@@ -1,0 +1,36 @@
+change: core-saas-security-tenancy
+project: cocinacore
+artifact_store: hybrid
+delivery_strategy: ask-on-risk
+status: planned
+created_at: 2026-05-21
+updated_at: 2026-05-21
+phases:
+  proposal: complete
+  spec: complete
+  design: complete
+  tasks: complete
+  apply: pending
+  verify: pending
+  archive: pending
+artifacts:
+  proposal:
+    path: openspec/changes/core-saas-security-tenancy/proposal.md
+    topic_key: sdd/core-saas-security-tenancy/proposal
+  spec:
+    path: openspec/changes/core-saas-security-tenancy/specs/security-tenancy/spec.md
+    topic_key: sdd/core-saas-security-tenancy/spec
+  design:
+    path: openspec/changes/core-saas-security-tenancy/design.md
+    topic_key: sdd/core-saas-security-tenancy/design
+  tasks:
+    path: openspec/changes/core-saas-security-tenancy/tasks.md
+    topic_key: sdd/core-saas-security-tenancy/tasks
+  state:
+    path: openspec/changes/core-saas-security-tenancy/state.yaml
+    topic_key: sdd/core-saas-security-tenancy/state
+review_workload:
+  decision_needed_before_apply: Yes
+  chained_prs_recommended: Yes
+  chain_strategy: pending
+  four_hundred_line_budget_risk: High

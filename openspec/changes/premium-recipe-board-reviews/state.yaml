@@ -1,0 +1,36 @@
+change: premium-recipe-board-reviews
+project: cocinacore
+artifact_store: hybrid
+delivery_strategy: ask-on-risk
+status: planned
+created_at: 2026-05-21
+updated_at: 2026-05-21
+phases:
+  proposal: complete
+  spec: complete
+  design: complete
+  tasks: complete
+  apply: pending
+  verify: pending
+  archive: pending
+artifacts:
+  proposal:
+    path: openspec/changes/premium-recipe-board-reviews/proposal.md
+    topic_key: sdd/premium-recipe-board-reviews/proposal
+  spec:
+    path: openspec/changes/premium-recipe-board-reviews/specs/premium-board/spec.md
+    topic_key: sdd/premium-recipe-board-reviews/spec
+  design:
+    path: openspec/changes/premium-recipe-board-reviews/design.md
+    topic_key: sdd/premium-recipe-board-reviews/design
+  tasks:
+    path: openspec/changes/premium-recipe-board-reviews/tasks.md
+    topic_key: sdd/premium-recipe-board-reviews/tasks
+  state:
+    path: openspec/changes/premium-recipe-board-reviews/state.yaml
+    topic_key: sdd/premium-recipe-board-reviews/state
+review_workload:
+  decision_needed_before_apply: Yes
+  chained_prs_recommended: Yes
+  chain_strategy: pending
+  four_hundred_line_budget_risk: High

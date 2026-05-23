@@ -1,0 +1,32 @@
+schema: spec-driven
+project: cocinacore
+mode: hybrid
+context: |
+  CocinaCore is a multi-tenant cooking SaaS MVP using Next.js 16.2.6, React 19.2.4,
+  TypeScript strict, App Router, npm, and Supabase PostgreSQL with RLS and pgvector.
+  Existing code has a mock frontend, RAG services, and an initial Supabase schema.
+  No test runner or CI is configured. Lint currently fails on explicit any usage.
+rules:
+  proposal:
+    - Keep proposals concise and include rollback, risks, and success criteria.
+  specs:
+    - Use RFC 2119 keywords and Given/When/Then scenarios.
+    - Prove tenant isolation and authorization behavior in security-sensitive specs.
+  design:
+    - Include architecture decisions, data flow, file impacts, interfaces, tests, and rollout.
+    - Do not expose server secrets through NEXT_PUBLIC or client bundles.
+  tasks:
+    - Include Review Workload Forecast guard lines exactly.
+    - Use reviewable work units and recommend chained PRs when likely over 400 changed lines.
+  apply:
+    tdd: false
+    test_command: ""
+    notes:
+      - Do not implement without resolving review workload guards.
+      - Use conventional commits only; never add AI attribution.
+  verify:
+    test_command: "npm run lint && npx tsc --noEmit && npm run build"
+    build_command: "npm run build"
+    coverage_threshold: 0
+  archive:
+    - Do not archive active MVP planning changes until explicitly requested.

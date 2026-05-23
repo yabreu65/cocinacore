@@ -1,0 +1,36 @@
+change: auth-rbac-invitations-trial
+project: cocinacore
+artifact_store: hybrid
+delivery_strategy: ask-on-risk
+status: planned
+created_at: 2026-05-21
+updated_at: 2026-05-21
+phases:
+  proposal: complete
+  spec: complete
+  design: complete
+  tasks: complete
+  apply: pending
+  verify: pending
+  archive: pending
+artifacts:
+  proposal:
+    path: openspec/changes/auth-rbac-invitations-trial/proposal.md
+    topic_key: sdd/auth-rbac-invitations-trial/proposal
+  spec:
+    path: openspec/changes/auth-rbac-invitations-trial/specs/auth-rbac-trial/spec.md
+    topic_key: sdd/auth-rbac-invitations-trial/spec
+  design:
+    path: openspec/changes/auth-rbac-invitations-trial/design.md
+    topic_key: sdd/auth-rbac-invitations-trial/design
+  tasks:
+    path: openspec/changes/auth-rbac-invitations-trial/tasks.md
+    topic_key: sdd/auth-rbac-invitations-trial/tasks
+  state:
+    path: openspec/changes/auth-rbac-invitations-trial/state.yaml
+    topic_key: sdd/auth-rbac-invitations-trial/state
+review_workload:
+  decision_needed_before_apply: Yes
+  chained_prs_recommended: Yes
+  chain_strategy: pending
+  four_hundred_line_budget_risk: High

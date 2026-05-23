@@ -1,0 +1,36 @@
+change: engineering-standards
+project: cocinacore
+artifact_store: hybrid
+delivery_strategy: ask-on-risk
+status: planned
+created_at: 2026-05-21
+updated_at: 2026-05-21
+phases:
+  proposal: complete
+  spec: complete
+  design: complete
+  tasks: complete
+  apply: pending
+  verify: pending
+  archive: pending
+artifacts:
+  proposal:
+    path: openspec/changes/engineering-standards/proposal.md
+    topic_key: sdd/engineering-standards/proposal
+  spec:
+    path: openspec/changes/engineering-standards/specs/engineering-standards/spec.md
+    topic_key: sdd/engineering-standards/spec
+  design:
+    path: openspec/changes/engineering-standards/design.md
+    topic_key: sdd/engineering-standards/design
+  tasks:
+    path: openspec/changes/engineering-standards/tasks.md
+    topic_key: sdd/engineering-standards/tasks
+  state:
+    path: openspec/changes/engineering-standards/state.yaml
+    topic_key: sdd/engineering-standards/state
+review_workload:
+  decision_needed_before_apply: Yes
+  chained_prs_recommended: Yes
+  chain_strategy: pending
+  four_hundred_line_budget_risk: Medium
