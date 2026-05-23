@@ -55,8 +55,8 @@ const sidebarItems = [
   { label: humanCopy.assistantRecipesNav, icon: Sparkles, href: '/recipes/search', description: 'Genera recetas con ayuda o busca recetas usando tus PDFs.' },
   { label: 'Planificador', icon: CalendarDays, href: '/meal-planner', description: 'Crea menús semanales o mensuales según tu inventario o estilo de cocina.' },
   { label: 'Inventario', icon: Package, href: '/recipes/inventory', description: 'Gestiona tus ingredientes para mejorar recomendaciones y menús.' },
-  { label: 'Biblioteca', icon: Library, href: '/premium', description: 'Consulta y administra tus libros y recetas en PDF.' },
-  { label: 'Tablero Premium', icon: Crown, href: '/premium', description: 'Explora recetas destacadas y contenido premium de la comunidad.' },
+  { label: 'Biblioteca', icon: Library, href: '/recipes/search', description: 'Consulta y administra tus libros y recetas en PDF.' },
+  { label: 'Tablero Premium', icon: Crown, href: '/app/premium', description: 'Descubrí recetas premium recomendadas con señales inteligentes.' },
   { label: 'Perfil', icon: User, href: '/mfa', description: 'Configura tu cuenta, seguridad y preferencias personales.' },
   { label: 'Facturación', icon: CreditCard, href: '#', description: 'Revisa estado de plan, trial y futuras opciones de pago.' },
 ];
@@ -1114,7 +1114,7 @@ export default function AppDashboardPage() {
               <Card>
                 <h3 className="text-xl font-semibold">Premium Board</h3>
                 <p className="mt-2 text-[#6B5A50]">Explora y publica recetas premium de la comunidad.</p>
-                <Link href="/premium" className="mt-4 inline-flex items-center gap-1 font-semibold text-[#A55412]">
+                <Link href="/app/premium" className="mt-4 inline-flex items-center gap-1 font-semibold text-[#A55412]">
                   Explorar <ArrowUpRight size={14} />
                 </Link>
               </Card>

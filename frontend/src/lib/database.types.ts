@@ -9,6 +9,61 @@ export type Json =
 export type Database = {
   public: {
     Tables: {
+
+      user_meal_plans: {
+        Row: {
+          id: string;
+          tenant_id: string;
+          user_id: string;
+          period: 'week' | 'fortnight' | 'month';
+          mode: 'inventory_to_menu' | 'menu_to_shopping' | 'balanced_ai';
+          base_cuisine: string;
+          fusion_cuisines: string[];
+          fusion_intensity: 'sutil' | 'media' | 'alta';
+          goal: string | null;
+          restrictions: string[];
+          inventory_snapshot: Json;
+          calendar_payload: Json;
+          ai_content: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          tenant_id: string;
+          user_id: string;
+          period: 'week' | 'fortnight' | 'month';
+          mode: 'inventory_to_menu' | 'menu_to_shopping' | 'balanced_ai';
+          base_cuisine: string;
+          fusion_cuisines?: string[];
+          fusion_intensity: 'sutil' | 'media' | 'alta';
+          goal?: string | null;
+          restrictions?: string[];
+          inventory_snapshot: Json;
+          calendar_payload: Json;
+          ai_content?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          tenant_id?: string;
+          user_id?: string;
+          period?: 'week' | 'fortnight' | 'month';
+          mode?: 'inventory_to_menu' | 'menu_to_shopping' | 'balanced_ai';
+          base_cuisine?: string;
+          fusion_cuisines?: string[];
+          fusion_intensity?: 'sutil' | 'media' | 'alta';
+          goal?: string | null;
+          restrictions?: string[];
+          inventory_snapshot?: Json;
+          calendar_payload?: Json;
+          ai_content?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
       users: {
         Row: {
           id: string;
@@ -278,6 +333,186 @@ export type Database = {
           label?: string;
           sort_order?: number;
           created_at?: string;
+        };
+        Relationships: [];
+      };
+
+
+
+      saved_premium_recipes: {
+        Row: {
+          id: string;
+          tenant_id: string;
+          user_id: string;
+          premium_recipe_id: string;
+          notes: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          tenant_id: string;
+          user_id: string;
+          premium_recipe_id: string;
+          notes?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          tenant_id?: string;
+          user_id?: string;
+          premium_recipe_id?: string;
+          notes?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      shopping_list_items: {
+        Row: {
+          id: string;
+          tenant_id: string;
+          user_id: string;
+          source: string;
+          premium_recipe_id: string | null;
+          ingredient_name: string;
+          quantity: string | null;
+          status: 'pending' | 'purchased';
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          tenant_id: string;
+          user_id: string;
+          source?: string;
+          premium_recipe_id?: string | null;
+          ingredient_name: string;
+          quantity?: string | null;
+          status?: 'pending' | 'purchased';
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          tenant_id?: string;
+          user_id?: string;
+          source?: string;
+          premium_recipe_id?: string | null;
+          ingredient_name?: string;
+          quantity?: string | null;
+          status?: 'pending' | 'purchased';
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      premium_recipes: {
+        Row: {
+          id: string;
+          source_recipe_history_id: string;
+          source_tenant_id: string;
+          creator_user_id: string;
+          creator_display_name: string | null;
+          eligibility_score: number;
+          creator_opted_in: boolean;
+          status: 'published' | 'withdrawn' | 'moderation_hidden';
+          published_at: string | null;
+          withdrawn_at: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          source_recipe_history_id: string;
+          source_tenant_id: string;
+          creator_user_id: string;
+          creator_display_name?: string | null;
+          eligibility_score: number;
+          creator_opted_in?: boolean;
+          status?: 'published' | 'withdrawn' | 'moderation_hidden';
+          published_at?: string | null;
+          withdrawn_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          source_recipe_history_id?: string;
+          source_tenant_id?: string;
+          creator_user_id?: string;
+          creator_display_name?: string | null;
+          eligibility_score?: number;
+          creator_opted_in?: boolean;
+          status?: 'published' | 'withdrawn' | 'moderation_hidden';
+          published_at?: string | null;
+          withdrawn_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      premium_recipe_reviews: {
+        Row: {
+          id: string;
+          premium_recipe_id: string;
+          user_id: string;
+          stars: 1 | 2 | 3 | 4 | 5;
+          comment: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          premium_recipe_id: string;
+          user_id: string;
+          stars: 1 | 2 | 3 | 4 | 5;
+          comment?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          premium_recipe_id?: string;
+          user_id?: string;
+          stars?: 1 | 2 | 3 | 4 | 5;
+          comment?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      premium_review_reports: {
+        Row: {
+          id: string;
+          premium_recipe_id: string;
+          review_id: string | null;
+          reporter_user_id: string;
+          reason: string;
+          status: 'open' | 'reviewing' | 'resolved' | 'dismissed';
+          created_at: string;
+          resolved_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          premium_recipe_id: string;
+          review_id?: string | null;
+          reporter_user_id: string;
+          reason: string;
+          status?: 'open' | 'reviewing' | 'resolved' | 'dismissed';
+          created_at?: string;
+          resolved_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          premium_recipe_id?: string;
+          review_id?: string | null;
+          reporter_user_id?: string;
+          reason?: string;
+          status?: 'open' | 'reviewing' | 'resolved' | 'dismissed';
+          created_at?: string;
+          resolved_at?: string | null;
         };
         Relationships: [];
       };
