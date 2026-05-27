@@ -15,6 +15,7 @@ export type Database = {
           id: string;
           tenant_id: string;
           user_id: string;
+          people_count: number;
           period: 'week' | 'fortnight' | 'month';
           mode: 'inventory_to_menu' | 'menu_to_shopping' | 'balanced_ai';
           base_cuisine: string;
@@ -32,6 +33,7 @@ export type Database = {
           id?: string;
           tenant_id: string;
           user_id: string;
+          people_count?: number;
           period: 'week' | 'fortnight' | 'month';
           mode: 'inventory_to_menu' | 'menu_to_shopping' | 'balanced_ai';
           base_cuisine: string;
@@ -49,6 +51,7 @@ export type Database = {
           id?: string;
           tenant_id?: string;
           user_id?: string;
+          people_count?: number;
           period?: 'week' | 'fortnight' | 'month';
           mode?: 'inventory_to_menu' | 'menu_to_shopping' | 'balanced_ai';
           base_cuisine?: string;
@@ -64,39 +67,228 @@ export type Database = {
         };
         Relationships: [];
       };
+      user_meal_plan_inventory_suggestions: {
+        Row: {
+          id: string;
+          tenant_id: string;
+          user_id: string;
+          meal_plan_id: string;
+          people_count: number;
+          period: 'week' | 'fortnight' | 'month';
+          normalized_items: Json;
+          raw_items: Json;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          tenant_id: string;
+          user_id: string;
+          meal_plan_id: string;
+          people_count: number;
+          period: 'week' | 'fortnight' | 'month';
+          normalized_items: Json;
+          raw_items: Json;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          tenant_id?: string;
+          user_id?: string;
+          meal_plan_id?: string;
+          people_count?: number;
+          period?: 'week' | 'fortnight' | 'month';
+          normalized_items?: Json;
+          raw_items?: Json;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
       users: {
         Row: {
           id: string;
           tenant_id: string | null;
+          email: string | null;
+          role: 'owner' | 'admin' | 'member';
           full_name: string | null;
+          terms_accepted_at: string | null;
+          terms_version: string | null;
           onboarding_completed: boolean | null;
+          created_at: string | null;
         };
         Insert: {
           id: string;
           tenant_id?: string | null;
+          email?: string | null;
+          role?: 'owner' | 'admin' | 'member';
           full_name?: string | null;
+          terms_accepted_at?: string | null;
+          terms_version?: string | null;
           onboarding_completed?: boolean | null;
+          created_at?: string | null;
         };
         Update: {
           id?: string;
           tenant_id?: string | null;
+          email?: string | null;
+          role?: 'owner' | 'admin' | 'member';
           full_name?: string | null;
+          terms_accepted_at?: string | null;
+          terms_version?: string | null;
           onboarding_completed?: boolean | null;
+          created_at?: string | null;
         };
         Relationships: [];
       };
       tenants: {
         Row: {
           id: string;
+          tenant_type: 'home' | 'professional';
+          trial_started_at: string | null;
           trial_ends_at: string | null;
+          trial_soft_blocked_at: string | null;
         };
         Insert: {
           id?: string;
+          tenant_type?: 'home' | 'professional';
+          trial_started_at?: string | null;
           trial_ends_at?: string | null;
+          trial_soft_blocked_at?: string | null;
         };
         Update: {
           id?: string;
+          tenant_type?: 'home' | 'professional';
+          trial_started_at?: string | null;
           trial_ends_at?: string | null;
+          trial_soft_blocked_at?: string | null;
+        };
+        Relationships: [];
+      };
+      tenant_invitations: {
+        Row: {
+          id: string;
+          tenant_id: string;
+          email: string;
+          invited_by: string;
+          role: "member";
+          invitation_token: string;
+          status: "pending" | "accepted" | "revoked" | "expired";
+          expires_at: string;
+          accepted_at: string | null;
+          accepted_by: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          tenant_id: string;
+          email: string;
+          invited_by: string;
+          role?: "member";
+          invitation_token: string;
+          status?: "pending" | "accepted" | "revoked" | "expired";
+          expires_at?: string;
+          accepted_at?: string | null;
+          accepted_by?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          tenant_id?: string;
+          email?: string;
+          invited_by?: string;
+          role?: "member";
+          invitation_token?: string;
+          status?: "pending" | "accepted" | "revoked" | "expired";
+          expires_at?: string;
+          accepted_at?: string | null;
+          accepted_by?: string | null;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
+      platform_owners: {
+        Row: {
+          user_id: string;
+          created_at: string;
+        };
+        Insert: {
+          user_id: string;
+          created_at?: string;
+        };
+        Update: {
+          user_id?: string;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
+      global_books: {
+        Row: {
+          id: string;
+          title: string;
+          author: string | null;
+          description: string | null;
+          cuisine_region: string;
+          cuisine_country: string | null;
+          cuisine_style: string | null;
+          tags: string[];
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          title: string;
+          author?: string | null;
+          description?: string | null;
+          cuisine_region?: string;
+          cuisine_country?: string | null;
+          cuisine_style?: string | null;
+          tags?: string[];
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          title?: string;
+          author?: string | null;
+          description?: string | null;
+          cuisine_region?: string;
+          cuisine_country?: string | null;
+          cuisine_style?: string | null;
+          tags?: string[];
+          created_at?: string;
+        };
+        Relationships: [];
+      };
+      global_pdf_library: {
+        Row: {
+          id: string;
+          global_book_id: string;
+          storage_path: string;
+          file_size_bytes: number;
+          page_count: number;
+          checksum_sha256: string;
+          uploaded_by: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          global_book_id: string;
+          storage_path: string;
+          file_size_bytes: number;
+          page_count: number;
+          checksum_sha256: string;
+          uploaded_by: string;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          global_book_id?: string;
+          storage_path?: string;
+          file_size_bytes?: number;
+          page_count?: number;
+          checksum_sha256?: string;
+          uploaded_by?: string;
+          created_at?: string;
         };
         Relationships: [];
       };
@@ -137,6 +329,8 @@ export type Database = {
           inventory_snapshot: Json;
           user_feedback: "accepted" | "discarded" | null;
           user_feedback_at: string | null;
+          is_saved: boolean;
+          expires_at: string | null;
           created_at: string;
         };
         Insert: {
@@ -150,6 +344,8 @@ export type Database = {
           inventory_snapshot?: Json;
           user_feedback?: "accepted" | "discarded" | null;
           user_feedback_at?: string | null;
+          is_saved?: boolean;
+          expires_at?: string | null;
           created_at?: string;
         };
         Update: {
@@ -163,6 +359,8 @@ export type Database = {
           inventory_snapshot?: Json;
           user_feedback?: "accepted" | "discarded" | null;
           user_feedback_at?: string | null;
+          is_saved?: boolean;
+          expires_at?: string | null;
           created_at?: string;
         };
         Relationships: [];
@@ -552,6 +750,12 @@ export type Database = {
     };
     Views: Record<string, never>;
     Functions: {
+      accept_tenant_invitation: {
+        Args: {
+          p_invitation_token: string;
+        };
+        Returns: string;
+      };
       match_chunks: {
         Args: {
           query_embedding: number[];
@@ -565,6 +769,20 @@ export type Database = {
           similarity: number;
           metadata: { page_number?: number; book_title?: string } | null;
         }>;
+      };
+      is_platform_owner: {
+        Args: Record<string, never>;
+        Returns: boolean;
+      };
+      get_owner_overview_metrics: {
+        Args: Record<string, never>;
+        Returns: Json;
+      };
+      remove_tenant_member: {
+        Args: {
+          p_member_id: string;
+        };
+        Returns: void;
       };
     };
     Enums: Record<string, never>;

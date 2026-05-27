@@ -2,10 +2,12 @@
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { motion } from 'framer-motion';
 import {
-  Bot,
   CalendarDays,
+  ChevronDown,
+  ChevronUp,
   Download,
   Eye,
   Lock,
@@ -17,6 +19,11 @@ import {
   X,
 } from 'lucide-react';
 import { getSupabaseBrowserClient } from '@/lib/supabaseClient';
+import {
+  buildInventorySuggestion,
+  type RawSuggestedItem,
+  type SuggestedInventoryItem,
+} from './inventorySuggestion';
 
 const CUISINES = ['Venezolana', 'Colombiana', 'Latinoamericana', 'Asiática', 'Italiana', 'Mediterránea', 'Mexicana'];
 const CUISINE_FLAGS: Record<string, string> = {
@@ -85,6 +92,7 @@ type MealDetailState = {
 };
 
 type ErrorPayload = { error?: string };
+type MatchChunkRow = { content: string; similarity: number | string | null };
 type MealDetailTab = 'summary' | 'ingredients' | 'preparation';
 type ShoppingListEntry = {
   id: string;
@@ -242,10 +250,12 @@ export default function MealPlannerPage() {
   const [baseCuisine, setBaseCuisine] = useState('Latinoamericana');
   const [fusionCuisines, setFusionCuisines] = useState<string[]>([]);
   const [goal, setGoal] = useState('Familiar');
+  const [peopleCount, setPeopleCount] = useState(4);
   const [inventory, setInventory] = useState<string[]>([]);
   const [selectedRestrictions, setSelectedRestrictions] = useState<string[]>([]);
   const [fusionIntensity, setFusionIntensity] = useState<FusionIntensity>('media');
   const [intensityAuto, setIntensityAuto] = useState(true);
+  const [usePdfContext, setUsePdfContext] = useState(true);
   const [culinaryProfile, setCulinaryProfile] = useState<{
     preferred: string[];
     avoid: string[];
@@ -260,6 +270,9 @@ export default function MealPlannerPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState('');
+  const [pdfContextCount, setPdfContextCount] = useState(0);
+  const [inventorySuggestion, setInventorySuggestion] = useState<SuggestedInventoryItem[]>([]);
+  const [inventorySuggestionUpdatedAt, setInventorySuggestionUpdatedAt] = useState<string | null>(null);
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [hasSavedPlan, setHasSavedPlan] = useState(false);
@@ -275,6 +288,9 @@ export default function MealPlannerPage() {
   const [mealDetailTab, setMealDetailTab] = useState<MealDetailTab>('summary');
   const [selectedMeal, setSelectedMeal] = useState<SelectedMealState>(null);
   const [lockedMeals, setLockedMeals] = useState<string[]>([]);
+  const [activeWeekIndex, setActiveWeekIndex] = useState(0);
+  const [activeDayIndex, setActiveDayIndex] = useState(0);
+  const [shoppingCollapsed, setShoppingCollapsed] = useState(false);
 
   useEffect(() => {
     const loadProfileAndInventory = async () => {
@@ -285,7 +301,7 @@ export default function MealPlannerPage() {
         const authUserId = authData.user?.id ?? null;
         setUserId(authUserId);
 
-        const [{ data: userRow }, { data: invRows }, { data: profileRow }, { data: profileTermRows }, { data: termsRows }, { data: savedPlanRow }, { data: shoppingRows }] = await Promise.all([
+        const [{ data: userRow }, { data: invRows }, { data: profileRow }, { data: profileTermRows }, { data: termsRows }, { data: savedPlanRow }, { data: shoppingRows }, { data: suggestionRow }] = await Promise.all([
           authUserId ? supabase.from('users').select('tenant_id').eq('id', authUserId).maybeSingle() : Promise.resolve({ data: null }),
           supabase.from('recipe_inventory_items').select('ingredient_name').order('created_at', { ascending: false }).limit(200),
           supabase.from('user_culinary_profiles').select('level').maybeSingle(),
@@ -293,6 +309,7 @@ export default function MealPlannerPage() {
           supabase.from('culinary_terms').select('id,label').limit(300),
           supabase.from('user_meal_plans').select('*').maybeSingle(),
           supabase.from('shopping_list_items').select('id,ingredient_name,quantity,status').eq('source', 'meal_planner').order('created_at', { ascending: false }).limit(120),
+          supabase.from('user_meal_plan_inventory_suggestions').select('normalized_items,updated_at').maybeSingle(),
         ]);
 
         const resolvedTenantId = userRow?.tenant_id ?? null;
@@ -339,9 +356,19 @@ export default function MealPlannerPage() {
             setCalendarData(savedCalendar);
           }
           setResult(savedPlanRow.ai_content ?? '');
+          setPeopleCount(savedPlanRow.people_count ?? 4);
           setHasSavedPlan(true);
         } else {
           setHasSavedPlan(false);
+        }
+
+        if (suggestionRow?.normalized_items && Array.isArray(suggestionRow.normalized_items)) {
+          const parsed = suggestionRow.normalized_items as unknown as SuggestedInventoryItem[];
+          setInventorySuggestion(parsed);
+          setInventorySuggestionUpdatedAt(suggestionRow.updated_at ?? null);
+        } else {
+          setInventorySuggestion([]);
+          setInventorySuggestionUpdatedAt(null);
         }
       } finally {
         setLoadingInventory(false);
@@ -383,9 +410,42 @@ export default function MealPlannerPage() {
     setError(null);
 
     try {
+      const effectivePeopleCount = Number.isFinite(peopleCount) && peopleCount > 0 ? peopleCount : 4;
       const apiMode: 'inventory_to_menu' | 'menu_to_shopping' =
         mode === 'inventory_to_menu' ? 'inventory_to_menu' : 'menu_to_shopping';
       const apiPeriod: 'week' | 'month' = period === 'month' ? 'month' : 'week';
+
+      let pdfChunks: string[] = [];
+      if (usePdfContext) {
+        const supabase = getSupabaseBrowserClient();
+        const query = `Menu ${period}. Cocina base ${baseCuisine}. Fusión ${fusionCuisines.join(', ') || 'sin fusión'}. Objetivo ${goal}. Ingredientes: ${inventory.join(', ') || 'sin inventario'}.`;
+        const embedRes = await fetch('/api/embeddings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ texts: [query] }),
+        });
+
+        if (!embedRes.ok) {
+          const payload = await readErrorPayload(embedRes, 'No se pudo crear contexto PDF.');
+          throw new Error(payload.error ?? 'No se pudo crear contexto PDF.');
+        }
+
+        const embedPayload = (await embedRes.json()) as { embeddings: number[][] };
+        const queryEmbedding = embedPayload.embeddings[0];
+        const { data: chunkRows, error: chunksError } = await supabase.rpc('match_chunks', {
+          query_embedding: queryEmbedding,
+          match_threshold: 0.35,
+          match_count: 8,
+          filter_tenant_id: null,
+        });
+        if (chunksError) throw chunksError;
+
+        pdfChunks = ((chunkRows ?? []) as MatchChunkRow[])
+          .filter((row) => typeof row.content === 'string' && row.content.trim().length > 0)
+          .sort((a, b) => Number(b.similarity ?? 0) - Number(a.similarity ?? 0))
+          .map((row) => row.content)
+          .slice(0, 8);
+      }
 
       const res = await fetch('/api/meal-plan', {
         method: 'POST',
@@ -396,6 +456,7 @@ export default function MealPlannerPage() {
           baseCuisine,
           fusionCuisines,
           fusionIntensity,
+          peopleCount: effectivePeopleCount,
           inventory,
           culinaryProfile: {
             preferred: [...culinaryProfile.preferred, goal],
@@ -403,6 +464,7 @@ export default function MealPlannerPage() {
             goals: culinaryProfile.goals,
             level: culinaryProfile.level,
           },
+          chunks: pdfChunks,
         }),
       });
 
@@ -416,8 +478,10 @@ export default function MealPlannerPage() {
       const parsedCalendar = parseMenuToCalendar(content, fusionLabel);
       const parsedShopping = extractShoppingItems(content);
       setResult(content);
+      setPdfContextCount(pdfChunks.length);
       setCalendarData(parsedCalendar);
       setShoppingItems(parsedShopping);
+      setPeopleCount(effectivePeopleCount);
 
       if (tenantId && userId) {
         const supabase = getSupabaseBrowserClient();
@@ -612,11 +676,13 @@ export default function MealPlannerPage() {
     setLoading(true);
     setError(null);
     try {
+      const effectivePeopleCount = Number.isFinite(peopleCount) && peopleCount > 0 ? peopleCount : 4;
       const supabase = getSupabaseBrowserClient();
       const { error: upsertError } = await supabase.from('user_meal_plans').upsert(
         {
           tenant_id: tenantId,
           user_id: userId,
+          people_count: effectivePeopleCount,
           period,
           mode,
           base_cuisine: baseCuisine,
@@ -638,6 +704,7 @@ export default function MealPlannerPage() {
       }
 
       setHasSavedPlan(true);
+      setPeopleCount(effectivePeopleCount);
       setError('Menú guardado correctamente. Si guardás otro, reemplaza este.');
     } finally {
       setLoading(false);
@@ -665,6 +732,81 @@ export default function MealPlannerPage() {
       }
       setHasSavedPlan(false);
       setError('Menú guardado eliminado.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const generateInventorySuggestion = async () => {
+    if (!tenantId || !userId) {
+      setError('No se pudo generar inventario: falta sesión o tenant.');
+      return;
+    }
+    const effectivePeopleCount = Number.isFinite(peopleCount) && peopleCount > 0 ? peopleCount : 4;
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await fetch('/api/meal-plan/inventory-suggestion', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          menuContent: result,
+          peopleCount: effectivePeopleCount,
+          inventory,
+          restrictions: selectedRestrictions,
+          profile: {
+            preferred: culinaryProfile.preferred,
+            goals: culinaryProfile.goals,
+            level: culinaryProfile.level,
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        const payload = await readErrorPayload(response, 'No se pudo generar inventario sugerido.');
+        throw new Error(payload.error ?? 'No se pudo generar inventario sugerido.');
+      }
+
+      const payload = (await response.json()) as { items?: RawSuggestedItem[]; peopleCount?: number };
+      const rawItems = Array.isArray(payload.items) ? payload.items : [];
+      const normalizedItems = buildInventorySuggestion(rawItems, effectivePeopleCount);
+
+      const supabase = getSupabaseBrowserClient();
+      const { data: mealPlanRow } = await supabase
+        .from('user_meal_plans')
+        .select('id')
+        .eq('tenant_id', tenantId)
+        .eq('user_id', userId)
+        .maybeSingle();
+
+      const mealPlanId = mealPlanRow?.id;
+      if (!mealPlanId) {
+        throw new Error('Primero guardá el menú antes de generar inventario sugerido.');
+      }
+
+      const nowIso = new Date().toISOString();
+      const { error: upsertError } = await supabase
+        .from('user_meal_plan_inventory_suggestions')
+        .upsert(
+          {
+            tenant_id: tenantId,
+            user_id: userId,
+            meal_plan_id: mealPlanId,
+            people_count: effectivePeopleCount,
+            period,
+            normalized_items: normalizedItems,
+            raw_items: rawItems,
+            updated_at: nowIso,
+          },
+          { onConflict: 'tenant_id,user_id' }
+        );
+      if (upsertError) throw upsertError;
+
+      setInventorySuggestion(normalizedItems);
+      setInventorySuggestionUpdatedAt(nowIso);
+      setError(`Inventario sugerido generado para ${effectivePeopleCount} personas.`);
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : 'No se pudo generar inventario sugerido.');
     } finally {
       setLoading(false);
     }
@@ -734,85 +876,151 @@ export default function MealPlannerPage() {
   };
 
   const renderPeriodView = () => {
-    if (period === 'fortnight') {
-      return (
-        <div className="grid gap-4 xl:grid-cols-2">
-          <section className="rounded-2xl border border-[#E8DDD2] bg-white/70 p-4">
-            <p className="text-sm font-semibold text-[#6B5A50]">Semana 1</p>
-            <CalendarGrid days={calendarData.slice(0, 7)} onViewPreparation={openMealDetail} onSelectMeal={setSelectedMeal} selectedMeal={selectedMeal} lockedMeals={lockedMeals} />
-          </section>
-          <section className="rounded-2xl border border-[#E8DDD2] bg-white/70 p-4">
-            <p className="text-sm font-semibold text-[#6B5A50]">Semana 2</p>
-            <CalendarGrid days={calendarData.slice(0, 7)} onViewPreparation={openMealDetail} onSelectMeal={setSelectedMeal} selectedMeal={selectedMeal} lockedMeals={lockedMeals} />
-          </section>
-        </div>
-      );
-    }
+    const dayTabs = DAY_NAMES.map((day, idx) => (
+      <button
+        key={`tab-${day}`}
+        type="button"
+        onClick={() => setActiveDayIndex(idx)}
+        className={`rounded-lg border px-2.5 py-1 text-xs font-semibold sm:text-sm ${
+          activeDayIndex === idx
+            ? 'border-[#16110D] bg-[#16110D] text-[#F5ECE2]'
+            : 'border-[#E8DDD2] bg-white text-[#6B5A50] hover:border-[#C56A1A]/40'
+        }`}
+      >
+        {day.slice(0, 3)}
+      </button>
+    ));
 
-    if (period === 'month') {
+    const renderSingleDay = (day: PlannerDay) => (
+      <section className="rounded-xl border border-[#E8DDD2] bg-white/80 p-3">
+        <div className="mb-2 flex items-center gap-1">
+          <CalendarDays size={14} className="text-[#C56A1A]" />
+          <p className="text-sm font-semibold">{day.day}</p>
+        </div>
+        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+          {MEALS.map((mealType) => (
+            <MealCard
+              key={`${day.day}-${mealType}`}
+              day={day.day}
+              mealType={mealType}
+              card={day.meals[mealType]}
+              onViewPreparation={openMealDetail}
+              onSelectMeal={setSelectedMeal}
+              selected={selectedMeal?.day === day.day && selectedMeal?.mealType === mealType}
+              locked={lockedMeals.includes(mealKey(day.day, mealType))}
+            />
+          ))}
+        </div>
+      </section>
+    );
+
+    if (period === 'fortnight') {
+      const weekDays = activeWeekIndex === 0 ? calendarData.slice(0, 7) : calendarData.slice(0, 7);
+      const safeDay = weekDays[activeDayIndex] ?? weekDays[0];
       return (
-        <section className="rounded-2xl border border-[#E8DDD2] bg-white/70 p-4">
-          <p className="text-sm font-semibold text-[#6B5A50]">Vista mensual compacta</p>
-          <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-7">
-            {Array.from({ length: 28 }).map((_, idx) => {
-              const dayData = calendarData[idx % calendarData.length];
-              return (
-                <div key={`month-${idx + 1}`} className="rounded-xl border border-[#E8DDD2] bg-white p-2">
-                  <p className="text-xs font-semibold text-[#6B5A50]">Día {idx + 1}</p>
-                  <p className="mt-1 text-xs text-[#241A14] line-clamp-2">{dayData.meals.Cena.name}</p>
-                </div>
-              );
-            })}
+        <section className="space-y-3">
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setActiveWeekIndex(0)}
+              className={`rounded-lg border px-3 py-1.5 text-xs font-semibold sm:text-sm ${activeWeekIndex === 0 ? 'border-[#16110D] bg-[#16110D] text-[#F5ECE2]' : 'border-[#E8DDD2] bg-white text-[#6B5A50]'}`}
+            >
+              Semana 1
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveWeekIndex(1)}
+              className={`rounded-lg border px-3 py-1.5 text-xs font-semibold sm:text-sm ${activeWeekIndex === 1 ? 'border-[#16110D] bg-[#16110D] text-[#F5ECE2]' : 'border-[#E8DDD2] bg-white text-[#6B5A50]'}`}
+            >
+              Semana 2
+            </button>
           </div>
+          <div className="flex flex-wrap gap-2">{dayTabs}</div>
+          {safeDay ? renderSingleDay(safeDay) : null}
         </section>
       );
     }
 
-    return <CalendarGrid days={calendarData} onViewPreparation={openMealDetail} onSelectMeal={setSelectedMeal} selectedMeal={selectedMeal} lockedMeals={lockedMeals} />;
+    if (period === 'month') {
+      const safeDay = calendarData[activeDayIndex % Math.max(calendarData.length, 1)] ?? null;
+      return (
+        <section className="space-y-3">
+          <section className="rounded-2xl border border-[#E8DDD2] bg-white/70 p-4">
+            <p className="text-sm font-semibold text-[#6B5A50]">Vista mensual compacta</p>
+            <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
+              {Array.from({ length: 28 }).map((_, idx) => {
+                const dayData = calendarData[idx % calendarData.length];
+                const active = idx === activeDayIndex;
+                return (
+                  <button
+                    type="button"
+                    key={`month-${idx + 1}`}
+                    onClick={() => setActiveDayIndex(idx)}
+                    className={`rounded-xl border bg-white p-2 text-left ${active ? 'border-[#16110D] ring-1 ring-[#16110D]/20' : 'border-[#E8DDD2]'}`}
+                  >
+                    <p className="text-xs font-semibold text-[#6B5A50]">Día {idx + 1}</p>
+                    <p className="mt-1 text-xs text-[#241A14] line-clamp-2">{dayData.meals.Cena.name}</p>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+          {safeDay ? renderSingleDay(safeDay) : null}
+        </section>
+      );
+    }
+
+    const safeDay = calendarData[activeDayIndex] ?? calendarData[0];
+    return (
+      <section className="space-y-3">
+        <div className="flex flex-wrap gap-2">{dayTabs}</div>
+        {safeDay ? renderSingleDay(safeDay) : null}
+      </section>
+    );
   };
 
   return (
     <>
-    <main className="texture-paper min-h-screen bg-[#FAF6F1] px-4 py-6 text-[#241A14] md:px-6">
+    <main className="texture-paper min-h-screen bg-[#FAF6F1] px-2 py-4 text-[#241A14] sm:px-3 sm:py-5 md:px-6 md:py-7 xl:py-8">
       <section className="mx-auto w-full max-w-[1400px]">
         <motion.section
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
-          className="relative overflow-hidden rounded-3xl border border-[#E8DDD2] bg-white/80 p-6 premium-shadow"
+          className="relative overflow-hidden rounded-3xl border border-[#E8DDD2] bg-white/85 p-3 premium-shadow sm:p-4 md:p-6 xl:p-7"
         >
           <div className="pointer-events-none absolute right-0 top-0 h-40 w-40 rounded-full bg-[#6D4AFF]/10 blur-3xl" />
           <div className="pointer-events-none absolute left-0 top-0 h-40 w-40 rounded-full bg-[#C56A1A]/10 blur-3xl" />
 
-          <div className="relative flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <div className="inline-flex items-center gap-2 rounded-full border border-[#6D4AFF]/30 bg-[#6D4AFF]/10 px-3 py-1 text-xs font-semibold text-[#6D4AFF]">
-                <Bot size={14} /> AI Culinaria
+          <div className="relative flex flex-col gap-5 md:gap-6">
+            <div className="mx-auto w-full xl:max-w-4xl">
+              <div className="flex w-full items-center justify-center rounded-xl border border-[#E8DDD2] bg-white px-3 py-2 md:w-auto">
+                <Image src="/logo.png" alt="CocinaCore" width={200} height={56} className="h-32 w-auto sm:h-64" />
               </div>
-              <h1 className="mt-3 text-4xl font-semibold leading-tight md:text-5xl">
+              <h1 className="mt-4 text-center text-2xl font-semibold leading-tight sm:text-3xl md:text-4xl lg:text-5xl">
                 Planificador culinario inteligente
               </h1>
-              <p className="mt-2 max-w-3xl text-[#6B5A50]">
+              <p className="mt-2 text-center text-base text-[#6B5A50] sm:text-lg md:mx-auto md:max-w-4xl">
                 Organiza comidas semanales, quincenales o mensuales usando IA, inventario y preferencias culinarias.
               </p>
             </div>
 
-            <div className="flex flex-wrap gap-2">
-              <button onClick={() => void regenerateWeek()} className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-2 text-sm font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40" type="button">
+            <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 lg:flex lg:flex-wrap lg:justify-center">
+              <button onClick={() => void regenerateWeek()} className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-2 text-sm font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40 lg:min-w-[190px]" type="button">
                 <RefreshCw size={14} className="mr-1 inline" /> Regenerar menú
               </button>
-              <button onClick={exportPlan} className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-2 text-sm font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40" type="button">
+              <button onClick={exportPlan} className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-2 text-sm font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40 lg:min-w-[190px]" type="button">
                 <Download size={14} className="mr-1 inline" /> Exportar PDF
               </button>
-              <button onClick={() => void sharePlan()} className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-2 text-sm font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40" type="button">
+              <button onClick={() => void sharePlan()} className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-2 text-sm font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40 lg:min-w-[190px]" type="button">
                 <Share2 size={14} className="mr-1 inline" /> Compartir menú
               </button>
             </div>
           </div>
         </motion.section>
 
-        <form onSubmit={onSubmit} className="mt-4 grid gap-4 xl:grid-cols-[1fr_340px]">
+        <form onSubmit={onSubmit} className="mt-4 grid gap-4 lg:gap-5 xl:grid-cols-[minmax(0,1fr)_390px]">
           <section className="space-y-4">
-            <div className="grid gap-3 rounded-2xl border border-[#E8DDD2] bg-white/80 p-4">
+            <div className="grid gap-3 rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
               <ToolbarSegment
                 label="Periodo"
                 options={PERIOD_OPTIONS.map((option) => ({ value: option.key, label: option.label }))}
@@ -838,7 +1046,7 @@ export default function MealPlannerPage() {
                   setFusionIntensity(value as FusionIntensity);
                 }}
               />
-              <div className="flex items-center justify-between rounded-xl border border-[#E8DDD2] bg-white px-3 py-2 text-xs">
+              <div className="flex flex-col items-start gap-2 rounded-xl border border-[#E8DDD2] bg-white px-3 py-2 text-xs sm:flex-row sm:items-center sm:justify-between">
                 <span className="text-[#6B5A50]">
                   Preset automático por objetivo: <span className="font-semibold text-[#241A14]">{goal}</span>
                 </span>
@@ -855,7 +1063,7 @@ export default function MealPlannerPage() {
               </div>
             </div>
 
-            <article className="rounded-2xl border border-[#E8DDD2] bg-white/80 p-4">
+            <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
               <div className="flex items-center gap-2">
                 <Sparkles size={16} className="text-[#6D4AFF]" />
                 <h2 className="text-lg font-semibold">Configuración inteligente</h2>
@@ -893,6 +1101,22 @@ export default function MealPlannerPage() {
                   <select value={goal} onChange={(e) => setGoal(e.target.value)} className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 text-sm outline-none">
                     {GOALS.map((value) => <option key={value} value={value}>{value}</option>)}
                   </select>
+                </label>
+
+                <label className="grid gap-1 text-sm font-semibold text-[#6B5A50]">
+                  Personas del menú
+                  <input
+                    value={peopleCount}
+                    onChange={(e) => {
+                      const parsed = Number(e.target.value);
+                      setPeopleCount(Number.isFinite(parsed) ? parsed : 4);
+                    }}
+                    type="number"
+                    min={1}
+                    max={50}
+                    className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 text-sm outline-none"
+                  />
+                  <span className="text-xs font-normal text-[#8C7A6D]">Si queda vacío o inválido, se usa 4 por defecto.</span>
                 </label>
 
                 <label className="grid gap-1 text-sm font-semibold text-[#6B5A50]">
@@ -950,17 +1174,33 @@ export default function MealPlannerPage() {
                 </p>
               </div>
 
+              <div className="mt-3 rounded-xl border border-[#E8DDD2] bg-white p-3">
+                <label className="flex items-center gap-2 text-sm font-semibold text-[#241A14]">
+                  <input
+                    type="checkbox"
+                    checked={usePdfContext}
+                    onChange={(event) => setUsePdfContext(event.target.checked)}
+                    className="h-4 w-4 rounded border-[#E8DDD2]"
+                  />
+                  Usar contexto de biblioteca PDF
+                </label>
+                <p className="mt-1 text-xs text-[#8C7A6D]">
+                  Si está activo, el planificador busca primero contexto relevante en tus PDFs/globales y luego genera el menú con IA.
+                </p>
+              </div>
+
               <button type="submit" disabled={loading || loadingInventory} className="mt-4 h-12 w-full rounded-xl bg-[#C56A1A] px-4 text-base font-semibold text-white transition hover:bg-[#A55412] disabled:opacity-60">
                 {loading ? 'Generando planificación...' : 'Generar planificación inteligente'}
               </button>
             </article>
 
-            <section className="rounded-2xl border border-[#E8DDD2] bg-white/80 p-4">
-              <div className="mb-3 flex items-center justify-between">
+            <section className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
+              <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <h2 className="text-lg font-semibold">Calendario de menú</h2>
-                <div className="flex gap-2 text-xs">
+                <div className="grid grid-cols-2 gap-2 text-xs sm:flex sm:flex-wrap">
                   <button type="button" onClick={() => void regenerateWeek()} className="rounded-lg border border-[#E8DDD2] px-2 py-1 font-semibold text-[#6B5A50]">Regenerar semana</button>
                   <button type="button" onClick={() => void savePlan()} className="rounded-lg border border-[#E8DDD2] px-2 py-1 font-semibold text-[#6B5A50]">Guardar menú</button>
+                  <button type="button" onClick={() => void generateInventorySuggestion()} className="rounded-lg border border-[#E8DDD2] px-2 py-1 font-semibold text-[#6B5A50]">Generar inventario</button>
                   <button type="button" onClick={() => void deleteSavedPlan()} disabled={!hasSavedPlan} className="rounded-lg border border-[#E8DDD2] px-2 py-1 font-semibold text-[#6B5A50] disabled:opacity-50">Borrar guardado</button>
                 </div>
               </div>
@@ -970,24 +1210,41 @@ export default function MealPlannerPage() {
             {result ? (
               <section className="rounded-2xl border border-[#E8DDD2] bg-white/80 p-4">
                 <h3 className="text-lg font-semibold">Salida textual IA</h3>
+                {usePdfContext ? (
+                  <p className="mt-1 text-xs text-[#6B5A50]">Contexto PDF aplicado: {pdfContextCount} fragmentos</p>
+                ) : null}
                 <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap text-sm text-[#3d312a]">{result}</pre>
               </section>
             ) : null}
           </section>
 
-          <aside className="space-y-4">
-            <article className="rounded-2xl border border-[#E8DDD2] bg-white/80 p-4">
-              <div className="flex items-center gap-2">
-                <ShoppingCart size={16} className="text-[#567A3B]" />
-                <h3 className="text-lg font-semibold">Lista inteligente de compras</h3>
+          <aside className="space-y-4 xl:sticky xl:top-4 xl:self-start">
+            <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <ShoppingCart size={16} className="text-[#567A3B]" />
+                  <h3 className="text-lg font-semibold">Lista inteligente de compras</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShoppingCollapsed((prev) => !prev)}
+                  className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1 text-xs font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40"
+                >
+                  {shoppingCollapsed ? (
+                    <span className="inline-flex items-center gap-1"><ChevronDown size={14} /> Expandir</span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1"><ChevronUp size={14} /> Colapsar</span>
+                  )}
+                </button>
               </div>
               <p className="mt-1 text-sm text-[#6B5A50]">Separada por categorías para ejecución rápida.</p>
 
+              {!shoppingCollapsed ? (
               <div className="mt-3 space-y-3 text-sm">
                 {['Proteínas', 'Verduras', 'Lácteos', 'Especias', 'Extras'].map((group, idx) => (
-                  <div key={group} className="rounded-xl border border-[#E8DDD2] bg-white/70 p-3">
+                  <div key={group} className="rounded-xl border border-[#E8DDD2] bg-white/80 p-3">
                     <p className="font-semibold text-[#241A14]">{group}</p>
-                    <ul className="mt-2 space-y-1 text-[#6B5A50]">
+                    <ul className="mt-2 space-y-1.5 text-[#6B5A50]">
                       {(shoppingListEntries.length > 0
                         ? shoppingListEntries.map((entry) => `${entry.ingredientName}${entry.status === 'purchased' ? '::purchased' : ''}`)
                         : (shoppingItems.length ? shoppingItems : inventorySummary)
@@ -997,7 +1254,7 @@ export default function MealPlannerPage() {
                         const purchased = entry ? entry.status === 'purchased' : statusMark === 'purchased';
                         return (
                         <li key={`${group}-${item}`} className="flex items-center justify-between">
-                          <span>{name}</span>
+                          <span className="line-clamp-2 leading-5">{name}</span>
                           <button type="button" onClick={() => entry ? void toggleShoppingItemStatus(entry) : undefined} className="text-xs">
                             {purchased ? '✓ comprado' : '○ comprar'}
                           </button>
@@ -1008,13 +1265,61 @@ export default function MealPlannerPage() {
                   </div>
                 ))}
               </div>
+              ) : null}
 
+              {!shoppingCollapsed ? (
               <p className="mt-3 rounded-xl border border-[#567A3B]/30 bg-[#567A3B]/10 p-2 text-xs text-[#567A3B]">
                 Ingredientes reutilizados inteligentemente para reducir compras repetidas.
               </p>
+              ) : null}
             </article>
 
-            <article className="rounded-2xl border border-[#E8DDD2] bg-white/80 p-4">
+            <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-lg font-semibold">Inventario sugerido del menú</h3>
+                <span className="rounded-full border border-[#6D4AFF]/30 bg-[#6D4AFF]/10 px-2 py-0.5 text-[10px] font-semibold text-[#6D4AFF]">
+                  {peopleCount || 4} personas
+                </span>
+              </div>
+              <p className="mt-1 text-sm text-[#6B5A50]">Lista separada del inventario real, consolidada por equivalencias.</p>
+              {inventorySuggestionUpdatedAt ? (
+                <p className="mt-1 text-[11px] text-[#8C7A6D]">Actualizado: {new Date(inventorySuggestionUpdatedAt).toLocaleString()}</p>
+              ) : null}
+              <ul className="mt-3 space-y-2.5">
+                {inventorySuggestion.map((item) => (
+                  <li key={item.canonical_name} className="rounded-xl border border-[#E8DDD2] bg-white/75 p-2 text-sm">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-semibold text-[#241A14]">{item.canonical_name}</p>
+                      <p className="text-xs text-[#6B5A50]">
+                        {item.quantity === null ? 'Cantidad estimada sin número' : `${item.quantity} ${item.unit}`}
+                      </p>
+                    </div>
+                    <p className="text-[11px] text-[#6B5A50]">
+                      Nombre receta: {item.display_name}
+                      {item.display_name.toLowerCase() !== item.canonical_name.toLowerCase() ? ` · Equivalencia aplicada a "${item.canonical_name}"` : ''}
+                    </p>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {item.estimated ? (
+                        <span className="rounded-full border border-[#C56A1A]/35 bg-[#C56A1A]/10 px-2 py-0.5 text-[10px] font-semibold text-[#A55412]">
+                          Estimado IA ({Math.round(item.confidence * 100)}%)
+                        </span>
+                      ) : (
+                        <span className="rounded-full border border-[#567A3B]/35 bg-[#567A3B]/10 px-2 py-0.5 text-[10px] font-semibold text-[#567A3B]">
+                          Cantidad definida
+                        </span>
+                      )}
+                    </div>
+                  </li>
+                ))}
+                {inventorySuggestion.length === 0 ? (
+                  <li className="rounded-xl border border-[#E8DDD2] bg-white/75 p-2 text-sm text-[#6B5A50]">
+                    Todavía no generaste inventario sugerido para este menú.
+                  </li>
+                ) : null}
+              </ul>
+            </article>
+
+            <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
               <div className="flex items-center gap-2">
                 <Wand2 size={16} className="text-[#6D4AFF]" />
                 <h3 className="text-lg font-semibold">IA contextual activa</h3>
@@ -1032,7 +1337,7 @@ export default function MealPlannerPage() {
               </ul>
             </article>
 
-            <article className="rounded-2xl border border-[#E8DDD2] bg-white/80 p-4">
+            <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
               <h3 className="text-lg font-semibold">Acciones rápidas</h3>
               <p className="mt-2 rounded-xl border border-[#E8DDD2] bg-white/70 px-3 py-2 text-xs text-[#6B5A50]">
                 {selectedMeal
@@ -1170,7 +1475,7 @@ function ToolbarSegment(props: {
   return (
     <div>
       <p className="mb-2 text-sm font-semibold text-[#6B5A50]">{label}</p>
-      <div className="inline-flex rounded-xl border border-[#E8DDD2] bg-white p-1">
+      <div className="flex flex-wrap gap-1 rounded-xl border border-[#E8DDD2] bg-white p-1">
         {options.map((option) => (
           <button
             key={option.value}
@@ -1232,41 +1537,5 @@ function MealCard(props: {
         <Eye size={12} /> Ver preparación
       </button>
     </article>
-  );
-}
-
-function CalendarGrid(props: {
-  days: PlannerDay[];
-  onViewPreparation: (day: string, mealType: MealType, card: PlannerMealCard) => void;
-  onSelectMeal: (slot: SelectedMealState) => void;
-  selectedMeal: SelectedMealState;
-  lockedMeals: string[];
-}) {
-  const { days, onViewPreparation, onSelectMeal, selectedMeal, lockedMeals } = props;
-  return (
-    <div className="mt-3 grid gap-3 lg:grid-cols-7">
-      {days.map((day) => (
-        <section key={day.day} className="rounded-xl border border-[#E8DDD2] bg-white/80 p-3">
-          <div className="mb-2 flex items-center gap-1">
-            <CalendarDays size={14} className="text-[#C56A1A]" />
-            <p className="text-sm font-semibold">{day.day}</p>
-          </div>
-          <div className="space-y-2">
-            {MEALS.map((mealType) => (
-              <MealCard
-                key={`${day.day}-${mealType}`}
-                day={day.day}
-                mealType={mealType}
-                card={day.meals[mealType]}
-                onViewPreparation={onViewPreparation}
-                onSelectMeal={onSelectMeal}
-                selected={selectedMeal?.day === day.day && selectedMeal?.mealType === mealType}
-                locked={lockedMeals.includes(mealKey(day.day, mealType))}
-              />
-            ))}
-          </div>
-        </section>
-      ))}
-    </div>
   );
 }

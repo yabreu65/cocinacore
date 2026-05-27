@@ -10,6 +10,13 @@ type InventoryRow = {
   quantity: string | null;
 };
 
+type SuggestedInventoryItem = {
+  canonical_name: string;
+  display_name: string;
+  quantity: number | null;
+  unit: string;
+};
+
 export default function RecipeInventoryPage() {
   const [rows, setRows] = useState<InventoryRow[]>([]);
   const [name, setName] = useState('');
@@ -17,17 +24,36 @@ export default function RecipeInventoryPage() {
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [suggestedCount, setSuggestedCount] = useState(0);
 
   const load = async () => {
     setLoading(true);
     setError(null);
     try {
       const supabase = getSupabaseBrowserClient();
-      const { data, error: queryErr } = await supabase
-        .from('recipe_inventory_items')
-        .select('id,ingredient_name,quantity')
-        .order('created_at', { ascending: false })
-        .limit(200);
+      const { data: authData, error: authErr } = await supabase.auth.getUser();
+      if (authErr || !authData.user) throw new Error('Sin sesión activa.');
+      const userId = authData.user.id;
+
+      const [{ data, error: queryErr }, { data: suggestionRow, error: suggestionErr }] = await Promise.all([
+        supabase
+          .from('recipe_inventory_items')
+          .select('id,ingredient_name,quantity')
+          .order('created_at', { ascending: false })
+          .limit(200),
+        supabase
+          .from('user_meal_plan_inventory_suggestions')
+          .select('normalized_items')
+          .eq('user_id', userId)
+          .maybeSingle(),
+      ]);
+      if (suggestionErr) throw suggestionErr;
+
+      const suggestedItems = Array.isArray(suggestionRow?.normalized_items)
+        ? (suggestionRow.normalized_items as unknown as SuggestedInventoryItem[])
+        : [];
+
+      setSuggestedCount(suggestedItems.length);
       if (queryErr) throw queryErr;
       setRows((data ?? []) as InventoryRow[]);
     } catch (e) {
@@ -94,6 +120,85 @@ export default function RecipeInventoryPage() {
     }
   };
 
+  const applySuggestedInventory = async () => {
+    setWorking(true);
+    setError(null);
+    try {
+      const supabase = getSupabaseBrowserClient();
+      const { data: authData, error: authErr } = await supabase.auth.getUser();
+      if (authErr || !authData.user) throw new Error('Sin sesión activa.');
+      const userId = authData.user.id;
+
+      const { data: userRow, error: userErr } = await supabase
+        .from('users')
+        .select('tenant_id')
+        .eq('id', userId)
+        .maybeSingle();
+      if (userErr || !userRow?.tenant_id) throw new Error('No se encontró tenant del usuario.');
+
+      const { data: suggestionRow, error: suggestionErr } = await supabase
+        .from('user_meal_plan_inventory_suggestions')
+        .select('normalized_items')
+        .eq('user_id', userId)
+        .maybeSingle();
+      if (suggestionErr) throw suggestionErr;
+
+      const suggestedItems = Array.isArray(suggestionRow?.normalized_items)
+        ? (suggestionRow.normalized_items as unknown as SuggestedInventoryItem[])
+        : [];
+      if (suggestedItems.length === 0) {
+        setError('No hay inventario sugerido desde menú para aplicar todavía.');
+        return;
+      }
+
+      const { data: existingRows, error: existingErr } = await supabase
+        .from('recipe_inventory_items')
+        .select('id,ingredient_name,quantity')
+        .eq('tenant_id', userRow.tenant_id)
+        .eq('user_id', userId)
+        .limit(400);
+      if (existingErr) throw existingErr;
+
+      const existingByName = new Map(
+        (existingRows ?? []).map((row) => [row.ingredient_name.trim().toLowerCase(), row]),
+      );
+
+      for (const item of suggestedItems) {
+        const ingredientName = (item.canonical_name || item.display_name || '').trim();
+        if (!ingredientName) continue;
+        const key = ingredientName.toLowerCase();
+        const quantityValue = item.quantity === null ? null : `${item.quantity} ${item.unit}`.trim();
+        const existing = existingByName.get(key);
+
+        if (existing?.id) {
+          if (!existing.quantity || existing.quantity.trim().length === 0) {
+            const { error: updateErr } = await supabase
+              .from('recipe_inventory_items')
+              .update({ quantity: quantityValue })
+              .eq('id', existing.id);
+            if (updateErr) throw updateErr;
+          }
+          continue;
+        }
+
+        const { error: insertErr } = await supabase.from('recipe_inventory_items').insert({
+          tenant_id: userRow.tenant_id,
+          user_id: userId,
+          ingredient_name: ingredientName,
+          quantity: quantityValue,
+        });
+        if (insertErr) throw insertErr;
+      }
+
+      await load();
+      setError('Inventario sugerido aplicado al inventario real.');
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : 'No se pudo aplicar inventario sugerido.');
+    } finally {
+      setWorking(false);
+    }
+  };
+
   return (
     <main className="texture-paper min-h-screen bg-[#FAF6F1] px-4 py-6 text-[#241A14] md:px-6">
       <section className="mx-auto w-full max-w-4xl rounded-3xl border border-[#E8DDD2] bg-white/80 p-5 premium-shadow">
@@ -103,6 +208,17 @@ export default function RecipeInventoryPage() {
             <p className="text-[#6B5A50]">Gestioná tu inventario para mejorar recetas y menús.</p>
           </div>
           <Link href="/app" className="text-sm font-semibold text-[#A55412]">Volver</Link>
+        </div>
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void applySuggestedInventory()}
+            disabled={working || loading || suggestedCount === 0}
+            className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-2 text-sm font-semibold text-[#6B5A50] disabled:opacity-60"
+          >
+            Aplicar sugerido del menú
+          </button>
+          <span className="text-xs text-[#6B5A50]">Sugeridos disponibles: {suggestedCount}</span>
         </div>
 
         <form onSubmit={onSubmit} className="grid gap-2 md:grid-cols-[1fr_220px_auto]">
@@ -129,4 +245,3 @@ export default function RecipeInventoryPage() {
     </main>
   );
 }
-

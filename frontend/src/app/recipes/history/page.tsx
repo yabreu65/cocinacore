@@ -20,6 +20,30 @@ function toPrettyPayload(payload: unknown): string {
     if (typeof obj.full_recipe === 'string' && obj.full_recipe.trim().length > 0) {
       return obj.full_recipe;
     }
+
+    const title = typeof obj.title === 'string' ? obj.title : null;
+    const summary = typeof obj.summary === 'string' ? obj.summary : null;
+    const ingredients = Array.isArray(obj.ingredients) ? obj.ingredients.filter((item): item is string => typeof item === 'string') : [];
+    const steps = Array.isArray(obj.steps) ? obj.steps.filter((item): item is string => typeof item === 'string') : [];
+    const tips = Array.isArray(obj.tips) ? obj.tips.filter((item): item is string => typeof item === 'string') : [];
+
+    const blocks: string[] = [];
+    if (title) blocks.push(`# ${title}`);
+    if (summary) blocks.push(summary);
+    if (ingredients.length > 0) {
+      blocks.push('## Ingredientes');
+      blocks.push(...ingredients.map((item) => `- ${item}`));
+    }
+    if (steps.length > 0) {
+      blocks.push('## Preparación');
+      blocks.push(...steps.map((item, index) => `${index + 1}. ${item}`));
+    }
+    if (tips.length > 0) {
+      blocks.push('## Tips');
+      blocks.push(...tips.map((item) => `- ${item}`));
+    }
+
+    if (blocks.length > 0) return blocks.join('\n');
     return JSON.stringify(payload, null, 2);
   }
   return 'Sin detalle disponible.';

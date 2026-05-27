@@ -12,6 +12,7 @@ import {
   CalendarDays,
   Crown,
   User,
+  Users,
   CreditCard,
   Search,
   ArrowUpRight,
@@ -27,12 +28,14 @@ type DashboardPdfItem = {
   createdAt: string;
   ocrUsed: boolean;
   processingStatus: 'processing' | 'ready' | 'failed';
+  processingError: string | null;
 };
 
 type DashboardData = {
   userId: string | null;
   fullName: string;
   tenantId: string | null;
+  tenantType: 'home' | 'professional';
   trialEndsAt: string | null;
   inventory: Array<{ name: string; quantity: string | null }>;
   recentRecipes: Array<{ title: string; createdAt: string; feedback: 'accepted' | 'discarded' | null }>;
@@ -55,10 +58,11 @@ const sidebarItems = [
   { label: humanCopy.assistantRecipesNav, icon: Sparkles, href: '/recipes/search', description: 'Genera recetas con ayuda o busca recetas usando tus PDFs.' },
   { label: 'Planificador', icon: CalendarDays, href: '/meal-planner', description: 'Crea menús semanales o mensuales según tu inventario o estilo de cocina.' },
   { label: 'Inventario', icon: Package, href: '/recipes/inventory', description: 'Gestiona tus ingredientes para mejorar recomendaciones y menús.' },
-  { label: 'Biblioteca', icon: Library, href: '/recipes/search', description: 'Consulta y administra tus libros y recetas en PDF.' },
+  { label: 'Biblioteca', icon: Library, href: '/library', description: 'Consulta y administra tus libros y recetas en PDF.' },
   { label: 'Tablero Premium', icon: Crown, href: '/app/premium', description: 'Descubrí recetas premium recomendadas con señales inteligentes.' },
-  { label: 'Perfil', icon: User, href: '/mfa', description: 'Configura tu cuenta, seguridad y preferencias personales.' },
-  { label: 'Facturación', icon: CreditCard, href: '#', description: 'Revisa estado de plan, trial y futuras opciones de pago.' },
+  { label: 'Miembros', icon: Users, href: '/members', description: 'Invitá y gestiona miembros de tu tenant con roles y estados.' },
+  { label: 'Perfil', icon: User, href: '/profile', description: 'Configura tu cuenta, seguridad y preferencias personales.' },
+  { label: 'Facturación', icon: CreditCard, href: '/billing', description: 'Revisa estado de plan, trial y futuras opciones de pago.' },
 ];
 
 const quickChips = ['Receta rápida', 'Cena familiar', 'Sin gluten', 'Postre', 'Pasta', 'Parrilla'];
@@ -234,6 +238,7 @@ export default function AppDashboardPage() {
     userId: null,
     fullName: 'Chef',
     tenantId: null,
+    tenantType: 'home',
     trialEndsAt: null,
     inventory: [],
     recentRecipes: [],
@@ -294,6 +299,7 @@ export default function AppDashboardPage() {
       }
       const tenantId = profile?.tenant_id ?? null;
       let trialEndsAt: string | null = null;
+      let tenantType: 'home' | 'professional' = 'home';
       let pdfCount = 0;
       let latestPdfOcrUsed = false;
       let latestPdfs: DashboardPdfItem[] = [];
@@ -301,7 +307,7 @@ export default function AppDashboardPage() {
 
       if (tenantId) {
         const [{ data: tenant }, { count }, { data: latestPdf }, { data: pdfRows }, { data: bookRows }] = await Promise.all([
-          supabase.from('tenants').select('trial_ends_at').eq('id', tenantId).maybeSingle(),
+          supabase.from('tenants').select('trial_ends_at,tenant_type').eq('id', tenantId).maybeSingle(),
           supabase.from('tenant_pdf_library').select('*', { count: 'exact', head: true }).eq('tenant_id', tenantId),
           supabase
             .from('tenant_pdf_library')
@@ -312,7 +318,7 @@ export default function AppDashboardPage() {
             .maybeSingle(),
           supabase
             .from('tenant_pdf_library')
-            .select('id,storage_path,created_at,ocr_used,processing_status')
+            .select('id,storage_path,created_at,ocr_used,processing_status,processing_error')
             .eq('tenant_id', tenantId)
             .order('created_at', { ascending: false })
             .limit(5),
@@ -325,6 +331,7 @@ export default function AppDashboardPage() {
         ]);
 
         trialEndsAt = tenant?.trial_ends_at ?? null;
+        tenantType = tenant?.tenant_type === 'professional' ? 'professional' : 'home';
         pdfCount = count ?? 0;
         latestPdfOcrUsed = latestPdf?.ocr_used ?? false;
         latestPdfs = (pdfRows ?? []).map((row) => ({
@@ -333,6 +340,7 @@ export default function AppDashboardPage() {
           createdAt: row.created_at,
           ocrUsed: row.ocr_used,
           processingStatus: row.processing_status,
+          processingError: row.processing_error ?? null,
         }));
         tenantBooks = (bookRows ?? []).map((row) => ({ id: row.id, title: row.title }));
       }
@@ -360,6 +368,7 @@ export default function AppDashboardPage() {
         userId: authUser.id,
         fullName: profile?.full_name || getMetadataFullName(authUser) || 'Chef',
         tenantId,
+        tenantType,
         trialEndsAt,
         inventory: (inventoryRows ?? [])
           .map((row) => ({ name: row.ingredient_name, quantity: row.quantity ?? null }))
@@ -513,8 +522,8 @@ export default function AppDashboardPage() {
         });
 
         if (!recipeRes.ok) {
-          const payload = await readErrorPayload(recipeRes, 'No se pudo generar receta.');
-          throw new Error(payload.error ?? 'No se pudo generar receta.');
+          const payload = await readErrorPayload(recipeRes, humanCopy.recipeGenerateError);
+          throw new Error(payload.error ?? humanCopy.recipeGenerateError);
         }
 
         const recipePayload = (await recipeRes.json()) as { recipe: string; title?: string };
@@ -535,8 +544,8 @@ export default function AppDashboardPage() {
         });
 
         if (!recipeRes.ok) {
-          const payload = await readErrorPayload(recipeRes, 'No se pudo generar receta.');
-          throw new Error(payload.error ?? 'No se pudo generar receta.');
+          const payload = await readErrorPayload(recipeRes, humanCopy.recipeGenerateError);
+          throw new Error(payload.error ?? humanCopy.recipeGenerateError);
         }
 
         const recipePayload = (await recipeRes.json()) as { recipe: string; title?: string };
@@ -566,14 +575,17 @@ export default function AppDashboardPage() {
 
       if (insertError) throw insertError;
       setPrompt('');
-      setMessage(recipeMode === 'pdf' ? 'Receta generada usando PDFs y guardada en historial.' : 'Receta generada solo con ayuda y guardada en historial.');
+      setMessage(humanCopy.recipeGeneratedSaved);
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'No se pudo crear la receta.');
+      setError(e instanceof Error ? e.message : humanCopy.recipeGenerateError);
     } finally {
       setWorking(false);
     }
   };
+
+  const pdfLimit = data.tenantType === 'professional' ? 15 : 5;
+  const canUploadMorePdfs = data.pdfCount < pdfLimit;
 
   const addIngredient = async () => {
     if (!data.tenantId || !data.userId) return;
@@ -636,6 +648,11 @@ export default function AppDashboardPage() {
 
     if (!file || !data.tenantId || !data.userId) return;
 
+    if (!canUploadMorePdfs) {
+      setError(`Límite de PDFs alcanzado para plan ${data.tenantType === 'professional' ? 'Professional' : 'Home'} (${pdfLimit}).`);
+      return;
+    }
+
     if (file.type !== 'application/pdf') {
       setError('Solo se permiten archivos PDF.');
       return;
@@ -645,6 +662,8 @@ export default function AppDashboardPage() {
     setMessage(null);
     setError(null);
 
+    let insertedPdfId: string | null = null;
+    let insertedBookId: string | null = null;
     try {
       const supabase = getSupabaseBrowserClient();
       const checksum = await sha256Hex(file);
@@ -671,21 +690,27 @@ export default function AppDashboardPage() {
         .single();
 
       if (bookErr || !bookRow) throw bookErr || new Error('No se pudo crear tenant_book.');
+      insertedBookId = bookRow.id;
 
-      const { error: pdfErr } = await supabase.from('tenant_pdf_library').insert({
-        tenant_id: data.tenantId,
-        tenant_book_id: bookRow.id,
-        storage_path: storagePath,
-        file_size_bytes: file.size,
-        page_count: Math.max(pageCount, 1),
-        checksum_sha256: checksum,
-        ocr_used: usedOcr,
-        processing_status: 'processing',
-        processed_chunks_count: 0,
-        uploaded_by: data.userId,
-      });
+      const { data: pdfRow, error: pdfErr } = await supabase
+        .from('tenant_pdf_library')
+        .insert({
+          tenant_id: data.tenantId,
+          tenant_book_id: bookRow.id,
+          storage_path: storagePath,
+          file_size_bytes: file.size,
+          page_count: Math.max(pageCount, 1),
+          checksum_sha256: checksum,
+          ocr_used: usedOcr,
+          processing_status: 'processing',
+          processed_chunks_count: 0,
+          uploaded_by: data.userId,
+        })
+        .select('id')
+        .single();
 
-      if (pdfErr) throw pdfErr;
+      if (pdfErr || !pdfRow) throw pdfErr || new Error('No se pudo crear tenant_pdf_library.');
+      insertedPdfId = pdfRow.id;
 
       const chunkCandidates = (chunks.length > 0 ? chunks : [{ content: `Documento cargado: ${file.name}`, pageNumber: 1 }]).slice(0, 120);
       const embeddings = await generateEmbeddingsFromApi(chunkCandidates.map((chunk) => chunk.content));
@@ -718,14 +743,16 @@ export default function AppDashboardPage() {
       await load();
     } catch (e) {
       const supabase = getSupabaseBrowserClient();
-      if (data.tenantId) {
+      if (insertedPdfId) {
         await supabase
           .from('tenant_pdf_library')
           .update({ processing_status: 'failed', processing_error: e instanceof Error ? e.message : 'Error de procesamiento' })
-          .eq('tenant_id', data.tenantId)
-          .eq('processing_status', 'processing');
+          .eq('id', insertedPdfId);
+      } else if (insertedBookId) {
+        await supabase.from('tenant_books').delete().eq('id', insertedBookId);
       }
       setError(e instanceof Error ? e.message : 'No se pudo subir PDF.');
+      await load();
     } finally {
       setWorking(false);
     }
@@ -734,7 +761,7 @@ export default function AppDashboardPage() {
   return (
     <main className="texture-paper min-h-screen bg-[#FAF6F1] text-[#241A14]">
       <div className="mx-auto flex w-full max-w-[1440px] gap-4 p-4 md:p-6">
-        <aside className="dark-panel-shadow sticky top-4 hidden h-[calc(100vh-2rem)] w-[260px] flex-col rounded-3xl border border-white/10 bg-[#16110D] p-4 text-[#F4EBDD] lg:flex">
+        <aside className="dark-panel-shadow sticky top-4 z-40 hidden h-[calc(100vh-2rem)] w-[260px] flex-col rounded-3xl border border-white/10 bg-[#16110D] p-4 text-[#F4EBDD] lg:flex">
           <div>
             <p className="text-xl font-extrabold">Cocina<span className="text-[#E39A5A]">Core</span></p>
             <p className="text-xs text-[#BFAE9F]">Tu cocina inteligente</p>
@@ -755,7 +782,7 @@ export default function AppDashboardPage() {
                 >
                   <Icon size={16} />
                   {item.label}
-                  <span className="pointer-events-none absolute left-full top-1/2 z-30 ml-3 hidden w-64 -translate-y-1/2 rounded-xl border border-[#E8DDD2]/30 bg-[#221913] px-3 py-2 text-xs text-[#F4EBDD] shadow-xl group-hover:block">
+                  <span className="pointer-events-none absolute left-full top-1/2 z-[999] ml-3 hidden w-64 -translate-y-1/2 rounded-xl border border-[#E8DDD2]/30 bg-[#221913] px-3 py-2 text-xs text-[#F4EBDD] shadow-xl group-hover:block">
                     {item.description}
                   </span>
                 </Link>
@@ -854,7 +881,7 @@ export default function AppDashboardPage() {
                       : 'border-[#E8DDD2] bg-white/80 text-[#6B5A50]'
                   }`}
                 >
-                  Buscar en PDFs
+                  {humanCopy.searchInPdfs}
                 </button>
                 <button
                   type="button"
@@ -865,7 +892,7 @@ export default function AppDashboardPage() {
                       : 'border-[#E8DDD2] bg-white/80 text-[#6B5A50]'
                   }`}
                 >
-                  Crear conmigo
+                  {humanCopy.createWithMe}
                 </button>
                 <span className="text-xs text-[#8C7A6D]">
                   {recipeMode === 'pdf' ? 'Usa contexto de tu biblioteca PDF.' : 'Ignora PDFs y genera libre con ayuda.'}
@@ -967,6 +994,9 @@ export default function AppDashboardPage() {
                 <h3 className="text-xl font-semibold">Biblioteca</h3>
                 <p className="mt-2 text-[#6B5A50]">Consulta tus libros y recetas PDF con búsqueda inteligente.</p>
                 <p className="mt-2 text-sm text-[#6B5A50]">PDFs cargados: {data.pdfCount}</p>
+                <p className="mt-1 text-xs text-[#6B5A50]">
+                  Plan {data.tenantType === 'professional' ? 'Professional' : 'Home'} · límite {pdfLimit} PDFs
+                </p>
                 {data.pdfCount > 0 && data.latestPdfOcrUsed ? (
                   <span className="mt-2 inline-flex rounded-full border border-[#6D4AFF]/30 bg-[#6D4AFF]/10 px-2 py-1 text-xs font-semibold text-[#6D4AFF]">
                     OCR aplicado en el último PDF
@@ -982,7 +1012,12 @@ export default function AppDashboardPage() {
                           {pdf.processingStatus === 'processing' ? (
                             <span className="rounded-full border border-[#C56A1A]/30 bg-[#C56A1A]/10 px-2 py-0.5 text-[10px] font-semibold text-[#C56A1A]">Proc</span>
                           ) : pdf.processingStatus === 'failed' ? (
-                            <span className="rounded-full border border-red-300 bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-700">Fail</span>
+                            <span
+                              className="rounded-full border border-red-300 bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-700"
+                              title={pdf.processingError ?? 'Error de procesamiento no detallado.'}
+                            >
+                              Error
+                            </span>
                           ) : null}
                           {pdf.ocrUsed ? (
                             <span className="rounded-full border border-[#6D4AFF]/30 bg-[#6D4AFF]/10 px-2 py-0.5 text-[10px] font-semibold text-[#6D4AFF]">OCR</span>
@@ -1003,10 +1038,10 @@ export default function AppDashboardPage() {
                 />
                 <button
                   onClick={() => uploadInputRef.current?.click()}
-                  disabled={working || loading}
+                  disabled={working || loading || !canUploadMorePdfs}
                   className="mt-4 rounded-xl border border-[#E8DDD2] px-3 py-2 text-sm font-semibold text-[#6B5A50] disabled:opacity-60"
                 >
-                  Subir PDF
+                  {canUploadMorePdfs ? 'Subir PDF' : 'Límite de PDFs alcanzado'}
                 </button>
               </Card>
 

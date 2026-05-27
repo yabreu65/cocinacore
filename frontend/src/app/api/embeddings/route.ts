@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { serverLogger } from '@/lib/serverLogger';
 
 interface EmbeddingsRequestBody {
   texts?: string[];
@@ -89,14 +90,18 @@ async function requestEmbeddings(apiKey: string, model: string, texts: string[])
 }
 
 export async function POST(request: NextRequest) {
+  const startedAt = Date.now();
+  const requestId = crypto.randomUUID();
   const apiKey = process.env.GEMINI_API_KEY;
 
   if (!apiKey) {
+    serverLogger.error('embeddings.misconfigured', { requestId });
     return NextResponse.json({ error: 'GEMINI_API_KEY no está configurada en el servidor.' }, { status: 500 });
   }
 
   const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'local';
   if (isRateLimited(ip)) {
+    serverLogger.warn('embeddings.rate_limited', { requestId, ip });
     return NextResponse.json({ error: 'Límite de solicitudes excedido. Espera un minuto.' }, { status: 429 });
   }
 
@@ -104,12 +109,21 @@ export async function POST(request: NextRequest) {
   const texts = Array.isArray(body.texts) ? body.texts.map((text) => text.trim()).filter((text) => text.length > 0) : [];
 
   if (texts.length === 0) {
+    serverLogger.warn('embeddings.invalid_input', { requestId, reason: 'empty_texts' });
     return NextResponse.json({ error: 'Debes enviar al menos un texto.' }, { status: 400 });
   }
 
   if (texts.length > 120) {
+    serverLogger.warn('embeddings.invalid_input', { requestId, reason: 'too_many_texts', textsCount: texts.length });
     return NextResponse.json({ error: 'Máximo 120 textos por solicitud.' }, { status: 400 });
   }
+
+  serverLogger.info('embeddings.request', {
+    requestId,
+    ip,
+    textsCount: texts.length,
+    modelsTried: [...new Set([ENV_MODEL, ...FALLBACK_MODELS].filter(Boolean) as string[])],
+  });
 
   const modelsToTry = [...new Set([ENV_MODEL, ...FALLBACK_MODELS].filter(Boolean) as string[])];
   const errors: string[] = [];
@@ -117,6 +131,12 @@ export async function POST(request: NextRequest) {
   for (const model of modelsToTry) {
     const result = await requestEmbeddings(apiKey, model, texts);
     if (result.ok) {
+      serverLogger.info('embeddings.success', {
+        requestId,
+        durationMs: Date.now() - startedAt,
+        modelUsed: model,
+        embeddingsCount: result.embeddings.length,
+      });
       return NextResponse.json({ embeddings: result.embeddings, modelUsed: model });
     }
 
@@ -124,6 +144,12 @@ export async function POST(request: NextRequest) {
 
     // If model not found, continue fallback. For other statuses also try fallback just in case.
   }
+
+  serverLogger.error('embeddings.failure', {
+    requestId,
+    durationMs: Date.now() - startedAt,
+    modelsTried: modelsToTry,
+  });
 
   return NextResponse.json(
     {

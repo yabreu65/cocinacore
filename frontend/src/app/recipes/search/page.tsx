@@ -2,7 +2,9 @@
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { getSupabaseBrowserClient } from '@/lib/supabaseClient';
+import { humanCopy } from '@/lib/copy';
 
 type MatchChunkRow = {
   id: string;
@@ -10,6 +12,8 @@ type MatchChunkRow = {
   similarity: number | string | null;
   metadata?: { page_number?: number; book_title?: string };
 };
+type GenerationMode = 'free' | 'rag';
+const RAG_SIMILARITY_THRESHOLD = 0.72;
 
 type TermOption = {
   id: string;
@@ -53,6 +57,8 @@ const AVOID_CONFIG: TaxonomySelectionConfig = {
 };
 
 const STORAGE_KEY = 'cocinacore_recipe_search_filters_v1';
+const RECIPE_SESSION_KEY = 'cocinacore_recipe_sessions_v1';
+const RECIPE_TTL_MS = 12 * 60 * 60 * 1000;
 
 const QUICK_TEMPLATES: Array<{
   label: string;
@@ -103,6 +109,133 @@ function safeSimilarity(value: number | string | null | undefined): number {
   return 0;
 }
 
+type RecipeSections = {
+  title: string;
+  ingredients: string[];
+  preparation: string[];
+  tips: string[];
+  fallback: string;
+};
+
+function cleanRecipeText(raw: string): string {
+  return raw
+    .replace(/\[TITULO\]/gi, '')
+    .replace(/^TITULO:?/gim, '')
+    .replace(/\*\*/g, '')
+    .replace(/^#+\s*/gim, '')
+    .trim();
+}
+
+function normalizeTitleCandidate(value: string): string {
+  return value
+    .replace(/^\[|\]$/g, '')
+    .replace(/\*\*/g, '')
+    .replace(/^#+\s*/, '')
+    .replace(/^[-–—]\s*/, '')
+    .trim();
+}
+
+function inferCleanTitle(lines: string[]): string {
+  const direct = lines
+    .map((line) => normalizeTitleCandidate(line))
+    .find((line) => line.length > 0 && line.length <= 70 && !/[.!?]$/.test(line));
+  if (direct) return direct;
+
+  const joined = lines.join(' ');
+  const recipePattern = joined.match(/(?:receta de|prepara(?:ción)? de)\s+([A-ZÁÉÍÓÚÑ][^,.]{3,60})/i);
+  if (recipePattern?.[1]) return normalizeTitleCandidate(recipePattern[1]);
+
+  const laPattern = joined.match(/\b([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑa-záéíóúñ]+){0,5})\s+es\s+un/i);
+  if (laPattern?.[1]) return normalizeTitleCandidate(laPattern[1]);
+
+  return 'Receta CocinaCore';
+}
+
+function parseRecipeSections(raw: string): RecipeSections {
+  const cleaned = cleanRecipeText(raw);
+  const lines = cleaned.split('\n').map((line) => line.trim()).filter(Boolean);
+  const title = inferCleanTitle(lines);
+
+  const ingredients: string[] = [];
+  const preparation: string[] = [];
+  const tips: string[] = [];
+  let current: 'ingredients' | 'preparation' | 'tips' | null = null;
+
+  for (const line of lines.slice(1)) {
+    const lower = line.toLowerCase();
+    if (lower.startsWith('ingredientes')) {
+      current = 'ingredients';
+      continue;
+    }
+    if (lower.startsWith('preparación') || lower.startsWith('preparacion')) {
+      current = 'preparation';
+      continue;
+    }
+    if (lower.startsWith('tips')) {
+      current = 'tips';
+      continue;
+    }
+    if (lower.startsWith('fuente')) {
+      current = null;
+      continue;
+    }
+
+    if (current === 'ingredients') ingredients.push(line.replace(/^-+\s*/, ''));
+    if (current === 'preparation') preparation.push(line.replace(/^\d+[\.)-]?\s*/, ''));
+    if (current === 'tips') tips.push(line.replace(/^-+\s*/, ''));
+  }
+
+  return { title, ingredients, preparation, tips, fallback: cleaned };
+}
+
+function splitIngredientLine(line: string): { quantity: string; name: string } {
+  const normalized = line.replace(/^[-•]\s*/, '').trim();
+  const match = normalized.match(/^(\d+[\/\d.,]*\s*(?:g|kg|ml|l|taza(?:s)?|cucharada(?:s)?|cucharadita(?:s)?|unidad(?:es)?|huevo(?:s)?|diente(?:s)?|ramita(?:s)?)?)\s+(.*)$/i);
+  if (!match) return { quantity: '—', name: normalized };
+  return { quantity: match[1].trim(), name: match[2].trim() };
+}
+
+type RecipeSession = {
+  id: string;
+  historyId: string | null;
+  title: string;
+  recipe: string;
+  mode: GenerationMode;
+  peopleCount: number;
+  saved: boolean;
+  createdAt: number;
+  expiresAt: number;
+};
+
+type HistoryRow = {
+  id: string;
+  recipe_title: string | null;
+  recipe_payload: {
+    full_recipe?: string;
+    mode?: GenerationMode;
+    citations?: Array<{ id?: string; similarity?: number; metadata?: { page_number?: number; book_title?: string } }>;
+  };
+  is_saved: boolean;
+  expires_at: string | null;
+  created_at: string;
+};
+
+function readRecipeSessions(): RecipeSession[] {
+  try {
+    const raw = localStorage.getItem(RECIPE_SESSION_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as RecipeSession[];
+    const now = Date.now();
+    return parsed.filter((item) => item.expiresAt > now);
+  } catch {
+    return [];
+  }
+}
+
+function saveRecipeSessions(sessions: RecipeSession[]) {
+  localStorage.setItem(RECIPE_SESSION_KEY, JSON.stringify(sessions));
+}
+
 function SelectionCard(props: {
   title: string;
   subtitle: string;
@@ -137,6 +270,7 @@ function SelectionCard(props: {
 
 export default function RecipeSearchPage() {
   const [ingredients, setIngredients] = useState<string>('');
+  const [peopleCount, setPeopleCount] = useState<number>(4);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [recipe, setRecipe] = useState<string>('');
@@ -147,6 +281,12 @@ export default function RecipeSearchPage() {
   const [selectedAvoid, setSelectedAvoid] = useState<string[]>([]);
   const [selectedGoals, setSelectedGoals] = useState<string[]>([]);
   const [level, setLevel] = useState<string>('');
+  const [mode, setMode] = useState<GenerationMode>('free');
+  const [recipeMode, setRecipeMode] = useState<GenerationMode>('free');
+  const [recipeModalOpen, setRecipeModalOpen] = useState(false);
+  const [recipeSessions, setRecipeSessions] = useState<RecipeSession[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [savingRecipe, setSavingRecipe] = useState(false);
 
   const normalizedIngredients = useMemo(
     () => ingredients.split(',').map((value) => value.trim()).filter((value) => value.length > 0),
@@ -162,6 +302,7 @@ export default function RecipeSearchPage() {
     if (level) score += 10;
     return Math.min(100, score);
   }, [normalizedIngredients.length, selectedRegional.length, selectedStyle.length, selectedGoals.length, level]);
+  const parsedRecipe = useMemo(() => (recipe ? parseRecipeSections(recipe) : null), [recipe]);
 
   useEffect(() => {
     try {
@@ -169,6 +310,7 @@ export default function RecipeSearchPage() {
       if (!raw) return;
       const parsed = JSON.parse(raw) as {
         ingredients: string;
+        peopleCount?: number;
         regional: string[];
         style: string[];
         goals: string[];
@@ -176,6 +318,7 @@ export default function RecipeSearchPage() {
         level: string;
       };
       setIngredients(parsed.ingredients ?? '');
+      setPeopleCount(typeof parsed.peopleCount === 'number' && Number.isFinite(parsed.peopleCount) && parsed.peopleCount > 0 ? Math.floor(parsed.peopleCount) : 4);
       setSelectedRegional(parsed.regional ?? []);
       setSelectedStyle(parsed.style ?? []);
       setSelectedGoals(parsed.goals ?? []);
@@ -187,10 +330,70 @@ export default function RecipeSearchPage() {
   }, []);
 
   useEffect(() => {
+    const loadRecentRecipes = async () => {
+      const local = readRecipeSessions();
+      const now = Date.now();
+      const supabase = getSupabaseBrowserClient();
+      const { data: authData } = await supabase.auth.getUser();
+      if (!authData.user) {
+        setRecipeSessions(local);
+        saveRecipeSessions(local);
+        return;
+      }
+
+      const { data: rows } = await supabase
+        .from('recipe_ai_history')
+        .select('id,recipe_title,recipe_payload,is_saved,expires_at,created_at')
+        .eq('user_id', authData.user.id)
+        .or(`is_saved.eq.true,expires_at.gt.${new Date().toISOString()}`)
+        .order('created_at', { ascending: false })
+        .limit(20);
+
+      const dbSessions: RecipeSession[] = ((rows ?? []) as HistoryRow[]).map((row) => {
+        const mappedMode: GenerationMode = row.recipe_payload?.mode === 'rag' ? 'rag' : 'free';
+        return {
+          id: row.id,
+          historyId: row.id,
+          title: row.recipe_title ?? parseRecipeSections(String(row.recipe_payload?.full_recipe ?? '')).title,
+          recipe: String(row.recipe_payload?.full_recipe ?? ''),
+          mode: mappedMode,
+          peopleCount: 4,
+          saved: Boolean(row.is_saved),
+          createdAt: new Date(row.created_at).getTime(),
+          expiresAt: row.is_saved ? Number.MAX_SAFE_INTEGER : (row.expires_at ? new Date(row.expires_at).getTime() : now + RECIPE_TTL_MS),
+        };
+      }).filter((item) => item.recipe.trim().length > 0);
+
+      const merged: RecipeSession[] = [...dbSessions, ...local]
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .filter((item, index, arr) => arr.findIndex((x) => x.title === item.title && x.createdAt === item.createdAt) === index)
+        .slice(0, 20)
+        .filter((item) => item.saved || item.expiresAt > now);
+
+      setRecipeSessions(merged);
+      saveRecipeSessions(merged);
+    };
+    void loadRecentRecipes();
+  }, []);
+
+  useEffect(() => {
+    const cleanupExpiredHistory = async () => {
+      const supabase = getSupabaseBrowserClient();
+      await supabase
+        .from('recipe_ai_history')
+        .delete()
+        .eq('is_saved', false)
+        .lte('expires_at', new Date().toISOString());
+    };
+    void cleanupExpiredHistory();
+  }, []);
+
+  useEffect(() => {
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
         ingredients,
+        peopleCount,
         regional: selectedRegional,
         style: selectedStyle,
         goals: selectedGoals,
@@ -198,7 +401,7 @@ export default function RecipeSearchPage() {
         level,
       }),
     );
-  }, [ingredients, level, selectedAvoid, selectedGoals, selectedRegional, selectedStyle]);
+  }, [ingredients, peopleCount, level, selectedAvoid, selectedGoals, selectedRegional, selectedStyle]);
 
   useEffect(() => {
     const loadTerms = async () => {
@@ -246,43 +449,50 @@ export default function RecipeSearchPage() {
     setError(null);
     setRecipe('');
     setCitations([]);
+    setRecipeMode(mode);
 
     try {
       const supabase = getSupabaseBrowserClient();
       const selectedPreferred = [...selectedRegional, ...selectedStyle];
-      const query = `Receta con ingredientes: ${normalizedIngredients.join(', ') || 'libre'}. Preferencias: ${selectedPreferred.join(', ') || 'sin preferencia'}.`;
+      const safePeopleCount = Number.isFinite(peopleCount) && peopleCount > 0 ? Math.floor(peopleCount) : 4;
+      let safeChunks: MatchChunkRow[] = [];
+      if (mode === 'rag') {
+        const query = `Receta con ingredientes: ${normalizedIngredients.join(', ') || 'libre'}. Preferencias: ${selectedPreferred.join(', ') || 'sin preferencia'}.`;
 
-      const embedRes = await fetch('/api/embeddings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ texts: [query] }),
-      });
+        const embedRes = await fetch('/api/embeddings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ texts: [query] }),
+        });
 
-      if (!embedRes.ok) {
-        const payload = await readErrorPayload(embedRes, 'No se pudo crear embedding.');
-        throw new Error(payload.error ?? 'No se pudo crear embedding.');
+        if (!embedRes.ok) {
+          const payload = await readErrorPayload(embedRes, 'No se pudo crear embedding.');
+          throw new Error(payload.error ?? 'No se pudo crear embedding.');
+        }
+
+        const embedPayload = (await embedRes.json()) as { embeddings: number[][] };
+        const queryEmbedding = embedPayload.embeddings[0];
+
+        const { data: chunkRows, error: rpcErr } = await supabase.rpc('match_chunks', {
+          query_embedding: queryEmbedding,
+          match_threshold: RAG_SIMILARITY_THRESHOLD,
+          match_count: 8,
+          filter_tenant_id: null,
+        });
+
+        if (rpcErr) throw rpcErr;
+
+        safeChunks = ((chunkRows ?? []) as MatchChunkRow[])
+          .filter((row) => row.content && safeSimilarity(row.similarity) > 0 && safeSimilarity(row.similarity) >= RAG_SIMILARITY_THRESHOLD)
+          .sort((a, b) => safeSimilarity(b.similarity) - safeSimilarity(a.similarity));
       }
-
-      const embedPayload = (await embedRes.json()) as { embeddings: number[][] };
-      const queryEmbedding = embedPayload.embeddings[0];
-
-      const { data: chunkRows, error: rpcErr } = await supabase.rpc('match_chunks', {
-        query_embedding: queryEmbedding,
-        match_threshold: 0.35,
-        match_count: 8,
-        filter_tenant_id: null,
-      });
-
-      if (rpcErr) throw rpcErr;
-
-      const safeChunks = ((chunkRows ?? []) as MatchChunkRow[])
-        .filter((row) => row.content)
-        .sort((a, b) => safeSimilarity(b.similarity) - safeSimilarity(a.similarity));
 
       const recipeRes = await fetch('/api/recipe-generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          mode,
+          peopleCount: safePeopleCount,
           ingredients: normalizedIngredients,
           chunks: safeChunks.map((row) => row.content),
           culinaryProfile: {
@@ -296,15 +506,80 @@ export default function RecipeSearchPage() {
       });
 
       if (!recipeRes.ok) {
-        const payload = await readErrorPayload(recipeRes, 'No se pudo generar receta.');
-        throw new Error(payload.error ?? 'No se pudo generar receta.');
+        const payload = await readErrorPayload(recipeRes, humanCopy.recipeGenerateError);
+        throw new Error(payload.error ?? humanCopy.recipeGenerateError);
       }
 
-      const recipePayload = (await recipeRes.json()) as { recipe: string };
+      const recipePayload = (await recipeRes.json()) as { recipe: string; mode?: GenerationMode };
       setRecipe(recipePayload.recipe);
-      setCitations(safeChunks.slice(0, 4));
+      setRecipeMode(recipePayload.mode ?? mode);
+      setCitations(mode === 'rag' ? safeChunks.slice(0, 4) : []);
+      setRecipeModalOpen(true);
+
+      const now = Date.now();
+      let historyId: string | null = null;
+      const { data: authData } = await supabase.auth.getUser();
+      if (authData.user) {
+        const { data: userRow } = await supabase
+          .from('users')
+          .select('tenant_id')
+          .eq('id', authData.user.id)
+          .maybeSingle();
+
+        if (userRow?.tenant_id) {
+          const recipeTitle = parseRecipeSections(recipePayload.recipe).title;
+          const { data: insertedHistory, error: insertHistoryError } = await supabase
+            .from('recipe_ai_history')
+            .insert({
+              tenant_id: userRow.tenant_id,
+              user_id: authData.user.id,
+              source: mode === 'rag' ? 'pdf_search' : 'ai_generation',
+              recipe_title: recipeTitle,
+              recipe_payload: {
+                title: recipeTitle,
+                full_recipe: recipePayload.recipe,
+                mode,
+                citations: mode === 'rag' ? safeChunks.slice(0, 4).map((row) => ({
+                  id: row.id,
+                  similarity: safeSimilarity(row.similarity),
+                  metadata: row.metadata ?? {},
+                })) : [],
+              },
+              restrictions_snapshot: {
+                avoid: selectedAvoid,
+                goals: selectedGoals,
+                level: level || null,
+              },
+              inventory_snapshot: normalizedIngredients,
+              is_saved: false,
+              expires_at: new Date(now + RECIPE_TTL_MS).toISOString(),
+            })
+            .select('id')
+            .single();
+
+          if (!insertHistoryError && insertedHistory) {
+            historyId = insertedHistory.id;
+          }
+        }
+      }
+
+      const newSession: RecipeSession = {
+        id: crypto.randomUUID(),
+        historyId,
+        title: parseRecipeSections(recipePayload.recipe).title,
+        recipe: recipePayload.recipe,
+        mode: recipePayload.mode ?? mode,
+        peopleCount: safePeopleCount,
+        saved: false,
+        createdAt: now,
+        expiresAt: now + RECIPE_TTL_MS,
+      };
+      const updatedSessions = [newSession, ...recipeSessions].slice(0, 20).filter((item) => item.expiresAt > now);
+      setRecipeSessions(updatedSessions);
+      saveRecipeSessions(updatedSessions);
+      setActiveSessionId(newSession.id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error generando receta.');
+      setError(err instanceof Error ? err.message : humanCopy.recipeGenerateError);
     } finally {
       setLoading(false);
     }
@@ -317,6 +592,40 @@ export default function RecipeSearchPage() {
     setSelectedGoals(template.goals);
     setSelectedAvoid(template.avoid);
     setLevel(template.level);
+  };
+
+  const openSession = (session: RecipeSession) => {
+    setRecipe(session.recipe);
+    setRecipeMode(session.mode);
+    setPeopleCount(session.peopleCount);
+    setCitations([]);
+    setActiveSessionId(session.id);
+    setRecipeModalOpen(true);
+  };
+
+  const saveActiveRecipe = async () => {
+    if (!activeSessionId || savingRecipe) return;
+    const current = recipeSessions.find((session) => session.id === activeSessionId);
+    if (!current) return;
+
+    setSavingRecipe(true);
+    try {
+      if (current.historyId) {
+        const supabase = getSupabaseBrowserClient();
+        await supabase
+          .from('recipe_ai_history')
+          .update({ is_saved: true, expires_at: null })
+          .eq('id', current.historyId);
+      }
+
+      const updated = recipeSessions.map((session) =>
+        session.id === activeSessionId ? { ...session, saved: true, expiresAt: Number.MAX_SAFE_INTEGER } : session
+      );
+      setRecipeSessions(updated);
+      saveRecipeSessions(updated);
+    } finally {
+      setSavingRecipe(false);
+    }
   };
 
   return (
@@ -357,7 +666,37 @@ export default function RecipeSearchPage() {
               placeholder="pollo, tomate, arroz, cebolla"
               className="mt-2 h-12 w-full rounded-xl border border-[#E8DDD2] bg-white px-3 text-sm outline-none transition focus:border-[#6D4AFF] focus:ring-2 focus:ring-[#6D4AFF]/20"
             />
+            <label htmlFor="peopleCount" className="mt-3 block text-sm font-semibold text-[#6B5A50]">Comensales</label>
+            <input
+              id="peopleCount"
+              type="number"
+              min={1}
+              max={20}
+              value={peopleCount}
+              onChange={(event) => setPeopleCount(Math.max(1, Math.min(20, Number(event.target.value) || 1)))}
+              className="mt-2 h-12 w-full rounded-xl border border-[#E8DDD2] bg-white px-3 text-sm outline-none transition focus:border-[#6D4AFF] focus:ring-2 focus:ring-[#6D4AFF]/20"
+            />
           </div>
+          <article className="rounded-2xl border border-[#E8DDD2] bg-white/70 p-4">
+            <p className="text-base font-semibold">Modo de generación</p>
+            <p className="text-sm text-[#6B5A50]">Elegí si querés receta libre o receta basada en biblioteca.</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setMode('free')}
+                className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${mode === 'free' ? 'border-[#C56A1A]/40 bg-[#C56A1A]/10 text-[#A55412]' : 'border-[#E8DDD2] bg-white text-[#6B5A50]'}`}
+              >
+                {humanCopy.createWithMe}
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode('rag')}
+                className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${mode === 'rag' ? 'border-[#6D4AFF]/40 bg-[#6D4AFF]/10 text-[#6D4AFF]' : 'border-[#E8DDD2] bg-white text-[#6B5A50]'}`}
+              >
+                {humanCopy.searchInPdfs}
+              </button>
+            </div>
+          </article>
 
           <SelectionCard
             title={REGIONAL_CONFIG.title}
@@ -442,19 +781,163 @@ export default function RecipeSearchPage() {
           </button>
         </form>
 
+        {recipeSessions.length > 0 ? (
+          <section className="mt-4 rounded-2xl border border-[#E8DDD2] bg-white/70 p-4">
+            <h2 className="text-lg font-semibold">Recetas recientes (12h)</h2>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              {recipeSessions.map((session) => (
+                <article key={session.id} className="rounded-xl border border-[#E8DDD2] bg-white p-3">
+                  <p className="line-clamp-1 text-sm font-semibold text-[#241A14]">{session.title}</p>
+                  <p className="mt-1 text-xs text-[#6B5A50]">
+                    {session.mode === 'rag' ? humanCopy.basedOnLibrary : humanCopy.freeGeneration} · {session.peopleCount} comensales · {session.saved ? 'Guardada' : 'Temporal 12h'}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => openSession(session)}
+                    className="mt-2 rounded-lg border border-[#E8DDD2] px-2.5 py-1 text-xs font-semibold text-[#6B5A50]"
+                  >
+                    Abrir receta
+                  </button>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
         {error ? <p className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
 
-        {recipe ? (
-          <section className="mt-4 rounded-2xl border border-[#E8DDD2] bg-white/70 p-4">
-            <h2 className="text-xl font-semibold">Receta</h2>
-            <pre className="mt-2 whitespace-pre-wrap text-sm text-[#3B2F26]">{recipe}</pre>
-            <h3 className="mt-3 text-sm font-semibold text-[#6B5A50]">Citas</h3>
-            <ul className="mt-1 space-y-1 text-xs text-[#6B5A50]">
-              {citations.map((row) => (
-                <li key={row.id}>{row.metadata?.book_title ?? 'Documento'} · pág {row.metadata?.page_number ?? '-'} · sim {safeSimilarity(row.similarity).toFixed(3)}</li>
-              ))}
-            </ul>
-          </section>
+        {recipeModalOpen && recipe ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-3 md:p-6">
+            <section className="max-h-[86vh] w-full max-w-5xl overflow-y-auto rounded-3xl border border-[#E8DDD2] bg-[#FAF6F1] p-4 shadow-2xl md:p-5">
+              <div className="mb-3 flex justify-end">
+                <button type="button" onClick={() => setRecipeModalOpen(false)} className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-1.5 text-xs font-semibold text-[#6B5A50]">
+                  Cerrar
+                </button>
+              </div>
+              <section className="space-y-4">
+            <header className="flex flex-wrap items-center justify-between gap-2">
+              <Link href="/app" className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-1.5 text-xs font-semibold text-[#6B5A50]">
+                ← Volver
+              </Link>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void saveActiveRecipe()}
+                  disabled={savingRecipe}
+                  className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-1.5 text-xs font-semibold text-[#6B5A50] disabled:opacity-60"
+                >
+                  {savingRecipe ? 'Guardando...' : 'Guardar'}
+                </button>
+                <button type="button" className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-1.5 text-xs font-semibold text-[#6B5A50]">Compartir</button>
+                <button type="button" className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-1.5 text-xs font-semibold text-[#6B5A50]">Agregar al menú</button>
+              </div>
+            </header>
+
+            <article className="grid gap-4 rounded-2xl border border-[#E8DDD2] bg-white/80 p-4 md:grid-cols-[1fr_auto]">
+              <div className="max-w-[520px] space-y-1.5">
+                <span className="inline-flex rounded-full border border-[#6D4AFF]/30 bg-[#6D4AFF]/10 px-2.5 py-1 text-xs font-semibold text-[#6D4AFF]">Creada por CocinaCore AI</span>
+                <h2 className="text-xl font-semibold text-[#241A14]">{parsedRecipe?.title ?? 'Receta generada'}</h2>
+                <p className="text-xs text-[#6B5A50]">
+                  {recipeMode === 'rag'
+                    ? 'Receta basada en tu biblioteca culinaria con ajuste inteligente de cantidades.'
+                    : 'Receta personalizada según tus ingredientes y preferencias culinarias.'}
+                </p>
+                <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-[#6B5A50] sm:grid-cols-4">
+                  <span className="rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] px-2 py-1">👥 {peopleCount || 4} comensales</span>
+                  <span className="rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] px-2 py-1">⏱️ 35 min</span>
+                  <span className="rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] px-2 py-1">🔥 {level || 'Intermedio'}</span>
+                  <span className="rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] px-2 py-1">🌍 {selectedRegional[0] ?? 'Fusión'}</span>
+                </div>
+              </div>
+              <div className="order-first place-self-start justify-self-center w-full max-w-[120px] overflow-hidden rounded-2xl bg-[#FAF6F1] md:order-none md:justify-self-end md:max-w-[170px]">
+                <Image src="/plato-logo.png" alt="Plato CocinaCore" width={800} height={600} className="h-auto w-full object-cover" />
+              </div>
+            </article>
+
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              <article className="rounded-2xl border border-[#E8DDD2] bg-white p-3"><p className="text-xs text-[#6B5A50]">Autenticidad</p><p className="mt-1 text-sm font-semibold">Alta</p></article>
+              <article className="rounded-2xl border border-[#E8DDD2] bg-white p-3"><p className="text-xs text-[#6B5A50]">Técnica clave</p><p className="mt-1 text-sm font-semibold">{parsedRecipe?.preparation[0]?.split(' ').slice(0, 3).join(' ') || 'Sofrito'}</p></article>
+              <article className="rounded-2xl border border-[#E8DDD2] bg-white p-3"><p className="text-xs text-[#6B5A50]">Ingrediente protagonista</p><p className="mt-1 text-sm font-semibold">{splitIngredientLine(parsedRecipe?.ingredients[0] ?? 'Ingredientes base').name}</p></article>
+              <article className="rounded-2xl border border-[#E8DDD2] bg-white p-3"><p className="text-xs text-[#6B5A50]">Perfil de sabor</p><p className="mt-1 text-sm font-semibold">{selectedStyle[0] ?? 'Casero equilibrado'}</p></article>
+            </div>
+
+            <nav className="flex flex-wrap gap-2 text-xs font-semibold">
+              <a href="#ingredientes" className="rounded-full border border-[#E8DDD2] bg-white px-3 py-1.5 text-[#6B5A50]">Ingredientes</a>
+              <a href="#preparacion" className="rounded-full border border-[#E8DDD2] bg-white px-3 py-1.5 text-[#6B5A50]">Preparación</a>
+              <a href="#tips" className="rounded-full border border-[#E8DDD2] bg-white px-3 py-1.5 text-[#6B5A50]">Tips del chef</a>
+              <a href="#origen" className="rounded-full border border-[#E8DDD2] bg-white px-3 py-1.5 text-[#6B5A50]">Origen y notas</a>
+            </nav>
+
+            <article id="ingredientes" className="rounded-2xl border border-[#E8DDD2] bg-white p-4">
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-lg font-semibold">Ingredientes</h3>
+                <button type="button" className="rounded-xl border border-[#E8DDD2] px-3 py-1.5 text-xs font-semibold text-[#6B5A50]">Agregar a mi lista</button>
+              </div>
+              <ul className="space-y-2">
+                {(parsedRecipe?.ingredients ?? []).map((item, index) => {
+                  const parsed = splitIngredientLine(item);
+                  return (
+                    <li key={`${item}-${index}`} className="flex items-center gap-3 rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] px-3 py-2 text-sm">
+                      <input type="checkbox" className="size-4 rounded border-[#E8DDD2]" />
+                      <span className="min-w-20 font-semibold text-[#6B5A50]">{parsed.quantity}</span>
+                      <span className="text-[#241A14]">{parsed.name}</span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </article>
+
+            <article id="preparacion" className="rounded-2xl border border-[#E8DDD2] bg-white p-4">
+              <h3 className="text-lg font-semibold">Preparación</h3>
+              <ol className="mt-2 space-y-2">
+                {(parsedRecipe?.preparation ?? []).map((step, index) => (
+                  <li key={`${step}-${index}`} className="flex gap-3 rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] px-3 py-2 text-sm">
+                    <span className="mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-[#C56A1A] text-xs font-bold text-white">{index + 1}</span>
+                    <span>{step}</span>
+                  </li>
+                ))}
+              </ol>
+            </article>
+
+            <article id="tips" className="rounded-2xl border border-[#E8DDD2] bg-white p-4">
+              <h3 className="text-lg font-semibold">Tips del chef</h3>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                {(parsedRecipe?.tips ?? []).map((tip, index) => (
+                  <div key={`${tip}-${index}`} className="rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] p-3 text-sm">
+                    <p className="text-xs font-semibold text-[#6B5A50]">Tip #{index + 1}</p>
+                    <p className="mt-1 text-[#241A14]">{tip}</p>
+                  </div>
+                ))}
+              </div>
+            </article>
+
+            <article id="origen" className="rounded-2xl border border-[#E8DDD2] bg-white p-4">
+              <h3 className="text-lg font-semibold">Origen y notas</h3>
+              <p className="mt-2 text-sm text-[#6B5A50]">
+                {recipeMode === 'rag'
+                  ? 'Receta generada por CocinaCore AI usando tu biblioteca culinaria, ingredientes y preferencias.'
+                  : 'Receta generada por CocinaCore AI usando tus ingredientes, preferencias culinarias y restricciones.'}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {['tradicional', 'familiar', selectedStyle[0]?.toLowerCase() ?? 'rápida', selectedRegional[0]?.toLowerCase() ?? 'fusión'].map((tag) => (
+                  <span key={tag} className="rounded-full border border-[#E8DDD2] bg-[#FAF6F1] px-2.5 py-1 text-xs text-[#6B5A50]">{tag}</span>
+                ))}
+              </div>
+            </article>
+
+            {recipeMode === 'rag' && citations.length > 0 ? (
+              <article className="rounded-2xl border border-[#E8DDD2] bg-white p-4">
+                <h3 className="text-sm font-semibold text-[#6B5A50]">Citas válidas de biblioteca</h3>
+                <ul className="mt-1 space-y-1 text-xs text-[#6B5A50]">
+                  {citations.map((row) => (
+                    <li key={row.id}>{row.metadata?.book_title ?? 'Documento'} · pág {row.metadata?.page_number ?? '-'} · sim {safeSimilarity(row.similarity).toFixed(3)}</li>
+                  ))}
+                </ul>
+              </article>
+            ) : null}
+              </section>
+            </section>
+          </div>
         ) : null}
       </section>
     </main>

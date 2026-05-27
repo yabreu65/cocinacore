@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { serverLogger } from '@/lib/serverLogger';
 
 interface Body {
   mode?: 'inventory_to_menu' | 'menu_to_shopping';
@@ -9,19 +10,24 @@ interface Body {
   cuisine?: string;
   country?: string;
   inventory?: string[];
+  peopleCount?: number;
   culinaryProfile?: {
     preferred?: string[];
     avoid?: string[];
     goals?: string[];
     level?: string | null;
   };
+  chunks?: string[];
 }
 
 export async function POST(request: NextRequest) {
+  const startedAt = Date.now();
+  const requestId = crypto.randomUUID();
   const apiKey = process.env.GEMINI_API_KEY;
   const model = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash';
 
   if (!apiKey) {
+    serverLogger.error('meal_plan.misconfigured', { requestId });
     return NextResponse.json({ error: 'GEMINI_API_KEY no está configurada.' }, { status: 500 });
   }
 
@@ -35,15 +41,29 @@ export async function POST(request: NextRequest) {
     .slice(0, 2);
   const fusionIntensity = body.fusionIntensity ?? 'media';
   const inventory = (body.inventory ?? []).map((v) => v.trim()).filter(Boolean).slice(0, 120);
+  const peopleCount = typeof body.peopleCount === 'number' && Number.isFinite(body.peopleCount) && body.peopleCount > 0
+    ? Math.floor(body.peopleCount)
+    : 4;
   const profilePreferred = (body.culinaryProfile?.preferred ?? []).map((v) => v.trim()).filter(Boolean).slice(0, 12);
   const profileAvoid = (body.culinaryProfile?.avoid ?? []).map((v) => v.trim()).filter(Boolean).slice(0, 12);
   const profileGoals = (body.culinaryProfile?.goals ?? []).map((v) => v.trim()).filter(Boolean).slice(0, 12);
   const profileLevel = body.culinaryProfile?.level?.trim() || 'No especificado';
+  const chunks = (body.chunks ?? []).map((value) => value.trim()).filter(Boolean).slice(0, 10);
 
   const periodLabel = period === 'month' ? '30 días' : '7 días';
   const cuisineLabel = fusionCuisines.length > 0
     ? `${baseCuisine} fusionada con ${fusionCuisines.join(' y ')}`
     : baseCuisine;
+
+  serverLogger.info('meal_plan.request', {
+    requestId,
+    model,
+    mode,
+    period,
+    peopleCount,
+    inventoryCount: inventory.length,
+    fusionCount: fusionCuisines.length,
+  });
 
   const strictWeekFormat = `Formato OBLIGATORIO:
 Lunes
@@ -86,10 +106,13 @@ Cena: ...`;
 Cocina objetivo: ${cuisineLabel}.
 Intensidad de fusión: ${fusionIntensity}.
 Perfil del usuario:
+- Personas: ${peopleCount}
 - Preferencias: ${profilePreferred.join(', ') || 'No especificado'}
 - Evitar: ${profileAvoid.join(', ') || 'No especificado'}
 - Objetivos: ${profileGoals.join(', ') || 'No especificado'}
 - Nivel: ${profileLevel}
+Contexto PDF:
+${chunks.length > 0 ? chunks.join('\n---\n') : 'Sin contexto PDF.'}
 
 Reglas:
 - No inventes ingredientes fuera del inventario.
@@ -108,10 +131,13 @@ Reglas:
     : `Genera un menú de ${periodLabel} de cocina ${cuisineLabel} y luego una lista de compras.
 Intensidad de fusión: ${fusionIntensity}.
 Perfil del usuario:
+- Personas: ${peopleCount}
 - Preferencias: ${profilePreferred.join(', ') || 'No especificado'}
 - Evitar: ${profileAvoid.join(', ') || 'No especificado'}
 - Objetivos: ${profileGoals.join(', ') || 'No especificado'}
 - Nivel: ${profileLevel}
+Contexto PDF:
+${chunks.length > 0 ? chunks.join('\n---\n') : 'Sin contexto PDF.'}
 
 Reglas:
 - Debes devolver SIEMPRE los 7 días completos (Lunes a Domingo), con desayuno, almuerzo y cena para cada día.
@@ -134,6 +160,11 @@ Reglas:
 
   if (!response.ok) {
     const errorText = await response.text();
+    serverLogger.error('meal_plan.upstream_error', {
+      requestId,
+      durationMs: Date.now() - startedAt,
+      status: response.status,
+    });
     return NextResponse.json({ error: `No se pudo generar menú: ${errorText}` }, { status: 502 });
   }
 
@@ -141,8 +172,17 @@ Reglas:
   const content = payload.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
 
   if (!content) {
+    serverLogger.warn('meal_plan.empty_response', {
+      requestId,
+      durationMs: Date.now() - startedAt,
+    });
     return NextResponse.json({ error: 'Gemini no devolvió menú.' }, { status: 502 });
   }
 
+  serverLogger.info('meal_plan.success', {
+    requestId,
+    durationMs: Date.now() - startedAt,
+    contentLength: content.length,
+  });
   return NextResponse.json({ content });
 }
