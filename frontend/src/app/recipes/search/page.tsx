@@ -2,9 +2,10 @@
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import Image from 'next/image';
 import { getSupabaseBrowserClient } from '@/lib/supabaseClient';
 import { humanCopy } from '@/lib/copy';
+import { RecipeView } from '@/components/recipe-view/RecipeView';
+import type { RecipeCitation } from '@/components/recipe-view/types';
 
 type MatchChunkRow = {
   id: string;
@@ -186,13 +187,6 @@ function parseRecipeSections(raw: string): RecipeSections {
   }
 
   return { title, ingredients, preparation, tips, fallback: cleaned };
-}
-
-function splitIngredientLine(line: string): { quantity: string; name: string } {
-  const normalized = line.replace(/^[-•]\s*/, '').trim();
-  const match = normalized.match(/^(\d+[\/\d.,]*\s*(?:g|kg|ml|l|taza(?:s)?|cucharada(?:s)?|cucharadita(?:s)?|unidad(?:es)?|huevo(?:s)?|diente(?:s)?|ramita(?:s)?)?)\s+(.*)$/i);
-  if (!match) return { quantity: '—', name: normalized };
-  return { quantity: match[1].trim(), name: match[2].trim() };
 }
 
 type RecipeSession = {
@@ -806,139 +800,21 @@ export default function RecipeSearchPage() {
 
         {error ? <p className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
 
-        {recipeModalOpen && recipe ? (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-3 md:p-6">
-            <section className="max-h-[86vh] w-full max-w-5xl overflow-y-auto rounded-3xl border border-[#E8DDD2] bg-[#FAF6F1] p-4 shadow-2xl md:p-5">
-              <div className="mb-3 flex justify-end">
-                <button type="button" onClick={() => setRecipeModalOpen(false)} className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-1.5 text-xs font-semibold text-[#6B5A50]">
-                  Cerrar
-                </button>
-              </div>
-              <section className="space-y-4">
-            <header className="flex flex-wrap items-center justify-between gap-2">
-              <Link href="/app" className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-1.5 text-xs font-semibold text-[#6B5A50]">
-                ← Volver
-              </Link>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => void saveActiveRecipe()}
-                  disabled={savingRecipe}
-                  className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-1.5 text-xs font-semibold text-[#6B5A50] disabled:opacity-60"
-                >
-                  {savingRecipe ? 'Guardando...' : 'Guardar'}
-                </button>
-                <button type="button" className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-1.5 text-xs font-semibold text-[#6B5A50]">Compartir</button>
-                <button type="button" className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-1.5 text-xs font-semibold text-[#6B5A50]">Agregar al menú</button>
-              </div>
-            </header>
-
-            <article className="grid gap-4 rounded-2xl border border-[#E8DDD2] bg-white/80 p-4 md:grid-cols-[1fr_auto]">
-              <div className="max-w-[520px] space-y-1.5">
-                <span className="inline-flex rounded-full border border-[#6D4AFF]/30 bg-[#6D4AFF]/10 px-2.5 py-1 text-xs font-semibold text-[#6D4AFF]">Creada por CocinaCore AI</span>
-                <h2 className="text-xl font-semibold text-[#241A14]">{parsedRecipe?.title ?? 'Receta generada'}</h2>
-                <p className="text-xs text-[#6B5A50]">
-                  {recipeMode === 'rag'
-                    ? 'Receta basada en tu biblioteca culinaria con ajuste inteligente de cantidades.'
-                    : 'Receta personalizada según tus ingredientes y preferencias culinarias.'}
-                </p>
-                <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-[#6B5A50] sm:grid-cols-4">
-                  <span className="rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] px-2 py-1">👥 {peopleCount || 4} comensales</span>
-                  <span className="rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] px-2 py-1">⏱️ 35 min</span>
-                  <span className="rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] px-2 py-1">🔥 {level || 'Intermedio'}</span>
-                  <span className="rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] px-2 py-1">🌍 {selectedRegional[0] ?? 'Fusión'}</span>
-                </div>
-              </div>
-              <div className="order-first place-self-start justify-self-center w-full max-w-[120px] overflow-hidden rounded-2xl bg-[#FAF6F1] md:order-none md:justify-self-end md:max-w-[170px]">
-                <Image src="/plato-logo.png" alt="Plato CocinaCore" width={800} height={600} className="h-auto w-full object-cover" />
-              </div>
-            </article>
-
-            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-              <article className="rounded-2xl border border-[#E8DDD2] bg-white p-3"><p className="text-xs text-[#6B5A50]">Autenticidad</p><p className="mt-1 text-sm font-semibold">Alta</p></article>
-              <article className="rounded-2xl border border-[#E8DDD2] bg-white p-3"><p className="text-xs text-[#6B5A50]">Técnica clave</p><p className="mt-1 text-sm font-semibold">{parsedRecipe?.preparation[0]?.split(' ').slice(0, 3).join(' ') || 'Sofrito'}</p></article>
-              <article className="rounded-2xl border border-[#E8DDD2] bg-white p-3"><p className="text-xs text-[#6B5A50]">Ingrediente protagonista</p><p className="mt-1 text-sm font-semibold">{splitIngredientLine(parsedRecipe?.ingredients[0] ?? 'Ingredientes base').name}</p></article>
-              <article className="rounded-2xl border border-[#E8DDD2] bg-white p-3"><p className="text-xs text-[#6B5A50]">Perfil de sabor</p><p className="mt-1 text-sm font-semibold">{selectedStyle[0] ?? 'Casero equilibrado'}</p></article>
-            </div>
-
-            <nav className="flex flex-wrap gap-2 text-xs font-semibold">
-              <a href="#ingredientes" className="rounded-full border border-[#E8DDD2] bg-white px-3 py-1.5 text-[#6B5A50]">Ingredientes</a>
-              <a href="#preparacion" className="rounded-full border border-[#E8DDD2] bg-white px-3 py-1.5 text-[#6B5A50]">Preparación</a>
-              <a href="#tips" className="rounded-full border border-[#E8DDD2] bg-white px-3 py-1.5 text-[#6B5A50]">Tips del chef</a>
-              <a href="#origen" className="rounded-full border border-[#E8DDD2] bg-white px-3 py-1.5 text-[#6B5A50]">Origen y notas</a>
-            </nav>
-
-            <article id="ingredientes" className="rounded-2xl border border-[#E8DDD2] bg-white p-4">
-              <div className="mb-2 flex items-center justify-between">
-                <h3 className="text-lg font-semibold">Ingredientes</h3>
-                <button type="button" className="rounded-xl border border-[#E8DDD2] px-3 py-1.5 text-xs font-semibold text-[#6B5A50]">Agregar a mi lista</button>
-              </div>
-              <ul className="space-y-2">
-                {(parsedRecipe?.ingredients ?? []).map((item, index) => {
-                  const parsed = splitIngredientLine(item);
-                  return (
-                    <li key={`${item}-${index}`} className="flex items-center gap-3 rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] px-3 py-2 text-sm">
-                      <input type="checkbox" className="size-4 rounded border-[#E8DDD2]" />
-                      <span className="min-w-20 font-semibold text-[#6B5A50]">{parsed.quantity}</span>
-                      <span className="text-[#241A14]">{parsed.name}</span>
-                    </li>
-                  );
-                })}
-              </ul>
-            </article>
-
-            <article id="preparacion" className="rounded-2xl border border-[#E8DDD2] bg-white p-4">
-              <h3 className="text-lg font-semibold">Preparación</h3>
-              <ol className="mt-2 space-y-2">
-                {(parsedRecipe?.preparation ?? []).map((step, index) => (
-                  <li key={`${step}-${index}`} className="flex gap-3 rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] px-3 py-2 text-sm">
-                    <span className="mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-[#C56A1A] text-xs font-bold text-white">{index + 1}</span>
-                    <span>{step}</span>
-                  </li>
-                ))}
-              </ol>
-            </article>
-
-            <article id="tips" className="rounded-2xl border border-[#E8DDD2] bg-white p-4">
-              <h3 className="text-lg font-semibold">Tips del chef</h3>
-              <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                {(parsedRecipe?.tips ?? []).map((tip, index) => (
-                  <div key={`${tip}-${index}`} className="rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] p-3 text-sm">
-                    <p className="text-xs font-semibold text-[#6B5A50]">Tip #{index + 1}</p>
-                    <p className="mt-1 text-[#241A14]">{tip}</p>
-                  </div>
-                ))}
-              </div>
-            </article>
-
-            <article id="origen" className="rounded-2xl border border-[#E8DDD2] bg-white p-4">
-              <h3 className="text-lg font-semibold">Origen y notas</h3>
-              <p className="mt-2 text-sm text-[#6B5A50]">
-                {recipeMode === 'rag'
-                  ? 'Receta generada por CocinaCore AI usando tu biblioteca culinaria, ingredientes y preferencias.'
-                  : 'Receta generada por CocinaCore AI usando tus ingredientes, preferencias culinarias y restricciones.'}
-              </p>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {['tradicional', 'familiar', selectedStyle[0]?.toLowerCase() ?? 'rápida', selectedRegional[0]?.toLowerCase() ?? 'fusión'].map((tag) => (
-                  <span key={tag} className="rounded-full border border-[#E8DDD2] bg-[#FAF6F1] px-2.5 py-1 text-xs text-[#6B5A50]">{tag}</span>
-                ))}
-              </div>
-            </article>
-
-            {recipeMode === 'rag' && citations.length > 0 ? (
-              <article className="rounded-2xl border border-[#E8DDD2] bg-white p-4">
-                <h3 className="text-sm font-semibold text-[#6B5A50]">Citas válidas de biblioteca</h3>
-                <ul className="mt-1 space-y-1 text-xs text-[#6B5A50]">
-                  {citations.map((row) => (
-                    <li key={row.id}>{row.metadata?.book_title ?? 'Documento'} · pág {row.metadata?.page_number ?? '-'} · sim {safeSimilarity(row.similarity).toFixed(3)}</li>
-                  ))}
-                </ul>
-              </article>
-            ) : null}
-              </section>
-            </section>
-          </div>
-        ) : null}
+        <RecipeView
+          open={recipeModalOpen && Boolean(recipe)}
+          recipe={recipe}
+          recipeMode={recipeMode}
+          peopleCount={peopleCount}
+          level={level || 'Intermedio'}
+          region={selectedRegional[0] ?? 'Fusión'}
+          style={selectedStyle[0] ?? 'Casera'}
+          parsedRecipe={parsedRecipe}
+          citations={citations.map((item, index) => ({ ...item, id: item.id || `citation-${index}` })) as RecipeCitation[]}
+          selectedInventory={normalizedIngredients}
+          savingRecipe={savingRecipe}
+          onClose={() => setRecipeModalOpen(false)}
+          onSave={() => void saveActiveRecipe()}
+        />
       </section>
     </main>
   );
