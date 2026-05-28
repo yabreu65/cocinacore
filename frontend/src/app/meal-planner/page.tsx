@@ -10,11 +10,14 @@ import {
   ChevronUp,
   Download,
   Eye,
+  History,
   Lock,
   RefreshCw,
+  RotateCcw,
   Share2,
   ShoppingCart,
   Sparkles,
+  Trash2,
   Wand2,
   X,
 } from 'lucide-react';
@@ -33,7 +36,6 @@ import {
   buildSmartShoppingList,
 } from '@/lib/inventory/meal-plan-projection';
 import { InventoryDepletionPreview } from '@/components/home-os/InventoryDepletionPreview';
-import { MealTimelineCard } from '@/components/home-os/MealTimelineCard';
 import { SmartShoppingSection } from '@/components/home-os/SmartShoppingSection';
 import { SupermarketModeCard } from '@/components/home-os/SupermarketModeCard';
 import { DailyKitchenCard } from '@/components/home-os/DailyKitchenCard';
@@ -41,6 +43,29 @@ import { InventoryPlaybackCard } from '@/components/home-os/InventoryPlaybackCar
 import { HomeIntelligenceDashboard } from '@/components/home-os/HomeIntelligenceDashboard';
 import { SmartPredictionCard } from '@/components/home-os/SmartPredictionCard';
 import { buildMealPlanSimulation } from '@/lib/inventory/meal-plan-simulation';
+import { EditableMealTimeline } from '@/components/home-os/EditableMealTimeline';
+import { IngredientConstraintCard } from '@/components/home-os/IngredientConstraintCard';
+import { ReorderSuggestionCard } from '@/components/home-os/ReorderSuggestionCard';
+import { SimulationControls } from '@/components/home-os/SimulationControls';
+import { SmartOptimizationPanel } from '@/components/home-os/SmartOptimizationPanel';
+import type { OptimizationMode } from '@/lib/meal-planner/simulation-state';
+import {
+  calculateMealPlanScore,
+  compareMealPlans,
+  explainOptimization,
+  type MealPlanComparison,
+  type MealPlanOptimizationScore,
+} from '@/lib/inventory/meal-plan-optimizer';
+import { OptimizationScoreCard } from '@/components/home-os/OptimizationScoreCard';
+import { BeforeAfterComparisonCard } from '@/components/home-os/BeforeAfterComparisonCard';
+import { AIOptimizationInsights } from '@/components/home-os/AIOptimizationInsights';
+import type { Database } from '@/lib/database.types';
+import {
+  applyOptimizationState,
+  buildMealKey,
+  moveMealAcrossDayState,
+  moveMealAcrossSlotState,
+} from '@/lib/meal-planner/simulation-state';
 
 const CUISINES = ['Venezolana', 'Colombiana', 'Latinoamericana', 'Asiática', 'Italiana', 'Mediterránea', 'Mexicana'];
 const CUISINE_FLAGS: Record<string, string> = {
@@ -112,6 +137,20 @@ type ErrorPayload = { error?: string };
 type MatchChunkRow = { content: string; similarity: number | string | null };
 type MealDetailTab = 'summary' | 'ingredients' | 'preparation';
 type SelectedMealState = { day: string; mealType: MealType } | null;
+type OptimizationSnapshotRow = Database['public']['Tables']['user_meal_plan_optimization_snapshots']['Row'];
+type OptimizationSnapshotView = {
+  id: string;
+  createdAt: string;
+  mode: OptimizationMode;
+  baselineScore: MealPlanOptimizationScore;
+  optimizedScore: MealPlanOptimizationScore;
+  comparison: MealPlanComparison;
+  notes: string[];
+  baselineCalendar: PlannerDay[];
+  optimizedCalendar: PlannerDay[];
+};
+
+const HISTORY_PAGE_SIZE = 5;
 type InventoryItemExtended = InventoryComparableItem & {
   category?: string | null;
   estimated_unit_price?: number | null;
@@ -256,7 +295,73 @@ function pick<T>(arr: T[], max: number): T[] {
 }
 
 function mealKey(day: string, mealType: MealType): string {
-  return `${day}::${mealType}`;
+  return buildMealKey(day, mealType);
+}
+
+function modeLabel(mode: OptimizationMode): string {
+  switch (mode) {
+    case 'optimize_cost':
+      return 'Optimizar costo';
+    case 'reduce_waste':
+      return 'Optimizar desperdicio';
+    case 'prioritize_fresh':
+      return 'Priorizar frescos';
+    case 'reduce_missing':
+      return 'Reducir faltantes';
+    case 'reuse_proteins':
+      return 'Reutilizar proteínas';
+    case 'balance_ingredients':
+      return 'Balancear ingredientes';
+    default:
+      return mode;
+  }
+}
+
+function parseSnapshot(rows: OptimizationSnapshotRow[]): OptimizationSnapshotView[] {
+  return rows
+    .map((row) => {
+      const notes = Array.isArray(row.explainability_notes)
+        ? row.explainability_notes.filter((note): note is string => typeof note === 'string')
+        : [];
+
+      const baselineCalendar = Array.isArray(row.baseline_calendar)
+        ? (row.baseline_calendar as unknown as PlannerDay[])
+        : [];
+      const optimizedCalendar = Array.isArray(row.optimized_calendar)
+        ? (row.optimized_calendar as unknown as PlannerDay[])
+        : [];
+
+      const baselineScore = row.baseline_score as unknown as MealPlanOptimizationScore;
+      const optimizedScore = row.optimized_score as unknown as MealPlanOptimizationScore;
+      const comparison = row.comparison as unknown as MealPlanComparison;
+
+      if (!row.id || !row.optimization_mode) return null;
+
+      return {
+        id: row.id,
+        createdAt: row.created_at,
+        mode: row.optimization_mode,
+        baselineScore,
+        optimizedScore,
+        comparison,
+        notes,
+        baselineCalendar,
+        optimizedCalendar,
+      } satisfies OptimizationSnapshotView;
+    })
+    .filter((row): row is OptimizationSnapshotView => row !== null);
+}
+
+function toSimulationDays(days: PlannerDay[]): Array<{ day: string; meals: Array<{ label: string; title: string; time: string; difficulty: string }> }> {
+  return days.map((day) => ({
+    day: day.day,
+    meals: MEALS.map((mealType) => ({
+      label: mealType,
+      title: day.meals[mealType].name.replace(/\*\*/g, '').trim(),
+      time: day.meals[mealType].time,
+      difficulty: day.meals[mealType].difficulty,
+    })),
+  }));
 }
 
 export default function MealPlannerPage() {
@@ -289,6 +394,13 @@ export default function MealPlannerPage() {
   const [inventorySuggestionUpdatedAt, setInventorySuggestionUpdatedAt] = useState<string | null>(null);
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
+  const [mealPlanId, setMealPlanId] = useState<string | null>(null);
+  const [optimizationHistory, setOptimizationHistory] = useState<OptimizationSnapshotView[]>([]);
+  const [expandedSnapshotId, setExpandedSnapshotId] = useState<string | null>(null);
+  const [historyModeFilter, setHistoryModeFilter] = useState<OptimizationMode | 'all'>('all');
+  const [historyDateFilter, setHistoryDateFilter] = useState<'all' | '7d' | '30d' | '90d'>('all');
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyNow, setHistoryNow] = useState(() => Date.now());
   const [hasSavedPlan, setHasSavedPlan] = useState(false);
   const [mealDetail, setMealDetail] = useState<MealDetailState>({
     open: false,
@@ -306,6 +418,9 @@ export default function MealPlannerPage() {
   const [activeDayIndex, setActiveDayIndex] = useState(0);
   const [shoppingCollapsed, setShoppingCollapsed] = useState(false);
   const [simulatedDayIndex, setSimulatedDayIndex] = useState(0);
+  const [simulationCalendar, setSimulationCalendar] = useState<PlannerDay[]>(() => buildDefaultWeek('Latinoamericana'));
+  const [ingredientConstraints, setIngredientConstraints] = useState<string[]>([]);
+  const [activeOptimizationMode, setActiveOptimizationMode] = useState<OptimizationMode | null>(null);
 
   useEffect(() => {
     const loadProfileAndInventory = async () => {
@@ -375,8 +490,10 @@ export default function MealPlannerPage() {
           }
           setResult(savedPlanRow.ai_content ?? '');
           setPeopleCount(savedPlanRow.people_count ?? 4);
+          setMealPlanId(savedPlanRow.id ?? null);
           setHasSavedPlan(true);
         } else {
+          setMealPlanId(null);
           setHasSavedPlan(false);
         }
 
@@ -387,6 +504,20 @@ export default function MealPlannerPage() {
         } else {
           setInventorySuggestion([]);
           setInventorySuggestionUpdatedAt(null);
+        }
+
+        if (resolvedTenantId && authUserId) {
+          const { data: snapshotRows } = await supabase
+            .from('user_meal_plan_optimization_snapshots')
+            .select('*')
+            .eq('tenant_id', resolvedTenantId)
+            .eq('user_id', authUserId)
+            .order('created_at', { ascending: false })
+            .limit(12);
+          const mappedSnapshots = parseSnapshot((snapshotRows ?? []) as OptimizationSnapshotRow[]);
+          setOptimizationHistory(mappedSnapshots);
+        } else {
+          setOptimizationHistory([]);
         }
       } finally {
         setLoadingInventory(false);
@@ -402,9 +533,13 @@ export default function MealPlannerPage() {
   }, [goal, intensityAuto]);
 
   useEffect(() => {
-    if (simulatedDayIndex < calendarData.length) return;
+    setSimulationCalendar(calendarData);
+  }, [calendarData]);
+
+  useEffect(() => {
+    if (simulatedDayIndex < simulationCalendar.length) return;
     setSimulatedDayIndex(0);
-  }, [simulatedDayIndex, calendarData.length]);
+  }, [simulatedDayIndex, simulationCalendar.length]);
 
   const filteredProfileBadges = useMemo(
     () => pick([
@@ -467,18 +602,6 @@ export default function MealPlannerPage() {
     return insights;
   }, [inventoryProjection]);
 
-  const mealTimeline = useMemo(
-    () =>
-      calendarData.map((day) => ({
-        day: day.day,
-        meals: MEALS.map((mealType) => ({
-          label: mealType,
-          title: day.meals[mealType].name.replace(/\*\*/g, '').trim(),
-        })),
-      })),
-    [calendarData],
-  );
-
   const supermarketMetrics = useMemo(() => {
     const reusedCount = inventoryProjection.items.filter((item) => item.usedInRecipes.length > 1).length;
     return {
@@ -489,22 +612,117 @@ export default function MealPlannerPage() {
     };
   }, [inventoryProjection, smartShoppingList]);
 
+  const constrainedProjectionItems = useMemo(
+    () =>
+      inventoryProjection.items.map((item) => {
+        if (!ingredientConstraints.includes(item.ingredientName)) return item;
+        if (item.requiredTotalQuantity === null) return item;
+        const adjustedRequired = Number((item.requiredTotalQuantity * 0.6).toFixed(2));
+        return {
+          ...item,
+          requiredTotalQuantity: adjustedRequired,
+          projectedUsedQuantity: adjustedRequired,
+        };
+      }),
+    [inventoryProjection.items, ingredientConstraints],
+  );
+
   const mealSimulation = useMemo(
     () =>
       buildMealPlanSimulation(
-        calendarData.map((day) => ({
-          day: day.day,
-          meals: MEALS.map((mealType) => ({
-            label: mealType,
-            title: day.meals[mealType].name.replace(/\*\*/g, '').trim(),
-            time: day.meals[mealType].time,
-            difficulty: day.meals[mealType].difficulty,
-          })),
-        })),
-        inventoryProjection.items,
+        toSimulationDays(simulationCalendar),
+        constrainedProjectionItems,
       ),
-    [calendarData, inventoryProjection.items],
+    [simulationCalendar, constrainedProjectionItems],
   );
+
+  const baselineSimulation = useMemo(
+    () =>
+      buildMealPlanSimulation(
+        toSimulationDays(calendarData),
+        constrainedProjectionItems,
+      ),
+    [calendarData, constrainedProjectionItems],
+  );
+
+  const optimizationScore = useMemo(
+    () => calculateMealPlanScore(inventoryProjection, mealSimulation, activeOptimizationMode ?? 'reduce_waste'),
+    [inventoryProjection, mealSimulation, activeOptimizationMode],
+  );
+
+  const baselineScore = useMemo(
+    () => calculateMealPlanScore(inventoryProjection, baselineSimulation, activeOptimizationMode ?? 'reduce_waste'),
+    [inventoryProjection, baselineSimulation, activeOptimizationMode],
+  );
+
+  const optimizationComparison = useMemo(
+    () => compareMealPlans(baselineScore, optimizationScore),
+    [baselineScore, optimizationScore],
+  );
+
+  const optimizationNotes = useMemo(
+    () => explainOptimization(optimizationComparison, activeOptimizationMode ?? 'reduce_waste'),
+    [optimizationComparison, activeOptimizationMode],
+  );
+
+  const filteredOptimizationHistory = useMemo(() => {
+    const maxAgeMs =
+      historyDateFilter === '7d'
+        ? 7 * 24 * 60 * 60 * 1000
+        : historyDateFilter === '30d'
+          ? 30 * 24 * 60 * 60 * 1000
+          : historyDateFilter === '90d'
+            ? 90 * 24 * 60 * 60 * 1000
+            : null;
+
+    return optimizationHistory.filter((snapshot) => {
+      if (historyModeFilter !== 'all' && snapshot.mode !== historyModeFilter) return false;
+      if (maxAgeMs !== null && historyNow - new Date(snapshot.createdAt).getTime() > maxAgeMs) return false;
+      return true;
+    });
+  }, [optimizationHistory, historyDateFilter, historyModeFilter, historyNow]);
+
+  const visibleOptimizationHistory = useMemo(
+    () => filteredOptimizationHistory.slice(0, historyPage * HISTORY_PAGE_SIZE),
+    [filteredOptimizationHistory, historyPage],
+  );
+
+  const hasMoreHistory = visibleOptimizationHistory.length < filteredOptimizationHistory.length;
+
+  useEffect(() => {
+    setHistoryPage(1);
+    setHistoryNow(Date.now());
+  }, [historyDateFilter, historyModeFilter]);
+
+  const reorderSuggestions = useMemo(() => {
+    const suggestions: string[] = [];
+    if (ingredientConstraints.length > 0) {
+      suggestions.push(`Priorizá ahorro de ${ingredientConstraints.join(', ')} moviendo recetas de alto consumo al final de la semana.`);
+    }
+    if (mealSimulation.predictions.length > 0) {
+      suggestions.push(`Podés adelantar recetas antes de ${mealSimulation.predictions[0].split(' el ')[1] ?? 'días críticos'} para reducir faltantes.`);
+    }
+    if (activeOptimizationMode === 'optimize_cost') {
+      suggestions.push('Reordenamos almuerzos para concentrar ingredientes compartidos y reducir compras duplicadas.');
+    }
+    if (activeOptimizationMode === 'prioritize_fresh') {
+      suggestions.push('Conviene cocinar ingredientes frescos entre lunes y miércoles para evitar pérdida de calidad.');
+    }
+    if (suggestions.length === 0 && mealSimulation.reusedIngredients.length > 0) {
+      suggestions.push(`El menú ya reutiliza ${mealSimulation.reusedIngredients.slice(0, 2).join(' y ')} de forma eficiente.`);
+    }
+    return suggestions.slice(0, 4);
+  }, [ingredientConstraints, mealSimulation, activeOptimizationMode]);
+
+  const hasSimulationChanges = useMemo(() => {
+    const toComparable = (days: PlannerDay[]) =>
+      days.map((day) => ({
+        day: day.day,
+        meals: MEALS.map((mealType) => day.meals[mealType].name),
+      }));
+
+    return JSON.stringify(toComparable(simulationCalendar)) !== JSON.stringify(toComparable(calendarData));
+  }, [simulationCalendar, calendarData]);
 
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -750,7 +968,7 @@ export default function MealPlannerPage() {
     try {
       const effectivePeopleCount = Number.isFinite(peopleCount) && peopleCount > 0 ? peopleCount : 4;
       const supabase = getSupabaseBrowserClient();
-      const { error: upsertError } = await supabase.from('user_meal_plans').upsert(
+      const { data: upsertedPlan, error: upsertError } = await supabase.from('user_meal_plans').upsert(
         {
           tenant_id: tenantId,
           user_id: userId,
@@ -768,13 +986,14 @@ export default function MealPlannerPage() {
           updated_at: new Date().toISOString(),
         },
         { onConflict: 'tenant_id,user_id' }
-      );
+      ).select('id').single();
 
       if (upsertError) {
         setError(`No se pudo guardar menú: ${upsertError.message}`);
         return;
       }
 
+      setMealPlanId(upsertedPlan?.id ?? null);
       setHasSavedPlan(true);
       setPeopleCount(effectivePeopleCount);
       setError('Menú guardado correctamente. Si guardás otro, reemplaza este.');
@@ -803,6 +1022,7 @@ export default function MealPlannerPage() {
         return;
       }
       setHasSavedPlan(false);
+      setMealPlanId(null);
       setError('Menú guardado eliminado.');
     } finally {
       setLoading(false);
@@ -945,6 +1165,163 @@ export default function MealPlannerPage() {
       if (prev.length >= 2) return prev;
       return [...prev, value];
     });
+  };
+
+  const moveMealAcrossDay = (dayIndex: number, mealType: MealType, direction: -1 | 1) => {
+    setSimulationCalendar((prev) => moveMealAcrossDayState(prev, dayIndex, mealType, direction, lockedMeals));
+  };
+
+  const moveMealAcrossSlot = (dayIndex: number, mealType: MealType, direction: -1 | 1) => {
+    setSimulationCalendar((prev) => moveMealAcrossSlotState(prev, dayIndex, mealType, direction, lockedMeals));
+  };
+
+  const toggleLockedMeal = (day: string, mealType: MealType) => {
+    const key = mealKey(day, mealType);
+    setLockedMeals((prev) => (prev.includes(key) ? prev.filter((value) => value !== key) : [...prev, key]));
+  };
+
+  const toggleIngredientConstraint = (value: string) => {
+    setIngredientConstraints((prev) =>
+      prev.includes(value) ? prev.filter((entry) => entry !== value) : [...prev, value],
+    );
+  };
+
+  const applyOptimization = (mode: OptimizationMode) => {
+    const optimizedCalendar = applyOptimizationState(simulationCalendar, mode, lockedMeals);
+    setActiveOptimizationMode(mode);
+    setSimulationCalendar(optimizedCalendar);
+
+    void (async () => {
+      if (!tenantId || !userId) return;
+
+      const supabase = getSupabaseBrowserClient();
+      let resolvedMealPlanId = mealPlanId;
+
+      if (!resolvedMealPlanId) {
+        const { data: planRow } = await supabase
+          .from('user_meal_plans')
+          .select('id')
+          .eq('tenant_id', tenantId)
+          .eq('user_id', userId)
+          .maybeSingle();
+        resolvedMealPlanId = planRow?.id ?? null;
+      }
+
+      if (!resolvedMealPlanId) return;
+
+      const optimizedSimulation = buildMealPlanSimulation(
+        toSimulationDays(optimizedCalendar),
+        constrainedProjectionItems,
+      );
+      const optimizedScore = calculateMealPlanScore(inventoryProjection, optimizedSimulation, mode);
+      const baseline = calculateMealPlanScore(inventoryProjection, baselineSimulation, mode);
+      const comparison = compareMealPlans(baseline, optimizedScore);
+      const notes = explainOptimization(comparison, mode);
+
+      const { data: insertedSnapshot, error: snapshotError } = await supabase
+        .from('user_meal_plan_optimization_snapshots')
+        .insert({
+          tenant_id: tenantId,
+          user_id: userId,
+          meal_plan_id: resolvedMealPlanId,
+          optimization_mode: mode,
+          baseline_score: baseline,
+          optimized_score: optimizedScore,
+          comparison,
+          explainability_notes: notes,
+          baseline_calendar: calendarData,
+          optimized_calendar: optimizedCalendar,
+          metadata: {
+            period,
+            peopleCount,
+            constraints: ingredientConstraints,
+            lockedMealsCount: lockedMeals.length,
+          },
+        })
+        .select('*')
+        .single();
+
+      if (snapshotError) {
+        setError(`No se pudo guardar snapshot de optimización: ${snapshotError.message}`);
+        return;
+      }
+
+      setMealPlanId(resolvedMealPlanId);
+      if (insertedSnapshot) {
+        const [parsed] = parseSnapshot([insertedSnapshot as OptimizationSnapshotRow]);
+        if (parsed) {
+          setOptimizationHistory((prev) => [parsed, ...prev.filter((entry) => entry.id !== parsed.id)].slice(0, 12));
+        }
+      }
+    })();
+  };
+
+  const resetSimulation = () => {
+    setSimulationCalendar(calendarData);
+    setIngredientConstraints([]);
+    setActiveOptimizationMode(null);
+    setError('Simulación restablecida al menú original.');
+  };
+
+  const applySimulationToMenu = () => {
+    setCalendarData(simulationCalendar);
+    setActiveOptimizationMode(null);
+    setError('Reorganización aplicada al menú (sin tocar stock real).');
+  };
+
+  const restoreSnapshotTemporarily = (snapshot: OptimizationSnapshotView) => {
+    if (!Array.isArray(snapshot.optimizedCalendar) || snapshot.optimizedCalendar.length === 0) {
+      setError('Ese snapshot no tiene calendario válido para restaurar.');
+      return;
+    }
+    setSimulationCalendar(snapshot.optimizedCalendar);
+    setActiveOptimizationMode(snapshot.mode);
+    setError('Simulación restaurada desde historial (sin tocar stock real).');
+  };
+
+  const deleteOptimizationSnapshot = async (snapshotId: string) => {
+    if (!tenantId || !userId) {
+      setError('No se pudo eliminar snapshot: falta sesión o tenant.');
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+    const { error: deleteError } = await supabase
+      .from('user_meal_plan_optimization_snapshots')
+      .delete()
+      .eq('id', snapshotId)
+      .eq('tenant_id', tenantId)
+      .eq('user_id', userId);
+
+    if (deleteError) {
+      setError(`No se pudo eliminar snapshot: ${deleteError.message}`);
+      return;
+    }
+
+    setOptimizationHistory((prev) => prev.filter((entry) => entry.id !== snapshotId));
+    setExpandedSnapshotId((prev) => (prev === snapshotId ? null : prev));
+    setError('Snapshot eliminado del historial.');
+  };
+
+  const exportOptimizationSnapshot = (snapshot: OptimizationSnapshotView) => {
+    const payload = {
+      id: snapshot.id,
+      createdAt: snapshot.createdAt,
+      mode: snapshot.mode,
+      baselineScore: snapshot.baselineScore,
+      optimizedScore: snapshot.optimizedScore,
+      comparison: snapshot.comparison,
+      notes: snapshot.notes,
+      baselineCalendar: snapshot.baselineCalendar,
+      optimizedCalendar: snapshot.optimizedCalendar,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `cocinacore-optimization-${snapshot.id}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
   };
 
   const renderPeriodView = () => {
@@ -1296,11 +1673,174 @@ export default function MealPlannerPage() {
               dayStates={mealSimulation.dayStates}
               selectedDayIndex={simulatedDayIndex}
             />
-            <MealTimelineCard
-              timeline={mealTimeline}
+            <EditableMealTimeline
+              days={simulationCalendar}
+              lockedMeals={lockedMeals}
+              onToggleLock={toggleLockedMeal}
+              onMoveDay={moveMealAcrossDay}
+              onMoveMealSlot={moveMealAcrossSlot}
               selectedDayIndex={simulatedDayIndex}
               onSimulateDay={setSimulatedDayIndex}
             />
+            <SimulationControls
+              onReset={resetSimulation}
+              onApply={applySimulationToMenu}
+              hasChanges={hasSimulationChanges}
+            />
+            <IngredientConstraintCard
+              options={inventoryProjection.items.map((item) => item.ingredientName)}
+              selected={ingredientConstraints}
+              onToggle={toggleIngredientConstraint}
+            />
+            <SmartOptimizationPanel activeMode={activeOptimizationMode} onOptimize={applyOptimization} />
+            <OptimizationScoreCard score={optimizationScore} />
+            <BeforeAfterComparisonCard comparison={optimizationComparison} />
+            <AIOptimizationInsights notes={optimizationNotes} />
+            <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
+              <div className="flex items-center gap-2">
+                <History size={16} className="text-[#6D4AFF]" />
+                <h3 className="text-lg font-semibold">Historial de optimizaciones</h3>
+              </div>
+              <p className="mt-1 text-sm text-[#6B5A50]">
+                Últimos snapshots guardados para revisar mejoras y restaurar simulaciones temporales.
+              </p>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                <label className="text-xs font-semibold text-[#6B5A50]">
+                  Filtrar por modo
+                  <select
+                    value={historyModeFilter}
+                    onChange={(event) => setHistoryModeFilter(event.target.value as OptimizationMode | 'all')}
+                    className="mt-1 h-9 w-full rounded-lg border border-[#E8DDD2] bg-white px-2 text-xs text-[#241A14] outline-none"
+                  >
+                    <option value="all">Todos</option>
+                    <option value="optimize_cost">Optimizar costo</option>
+                    <option value="reduce_waste">Optimizar desperdicio</option>
+                    <option value="prioritize_fresh">Priorizar frescos</option>
+                    <option value="reduce_missing">Reducir faltantes</option>
+                    <option value="reuse_proteins">Reutilizar proteínas</option>
+                    <option value="balance_ingredients">Balancear ingredientes</option>
+                  </select>
+                </label>
+                <label className="text-xs font-semibold text-[#6B5A50]">
+                  Filtrar por fecha
+                  <select
+                    value={historyDateFilter}
+                    onChange={(event) => setHistoryDateFilter(event.target.value as 'all' | '7d' | '30d' | '90d')}
+                    className="mt-1 h-9 w-full rounded-lg border border-[#E8DDD2] bg-white px-2 text-xs text-[#241A14] outline-none"
+                  >
+                    <option value="all">Todo el historial</option>
+                    <option value="7d">Últimos 7 días</option>
+                    <option value="30d">Últimos 30 días</option>
+                    <option value="90d">Últimos 90 días</option>
+                  </select>
+                </label>
+              </div>
+              {filteredOptimizationHistory.length === 0 ? (
+                <div className="mt-3 rounded-xl border border-dashed border-[#E8DDD2] bg-[#FAF6F1] px-3 py-4 text-sm text-[#6B5A50]">
+                  No hay snapshots para el filtro seleccionado. Probá otro modo/fecha o ejecutá una optimización nueva.
+                </div>
+              ) : (
+                <div className="mt-3 space-y-2">
+                  {visibleOptimizationHistory.map((snapshot) => {
+                    const improvement = snapshot.optimizedScore.total - snapshot.baselineScore.total;
+                    const expanded = expandedSnapshotId === snapshot.id;
+                    return (
+                      <section key={snapshot.id} className="rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] p-3">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <p className="text-sm font-semibold text-[#241A14]">{modeLabel(snapshot.mode)}</p>
+                            <p className="text-xs text-[#6B5A50]">
+                              {new Date(snapshot.createdAt).toLocaleString('es-AR')}
+                            </p>
+                          </div>
+                          <span
+                            className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${
+                              improvement >= 0
+                                ? 'border-[#567A3B]/40 bg-[#567A3B]/10 text-[#567A3B]'
+                                : 'border-[#B84D4D]/40 bg-[#B84D4D]/10 text-[#B84D4D]'
+                            }`}
+                          >
+                            Mejora total {improvement >= 0 ? '+' : ''}
+                            {improvement}
+                          </span>
+                        </div>
+
+                        <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                          <div className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1.5 text-xs">
+                            <p className="text-[#6B5A50]">Score antes</p>
+                            <p className="font-semibold text-[#241A14]">{snapshot.baselineScore.total}</p>
+                          </div>
+                          <div className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1.5 text-xs">
+                            <p className="text-[#6B5A50]">Score después</p>
+                            <p className="font-semibold text-[#241A14]">{snapshot.optimizedScore.total}</p>
+                          </div>
+                          <div className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1.5 text-xs">
+                            <p className="text-[#6B5A50]">Resumen</p>
+                            <p className="line-clamp-2 font-semibold text-[#241A14]">{snapshot.notes[0] ?? 'Sin resumen disponible.'}</p>
+                          </div>
+                        </div>
+
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setExpandedSnapshotId((prev) => (prev === snapshot.id ? null : snapshot.id))}
+                            className="rounded-lg border border-[#E8DDD2] bg-white px-2.5 py-1 text-xs font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40"
+                          >
+                            <Eye size={12} className="mr-1 inline" />
+                            {expanded ? 'Ocultar detalle' : 'Ver detalle'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => restoreSnapshotTemporarily(snapshot)}
+                            className="rounded-lg border border-[#E8DDD2] bg-white px-2.5 py-1 text-xs font-semibold text-[#6B5A50] hover:border-[#6D4AFF]/40"
+                          >
+                            <RotateCcw size={12} className="mr-1 inline" />
+                            Restaurar simulación
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void deleteOptimizationSnapshot(snapshot.id)}
+                            className="rounded-lg border border-[#E8DDD2] bg-white px-2.5 py-1 text-xs font-semibold text-[#B84D4D] hover:border-[#B84D4D]/40"
+                          >
+                            <Trash2 size={12} className="mr-1 inline" />
+                            Eliminar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => exportOptimizationSnapshot(snapshot)}
+                            className="rounded-lg border border-[#E8DDD2] bg-white px-2.5 py-1 text-xs font-semibold text-[#6B5A50] hover:border-[#6D4AFF]/40"
+                          >
+                            <Download size={12} className="mr-1 inline" />
+                            Exportar
+                          </button>
+                        </div>
+
+                        {expanded ? (
+                          <div className="mt-2 rounded-lg border border-[#E8DDD2] bg-white px-3 py-2 text-xs text-[#6B5A50]">
+                            <p className="font-semibold text-[#241A14]">Explicación principal</p>
+                            <ul className="mt-1 list-disc space-y-1 pl-4">
+                              {snapshot.notes.slice(0, 3).map((note) => (
+                                <li key={note} className="break-words">{note}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
+                      </section>
+                    );
+                  })}
+                  {hasMoreHistory ? (
+                    <button
+                      type="button"
+                      onClick={() => setHistoryPage((prev) => prev + 1)}
+                      className="w-full rounded-lg border border-[#E8DDD2] bg-white px-3 py-2 text-xs font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40"
+                    >
+                      Ver más historial
+                    </button>
+                  ) : null}
+                </div>
+              )}
+            </article>
+            <ReorderSuggestionCard suggestions={reorderSuggestions} />
             <SmartPredictionCard predictions={mealSimulation.predictions} />
 
             {result ? (

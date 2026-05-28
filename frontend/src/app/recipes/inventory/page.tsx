@@ -3,11 +3,27 @@
 import { FormEvent, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { getSupabaseBrowserClient } from '@/lib/supabaseClient';
+import {
+  detectInventoryCategory,
+  getStockBadge,
+  isExpiringSoon,
+  normalizeInventoryName,
+} from '@/lib/inventory/normalize-inventory';
+import {
+  formatQuantity,
+  parseQuantity,
+} from '@/lib/inventory/quantity-normalization';
 
 type InventoryRow = {
   id: string;
   ingredient_name: string;
   quantity: string | null;
+  unit: string | null;
+  category: string | null;
+  expiration_date: string | null;
+  estimated_unit_price: number | null;
+  purchase_location: string | null;
+  low_stock_threshold: number | null;
 };
 
 type SuggestedInventoryItem = {
@@ -21,6 +37,12 @@ export default function RecipeInventoryPage() {
   const [rows, setRows] = useState<InventoryRow[]>([]);
   const [name, setName] = useState('');
   const [quantity, setQuantity] = useState('');
+  const [unit, setUnit] = useState('');
+  const [category, setCategory] = useState('');
+  const [expirationDate, setExpirationDate] = useState('');
+  const [estimatedUnitPrice, setEstimatedUnitPrice] = useState('');
+  const [purchaseLocation, setPurchaseLocation] = useState('');
+  const [lowStockThreshold, setLowStockThreshold] = useState('');
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,7 +60,9 @@ export default function RecipeInventoryPage() {
       const [{ data, error: queryErr }, { data: suggestionRow, error: suggestionErr }] = await Promise.all([
         supabase
           .from('recipe_inventory_items')
-          .select('id,ingredient_name,quantity')
+          .select(
+            'id,ingredient_name,quantity,unit,category,expiration_date,estimated_unit_price,purchase_location,low_stock_threshold',
+          )
           .order('created_at', { ascending: false })
           .limit(200),
         supabase
@@ -69,8 +93,8 @@ export default function RecipeInventoryPage() {
 
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    const value = name.trim();
-    if (!value) return;
+      const value = name.trim();
+      if (!value) return;
     setWorking(true);
     setError(null);
     try {
@@ -97,7 +121,17 @@ export default function RecipeInventoryPage() {
       if (existingRow?.id) {
         const { error: updateErr } = await supabase
           .from('recipe_inventory_items')
-          .update({ ingredient_name: value, quantity: quantity.trim() || null })
+          .update({
+            ingredient_name: value,
+            normalized_name: normalizeInventoryName(value),
+            quantity: quantity.trim() || null,
+            unit: unit.trim() || null,
+            category: category.trim() || detectInventoryCategory(value),
+            expiration_date: expirationDate || null,
+            estimated_unit_price: estimatedUnitPrice.trim() ? Number(estimatedUnitPrice) : null,
+            purchase_location: purchaseLocation.trim() || null,
+            low_stock_threshold: lowStockThreshold.trim() ? Number(lowStockThreshold) : null,
+          })
           .eq('id', existingRow.id);
         if (updateErr) throw updateErr;
       } else {
@@ -106,12 +140,25 @@ export default function RecipeInventoryPage() {
           user_id: userData.user.id,
           ingredient_name: value,
           quantity: quantity.trim() || null,
+          unit: unit.trim() || null,
+          category: category.trim() || detectInventoryCategory(value),
+          expiration_date: expirationDate || null,
+          estimated_unit_price: estimatedUnitPrice.trim() ? Number(estimatedUnitPrice) : null,
+          purchase_location: purchaseLocation.trim() || null,
+          low_stock_threshold: lowStockThreshold.trim() ? Number(lowStockThreshold) : null,
+          normalized_name: normalizeInventoryName(value),
         });
         if (insertErr) throw insertErr;
       }
 
       setName('');
       setQuantity('');
+      setUnit('');
+      setCategory('');
+      setExpirationDate('');
+      setEstimatedUnitPrice('');
+      setPurchaseLocation('');
+      setLowStockThreshold('');
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo guardar ingrediente.');
@@ -221,9 +268,15 @@ export default function RecipeInventoryPage() {
           <span className="text-xs text-[#6B5A50]">Sugeridos disponibles: {suggestedCount}</span>
         </div>
 
-        <form onSubmit={onSubmit} className="grid gap-2 md:grid-cols-[1fr_220px_auto]">
+        <form onSubmit={onSubmit} className="grid gap-2 md:grid-cols-[1fr_160px_140px_auto]">
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ingrediente" className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 outline-none" />
           <input value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="Cantidad" className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 outline-none" />
+          <input value={unit} onChange={(e) => setUnit(e.target.value)} placeholder="Unidad" className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 outline-none" />
+          <input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="Categoría" className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 outline-none md:col-span-2" />
+          <input type="date" value={expirationDate} onChange={(e) => setExpirationDate(e.target.value)} className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 outline-none" />
+          <input type="number" step="0.01" value={estimatedUnitPrice} onChange={(e) => setEstimatedUnitPrice(e.target.value)} placeholder="Precio estimado" className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 outline-none" />
+          <input value={purchaseLocation} onChange={(e) => setPurchaseLocation(e.target.value)} placeholder="Lugar de compra" className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 outline-none" />
+          <input type="number" step="0.01" value={lowStockThreshold} onChange={(e) => setLowStockThreshold(e.target.value)} placeholder="Stock mínimo" className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 outline-none" />
           <button type="submit" disabled={working} className="h-11 rounded-xl bg-[#C56A1A] px-4 font-semibold text-white disabled:opacity-60">
             {working ? 'Guardando...' : 'Agregar'}
           </button>
@@ -234,9 +287,53 @@ export default function RecipeInventoryPage() {
 
         <ul className="mt-4 grid gap-2">
           {rows.map((item) => (
-            <li key={item.id} className="flex items-center justify-between rounded-xl border border-[#E8DDD2] bg-white/70 px-3 py-2 text-sm">
-              <span className="font-medium">{item.ingredient_name}</span>
-              <span className="text-[#6B5A50]">{item.quantity ?? 'Sin cantidad'}</span>
+            <li key={item.id} className="rounded-xl border border-[#E8DDD2] bg-white/70 px-3 py-3 text-sm">
+              {(() => {
+                const parsed = parseQuantity(
+                  [item.quantity ?? '', item.unit ?? ''].filter(Boolean).join(' ').trim(),
+                );
+                const normalizedLabel =
+                  parsed.structured && parsed.value !== null
+                    ? formatQuantity(parsed.value, parsed.unit)
+                    : null;
+                return (
+                  <>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-medium">{item.ingredient_name}</span>
+                <span className="text-[#6B5A50]">{item.quantity ?? 'Sin cantidad'} {item.unit ?? ''}</span>
+              </div>
+              <div className="mt-1 flex flex-wrap gap-1">
+                <span
+                  className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                    getStockBadge(item.quantity, item.low_stock_threshold) === 'bajo stock'
+                      ? 'border-amber-300 bg-amber-50 text-amber-700'
+                      : 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                  }`}
+                >
+                  {getStockBadge(item.quantity, item.low_stock_threshold) === 'bajo stock' ? 'bajo stock' : 'suficiente'}
+                </span>
+                {isExpiringSoon(item.expiration_date) ? (
+                  <span className="rounded-full border border-red-300 bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-700">vence pronto</span>
+                ) : null}
+                {!item.unit ? (
+                  <span className="rounded-full border border-[#6D4AFF]/30 bg-[#6D4AFF]/10 px-2 py-0.5 text-[10px] font-semibold text-[#6D4AFF]">sin unidad</span>
+                ) : null}
+                {!parsed.structured ? (
+                  <span className="rounded-full border border-[#6B5A50]/30 bg-[#6B5A50]/10 px-2 py-0.5 text-[10px] font-semibold text-[#6B5A50]">
+                    cantidad no estructurada
+                  </span>
+                ) : null}
+              </div>
+              <div className="mt-1 grid gap-1 text-xs text-[#6B5A50] md:grid-cols-2">
+                <span>Cantidad normalizada: {normalizedLabel ?? 'No disponible'}</span>
+                <span>Categoría: {item.category ?? 'Sin categoría'}</span>
+                <span>Vence: {item.expiration_date ?? '—'}</span>
+                <span>Precio estimado: {item.estimated_unit_price ?? '—'}</span>
+                <span>Lugar: {item.purchase_location ?? '—'}</span>
+              </div>
+                  </>
+                );
+              })()}
             </li>
           ))}
           {!loading && rows.length === 0 ? <li className="text-sm text-[#6B5A50]">Aún no tienes ingredientes cargados.</li> : null}

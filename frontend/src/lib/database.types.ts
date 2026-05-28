@@ -106,6 +106,72 @@ export type Database = {
         };
         Relationships: [];
       };
+      user_meal_plan_optimization_snapshots: {
+        Row: {
+          id: string;
+          tenant_id: string;
+          user_id: string;
+          meal_plan_id: string;
+          optimization_mode:
+            | 'reduce_waste'
+            | 'optimize_cost'
+            | 'prioritize_fresh'
+            | 'reduce_missing'
+            | 'reuse_proteins'
+            | 'balance_ingredients';
+          baseline_score: Json;
+          optimized_score: Json;
+          comparison: Json;
+          explainability_notes: Json;
+          baseline_calendar: Json;
+          optimized_calendar: Json;
+          metadata: Json;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          tenant_id: string;
+          user_id: string;
+          meal_plan_id: string;
+          optimization_mode:
+            | 'reduce_waste'
+            | 'optimize_cost'
+            | 'prioritize_fresh'
+            | 'reduce_missing'
+            | 'reuse_proteins'
+            | 'balance_ingredients';
+          baseline_score: Json;
+          optimized_score: Json;
+          comparison: Json;
+          explainability_notes: Json;
+          baseline_calendar: Json;
+          optimized_calendar: Json;
+          metadata?: Json;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          tenant_id?: string;
+          user_id?: string;
+          meal_plan_id?: string;
+          optimization_mode?:
+            | 'reduce_waste'
+            | 'optimize_cost'
+            | 'prioritize_fresh'
+            | 'reduce_missing'
+            | 'reuse_proteins'
+            | 'balance_ingredients';
+          baseline_score?: Json;
+          optimized_score?: Json;
+          comparison?: Json;
+          explainability_notes?: Json;
+          baseline_calendar?: Json;
+          optimized_calendar?: Json;
+          metadata?: Json;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
       users: {
         Row: {
           id: string;
@@ -299,7 +365,16 @@ export type Database = {
           user_id: string;
           ingredient_name: string;
           quantity: string | null;
+          unit: string | null;
+          category: string | null;
+          expiration_date: string | null;
+          estimated_unit_price: number | null;
+          purchase_location: string | null;
+          low_stock_threshold: number | null;
+          normalized_name: string | null;
+          notes: string | null;
           created_at: string;
+          updated_at: string;
         };
         Insert: {
           id?: string;
@@ -307,6 +382,16 @@ export type Database = {
           user_id: string;
           ingredient_name: string;
           quantity?: string | null;
+          unit?: string | null;
+          category?: string | null;
+          expiration_date?: string | null;
+          estimated_unit_price?: number | null;
+          purchase_location?: string | null;
+          low_stock_threshold?: number | null;
+          normalized_name?: string | null;
+          notes?: string | null;
+          created_at?: string;
+          updated_at?: string;
         };
         Update: {
           id?: string;
@@ -314,6 +399,16 @@ export type Database = {
           user_id?: string;
           ingredient_name?: string;
           quantity?: string | null;
+          unit?: string | null;
+          category?: string | null;
+          expiration_date?: string | null;
+          estimated_unit_price?: number | null;
+          purchase_location?: string | null;
+          low_stock_threshold?: number | null;
+          normalized_name?: string | null;
+          notes?: string | null;
+          created_at?: string;
+          updated_at?: string;
         };
         Relationships: [];
       };
