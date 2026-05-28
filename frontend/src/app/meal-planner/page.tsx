@@ -24,6 +24,23 @@ import {
   type RawSuggestedItem,
   type SuggestedInventoryItem,
 } from './inventorySuggestion';
+import {
+  type InventoryComparableItem,
+  type RecipeRequirement,
+} from '@/lib/inventory/recipe-requirements';
+import {
+  buildMealPlanInventoryProjection,
+  buildSmartShoppingList,
+} from '@/lib/inventory/meal-plan-projection';
+import { InventoryDepletionPreview } from '@/components/home-os/InventoryDepletionPreview';
+import { MealTimelineCard } from '@/components/home-os/MealTimelineCard';
+import { SmartShoppingSection } from '@/components/home-os/SmartShoppingSection';
+import { SupermarketModeCard } from '@/components/home-os/SupermarketModeCard';
+import { DailyKitchenCard } from '@/components/home-os/DailyKitchenCard';
+import { InventoryPlaybackCard } from '@/components/home-os/InventoryPlaybackCard';
+import { HomeIntelligenceDashboard } from '@/components/home-os/HomeIntelligenceDashboard';
+import { SmartPredictionCard } from '@/components/home-os/SmartPredictionCard';
+import { buildMealPlanSimulation } from '@/lib/inventory/meal-plan-simulation';
 
 const CUISINES = ['Venezolana', 'Colombiana', 'Latinoamericana', 'Asiática', 'Italiana', 'Mediterránea', 'Mexicana'];
 const CUISINE_FLAGS: Record<string, string> = {
@@ -94,13 +111,11 @@ type MealDetailState = {
 type ErrorPayload = { error?: string };
 type MatchChunkRow = { content: string; similarity: number | string | null };
 type MealDetailTab = 'summary' | 'ingredients' | 'preparation';
-type ShoppingListEntry = {
-  id: string;
-  ingredientName: string;
-  quantity: string | null;
-  status: 'pending' | 'purchased';
-};
 type SelectedMealState = { day: string; mealType: MealType } | null;
+type InventoryItemExtended = InventoryComparableItem & {
+  category?: string | null;
+  estimated_unit_price?: number | null;
+};
 
 async function readErrorPayload(response: Response, fallback: string): Promise<ErrorPayload> {
   const payload: unknown = await response.json().catch(() => ({ error: fallback }));
@@ -252,6 +267,7 @@ export default function MealPlannerPage() {
   const [goal, setGoal] = useState('Familiar');
   const [peopleCount, setPeopleCount] = useState(4);
   const [inventory, setInventory] = useState<string[]>([]);
+  const [inventoryItems, setInventoryItems] = useState<InventoryItemExtended[]>([]);
   const [selectedRestrictions, setSelectedRestrictions] = useState<string[]>([]);
   const [fusionIntensity, setFusionIntensity] = useState<FusionIntensity>('media');
   const [intensityAuto, setIntensityAuto] = useState(true);
@@ -264,8 +280,6 @@ export default function MealPlannerPage() {
   }>({ preferred: [], avoid: [], goals: [], level: null });
   const fusionLabel = useMemo(() => buildFusionLabel(baseCuisine, fusionCuisines), [baseCuisine, fusionCuisines]);
   const [calendarData, setCalendarData] = useState<PlannerDay[]>(() => buildDefaultWeek('Latinoamericana'));
-  const [shoppingItems, setShoppingItems] = useState<string[]>([]);
-  const [shoppingListEntries, setShoppingListEntries] = useState<ShoppingListEntry[]>([]);
   const [loadingInventory, setLoadingInventory] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -291,6 +305,7 @@ export default function MealPlannerPage() {
   const [activeWeekIndex, setActiveWeekIndex] = useState(0);
   const [activeDayIndex, setActiveDayIndex] = useState(0);
   const [shoppingCollapsed, setShoppingCollapsed] = useState(false);
+  const [simulatedDayIndex, setSimulatedDayIndex] = useState(0);
 
   useEffect(() => {
     const loadProfileAndInventory = async () => {
@@ -301,14 +316,17 @@ export default function MealPlannerPage() {
         const authUserId = authData.user?.id ?? null;
         setUserId(authUserId);
 
-        const [{ data: userRow }, { data: invRows }, { data: profileRow }, { data: profileTermRows }, { data: termsRows }, { data: savedPlanRow }, { data: shoppingRows }, { data: suggestionRow }] = await Promise.all([
+        const [{ data: userRow }, { data: invRows }, { data: profileRow }, { data: profileTermRows }, { data: termsRows }, { data: savedPlanRow }, { data: suggestionRow }] = await Promise.all([
           authUserId ? supabase.from('users').select('tenant_id').eq('id', authUserId).maybeSingle() : Promise.resolve({ data: null }),
-          supabase.from('recipe_inventory_items').select('ingredient_name').order('created_at', { ascending: false }).limit(200),
+          supabase
+            .from('recipe_inventory_items')
+            .select('ingredient_name,quantity,unit,category,estimated_unit_price')
+            .order('created_at', { ascending: false })
+            .limit(200),
           supabase.from('user_culinary_profiles').select('level').maybeSingle(),
           supabase.from('user_culinary_profile_terms').select('preference_type,term_id'),
           supabase.from('culinary_terms').select('id,label').limit(300),
           supabase.from('user_meal_plans').select('*').maybeSingle(),
-          supabase.from('shopping_list_items').select('id,ingredient_name,quantity,status').eq('source', 'meal_planner').order('created_at', { ascending: false }).limit(120),
           supabase.from('user_meal_plan_inventory_suggestions').select('normalized_items,updated_at').maybeSingle(),
         ]);
 
@@ -317,15 +335,15 @@ export default function MealPlannerPage() {
 
         const items = (invRows ?? []).map((row) => row.ingredient_name).filter(Boolean);
         setInventory(items);
-        setShoppingListEntries(
-          (shoppingRows ?? []).map((row) => ({
-            id: row.id,
-            ingredientName: row.ingredient_name,
-            quantity: row.quantity,
-            status: row.status,
-          }))
+        setInventoryItems(
+          (invRows ?? []).map((row) => ({
+            ingredient_name: row.ingredient_name,
+            quantity: row.quantity ?? null,
+            unit: row.unit ?? null,
+            category: row.category ?? null,
+            estimated_unit_price: row.estimated_unit_price ?? null,
+          })),
         );
-
         const termById = new Map((termsRows ?? []).map((row) => [row.id, row.label]));
         const mappedRows = (profileTermRows ?? []) as Array<{ preference_type: 'identity' | 'prefer' | 'avoid' | 'goal'; term_id: string }>;
         const labelsByType = (type: 'identity' | 'prefer' | 'avoid' | 'goal') =>
@@ -383,6 +401,11 @@ export default function MealPlannerPage() {
     setFusionIntensity(GOAL_TO_INTENSITY[goal] ?? 'media');
   }, [goal, intensityAuto]);
 
+  useEffect(() => {
+    if (simulatedDayIndex < calendarData.length) return;
+    setSimulatedDayIndex(0);
+  }, [simulatedDayIndex, calendarData.length]);
+
   const filteredProfileBadges = useMemo(
     () => pick([
       ...culinaryProfile.preferred,
@@ -393,8 +416,6 @@ export default function MealPlannerPage() {
     [culinaryProfile],
   );
 
-  const inventorySummary = useMemo(() => pick(inventory, 6), [inventory]);
-
   const profileFlags = [
     { label: 'Inventario', active: inventory.length > 0 },
     { label: 'Perfil culinario', active: filteredProfileBadges.length > 0 },
@@ -403,6 +424,87 @@ export default function MealPlannerPage() {
     { label: 'Restricciones', active: selectedRestrictions.length > 0 },
     { label: 'Objetivos', active: culinaryProfile.goals.length > 0 || Boolean(goal) },
   ];
+
+  const inventoryProjection = useMemo(() => {
+    const requirements: RecipeRequirement[] = inventorySuggestion.map((item) => ({
+      ingredientName: item.display_name || item.canonical_name,
+      normalizedName: item.canonical_name.toLowerCase(),
+      requiredQuantity: item.quantity,
+      requiredUnit: item.unit as RecipeRequirement['requiredUnit'],
+      usedInRecipes: item.sources,
+    }));
+    return buildMealPlanInventoryProjection(requirements, inventoryItems);
+  }, [inventorySuggestion, inventoryItems]);
+
+  const smartShoppingList = useMemo(
+    () => buildSmartShoppingList(inventoryProjection),
+    [inventoryProjection],
+  );
+
+  const inventoryInsights = useMemo(() => {
+    const projectionItems = inventoryProjection.items;
+    if (projectionItems.length === 0) return [];
+    const reuseCandidate = projectionItems
+      .map((item) => ({ item, uses: item.usedInRecipes.length }))
+      .sort((a, b) => b.uses - a.uses)[0];
+
+    const insights: string[] = [];
+    if (reuseCandidate && reuseCandidate.uses > 1) {
+      insights.push(`Este menú reutiliza ${reuseCandidate.item.ingredientName} en ${reuseCandidate.uses} recetas.`);
+    }
+    if (inventoryProjection.summary.missing + inventoryProjection.summary.partial > 0) {
+      insights.push(
+        `Tu inventario cubre parte del menú, pero faltan ${
+          inventoryProjection.summary.missing + inventoryProjection.summary.partial
+        } ingredientes.`,
+      );
+    }
+    if (inventoryProjection.summary.unknown > 0) {
+      insights.push(
+        `Hay ${inventoryProjection.summary.unknown} ingredientes que requieren revisión manual por cantidad no estructurada.`,
+      );
+    }
+    return insights;
+  }, [inventoryProjection]);
+
+  const mealTimeline = useMemo(
+    () =>
+      calendarData.map((day) => ({
+        day: day.day,
+        meals: MEALS.map((mealType) => ({
+          label: mealType,
+          title: day.meals[mealType].name.replace(/\*\*/g, '').trim(),
+        })),
+      })),
+    [calendarData],
+  );
+
+  const supermarketMetrics = useMemo(() => {
+    const reusedCount = inventoryProjection.items.filter((item) => item.usedInRecipes.length > 1).length;
+    return {
+      estimatedCost: smartShoppingList.estimatedCostTotal,
+      missingCount: inventoryProjection.summary.missing + inventoryProjection.summary.partial,
+      reusedCount,
+      reviewCount: inventoryProjection.summary.unknown,
+    };
+  }, [inventoryProjection, smartShoppingList]);
+
+  const mealSimulation = useMemo(
+    () =>
+      buildMealPlanSimulation(
+        calendarData.map((day) => ({
+          day: day.day,
+          meals: MEALS.map((mealType) => ({
+            label: mealType,
+            title: day.meals[mealType].name.replace(/\*\*/g, '').trim(),
+            time: day.meals[mealType].time,
+            difficulty: day.meals[mealType].difficulty,
+          })),
+        })),
+        inventoryProjection.items,
+      ),
+    [calendarData, inventoryProjection.items],
+  );
 
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -476,15 +578,14 @@ export default function MealPlannerPage() {
       const payload = (await res.json()) as { content: string };
       const content = payload.content;
       const parsedCalendar = parseMenuToCalendar(content, fusionLabel);
-      const parsedShopping = extractShoppingItems(content);
       setResult(content);
       setPdfContextCount(pdfChunks.length);
       setCalendarData(parsedCalendar);
-      setShoppingItems(parsedShopping);
       setPeopleCount(effectivePeopleCount);
 
       if (tenantId && userId) {
         const supabase = getSupabaseBrowserClient();
+        const parsedShopping = extractShoppingItems(content);
         await supabase
           .from('shopping_list_items')
           .delete()
@@ -505,21 +606,6 @@ export default function MealPlannerPage() {
           await supabase.from('shopping_list_items').insert(toInsert);
         }
 
-        const { data: shoppingRows } = await supabase
-          .from('shopping_list_items')
-          .select('id,ingredient_name,quantity,status')
-          .eq('source', 'meal_planner')
-          .order('created_at', { ascending: false })
-          .limit(120);
-
-        setShoppingListEntries(
-          (shoppingRows ?? []).map((row) => ({
-            id: row.id,
-            ingredientName: row.ingredient_name,
-            quantity: row.quantity,
-            status: row.status,
-          }))
-        );
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error generando menú.');
@@ -651,20 +737,6 @@ export default function MealPlannerPage() {
     const key = mealKey(selectedMeal.day, selectedMeal.mealType);
     setLockedMeals((prev) => (prev.includes(key) ? prev.filter((v) => v !== key) : [...prev, key]));
     setError('Estado de bloqueo actualizado.');
-  };
-
-  const toggleShoppingItemStatus = async (entry: ShoppingListEntry) => {
-    const nextStatus: ShoppingListEntry['status'] = entry.status === 'pending' ? 'purchased' : 'pending';
-    const supabase = getSupabaseBrowserClient();
-    const { error: updateError } = await supabase
-      .from('shopping_list_items')
-      .update({ status: nextStatus, updated_at: new Date().toISOString() })
-      .eq('id', entry.id);
-    if (updateError) {
-      setError(`No se pudo actualizar compra: ${updateError.message}`);
-      return;
-    }
-    setShoppingListEntries((prev) => prev.map((item) => (item.id === entry.id ? { ...item, status: nextStatus } : item)));
   };
 
   const savePlan = async () => {
@@ -1207,6 +1279,30 @@ export default function MealPlannerPage() {
               {renderPeriodView()}
             </section>
 
+            <HomeIntelligenceDashboard
+              weeklyCoverage={mealSimulation.weeklyCoverage}
+              criticalCount={mealSimulation.criticalIngredients.length}
+              reusedCount={mealSimulation.reusedIngredients.length}
+              projectedCost={smartShoppingList.estimatedCostTotal}
+              criticalIngredients={mealSimulation.criticalIngredients}
+              reusedIngredients={mealSimulation.reusedIngredients}
+            />
+            <DailyKitchenCard
+              dayState={mealSimulation.dayStates[simulatedDayIndex] ?? null}
+              message={mealSimulation.dailyKitchenMessage}
+            />
+            <InventoryDepletionPreview items={inventoryProjection.items} />
+            <InventoryPlaybackCard
+              dayStates={mealSimulation.dayStates}
+              selectedDayIndex={simulatedDayIndex}
+            />
+            <MealTimelineCard
+              timeline={mealTimeline}
+              selectedDayIndex={simulatedDayIndex}
+              onSimulateDay={setSimulatedDayIndex}
+            />
+            <SmartPredictionCard predictions={mealSimulation.predictions} />
+
             {result ? (
               <section className="rounded-2xl border border-[#E8DDD2] bg-white/80 p-4">
                 <h3 className="text-lg font-semibold">Salida textual IA</h3>
@@ -1237,41 +1333,28 @@ export default function MealPlannerPage() {
                   )}
                 </button>
               </div>
-              <p className="mt-1 text-sm text-[#6B5A50]">Separada por categorías para ejecución rápida.</p>
+              {!shoppingCollapsed ? <div className="mt-3"><SmartShoppingSection shopping={smartShoppingList} /></div> : null}
+            </article>
 
-              {!shoppingCollapsed ? (
-              <div className="mt-3 space-y-3 text-sm">
-                {['Proteínas', 'Verduras', 'Lácteos', 'Especias', 'Extras'].map((group, idx) => (
-                  <div key={group} className="rounded-xl border border-[#E8DDD2] bg-white/80 p-3">
-                    <p className="font-semibold text-[#241A14]">{group}</p>
-                    <ul className="mt-2 space-y-1.5 text-[#6B5A50]">
-                      {(shoppingListEntries.length > 0
-                        ? shoppingListEntries.map((entry) => `${entry.ingredientName}${entry.status === 'purchased' ? '::purchased' : ''}`)
-                        : (shoppingItems.length ? shoppingItems : inventorySummary)
-                      ).slice(idx, idx + 3).map((item) => {
-                        const [name, statusMark] = item.split('::');
-                        const entry = shoppingListEntries.find((v) => v.ingredientName === name);
-                        const purchased = entry ? entry.status === 'purchased' : statusMark === 'purchased';
-                        return (
-                        <li key={`${group}-${item}`} className="flex items-center justify-between">
-                          <span className="line-clamp-2 leading-5">{name}</span>
-                          <button type="button" onClick={() => entry ? void toggleShoppingItemStatus(entry) : undefined} className="text-xs">
-                            {purchased ? '✓ comprado' : '○ comprar'}
-                          </button>
-                        </li>
-                        );
-                      })}
-                    </ul>
-                  </div>
-                ))}
+            <SupermarketModeCard
+              estimatedCost={supermarketMetrics.estimatedCost}
+              missingCount={supermarketMetrics.missingCount}
+              reusedCount={supermarketMetrics.reusedCount}
+              reviewCount={supermarketMetrics.reviewCount}
+            />
+
+            <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
+              <h3 className="text-lg font-semibold">Resumen de inventario proyectado</h3>
+              <p className="mt-1 text-sm text-[#6B5A50]">Proyección de consumo para este menú (sin descontar stock real).</p>
+              <div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:text-sm">
+                <SummaryBadge label="Suficientes" value={inventoryProjection.summary.sufficient} tone="success" />
+                <SummaryBadge label="Faltantes" value={inventoryProjection.summary.missing} tone="danger" />
+                <SummaryBadge label="Parciales" value={inventoryProjection.summary.partial} tone="warning" />
+                <SummaryBadge label="A revisar" value={inventoryProjection.summary.unknown} tone="neutral" />
               </div>
-              ) : null}
-
-              {!shoppingCollapsed ? (
-              <p className="mt-3 rounded-xl border border-[#567A3B]/30 bg-[#567A3B]/10 p-2 text-xs text-[#567A3B]">
-                Ingredientes reutilizados inteligentemente para reducir compras repetidas.
+              <p className="mt-3 rounded-xl border border-[#E8DDD2] bg-white/80 px-3 py-2 text-xs text-[#6B5A50]">
+                Costo estimado: <span className="font-semibold text-[#241A14]">~${inventoryProjection.summary.estimatedCost.toFixed(2)}</span>
               </p>
-              ) : null}
             </article>
 
             <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
@@ -1314,6 +1397,66 @@ export default function MealPlannerPage() {
                 {inventorySuggestion.length === 0 ? (
                   <li className="rounded-xl border border-[#E8DDD2] bg-white/75 p-2 text-sm text-[#6B5A50]">
                     Todavía no generaste inventario sugerido para este menú.
+                  </li>
+                ) : null}
+              </ul>
+            </article>
+
+            <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
+              <h3 className="text-lg font-semibold">Comparación con inventario</h3>
+              <p className="mt-1 text-sm text-[#6B5A50]">Estado operativo para ingredientes requeridos por el menú.</p>
+              <ul className="mt-3 space-y-2">
+                {inventoryProjection.items.slice(0, 12).map((item) => (
+                  <li key={item.normalizedName} className="rounded-xl border border-[#E8DDD2] bg-white/80 p-2 text-sm">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-semibold text-[#241A14]">{item.ingredientName}</p>
+                      <span
+                        className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                          item.status === 'sufficient'
+                            ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                            : item.status === 'partial'
+                              ? 'border-amber-300 bg-amber-50 text-amber-700'
+                              : item.status === 'missing'
+                                ? 'border-red-300 bg-red-50 text-red-700'
+                                : 'border-[#6B5A50]/30 bg-[#6B5A50]/10 text-[#6B5A50]'
+                        }`}
+                      >
+                        {item.status === 'sufficient'
+                          ? 'Disponible'
+                          : item.status === 'partial'
+                            ? 'Parcial'
+                            : item.status === 'missing'
+                              ? 'Falta comprar'
+                              : 'No comparable'}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs text-[#6B5A50]">
+                      Requerido: {item.requiredTotalQuantity ?? '—'} {item.requiredUnit} · Disponible: {item.availableQuantity ?? '—'} {item.availableUnit}
+                    </p>
+                    <p className="mt-1 text-[11px] text-[#8C7A6D]">
+                      Uso proyectado: {item.projectedUsedQuantity ?? '—'} {item.requiredUnit} · Restante: {item.projectedRemainingQuantity ?? '—'} {item.requiredUnit}
+                    </p>
+                  </li>
+                ))}
+                {inventoryProjection.items.length === 0 ? (
+                  <li className="rounded-xl border border-[#E8DDD2] bg-white/80 p-2 text-sm text-[#6B5A50]">
+                    Generá inventario sugerido para ver la comparación con tu stock real.
+                  </li>
+                ) : null}
+              </ul>
+            </article>
+
+            <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
+              <h3 className="text-lg font-semibold">Insights CocinaCore AI</h3>
+              <ul className="mt-3 space-y-2 text-sm">
+                {inventoryInsights.map((insight) => (
+                  <li key={insight} className="rounded-xl border border-[#E8DDD2] bg-white/80 px-3 py-2 text-[#6B5A50]">
+                    {insight}
+                  </li>
+                ))}
+                {inventoryInsights.length === 0 ? (
+                  <li className="rounded-xl border border-[#E8DDD2] bg-white/80 px-3 py-2 text-[#6B5A50]">
+                    Generá inventario sugerido para ver recomendaciones de optimización del menú.
                   </li>
                 ) : null}
               </ul>
@@ -1491,6 +1634,24 @@ function ToolbarSegment(props: {
           </button>
         ))}
       </div>
+    </div>
+  );
+}
+
+function SummaryBadge(props: { label: string; value: number; tone: 'success' | 'warning' | 'danger' | 'neutral' }) {
+  const toneClass =
+    props.tone === 'success'
+      ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+      : props.tone === 'warning'
+        ? 'border-amber-300 bg-amber-50 text-amber-700'
+        : props.tone === 'danger'
+          ? 'border-red-300 bg-red-50 text-red-700'
+          : 'border-[#6B5A50]/30 bg-[#6B5A50]/10 text-[#6B5A50]';
+
+  return (
+    <div className={`rounded-xl border px-3 py-2 ${toneClass}`}>
+      <p className="text-[11px] font-semibold uppercase tracking-[0.08em]">{props.label}</p>
+      <p className="mt-1 text-lg font-semibold">{props.value}</p>
     </div>
   );
 }
