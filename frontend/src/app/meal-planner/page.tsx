@@ -8,10 +8,12 @@ import {
   CalendarDays,
   ChevronDown,
   ChevronUp,
+  ClipboardCopy,
   Download,
   Eye,
   History,
   Lock,
+  MessageCircle,
   RefreshCw,
   RotateCcw,
   Share2,
@@ -490,6 +492,80 @@ function buildRecipeRequirementsFromCalendar(days: PlannerDay[]): RecipeRequirem
   return groupRequirementsByIngredient(requirements);
 }
 
+type NarrativeDaySection = {
+  day: string;
+  meals: Array<{ meal: string; text: string }>;
+};
+type ShoppingShareFormat = 'short' | 'detailed';
+
+function parseNarrativeMenu(content: string): NarrativeDaySection[] {
+  const sections: NarrativeDaySection[] = [];
+  const lines = content
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const dayRegex = /^(?:\*{0,2})?(lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado|domingo)(?:\*{0,2})?$/i;
+  const mealRegex = /^(desayuno|almuerzo|cena)\s*:\s*(.+)$/i;
+  let currentSection: NarrativeDaySection | null = null;
+
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/^[-•]\s*/, '').trim();
+    const dayMatch = line.match(dayRegex);
+    if (dayMatch) {
+      currentSection = {
+        day: dayMatch[1].charAt(0).toUpperCase() + dayMatch[1].slice(1),
+        meals: [],
+      };
+      sections.push(currentSection);
+      continue;
+    }
+
+    const mealMatch = line.match(mealRegex);
+    if (mealMatch && currentSection) {
+      currentSection.meals.push({
+        meal: mealMatch[1].charAt(0).toUpperCase() + mealMatch[1].slice(1).toLowerCase(),
+        text: mealMatch[2].replace(/\*\*/g, '').trim(),
+      });
+    }
+  }
+  return sections;
+}
+
+function buildShoppingWhatsappText(
+  shoppingList: ReturnType<typeof buildQuantifiedShoppingList>,
+  peopleCount: number,
+  period: PlannerPeriod,
+  format: ShoppingShareFormat,
+): string {
+  const periodLabel = period === 'week' ? 'semanal' : period === 'fortnight' ? 'quincenal' : 'mensual';
+  const lines: string[] = [
+    `🛒 Lista de mercado CocinaCore (${periodLabel})`,
+    `👥 ${peopleCount} personas`,
+    '',
+  ];
+
+  for (const group of shoppingList.groups) {
+    const buyItems = group.items.filter((item) => item.status === 'buy');
+    if (buyItems.length === 0) continue;
+    lines.push(`*${group.category}*`);
+    for (const item of buyItems) {
+      lines.push(`- [ ] ${item.ingredientName}: ${item.quantityToBuy ?? 'revisar'} ${item.unit}`);
+      if (format === 'detailed' && item.usedInRecipes.length > 0) {
+        lines.push(`   ↳ uso: ${item.usedInRecipes.join(', ')}`);
+      }
+    }
+    lines.push('');
+  }
+
+  if (shoppingList.estimatedCostTotal > 0) {
+    lines.push(`💵 Costo estimado: ~$${shoppingList.estimatedCostTotal.toFixed(2)}`);
+  }
+
+  lines.push('', 'Generado por CocinaCore');
+  return lines.join('\n');
+}
+
 export default function MealPlannerPage() {
   const [mode, setMode] = useState<PlannerMode>('balanced_ai');
   const [period, setPeriod] = useState<PlannerPeriod>('week');
@@ -516,6 +592,8 @@ export default function MealPlannerPage() {
   const [shoppingApplySummary, setShoppingApplySummary] = useState<string | null>(null);
   const [consumingRecipe, setConsumingRecipe] = useState(false);
   const [recentMovements, setRecentMovements] = useState<InventoryMovementRow[]>([]);
+  const [shoppingShareFeedback, setShoppingShareFeedback] = useState<string | null>(null);
+  const [shoppingShareFormat, setShoppingShareFormat] = useState<ShoppingShareFormat>('short');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState('');
@@ -719,6 +797,12 @@ export default function MealPlannerPage() {
         ? buildQuantifiedShoppingList(mealPlanRequirements, inventoryItems)
         : buildSmartShoppingList(inventoryProjection),
     [inventoryProjection, inventoryItems, mealPlanRequirements],
+  );
+
+  const narrativeSections = useMemo(() => parseNarrativeMenu(result), [result]);
+  const shoppingWhatsappText = useMemo(
+    () => buildShoppingWhatsappText(smartShoppingList, peopleCount || 4, period, shoppingShareFormat),
+    [smartShoppingList, peopleCount, period, shoppingShareFormat],
   );
 
   const inventoryInsights = useMemo(() => {
@@ -1627,6 +1711,23 @@ export default function MealPlannerPage() {
     }
   };
 
+  const shareShoppingToWhatsapp = () => {
+    setShoppingShareFeedback(null);
+    const encoded = encodeURIComponent(shoppingWhatsappText);
+    const url = `https://wa.me/?text=${encoded}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
+    setShoppingShareFeedback('Lista lista para enviar por WhatsApp.');
+  };
+
+  const copyShoppingList = async () => {
+    try {
+      await navigator.clipboard.writeText(shoppingWhatsappText);
+      setShoppingShareFeedback('Lista copiada al portapapeles.');
+    } catch {
+      setShoppingShareFeedback('No se pudo copiar. Probá enviar directo por WhatsApp.');
+    }
+  };
+
   const openMealDetail = async (day: string, mealType: MealType, card: PlannerMealCard) => {
     const cleanTitle = card.name.replace(/\*\*/g, '').trim();
     setMealDetail({
@@ -2392,11 +2493,41 @@ export default function MealPlannerPage() {
 
             {result ? (
               <section className="rounded-2xl border border-[#E8DDD2] bg-white/80 p-4">
-                <h3 className="text-lg font-semibold">Salida textual IA</h3>
-                {usePdfContext ? (
-                  <p className="mt-1 text-xs text-[#6B5A50]">Contexto PDF aplicado: {pdfContextCount} fragmentos</p>
-                ) : null}
-                <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap text-sm text-[#3d312a]">{result}</pre>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-lg font-semibold">Plan culinario generado</h3>
+                    <p className="text-xs text-[#6B5A50]">
+                      Vista editorial del menú para {peopleCount || 4} personas.
+                    </p>
+                  </div>
+                  {usePdfContext ? (
+                    <span className="rounded-full border border-[#6D4AFF]/30 bg-[#6D4AFF]/10 px-2 py-0.5 text-[10px] font-semibold text-[#6D4AFF]">
+                      Contexto PDF: {pdfContextCount}
+                    </span>
+                  ) : null}
+                </div>
+
+                {narrativeSections.length > 0 ? (
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    {narrativeSections.map((section) => (
+                      <article key={section.day} className="rounded-xl border border-[#E8DDD2] bg-white/85 p-3">
+                        <p className="text-sm font-semibold text-[#241A14]">{section.day}</p>
+                        <ul className="mt-2 space-y-2">
+                          {section.meals.map((meal) => (
+                            <li key={`${section.day}-${meal.meal}-${meal.text.slice(0, 16)}`} className="rounded-lg border border-[#E8DDD2] bg-[#FAF6F1] p-2">
+                              <p className="text-xs font-semibold text-[#6B5A50]">{meal.meal}</p>
+                              <p className="mt-1 text-sm text-[#241A14]">{meal.text}</p>
+                            </li>
+                          ))}
+                        </ul>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap rounded-xl border border-[#E8DDD2] bg-white/85 p-3 text-sm text-[#3d312a]">
+                    {result}
+                  </pre>
+                )}
               </section>
             ) : null}
           </section>
@@ -2408,17 +2539,53 @@ export default function MealPlannerPage() {
                   <ShoppingCart size={16} className="text-[#567A3B]" />
                   <h3 className="text-lg font-semibold">Lista inteligente de compras</h3>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setShoppingCollapsed((prev) => !prev)}
-                  className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1 text-xs font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40"
-                >
-                  {shoppingCollapsed ? (
-                    <span className="inline-flex items-center gap-1"><ChevronDown size={14} /> Expandir</span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1"><ChevronUp size={14} /> Colapsar</span>
-                  )}
-                </button>
+                <div className="flex flex-wrap items-center justify-end gap-1.5">
+                  <div className="inline-flex rounded-lg border border-[#E8DDD2] bg-white p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setShoppingShareFormat('short')}
+                      className={`rounded-md px-2 py-1 text-[11px] font-semibold ${
+                        shoppingShareFormat === 'short' ? 'bg-[#16110D] text-white' : 'text-[#6B5A50]'
+                      }`}
+                    >
+                      Corto
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShoppingShareFormat('detailed')}
+                      className={`rounded-md px-2 py-1 text-[11px] font-semibold ${
+                        shoppingShareFormat === 'detailed' ? 'bg-[#16110D] text-white' : 'text-[#6B5A50]'
+                      }`}
+                    >
+                      Detallado
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void copyShoppingList()}
+                    className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1 text-xs font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40"
+                  >
+                    <span className="inline-flex items-center gap-1"><ClipboardCopy size={14} /> Copiar</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={shareShoppingToWhatsapp}
+                    className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1 text-xs font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40"
+                  >
+                    <span className="inline-flex items-center gap-1"><MessageCircle size={14} /> WhatsApp</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShoppingCollapsed((prev) => !prev)}
+                    className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1 text-xs font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40"
+                  >
+                    {shoppingCollapsed ? (
+                      <span className="inline-flex items-center gap-1"><ChevronDown size={14} /> Expandir</span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1"><ChevronUp size={14} /> Colapsar</span>
+                    )}
+                  </button>
+                </div>
               </div>
               {!shoppingCollapsed ? (
                 <div className="mt-3 space-y-2">
@@ -2430,6 +2597,11 @@ export default function MealPlannerPage() {
                   {shoppingApplySummary ? (
                     <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
                       {shoppingApplySummary}
+                    </p>
+                  ) : null}
+                  {shoppingShareFeedback ? (
+                    <p className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-2 text-xs text-[#6B5A50]">
+                      {shoppingShareFeedback}
                     </p>
                   ) : null}
                 </div>
