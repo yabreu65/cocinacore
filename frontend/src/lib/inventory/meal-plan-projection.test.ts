@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildMealPlanInventoryProjection,
+  buildQuantifiedShoppingList,
   buildSmartShoppingList,
   consolidateMissingIngredients,
   estimateShoppingCost,
@@ -46,6 +47,59 @@ const recipeRequirements: RecipeRequirement[] = [
 ];
 
 describe('meal-plan-projection', () => {
+  it('handles weekly family menu with repeated ingredients and merges correctly', () => {
+    const shopping = buildQuantifiedShoppingList(
+      [
+        {
+          ingredientName: 'Tomate',
+          normalizedName: 'tomate',
+          requiredQuantity: 8,
+          requiredUnit: 'unidad',
+          usedInRecipes: ['Lunes · Almuerzo · Pasta'],
+        },
+        {
+          ingredientName: 'Tomate',
+          normalizedName: 'tomate',
+          requiredQuantity: 6,
+          requiredUnit: 'unidad',
+          usedInRecipes: ['Martes · Cena · Ensalada'],
+        },
+        {
+          ingredientName: 'Pollo',
+          normalizedName: 'pollo',
+          requiredQuantity: 1.2,
+          requiredUnit: 'kg',
+          usedInRecipes: ['Miércoles · Almuerzo · Pollo al horno'],
+        },
+        {
+          ingredientName: 'Pollo',
+          normalizedName: 'pollo',
+          requiredQuantity: 0.3,
+          requiredUnit: 'kg',
+          usedInRecipes: ['Jueves · Cena · Salteado'],
+        },
+      ],
+      [
+        { ingredient_name: 'tomate', quantity: '3', unit: 'unidad', category: 'Verduras', estimated_unit_price: 0.5 },
+        { ingredient_name: 'pollo', quantity: '1 kg', unit: null, category: 'Proteínas', estimated_unit_price: 6 },
+      ],
+    );
+
+    const items = shopping.groups.flatMap((group) => group.items);
+    const tomato = items.find((item) => item.normalizedName === 'tomate');
+    const chicken = items.find((item) => item.normalizedName === 'pollo');
+
+    expect(tomato?.requiredQuantity).toBe(14);
+    expect(tomato?.availableQuantity).toBe(3);
+    expect(tomato?.quantityToBuy).toBe(11);
+    expect(tomato?.usedInRecipes.length).toBe(2);
+
+    expect(chicken?.requiredQuantity).toBe(1.5);
+    expect(chicken?.availableQuantity).toBe(1);
+    expect(chicken?.quantityToBuy).toBe(0.5);
+    expect(chicken?.status).toBe('buy');
+  });
+
   it('aggregates repeated ingredients and calculates projection', () => {
     const projection = buildMealPlanInventoryProjection(recipeRequirements, [
       { ingredient_name: 'tomate', quantity: '3', unit: 'unidad', category: 'Verduras', estimated_unit_price: 0.5 },
@@ -120,5 +174,97 @@ describe('meal-plan-projection', () => {
     );
 
     expect(projection.items[0].status).toBe('unknown');
+  });
+
+  it('marks all as buy when inventory is empty', () => {
+    const shopping = buildQuantifiedShoppingList(
+      [
+        {
+          ingredientName: 'Arroz',
+          normalizedName: 'arroz',
+          requiredQuantity: 500,
+          requiredUnit: 'g',
+          usedInRecipes: ['A'],
+        },
+        {
+          ingredientName: 'Tomate',
+          normalizedName: 'tomate',
+          requiredQuantity: 4,
+          requiredUnit: 'unidad',
+          usedInRecipes: ['B'],
+        },
+      ],
+      [],
+    );
+
+    const statuses = shopping.groups.flatMap((group) => group.items).map((item) => item.status);
+    expect(statuses.every((status) => status === 'buy')).toBe(true);
+  });
+
+  it('builds quantified list with partial inventory (3 available / 20 required / 17 buy)', () => {
+    const shopping = buildQuantifiedShoppingList(
+      [
+        {
+          ingredientName: 'Tomate',
+          normalizedName: 'tomate',
+          requiredQuantity: 20,
+          requiredUnit: 'unidad',
+          usedInRecipes: ['Amatriciana', 'Caprese'],
+        },
+      ],
+      [{ ingredient_name: 'Tomate', quantity: '3', unit: 'unidad', category: 'Verduras', estimated_unit_price: 0.5 }],
+    );
+
+    const tomato = shopping.groups.flatMap((group) => group.items).find((item) => item.normalizedName === 'tomate');
+    expect(tomato).toBeDefined();
+    expect(tomato?.requiredQuantity).toBe(20);
+    expect(tomato?.availableQuantity).toBe(3);
+    expect(tomato?.quantityToBuy).toBe(17);
+    expect(tomato?.status).toBe('buy');
+  });
+
+  it('supports kg/g and l/ml conversions in quantified shopping', () => {
+    const shopping = buildQuantifiedShoppingList(
+      [
+        {
+          ingredientName: 'Arroz',
+          normalizedName: 'arroz',
+          requiredQuantity: 1200,
+          requiredUnit: 'g',
+          usedInRecipes: ['Bowl'],
+        },
+        {
+          ingredientName: 'Leche',
+          normalizedName: 'leche',
+          requiredQuantity: 2,
+          requiredUnit: 'l',
+          usedInRecipes: ['Sopa'],
+        },
+      ],
+      [
+        { ingredient_name: 'Arroz', quantity: '1 kg', unit: null, category: 'Granos' },
+        { ingredient_name: 'Leche', quantity: '500 ml', unit: null, category: 'Lácteos' },
+      ],
+    );
+    const items = shopping.groups.flatMap((group) => group.items);
+    expect(items.find((item) => item.normalizedName === 'arroz')?.quantityToBuy).toBe(200);
+    expect(items.find((item) => item.normalizedName === 'leche')?.quantityToBuy).toBe(1.5);
+  });
+
+  it('marks unknown structured quantities as review', () => {
+    const shopping = buildQuantifiedShoppingList(
+      [
+        {
+          ingredientName: 'Sal',
+          normalizedName: 'sal',
+          requiredQuantity: null,
+          requiredUnit: 'unknown',
+          usedInRecipes: ['Sopa'],
+        },
+      ],
+      [],
+    );
+    const sal = shopping.groups.flatMap((group) => group.items).find((item) => item.normalizedName === 'sal');
+    expect(sal?.status).toBe('review');
   });
 });

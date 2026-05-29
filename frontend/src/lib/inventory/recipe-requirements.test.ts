@@ -65,4 +65,30 @@ describe('recipe-requirements', () => {
     expect(requirements).toHaveLength(1);
     expect(requirements[0].normalizedName).toBe('tomate');
   });
+
+  it('prioritizes structured ingredients over markdown fallback', () => {
+    const requirements = extractRecipeRequirements({
+      structured_ingredients: [{ name: 'tomate', quantity: 4, unit: 'unidad' }],
+      markdown: 'Ingredientes\n- 1 tomate\nPreparación\n- mezclar',
+    });
+    expect(requirements).toHaveLength(1);
+    expect(requirements[0].requiredQuantity).toBe(4);
+    expect(requirements[0].requiredUnit).toBe('unidad');
+  });
+
+  it('keeps markdown fallback for legacy payloads without structured ingredients', () => {
+    const requirements = extractRecipeRequirements({
+      title: 'Receta legacy',
+      markdown: 'Ingredientes\n- 500 g arroz\n- sal al gusto\nPreparación\n- cocinar',
+    });
+    expect(requirements.length).toBeGreaterThan(0);
+    const hasStructuredRice = requirements.some(
+      (item) => item.requiredQuantity === 500 && item.requiredUnit === 'g',
+    );
+    const hasUnknownSalt = requirements.some(
+      (item) => item.requiredQuantity === null && item.requiredUnit === 'unknown',
+    );
+    expect(hasStructuredRice).toBe(true);
+    expect(hasUnknownSalt).toBe(true);
+  });
 });

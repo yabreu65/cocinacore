@@ -412,6 +412,54 @@ export type Database = {
         };
         Relationships: [];
       };
+      inventory_movements: {
+        Row: {
+          id: string;
+          tenant_id: string;
+          user_id: string;
+          inventory_item_id: string;
+          movement_type: 'purchase' | 'recipe_consumption' | 'manual_adjustment' | 'correction';
+          quantity: number;
+          unit: string;
+          normalized_name: string;
+          source: string;
+          source_recipe: string | null;
+          source_meal_plan_id: string | null;
+          notes: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          tenant_id: string;
+          user_id: string;
+          inventory_item_id: string;
+          movement_type: 'purchase' | 'recipe_consumption' | 'manual_adjustment' | 'correction';
+          quantity: number;
+          unit: string;
+          normalized_name: string;
+          source?: string;
+          source_recipe?: string | null;
+          source_meal_plan_id?: string | null;
+          notes?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          tenant_id?: string;
+          user_id?: string;
+          inventory_item_id?: string;
+          movement_type?: 'purchase' | 'recipe_consumption' | 'manual_adjustment' | 'correction';
+          quantity?: number;
+          unit?: string;
+          normalized_name?: string;
+          source?: string;
+          source_recipe?: string | null;
+          source_meal_plan_id?: string | null;
+          notes?: string | null;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
       recipe_ai_history: {
         Row: {
           id: string;

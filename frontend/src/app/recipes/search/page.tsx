@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { getSupabaseBrowserClient } from '@/lib/supabaseClient';
 import { humanCopy } from '@/lib/copy';
 import { RecipeView } from '@/components/recipe-view/RecipeView';
-import type { RecipeCitation } from '@/components/recipe-view/types';
+import type { RecipeCitation, StructuredRecipeIngredient } from '@/components/recipe-view/types';
 
 type MatchChunkRow = {
   id: string;
@@ -196,6 +196,7 @@ type RecipeSession = {
   recipe: string;
   mode: GenerationMode;
   peopleCount: number;
+  structuredIngredients: StructuredRecipeIngredient[];
   saved: boolean;
   createdAt: number;
   expiresAt: number;
@@ -207,6 +208,7 @@ type HistoryRow = {
   recipe_payload: {
     full_recipe?: string;
     mode?: GenerationMode;
+    structured_ingredients?: StructuredRecipeIngredient[];
     citations?: Array<{ id?: string; similarity?: number; metadata?: { page_number?: number; book_title?: string } }>;
   };
   is_saved: boolean;
@@ -281,6 +283,7 @@ export default function RecipeSearchPage() {
   const [recipeSessions, setRecipeSessions] = useState<RecipeSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [savingRecipe, setSavingRecipe] = useState(false);
+  const [structuredIngredients, setStructuredIngredients] = useState<StructuredRecipeIngredient[]>([]);
 
   const normalizedIngredients = useMemo(
     () => ingredients.split(',').map((value) => value.trim()).filter((value) => value.length > 0),
@@ -352,6 +355,9 @@ export default function RecipeSearchPage() {
           recipe: String(row.recipe_payload?.full_recipe ?? ''),
           mode: mappedMode,
           peopleCount: 4,
+          structuredIngredients: Array.isArray(row.recipe_payload?.structured_ingredients)
+            ? row.recipe_payload.structured_ingredients
+            : [],
           saved: Boolean(row.is_saved),
           createdAt: new Date(row.created_at).getTime(),
           expiresAt: row.is_saved ? Number.MAX_SAFE_INTEGER : (row.expires_at ? new Date(row.expires_at).getTime() : now + RECIPE_TTL_MS),
@@ -504,9 +510,14 @@ export default function RecipeSearchPage() {
         throw new Error(payload.error ?? humanCopy.recipeGenerateError);
       }
 
-      const recipePayload = (await recipeRes.json()) as { recipe: string; mode?: GenerationMode };
+      const recipePayload = (await recipeRes.json()) as {
+        recipe: string;
+        mode?: GenerationMode;
+        structuredIngredients?: StructuredRecipeIngredient[];
+      };
       setRecipe(recipePayload.recipe);
       setRecipeMode(recipePayload.mode ?? mode);
+      setStructuredIngredients(Array.isArray(recipePayload.structuredIngredients) ? recipePayload.structuredIngredients : []);
       setCitations(mode === 'rag' ? safeChunks.slice(0, 4) : []);
       setRecipeModalOpen(true);
 
@@ -538,6 +549,9 @@ export default function RecipeSearchPage() {
                   similarity: safeSimilarity(row.similarity),
                   metadata: row.metadata ?? {},
                 })) : [],
+                structured_ingredients: Array.isArray(recipePayload.structuredIngredients)
+                  ? recipePayload.structuredIngredients
+                  : [],
               },
               restrictions_snapshot: {
                 avoid: selectedAvoid,
@@ -564,6 +578,9 @@ export default function RecipeSearchPage() {
         recipe: recipePayload.recipe,
         mode: recipePayload.mode ?? mode,
         peopleCount: safePeopleCount,
+        structuredIngredients: Array.isArray(recipePayload.structuredIngredients)
+          ? recipePayload.structuredIngredients
+          : [],
         saved: false,
         createdAt: now,
         expiresAt: now + RECIPE_TTL_MS,
@@ -592,6 +609,7 @@ export default function RecipeSearchPage() {
     setRecipe(session.recipe);
     setRecipeMode(session.mode);
     setPeopleCount(session.peopleCount);
+    setStructuredIngredients(session.structuredIngredients);
     setCitations([]);
     setActiveSessionId(session.id);
     setRecipeModalOpen(true);
@@ -810,6 +828,7 @@ export default function RecipeSearchPage() {
           style={selectedStyle[0] ?? 'Casera'}
           parsedRecipe={parsedRecipe}
           citations={citations.map((item, index) => ({ ...item, id: item.id || `citation-${index}` })) as RecipeCitation[]}
+          structuredIngredients={structuredIngredients}
           selectedInventory={normalizedIngredients}
           savingRecipe={savingRecipe}
           onClose={() => setRecipeModalOpen(false)}

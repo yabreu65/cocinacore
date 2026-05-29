@@ -38,6 +38,18 @@ function extractIngredientsNode(recipePayload: unknown): unknown[] {
   if (!recipePayload || typeof recipePayload !== 'object') return [];
 
   const payload = recipePayload as Record<string, unknown>;
+  if (Array.isArray(payload.structured_ingredients) && payload.structured_ingredients.length > 0) {
+    return Array.from(payload.structured_ingredients as unknown[]);
+  }
+  if (
+    payload.recipe &&
+    typeof payload.recipe === 'object' &&
+    Array.isArray((payload.recipe as Record<string, unknown>).structured_ingredients) &&
+    ((payload.recipe as Record<string, unknown>).structured_ingredients as unknown[]).length > 0
+  ) {
+    return Array.from((payload.recipe as Record<string, unknown>).structured_ingredients as unknown[]);
+  }
+
   const candidates: unknown[] = [];
   if (Array.isArray(payload.ingredients)) {
     for (const node of payload.ingredients as unknown[]) candidates.push(node);

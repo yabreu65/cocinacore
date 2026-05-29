@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { serverLogger } from '@/lib/serverLogger';
 import { generateRecipeWithOpenRouter } from '@/lib/ai/openrouter';
+import {
+  extractStructuredIngredients,
+  validateStructuredIngredients,
+  type StructuredRecipeIngredient,
+} from '@/lib/recipes/structured-ingredients';
 
 interface Body {
   ingredients?: string[];
@@ -142,6 +147,10 @@ Reglas:
       peopleCount,
     });
     const title = inferTitleFromRecipe(openRouter.result);
+    const structuredIngredients = extractStructuredIngredients(openRouter.result);
+    const safeStructuredIngredients: StructuredRecipeIngredient[] = validateStructuredIngredients(structuredIngredients)
+      ? structuredIngredients
+      : [];
     serverLogger.info('recipe_generate.success', {
       requestId,
       durationMs: Date.now() - startedAt,
@@ -151,7 +160,14 @@ Reglas:
       titleLength: title.length,
       fallbackFrom: geminiErrorMessage,
     });
-    return NextResponse.json({ recipe: openRouter.result, title, provider: 'openrouter', model: openRouter.model, mode });
+    return NextResponse.json({
+      recipe: openRouter.result,
+      title,
+      provider: 'openrouter',
+      model: openRouter.model,
+      mode,
+      structuredIngredients: safeStructuredIngredients,
+    });
   };
 
   try {
@@ -181,6 +197,10 @@ Reglas:
     }
 
     const title = inferTitleFromRecipe(recipe);
+    const structuredIngredients = extractStructuredIngredients(recipe);
+    const safeStructuredIngredients: StructuredRecipeIngredient[] = validateStructuredIngredients(structuredIngredients)
+      ? structuredIngredients
+      : [];
     serverLogger.info('recipe_generate.success', {
       requestId,
       durationMs: Date.now() - startedAt,
@@ -188,7 +208,7 @@ Reglas:
       mode,
       titleLength: title.length,
     });
-    return NextResponse.json({ recipe, title, provider: 'gemini', mode });
+    return NextResponse.json({ recipe, title, provider: 'gemini', mode, structuredIngredients: safeStructuredIngredients });
   } catch (geminiError) {
     if (providerPreference === 'gemini') {
       serverLogger.error('recipe_generate.gemini_forced_failed', {

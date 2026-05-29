@@ -5,6 +5,7 @@ import {
   type InventoryComparableItem,
   type RecipeRequirement,
 } from './recipe-requirements';
+import { canCompareUnits, convertQuantity, normalizeUnit, type NormalizedUnit } from './quantity-normalization';
 
 export type ProjectionStatus = 'sufficient' | 'partial' | 'missing' | 'unknown';
 
@@ -49,6 +50,8 @@ export type ConsolidatedMissingIngredient = {
 export type ShoppingListGroupItem = {
   normalizedName: string;
   ingredientName: string;
+  requiredQuantity: number | null;
+  availableQuantity: number | null;
   quantityToBuy: number | null;
   unit: RecipeRequirement['requiredUnit'];
   status: 'buy' | 'review' | 'covered';
@@ -90,6 +93,20 @@ function inferCategory(name: string, category?: string | null): InventoryCategor
     return safeCategory;
   }
   return detectInventoryCategory(name);
+}
+
+function sumComparableQuantity(
+  baseValue: number | null,
+  baseUnit: NormalizedUnit,
+  incomingValue: number | null,
+  incomingUnit: NormalizedUnit,
+): number | null {
+  if (baseValue === null || incomingValue === null) return null;
+  if (!canCompareUnits(baseUnit, incomingUnit)) return null;
+  const converted =
+    incomingUnit === baseUnit ? incomingValue : convertQuantity(incomingValue, incomingUnit, baseUnit);
+  if (converted === null) return null;
+  return Number((baseValue + converted).toFixed(2));
 }
 
 function toProjectionItem(
@@ -215,10 +232,12 @@ export function buildSmartShoppingList(
   projection: MealPlanInventoryProjection,
 ): SmartShoppingList {
   const consolidated = consolidateMissingIngredients(projection.items);
+  const projectionByName = new Map(projection.items.map((item) => [item.normalizedName, item]));
   const byCategory = new Map<InventoryCategory, ShoppingListGroupItem[]>();
 
   for (const item of consolidated) {
     const category = item.category;
+    const source = projectionByName.get(item.normalizedName);
     const current = byCategory.get(category) ?? [];
     const estimatedCost =
       item.status === 'unknown' || item.missingQuantity === null || item.estimatedUnitPrice === null
@@ -228,6 +247,8 @@ export function buildSmartShoppingList(
     current.push({
       normalizedName: item.normalizedName,
       ingredientName: item.ingredientName,
+      requiredQuantity: source?.requiredTotalQuantity ?? null,
+      availableQuantity: source?.availableQuantity ?? null,
       quantityToBuy: item.missingQuantity,
       unit: item.unit,
       status: item.status === 'unknown' ? 'review' : item.missingQuantity && item.missingQuantity > 0 ? 'buy' : 'covered',
@@ -253,6 +274,127 @@ export function buildSmartShoppingList(
     .map((category) => ({
       category,
       items: (byCategory.get(category) ?? []).sort((a, b) => a.ingredientName.localeCompare(b.ingredientName)),
+    }))
+    .filter((group) => group.items.length > 0);
+
+  return {
+    groups,
+    estimatedCostTotal: Number(
+      groups
+        .flatMap((group) => group.items)
+        .reduce((acc, item) => acc + (item.estimatedCost ?? 0), 0)
+        .toFixed(2),
+    ),
+  };
+}
+
+export function buildQuantifiedShoppingList(
+  mealPlanRecipes: RecipeRequirement[],
+  inventoryItems: InventoryProjectionComparableItem[],
+): SmartShoppingList {
+  const compared = compareRecipeRequirementsToInventory(mealPlanRecipes, inventoryItems);
+  const byName = new Map<string, ShoppingListGroupItem & { category: InventoryCategory; estimatedUnitPrice: number | null }>();
+  const inventoryMap = new Map(inventoryItems.map((item) => [normalizeInventoryName(item.ingredient_name), item]));
+
+  for (const row of compared) {
+    const inventory = inventoryMap.get(row.normalizedName);
+    const category = inferCategory(row.ingredientName, inventory?.category);
+    const estimatedUnitPrice =
+      typeof inventory?.estimated_unit_price === 'number' && Number.isFinite(inventory.estimated_unit_price)
+        ? inventory.estimated_unit_price
+        : null;
+    const missing =
+      row.status === 'unknown'
+        ? null
+        : row.missingQuantity === null
+          ? row.requiredQuantity
+          : row.missingQuantity;
+
+    const existing = byName.get(row.normalizedName);
+    if (!existing) {
+      byName.set(row.normalizedName, {
+        normalizedName: row.normalizedName,
+        ingredientName: row.ingredientName,
+        requiredQuantity: row.requiredQuantity,
+        availableQuantity: row.availableQuantity,
+        quantityToBuy: missing,
+        unit: row.requiredUnit,
+        status:
+          row.status === 'unknown'
+            ? 'review'
+            : missing !== null && missing > 0
+              ? 'buy'
+              : 'covered',
+        usedInRecipes: [...row.usedInRecipes],
+        estimatedCost:
+          missing !== null && estimatedUnitPrice !== null ? Number((missing * estimatedUnitPrice).toFixed(2)) : null,
+        category,
+        estimatedUnitPrice,
+      });
+      continue;
+    }
+
+    existing.requiredQuantity = sumComparableQuantity(
+      existing.requiredQuantity,
+      existing.unit,
+      row.requiredQuantity,
+      row.requiredUnit,
+    );
+    existing.availableQuantity = sumComparableQuantity(
+      existing.availableQuantity,
+      existing.unit,
+      row.availableQuantity,
+      normalizeUnit(row.availableUnit),
+    );
+    existing.quantityToBuy = sumComparableQuantity(
+      existing.quantityToBuy,
+      existing.unit,
+      missing,
+      row.requiredUnit,
+    );
+    existing.usedInRecipes = mergeRecipeSources(existing.usedInRecipes, row.usedInRecipes);
+    existing.estimatedCost =
+      existing.quantityToBuy !== null && existing.estimatedUnitPrice !== null
+        ? Number((existing.quantityToBuy * existing.estimatedUnitPrice).toFixed(2))
+        : null;
+
+    if (existing.status === 'review' || row.status === 'unknown') {
+      existing.status = 'review';
+    } else if ((existing.quantityToBuy ?? 0) > 0) {
+      existing.status = 'buy';
+    } else {
+      existing.status = 'covered';
+    }
+  }
+
+  const orderedCategories: InventoryCategory[] = [
+    'Proteínas',
+    'Verduras',
+    'Frutas',
+    'Lácteos',
+    'Granos',
+    'Especias',
+    'Despensa',
+    'Otros',
+  ];
+
+  const groups = orderedCategories
+    .map((category) => ({
+      category,
+      items: Array.from(byName.values())
+        .filter((item) => item.category === category)
+        .map((item) => ({
+          normalizedName: item.normalizedName,
+          ingredientName: item.ingredientName,
+          requiredQuantity: item.requiredQuantity,
+          availableQuantity: item.availableQuantity,
+          quantityToBuy: item.quantityToBuy,
+          unit: item.unit,
+          status: item.status,
+          usedInRecipes: item.usedInRecipes,
+          estimatedCost: item.estimatedCost,
+        }))
+        .sort((a, b) => a.ingredientName.localeCompare(b.ingredientName)),
     }))
     .filter((group) => group.items.length > 0);
 

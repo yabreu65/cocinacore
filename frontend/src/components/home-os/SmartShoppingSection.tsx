@@ -1,7 +1,13 @@
 import type { SmartShoppingList } from '@/lib/inventory/meal-plan-projection';
+import type { InventoryCategory } from '@/lib/inventory/normalize-inventory';
 
 type Props = {
   shopping: SmartShoppingList;
+  onApplyShoppingItem?: (payload: {
+    category: InventoryCategory;
+    item: SmartShoppingList['groups'][number]['items'][number];
+  }) => Promise<void> | void;
+  applyingItemKey?: string | null;
 };
 
 export function SmartShoppingSection(props: Props) {
@@ -32,11 +38,30 @@ export function SmartShoppingSection(props: Props) {
                     </span>
                   </div>
                   <p className="mt-1 text-xs text-[#6B5A50]">
-                    {item.quantityToBuy === null ? 'Cantidad: revisar manualmente' : `Cantidad: ${item.quantityToBuy} ${item.unit}`}
+                    Requerido:{' '}
+                    {item.requiredQuantity === null ? 'revisar' : `${item.requiredQuantity} ${item.unit}`} · Disponible:{' '}
+                    {item.availableQuantity === null ? 'revisar' : `${item.availableQuantity} ${item.unit}`}
+                  </p>
+                  <p className="mt-1 text-xs text-[#6B5A50]">
+                    {item.quantityToBuy === null
+                      ? 'Comprar: revisar manualmente'
+                      : `Comprar: ${item.quantityToBuy} ${item.unit}`}
                     {item.estimatedCost !== null ? ` · ~$${item.estimatedCost.toFixed(2)}` : ''}
                   </p>
                   {item.usedInRecipes.length > 0 ? (
                     <p className="mt-1 line-clamp-2 text-[11px] text-[#8C7A6D]">Usado en: {item.usedInRecipes.join(', ')}</p>
+                  ) : null}
+                  {item.status === 'buy' && props.onApplyShoppingItem ? (
+                    <button
+                      type="button"
+                      onClick={() => void props.onApplyShoppingItem?.({ category: group.category, item })}
+                      disabled={props.applyingItemKey === `${group.category}-${item.normalizedName}`}
+                      className="mt-2 rounded-md border border-[#E8DDD2] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#241A14] hover:border-[#C56A1A]/40 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {props.applyingItemKey === `${group.category}-${item.normalizedName}`
+                        ? 'Aplicando...'
+                        : 'Agregar al inventario'}
+                    </button>
                   ) : null}
                 </li>
               ))}

@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { CheckCircle2, ChevronDown, ChevronUp, Clipboard, Eye, ShoppingBasket, Sparkles, XCircle } from 'lucide-react';
-import type { GenerationMode, IngredientSplit, RecipeCitation, RecipeSections } from './types';
+import type { GenerationMode, IngredientSplit, RecipeCitation, RecipeSections, StructuredRecipeIngredient } from './types';
 
 type Props = {
   open: boolean;
@@ -16,6 +16,7 @@ type Props = {
   style: string;
   parsedRecipe: RecipeSections | null;
   citations: RecipeCitation[];
+  structuredIngredients: StructuredRecipeIngredient[];
   selectedInventory: string[];
   savingRecipe: boolean;
   onClose: () => void;
@@ -60,14 +61,27 @@ export function RecipeView(props: Props) {
     () => (props.parsedRecipe?.ingredients ?? []).map((item) => splitIngredientLine(item)),
     [props.parsedRecipe?.ingredients],
   );
+  const displayIngredients = useMemo(() => {
+    if (props.structuredIngredients.length > 0) return props.structuredIngredients;
+    return ingredientRows.map((row) => ({
+      name: row.name,
+      normalized_name: normalize(row.name),
+      quantity: row.quantity === '—' ? null : Number(row.quantity),
+      unit: row.quantity === '—' ? null : null,
+      optional_quantity_text: row.quantity === '—' ? row.name : null,
+      category: null,
+      estimated_cost_optional: null,
+      structured: false,
+    }));
+  }, [ingredientRows, props.structuredIngredients]);
 
   const inventorySignals = useMemo(() => props.selectedInventory.map((item) => normalize(item)), [props.selectedInventory]);
 
   const ingredientStatus = useMemo(() => {
-    const available: IngredientSplit[] = [];
-    const missing: IngredientSplit[] = [];
+    const available: StructuredRecipeIngredient[] = [];
+    const missing: StructuredRecipeIngredient[] = [];
 
-    ingredientRows.forEach((row) => {
+    displayIngredients.forEach((row) => {
       const ingredientName = normalize(row.name);
       const isAvailable = inventorySignals.some((signal) => signal.length > 2 && ingredientName.includes(signal));
       if (isAvailable) available.push(row);
@@ -78,7 +92,7 @@ export function RecipeView(props: Props) {
     const critical = missing.slice(0, 2);
 
     return { available, missing, reused, critical };
-  }, [ingredientRows, inventorySignals]);
+  }, [displayIngredients, inventorySignals]);
 
   const insights = useMemo(() => {
     const base: string[] = [];
@@ -176,13 +190,20 @@ export function RecipeView(props: Props) {
           </button>
           {expanded.ingredients ? (
             <ul className="mt-3 space-y-2">
-              {ingredientRows.map((row, index) => {
+              {displayIngredients.map((row, index) => {
                 const isAvailable = inventorySignals.some((signal) => signal.length > 2 && normalize(row.name).includes(signal));
                 return (
                   <li key={`${row.name}-${index}`} className="flex items-center gap-3 rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] px-3 py-2 text-sm">
                     {isAvailable ? <CheckCircle2 size={16} className="text-[#567A3B]" /> : <XCircle size={16} className="text-[#B84D4D]" />}
-                    <span className="min-w-20 font-semibold text-[#6B5A50]">{row.quantity}</span>
+                    <span className="min-w-24 font-semibold text-[#6B5A50]">
+                      {row.structured ? `${row.quantity ?? '—'} ${row.unit ?? ''}`.trim() : 'No estructurada'}
+                    </span>
                     <span className="text-[#241A14]">{row.name}</span>
+                    {!row.structured ? (
+                      <span className="rounded-full border border-[#E8DDD2] bg-white px-2 py-0.5 text-[10px] font-semibold text-[#A55412]">
+                        ⚠️ Ambigua
+                      </span>
+                    ) : null}
                   </li>
                 );
               })}

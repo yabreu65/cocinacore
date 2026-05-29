@@ -28,13 +28,23 @@ import {
   type SuggestedInventoryItem,
 } from './inventorySuggestion';
 import {
+  extractRecipeRequirements,
+  groupRequirementsByIngredient,
   type InventoryComparableItem,
   type RecipeRequirement,
 } from '@/lib/inventory/recipe-requirements';
 import {
   buildMealPlanInventoryProjection,
+  buildQuantifiedShoppingList,
   buildSmartShoppingList,
 } from '@/lib/inventory/meal-plan-projection';
+import {
+  canCompareUnits,
+  convertQuantity,
+  normalizeUnit,
+  parseQuantity,
+  type NormalizedUnit,
+} from '@/lib/inventory/quantity-normalization';
 import { InventoryDepletionPreview } from '@/components/home-os/InventoryDepletionPreview';
 import { SmartShoppingSection } from '@/components/home-os/SmartShoppingSection';
 import { SupermarketModeCard } from '@/components/home-os/SupermarketModeCard';
@@ -43,6 +53,7 @@ import { InventoryPlaybackCard } from '@/components/home-os/InventoryPlaybackCar
 import { HomeIntelligenceDashboard } from '@/components/home-os/HomeIntelligenceDashboard';
 import { SmartPredictionCard } from '@/components/home-os/SmartPredictionCard';
 import { buildMealPlanSimulation } from '@/lib/inventory/meal-plan-simulation';
+import { normalizeInventoryName } from '@/lib/inventory/normalize-inventory';
 import { EditableMealTimeline } from '@/components/home-os/EditableMealTimeline';
 import { IngredientConstraintCard } from '@/components/home-os/IngredientConstraintCard';
 import { ReorderSuggestionCard } from '@/components/home-os/ReorderSuggestionCard';
@@ -60,6 +71,7 @@ import { OptimizationScoreCard } from '@/components/home-os/OptimizationScoreCar
 import { BeforeAfterComparisonCard } from '@/components/home-os/BeforeAfterComparisonCard';
 import { AIOptimizationInsights } from '@/components/home-os/AIOptimizationInsights';
 import type { Database } from '@/lib/database.types';
+import type { StructuredRecipeIngredient } from '@/lib/recipes/structured-ingredients';
 import {
   applyOptimizationState,
   buildMealKey,
@@ -116,6 +128,8 @@ type PlannerMealCard = {
   fusionTag: string;
   missing: number;
   aiScore: number;
+  structured_ingredients?: StructuredRecipeIngredient[];
+  recipe_content?: string | null;
 };
 
 type PlannerDay = {
@@ -149,9 +163,26 @@ type OptimizationSnapshotView = {
   baselineCalendar: PlannerDay[];
   optimizedCalendar: PlannerDay[];
 };
+type InventoryMovementRow = Database['public']['Tables']['inventory_movements']['Row'];
+type ConsumptionStatus = 'sufficient' | 'insufficient' | 'review';
+type ConsumptionPreviewItem = {
+  ingredientName: string;
+  normalizedName: string;
+  requiredQuantity: number | null;
+  requiredUnit: string | null;
+  availableQuantity: number | null;
+  availableUnit: string | null;
+  afterQuantity: number | null;
+  afterUnit: string | null;
+  status: ConsumptionStatus;
+  reason?: string;
+  inventoryItemId?: string;
+};
 
 const HISTORY_PAGE_SIZE = 5;
 type InventoryItemExtended = InventoryComparableItem & {
+  id?: string;
+  normalized_name?: string | null;
   category?: string | null;
   estimated_unit_price?: number | null;
 };
@@ -179,6 +210,8 @@ function createDefaultCard(day: string, meal: MealType, fusionLabel: string): Pl
     fusionTag: `Fusión ${fusionLabel}`,
     missing: 0,
     aiScore: 88,
+    structured_ingredients: [],
+    recipe_content: null,
   };
 }
 
@@ -236,6 +269,8 @@ function parseMenuToCalendar(content: string, fusionLabel: string): PlannerDay[]
       fusionTag: `Fusión ${fusionLabel}`,
       missing: 0,
       aiScore: 86,
+      structured_ingredients: [],
+      recipe_content: null,
     };
   }
 
@@ -270,10 +305,76 @@ function parseMenuToCalendar(content: string, fusionLabel: string): PlannerDay[]
       name: nextLine.slice(0, 72),
       difficulty: nextLine.length > 58 ? 'Alta' : nextLine.length > 42 ? 'Media' : 'Fácil',
       badge: 'Perfil aplicado',
+      structured_ingredients: current.structured_ingredients ?? [],
     };
   }
 
   return week;
+}
+
+function sanitizeStructuredIngredients(input: unknown): StructuredRecipeIngredient[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+    .map((item) => ({
+      name: typeof item.name === 'string' ? item.name : '',
+      normalized_name: typeof item.normalized_name === 'string' ? item.normalized_name : '',
+      quantity: typeof item.quantity === 'number' && Number.isFinite(item.quantity) ? item.quantity : null,
+      unit: typeof item.unit === 'string' ? item.unit : null,
+      optional_quantity_text:
+        typeof item.optional_quantity_text === 'string' ? item.optional_quantity_text : null,
+      category: typeof item.category === 'string' ? item.category : null,
+      estimated_cost_optional:
+        typeof item.estimated_cost_optional === 'number' && Number.isFinite(item.estimated_cost_optional)
+          ? item.estimated_cost_optional
+          : null,
+      structured: Boolean(item.structured),
+    }))
+    .filter((item) => item.name.length > 0 && item.normalized_name.length > 0);
+}
+
+function normalizePlannerDay(day: unknown): PlannerDay | null {
+  if (!day || typeof day !== 'object') return null;
+  const source = day as Record<string, unknown>;
+  if (typeof source.day !== 'string') return null;
+  const mealsRaw = source.meals;
+  if (!mealsRaw || typeof mealsRaw !== 'object') return null;
+  const mealsObject = mealsRaw as Record<string, unknown>;
+
+  const makeMeal = (mealType: MealType): PlannerMealCard => {
+    const raw = mealsObject[mealType];
+    const meal = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : null;
+    const difficulty =
+      meal?.difficulty === 'Media' || meal?.difficulty === 'Alta' ? meal.difficulty : 'Fácil';
+    return {
+      name: typeof meal?.name === 'string' ? meal.name : `${mealType} de ${source.day}`,
+      time: typeof meal?.time === 'string' ? meal.time : mealType === 'Desayuno' ? '15 min' : mealType === 'Almuerzo' ? '35 min' : '30 min',
+      difficulty,
+      badge: typeof meal?.badge === 'string' ? meal.badge : 'Perfil aplicado',
+      fusionTag: typeof meal?.fusionTag === 'string' ? meal.fusionTag : 'Fusión personalizada',
+      missing: typeof meal?.missing === 'number' ? meal.missing : 0,
+      aiScore: typeof meal?.aiScore === 'number' ? meal.aiScore : 86,
+      structured_ingredients: sanitizeStructuredIngredients(meal?.structured_ingredients),
+      recipe_content: typeof meal?.recipe_content === 'string' ? meal.recipe_content : null,
+    };
+  };
+
+  return {
+    day: source.day as (typeof DAY_NAMES)[number],
+    meals: {
+      Desayuno: makeMeal('Desayuno'),
+      Almuerzo: makeMeal('Almuerzo'),
+      Cena: makeMeal('Cena'),
+    },
+  };
+}
+
+function normalizePlannerCalendar(input: unknown): PlannerDay[] {
+  if (!Array.isArray(input)) return [];
+  const normalized = input
+    .map((day) => normalizePlannerDay(day))
+    .filter((day): day is PlannerDay => day !== null);
+  return normalized;
 }
 
 function extractShoppingItems(content: string): string[] {
@@ -324,12 +425,8 @@ function parseSnapshot(rows: OptimizationSnapshotRow[]): OptimizationSnapshotVie
         ? row.explainability_notes.filter((note): note is string => typeof note === 'string')
         : [];
 
-      const baselineCalendar = Array.isArray(row.baseline_calendar)
-        ? (row.baseline_calendar as unknown as PlannerDay[])
-        : [];
-      const optimizedCalendar = Array.isArray(row.optimized_calendar)
-        ? (row.optimized_calendar as unknown as PlannerDay[])
-        : [];
+      const baselineCalendar = normalizePlannerCalendar(row.baseline_calendar);
+      const optimizedCalendar = normalizePlannerCalendar(row.optimized_calendar);
 
       const baselineScore = row.baseline_score as unknown as MealPlanOptimizationScore;
       const optimizedScore = row.optimized_score as unknown as MealPlanOptimizationScore;
@@ -364,6 +461,35 @@ function toSimulationDays(days: PlannerDay[]): Array<{ day: string; meals: Array
   }));
 }
 
+function formatInventoryQuantityValue(value: number): string {
+  return Number(value.toFixed(3)).toString();
+}
+
+function convertToUnit(value: number, from: NormalizedUnit, to: NormalizedUnit): number | null {
+  if (from === to) return value;
+  return convertQuantity(value, from, to);
+}
+
+function buildRecipeRequirementsFromCalendar(days: PlannerDay[]): RecipeRequirement[] {
+  const requirements: RecipeRequirement[] = [];
+  for (const day of days) {
+    for (const mealType of MEALS) {
+      const meal = day.meals[mealType];
+      const payload = {
+        title: meal.name,
+        structured_ingredients: meal.structured_ingredients ?? [],
+        ingredients: [],
+      };
+      const extracted = extractRecipeRequirements(payload).map((item) => ({
+        ...item,
+        usedInRecipes: [`${day.day} · ${mealType} · ${meal.name}`],
+      }));
+      requirements.push(...extracted);
+    }
+  }
+  return groupRequirementsByIngredient(requirements);
+}
+
 export default function MealPlannerPage() {
   const [mode, setMode] = useState<PlannerMode>('balanced_ai');
   const [period, setPeriod] = useState<PlannerPeriod>('week');
@@ -386,6 +512,10 @@ export default function MealPlannerPage() {
   const fusionLabel = useMemo(() => buildFusionLabel(baseCuisine, fusionCuisines), [baseCuisine, fusionCuisines]);
   const [calendarData, setCalendarData] = useState<PlannerDay[]>(() => buildDefaultWeek('Latinoamericana'));
   const [loadingInventory, setLoadingInventory] = useState(true);
+  const [applyingShoppingItemKey, setApplyingShoppingItemKey] = useState<string | null>(null);
+  const [shoppingApplySummary, setShoppingApplySummary] = useState<string | null>(null);
+  const [consumingRecipe, setConsumingRecipe] = useState(false);
+  const [recentMovements, setRecentMovements] = useState<InventoryMovementRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState('');
@@ -431,11 +561,11 @@ export default function MealPlannerPage() {
         const authUserId = authData.user?.id ?? null;
         setUserId(authUserId);
 
-        const [{ data: userRow }, { data: invRows }, { data: profileRow }, { data: profileTermRows }, { data: termsRows }, { data: savedPlanRow }, { data: suggestionRow }] = await Promise.all([
+        const [{ data: userRow }, { data: invRows }, { data: profileRow }, { data: profileTermRows }, { data: termsRows }, { data: savedPlanRow }, { data: suggestionRow }, { data: movementsRows }] = await Promise.all([
           authUserId ? supabase.from('users').select('tenant_id').eq('id', authUserId).maybeSingle() : Promise.resolve({ data: null }),
           supabase
             .from('recipe_inventory_items')
-            .select('ingredient_name,quantity,unit,category,estimated_unit_price')
+            .select('id,ingredient_name,normalized_name,quantity,unit,category,estimated_unit_price')
             .order('created_at', { ascending: false })
             .limit(200),
           supabase.from('user_culinary_profiles').select('level').maybeSingle(),
@@ -443,6 +573,7 @@ export default function MealPlannerPage() {
           supabase.from('culinary_terms').select('id,label').limit(300),
           supabase.from('user_meal_plans').select('*').maybeSingle(),
           supabase.from('user_meal_plan_inventory_suggestions').select('normalized_items,updated_at').maybeSingle(),
+          supabase.from('inventory_movements').select('*').order('created_at', { ascending: false }).limit(8),
         ]);
 
         const resolvedTenantId = userRow?.tenant_id ?? null;
@@ -452,13 +583,16 @@ export default function MealPlannerPage() {
         setInventory(items);
         setInventoryItems(
           (invRows ?? []).map((row) => ({
+            id: row.id,
             ingredient_name: row.ingredient_name,
+            normalized_name: row.normalized_name ?? null,
             quantity: row.quantity ?? null,
             unit: row.unit ?? null,
             category: row.category ?? null,
             estimated_unit_price: row.estimated_unit_price ?? null,
           })),
         );
+        setRecentMovements((movementsRows ?? []) as InventoryMovementRow[]);
         const termById = new Map((termsRows ?? []).map((row) => [row.id, row.label]));
         const mappedRows = (profileTermRows ?? []) as Array<{ preference_type: 'identity' | 'prefer' | 'avoid' | 'goal'; term_id: string }>;
         const labelsByType = (type: 'identity' | 'prefer' | 'avoid' | 'goal') =>
@@ -483,9 +617,8 @@ export default function MealPlannerPage() {
         });
 
         if (savedPlanRow) {
-          const rawCalendar = savedPlanRow.calendar_payload;
-          const savedCalendar = Array.isArray(rawCalendar) ? (rawCalendar as unknown as PlannerDay[]) : null;
-          if (savedCalendar && savedCalendar.length > 0) {
+          const savedCalendar = normalizePlannerCalendar(savedPlanRow.calendar_payload);
+          if (savedCalendar.length > 0) {
             setCalendarData(savedCalendar);
           }
           setResult(savedPlanRow.ai_content ?? '');
@@ -560,20 +693,32 @@ export default function MealPlannerPage() {
     { label: 'Objetivos', active: culinaryProfile.goals.length > 0 || Boolean(goal) },
   ];
 
-  const inventoryProjection = useMemo(() => {
-    const requirements: RecipeRequirement[] = inventorySuggestion.map((item) => ({
-      ingredientName: item.display_name || item.canonical_name,
-      normalizedName: item.canonical_name.toLowerCase(),
-      requiredQuantity: item.quantity,
-      requiredUnit: item.unit as RecipeRequirement['requiredUnit'],
-      usedInRecipes: item.sources,
-    }));
-    return buildMealPlanInventoryProjection(requirements, inventoryItems);
-  }, [inventorySuggestion, inventoryItems]);
+  const mealPlanRequirements = useMemo<RecipeRequirement[]>(
+    () => {
+      const fromCalendar = buildRecipeRequirementsFromCalendar(simulationCalendar);
+      if (fromCalendar.length > 0) return fromCalendar;
+      return inventorySuggestion.map((item) => ({
+        ingredientName: item.display_name || item.canonical_name,
+        normalizedName: item.canonical_name.toLowerCase(),
+        requiredQuantity: item.quantity,
+        requiredUnit: item.unit as RecipeRequirement['requiredUnit'],
+        usedInRecipes: item.sources,
+      }));
+    },
+    [inventorySuggestion, simulationCalendar],
+  );
+
+  const inventoryProjection = useMemo(
+    () => buildMealPlanInventoryProjection(mealPlanRequirements, inventoryItems),
+    [mealPlanRequirements, inventoryItems],
+  );
 
   const smartShoppingList = useMemo(
-    () => buildSmartShoppingList(inventoryProjection),
-    [inventoryProjection],
+    () =>
+      mealPlanRequirements.length > 0
+        ? buildQuantifiedShoppingList(mealPlanRequirements, inventoryItems)
+        : buildSmartShoppingList(inventoryProjection),
+    [inventoryProjection, inventoryItems, mealPlanRequirements],
   );
 
   const inventoryInsights = useMemo(() => {
@@ -889,9 +1034,19 @@ export default function MealPlannerPage() {
           }),
         });
         if (!response.ok) continue;
-        const payload = (await response.json()) as { title?: string };
+        const payload = (await response.json()) as {
+          title?: string;
+          structuredIngredients?: StructuredRecipeIngredient[];
+          recipe?: string;
+        };
         if (payload.title?.trim()) {
-          day.meals[mealType] = { ...day.meals[mealType], name: payload.title.trim(), badge: 'Regenerada' };
+          day.meals[mealType] = {
+            ...day.meals[mealType],
+            name: payload.title.trim(),
+            badge: 'Regenerada',
+            structured_ingredients: sanitizeStructuredIngredients(payload.structuredIngredients),
+            recipe_content: typeof payload.recipe === 'string' ? payload.recipe : null,
+          };
         }
       }
       setCalendarData(updated);
@@ -932,13 +1087,29 @@ export default function MealPlannerPage() {
         }),
       });
       if (!response.ok) return;
-      const payload = (await response.json()) as { title?: string };
+      const payload = (await response.json()) as {
+        title?: string;
+        structuredIngredients?: StructuredRecipeIngredient[];
+        recipe?: string;
+      };
       if (!payload.title?.trim()) return;
       setCalendarData((prev) =>
         prev.map((d) =>
           d.day !== dayName
             ? d
-            : { ...d, meals: { ...d.meals, [mealType]: { ...d.meals[mealType], name: payload.title!.trim(), badge: 'Cambiada' } } }
+            : {
+                ...d,
+                meals: {
+                  ...d.meals,
+                  [mealType]: {
+                    ...d.meals[mealType],
+                    name: payload.title!.trim(),
+                    badge: 'Cambiada',
+                    structured_ingredients: sanitizeStructuredIngredients(payload.structuredIngredients),
+                    recipe_content: typeof payload.recipe === 'string' ? payload.recipe : null,
+                  },
+                },
+              }
         )
       );
       setError('Receta cambiada.');
@@ -967,6 +1138,7 @@ export default function MealPlannerPage() {
     setError(null);
     try {
       const effectivePeopleCount = Number.isFinite(peopleCount) && peopleCount > 0 ? peopleCount : 4;
+      const calendarToSave = simulationCalendar.length > 0 ? simulationCalendar : calendarData;
       const supabase = getSupabaseBrowserClient();
       const { data: upsertedPlan, error: upsertError } = await supabase.from('user_meal_plans').upsert(
         {
@@ -981,7 +1153,7 @@ export default function MealPlannerPage() {
           goal,
           restrictions: selectedRestrictions,
           inventory_snapshot: inventory,
-          calendar_payload: calendarData,
+          calendar_payload: calendarToSave,
           ai_content: result || null,
           updated_at: new Date().toISOString(),
         },
@@ -996,6 +1168,7 @@ export default function MealPlannerPage() {
       setMealPlanId(upsertedPlan?.id ?? null);
       setHasSavedPlan(true);
       setPeopleCount(effectivePeopleCount);
+      setCalendarData(calendarToSave);
       setError('Menú guardado correctamente. Si guardás otro, reemplaza este.');
     } finally {
       setLoading(false);
@@ -1104,6 +1277,356 @@ export default function MealPlannerPage() {
     }
   };
 
+  const applyShoppingItemToInventory = async (payload: {
+    category: string;
+    item: (typeof smartShoppingList.groups)[number]['items'][number];
+  }) => {
+    if (!tenantId || !userId) {
+      setError('No se pudo aplicar compra: falta sesión o tenant.');
+      return;
+    }
+    const { item, category } = payload;
+    if (item.status !== 'buy') return;
+    if (item.quantityToBuy === null || item.quantityToBuy <= 0) {
+      setError('Cantidad de compra no válida para aplicar.');
+      return;
+    }
+
+    const unit = normalizeUnit(item.unit);
+    if (unit === 'unknown') {
+      setError(`No se pudo aplicar ${item.ingredientName}: unidad no estructurada.`);
+      return;
+    }
+
+    const itemKey = `${category}-${item.normalizedName}`;
+    setApplyingShoppingItemKey(itemKey);
+    setError(null);
+    setShoppingApplySummary(null);
+
+    try {
+      const supabase = getSupabaseBrowserClient();
+      const { data: existingRows, error: fetchError } = await supabase
+        .from('recipe_inventory_items')
+        .select('id, ingredient_name, normalized_name, quantity, unit, category')
+        .eq('tenant_id', tenantId)
+        .eq('user_id', userId)
+        .eq('normalized_name', item.normalizedName)
+        .order('updated_at', { ascending: false })
+        .limit(10);
+      if (fetchError) throw fetchError;
+
+      const targetRow = (existingRows ?? []).find((row) => {
+        const rowUnit = normalizeUnit(row.unit);
+        if (rowUnit === 'unknown') return row.quantity === null || row.quantity.trim().length === 0;
+        return canCompareUnits(rowUnit, unit);
+      });
+
+      if (!targetRow) {
+        const { error: insertError } = await supabase.from('recipe_inventory_items').insert({
+          tenant_id: tenantId,
+          user_id: userId,
+          ingredient_name: item.ingredientName,
+          normalized_name: item.normalizedName,
+          quantity: formatInventoryQuantityValue(item.quantityToBuy),
+          unit: item.unit,
+          category,
+          notes: 'Agregado desde lista inteligente de compras',
+        });
+        if (insertError) throw insertError;
+      } else {
+        const currentQuantityRaw = [targetRow.quantity ?? '', targetRow.unit ?? ''].join(' ').trim();
+        const parsedCurrent = parseQuantity(currentQuantityRaw);
+        const rowUnit = normalizeUnit(targetRow.unit);
+
+        let nextQuantityValue = item.quantityToBuy;
+        let nextUnitValue: string = item.unit;
+
+        if (parsedCurrent.structured && parsedCurrent.value !== null && rowUnit !== 'unknown') {
+          const incomingConverted = convertToUnit(item.quantityToBuy, unit, rowUnit);
+          if (incomingConverted === null) {
+            setError(
+              `No se pudo aplicar ${item.ingredientName}: unidades incompatibles (${item.unit} vs ${targetRow.unit ?? 'sin unidad'}).`,
+            );
+            return;
+          }
+          nextQuantityValue = Number((parsedCurrent.value + incomingConverted).toFixed(3));
+          nextUnitValue = targetRow.unit ?? item.unit;
+        } else if ((targetRow.quantity ?? '').trim().length > 0 && rowUnit === 'unknown') {
+          setError(
+            `No se pudo sumar ${item.ingredientName} automáticamente porque el inventario actual no tiene unidad comparable.`,
+          );
+          return;
+        }
+
+        const { error: updateError } = await supabase
+          .from('recipe_inventory_items')
+          .update({
+            ingredient_name: targetRow.ingredient_name || item.ingredientName,
+            quantity: formatInventoryQuantityValue(nextQuantityValue),
+            unit: nextUnitValue,
+            category: targetRow.category ?? category,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', targetRow.id)
+          .eq('tenant_id', tenantId)
+          .eq('user_id', userId);
+        if (updateError) throw updateError;
+      }
+
+      const { data: inventoryRows, error: inventoryError } = await supabase
+        .from('recipe_inventory_items')
+        .select('ingredient_name, quantity, unit, category, estimated_unit_price')
+        .eq('tenant_id', tenantId)
+        .eq('user_id', userId)
+        .order('updated_at', { ascending: false });
+
+      if (!inventoryError) {
+        const rows = (inventoryRows ?? []) as InventoryItemExtended[];
+        setInventoryItems(rows);
+        setInventory(rows.map((row) => `${row.ingredient_name} ${row.quantity ?? ''}`.trim()).filter(Boolean));
+      }
+
+      setShoppingApplySummary(
+        `Compra aplicada: ${item.ingredientName} +${item.quantityToBuy} ${item.unit}. Inventario actualizado.`,
+      );
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error ? caughtError.message : 'No se pudo aplicar compra al inventario.',
+      );
+    } finally {
+      setApplyingShoppingItemKey(null);
+    }
+  };
+
+  const mealConsumptionPreview = useMemo(() => {
+    const card = mealDetail.card;
+    if (!card) return { items: [] as ConsumptionPreviewItem[], canApply: false };
+    const structured = card.structured_ingredients ?? [];
+    const items: ConsumptionPreviewItem[] = structured.map((ingredient) => {
+      const requiredUnitNormalized = normalizeUnit(ingredient.unit);
+      if (!ingredient.structured || ingredient.quantity === null || requiredUnitNormalized === 'unknown') {
+        return {
+          ingredientName: ingredient.name,
+          normalizedName: ingredient.normalized_name,
+          requiredQuantity: ingredient.quantity,
+          requiredUnit: ingredient.unit,
+          availableQuantity: null,
+          availableUnit: null,
+          afterQuantity: null,
+          afterUnit: null,
+          status: 'review',
+          reason: 'Ingrediente no estructurado o unidad no comparable',
+        };
+      }
+
+      const candidates = inventoryItems.filter(
+        (row) => (row.normalized_name ?? normalizeInventoryName(row.ingredient_name)) === ingredient.normalized_name,
+      );
+      if (candidates.length === 0) {
+        return {
+          ingredientName: ingredient.name,
+          normalizedName: ingredient.normalized_name,
+          requiredQuantity: ingredient.quantity,
+          requiredUnit: ingredient.unit,
+          availableQuantity: 0,
+          availableUnit: ingredient.unit,
+          afterQuantity: 0,
+          afterUnit: ingredient.unit,
+          status: 'insufficient',
+          reason: 'No está en inventario',
+        };
+      }
+
+      const targetRow = candidates.find((row) => {
+        const rowUnit = normalizeUnit(row.unit);
+        return rowUnit !== 'unknown' && canCompareUnits(rowUnit, requiredUnitNormalized);
+      });
+      if (!targetRow) {
+        return {
+          ingredientName: ingredient.name,
+          normalizedName: ingredient.normalized_name,
+          requiredQuantity: ingredient.quantity,
+          requiredUnit: ingredient.unit,
+          availableQuantity: null,
+          availableUnit: null,
+          afterQuantity: null,
+          afterUnit: null,
+          status: 'review',
+          reason: 'Unidad incompatible con inventario',
+        };
+      }
+
+      const rowParsed = parseQuantity([targetRow.quantity ?? '', targetRow.unit ?? ''].join(' ').trim());
+      const rowUnit = normalizeUnit(targetRow.unit);
+      if (!rowParsed.structured || rowParsed.value === null || rowUnit === 'unknown') {
+        return {
+          ingredientName: ingredient.name,
+          normalizedName: ingredient.normalized_name,
+          requiredQuantity: ingredient.quantity,
+          requiredUnit: ingredient.unit,
+          availableQuantity: null,
+          availableUnit: targetRow.unit,
+          afterQuantity: null,
+          afterUnit: targetRow.unit,
+          status: 'review',
+          reason: 'Cantidad actual no estructurada en inventario',
+          inventoryItemId: targetRow.id,
+        };
+      }
+
+      const availableInRequiredUnit =
+        rowUnit === requiredUnitNormalized
+          ? rowParsed.value
+          : convertQuantity(rowParsed.value, rowUnit, requiredUnitNormalized);
+      if (availableInRequiredUnit === null) {
+        return {
+          ingredientName: ingredient.name,
+          normalizedName: ingredient.normalized_name,
+          requiredQuantity: ingredient.quantity,
+          requiredUnit: ingredient.unit,
+          availableQuantity: null,
+          availableUnit: ingredient.unit,
+          afterQuantity: null,
+          afterUnit: ingredient.unit,
+          status: 'review',
+          reason: 'No se pudo convertir unidades',
+          inventoryItemId: targetRow.id,
+        };
+      }
+
+      const status: ConsumptionStatus =
+        availableInRequiredUnit >= ingredient.quantity ? 'sufficient' : 'insufficient';
+      const remainingInRequiredUnit = Number(
+        Math.max(availableInRequiredUnit - ingredient.quantity, 0).toFixed(3),
+      );
+
+      return {
+        ingredientName: ingredient.name,
+        normalizedName: ingredient.normalized_name,
+        requiredQuantity: ingredient.quantity,
+        requiredUnit: ingredient.unit,
+        availableQuantity: Number(availableInRequiredUnit.toFixed(3)),
+        availableUnit: ingredient.unit,
+        afterQuantity: remainingInRequiredUnit,
+        afterUnit: ingredient.unit,
+        status,
+        reason: status === 'insufficient' ? 'No alcanza inventario' : undefined,
+        inventoryItemId: targetRow.id,
+      };
+    });
+
+    const canApply = items.length > 0 && items.every((item) => item.status === 'sufficient');
+    return { items, canApply };
+  }, [mealDetail.card, inventoryItems]);
+
+  const applyRecipeConsumption = async () => {
+    if (!mealDetail.card || !tenantId || !userId) {
+      setError('No se pudo aplicar consumo: falta receta o sesión.');
+      return;
+    }
+    const preview = mealConsumptionPreview;
+    if (preview.items.length === 0) {
+      setError('Esta receta no tiene ingredientes estructurados para consumo real.');
+      return;
+    }
+    if (!preview.canApply) {
+      setError('Esta receta requiere revisión manual antes de descontar inventario.');
+      return;
+    }
+
+    setConsumingRecipe(true);
+    setError(null);
+    setShoppingApplySummary(null);
+    try {
+      const supabase = getSupabaseBrowserClient();
+      for (const item of preview.items) {
+        if (!item.inventoryItemId || item.requiredQuantity === null || !item.requiredUnit) continue;
+
+        const { data: row, error: fetchError } = await supabase
+          .from('recipe_inventory_items')
+          .select('id, quantity, unit')
+          .eq('id', item.inventoryItemId)
+          .eq('tenant_id', tenantId)
+          .eq('user_id', userId)
+          .maybeSingle();
+        if (fetchError || !row) throw new Error('No se pudo validar inventario antes de aplicar consumo.');
+
+        const rowParsed = parseQuantity([row.quantity ?? '', row.unit ?? ''].join(' ').trim());
+        const rowUnit = normalizeUnit(row.unit);
+        const reqUnit = normalizeUnit(item.requiredUnit);
+        if (!rowParsed.structured || rowParsed.value === null || rowUnit === 'unknown' || reqUnit === 'unknown') {
+          throw new Error(`No se pudo consumir ${item.ingredientName}: unidad no comparable.`);
+        }
+        const requiredInRowUnit =
+          reqUnit === rowUnit ? item.requiredQuantity : convertQuantity(item.requiredQuantity, reqUnit, rowUnit);
+        if (requiredInRowUnit === null) {
+          throw new Error(`No se pudo convertir unidad para ${item.ingredientName}.`);
+        }
+        if (rowParsed.value < requiredInRowUnit) {
+          throw new Error(`Inventario insuficiente para ${item.ingredientName}.`);
+        }
+
+        const nextQuantity = Number((rowParsed.value - requiredInRowUnit).toFixed(3));
+        const { error: updateError } = await supabase
+          .from('recipe_inventory_items')
+          .update({
+            quantity: formatInventoryQuantityValue(nextQuantity),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', item.inventoryItemId)
+          .eq('tenant_id', tenantId)
+          .eq('user_id', userId);
+        if (updateError) throw updateError;
+
+        const { error: movementError } = await supabase.from('inventory_movements').insert({
+          tenant_id: tenantId,
+          user_id: userId,
+          inventory_item_id: item.inventoryItemId,
+          movement_type: 'recipe_consumption',
+          quantity: item.requiredQuantity,
+          unit: item.requiredUnit,
+          normalized_name: item.normalizedName,
+          source: 'meal_planner',
+          source_recipe: mealDetail.card.name.replace(/\*\*/g, '').trim(),
+          source_meal_plan_id: mealPlanId,
+          notes: `${mealDetail.day} · ${mealDetail.mealType}`,
+        });
+        if (movementError) throw movementError;
+      }
+
+      const { data: inventoryRows } = await supabase
+        .from('recipe_inventory_items')
+        .select('id, ingredient_name, normalized_name, quantity, unit, category, estimated_unit_price')
+        .eq('tenant_id', tenantId)
+        .eq('user_id', userId)
+        .order('updated_at', { ascending: false });
+      const normalizedRows = (inventoryRows ?? []) as InventoryItemExtended[];
+      setInventoryItems(normalizedRows);
+      setInventory(
+        normalizedRows
+          .map((row) => `${row.ingredient_name} ${row.quantity ?? ''}`.trim())
+          .filter(Boolean),
+      );
+
+      const { data: movementRows } = await supabase
+        .from('inventory_movements')
+        .select('*')
+        .eq('tenant_id', tenantId)
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(8);
+      setRecentMovements((movementRows ?? []) as InventoryMovementRow[]);
+
+      setShoppingApplySummary(
+        `Consumo aplicado: ${mealDetail.card.name.replace(/\*\*/g, '').trim()} actualizado en inventario real.`,
+      );
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : 'No se pudo aplicar consumo real.');
+    } finally {
+      setConsumingRecipe(false);
+    }
+  };
+
   const openMealDetail = async (day: string, mealType: MealType, card: PlannerMealCard) => {
     const cleanTitle = card.name.replace(/\*\*/g, '').trim();
     setMealDetail({
@@ -1140,12 +1663,36 @@ export default function MealPlannerPage() {
         return;
       }
 
-      const payload = (await response.json()) as { recipe?: string };
+      const payload = (await response.json()) as {
+        recipe?: string;
+        structuredIngredients?: StructuredRecipeIngredient[];
+      };
       const content = payload.recipe?.trim();
 
       if (!content) {
         setMealDetail((prev) => ({ ...prev, loading: false, error: 'No se encontró preparación para esta receta.' }));
         return;
+      }
+
+      const structuredForMeal = sanitizeStructuredIngredients(payload.structuredIngredients);
+      if (structuredForMeal.length > 0) {
+        setSimulationCalendar((prev) =>
+          prev.map((dayEntry) =>
+            dayEntry.day !== day
+              ? dayEntry
+              : {
+                  ...dayEntry,
+                  meals: {
+                    ...dayEntry.meals,
+                    [mealType]: {
+                      ...dayEntry.meals[mealType],
+                      structured_ingredients: structuredForMeal,
+                      recipe_content: content,
+                    },
+                  },
+                },
+          ),
+        );
       }
 
       setMealDetail((prev) => ({ ...prev, loading: false, content, error: null }));
@@ -1873,7 +2420,20 @@ export default function MealPlannerPage() {
                   )}
                 </button>
               </div>
-              {!shoppingCollapsed ? <div className="mt-3"><SmartShoppingSection shopping={smartShoppingList} /></div> : null}
+              {!shoppingCollapsed ? (
+                <div className="mt-3 space-y-2">
+                  <SmartShoppingSection
+                    shopping={smartShoppingList}
+                    onApplyShoppingItem={applyShoppingItemToInventory}
+                    applyingItemKey={applyingShoppingItemKey}
+                  />
+                  {shoppingApplySummary ? (
+                    <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+                      {shoppingApplySummary}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
             </article>
 
             <SupermarketModeCard
@@ -2034,6 +2594,30 @@ export default function MealPlannerPage() {
                 <Link href="/app" className="rounded-xl border border-[#E8DDD2] px-3 py-2 text-center text-sm font-semibold text-[#6B5A50]">Volver al dashboard</Link>
               </div>
             </article>
+
+            <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
+              <h3 className="text-lg font-semibold">Últimos consumos</h3>
+              <p className="mt-1 text-xs text-[#6B5A50]">Trazabilidad de movimientos reales de inventario.</p>
+              {recentMovements.length === 0 ? (
+                <p className="mt-3 rounded-xl border border-[#E8DDD2] bg-white/70 px-3 py-2 text-xs text-[#6B5A50]">
+                  Todavía no hay consumos confirmados.
+                </p>
+              ) : (
+                <ul className="mt-3 space-y-2">
+                  {recentMovements.map((movement) => (
+                    <li key={movement.id} className="rounded-xl border border-[#E8DDD2] bg-white/75 px-3 py-2">
+                      <p className="text-xs font-semibold text-[#241A14]">
+                        {movement.normalized_name} · {movement.quantity} {movement.unit}
+                      </p>
+                      <p className="mt-1 text-[11px] text-[#6B5A50]">
+                        {movement.movement_type} · {movement.source_recipe ?? movement.source}
+                      </p>
+                      <p className="text-[11px] text-[#8C7A6D]">{new Date(movement.created_at).toLocaleString()}</p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </article>
           </aside>
         </form>
 
@@ -2090,6 +2674,47 @@ export default function MealPlannerPage() {
                     <p><strong>Dificultad:</strong> {mealDetail.card?.difficulty}</p>
                     <p><strong>Fusión:</strong> {mealDetail.card?.fusionTag}</p>
                     <p className="text-[#6B5A50]">Tip: cambiá a “Preparación” para ver el paso a paso completo.</p>
+                    <section className="mt-3 rounded-xl border border-[#E8DDD2] bg-white/80 p-3">
+                      <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[#6B5A50]">Impacto en inventario</p>
+                      <ul className="mt-2 space-y-2">
+                        {mealConsumptionPreview.items.length === 0 ? (
+                          <li className="text-xs text-[#6B5A50]">Sin ingredientes estructurados para consumo real.</li>
+                        ) : (
+                          mealConsumptionPreview.items.map((item) => (
+                            <li key={`${item.normalizedName}-${item.ingredientName}`} className="rounded-lg border border-[#E8DDD2] bg-[#FAF6F1] p-2">
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="text-xs font-semibold text-[#241A14]">{item.ingredientName}</p>
+                                <span
+                                  className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                                    item.status === 'sufficient'
+                                      ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                                      : item.status === 'insufficient'
+                                        ? 'border-amber-300 bg-amber-50 text-amber-700'
+                                        : 'border-[#6B5A50]/30 bg-[#6B5A50]/10 text-[#6B5A50]'
+                                  }`}
+                                >
+                                  {item.status === 'sufficient' ? 'Listo' : item.status === 'insufficient' ? 'No alcanza' : 'Revisar'}
+                                </span>
+                              </div>
+                              <p className="mt-1 text-[11px] text-[#6B5A50]">
+                                Requerido: {item.requiredQuantity ?? '—'} {item.requiredUnit ?? ''}
+                                {' · '}Disponible: {item.availableQuantity ?? '—'} {item.availableUnit ?? ''}
+                                {' · '}Después: {item.afterQuantity ?? '—'} {item.afterUnit ?? ''}
+                              </p>
+                              {item.reason ? <p className="mt-1 text-[11px] text-[#A55412]">{item.reason}</p> : null}
+                            </li>
+                          ))
+                        )}
+                      </ul>
+                      <button
+                        type="button"
+                        onClick={() => void applyRecipeConsumption()}
+                        disabled={consumingRecipe || !mealConsumptionPreview.canApply}
+                        className="mt-3 rounded-lg border border-[#E8DDD2] bg-white px-3 py-1.5 text-xs font-semibold text-[#241A14] hover:border-[#C56A1A]/40 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {consumingRecipe ? 'Aplicando consumo...' : 'Cocinar receta (aplicar consumo)'}
+                      </button>
+                    </section>
                   </div>
                 ) : null}
 
