@@ -1,4 +1,3 @@
-import type { User } from '@supabase/supabase-js';
 import type { GuardResult, TenantRole } from './types';
 import { getSafeRedirectPath } from './safeRedirect';
 
@@ -8,9 +7,9 @@ export function isPrivilegedRole(role: TenantRole | null | undefined): boolean {
   return role ? PRIVILEGED_ROLES.includes(role) : false;
 }
 
-export function requiresPasswordMfa(role: TenantRole | null | undefined, user: User): boolean {
-  const provider = typeof user.app_metadata.provider === 'string' ? user.app_metadata.provider : null;
-  return isPrivilegedRole(role) && provider === 'email';
+export function requiresPasswordMfa(role: TenantRole | null | undefined): boolean {
+  // MFA is intentionally disabled in this migration phase.
+  return false;
 }
 
 export function buildLoginRedirect(requestUrl: string, pathname: string, search: string): URL {

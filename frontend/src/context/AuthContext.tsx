@@ -1,12 +1,10 @@
 'use client';
 
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { requiresPasswordMfa } from '@/lib/auth/guards';
-import { getSupabaseBrowserClient } from '@/lib/supabaseClient';
-import type { AuthState, MfaState, TenantContext } from '@/lib/auth/types';
+import type { AuthState, AuthUser, MfaState, TenantContext } from '@/lib/auth/types';
 
 const initialState: AuthState = {
-  session: null,
   user: null,
   tenant: null,
   mfa: { assuranceLevel: null, required: false, verified: false },
@@ -20,60 +18,44 @@ function toMfaAssuranceLevel(value: unknown): MfaState['assuranceLevel'] {
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const supabase = useMemo(() => getSupabaseBrowserClient(), []);
   const [state, setState] = useState<AuthState>(initialState);
 
   useEffect(() => {
     let active = true;
 
     async function loadAuthState() {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const user = sessionData.session?.user ?? null;
-      let tenant: TenantContext | null = null;
+      try {
+        const response = await fetch('/api/auth/session', {
+          credentials: 'same-origin',
+        });
+        const data: { user: AuthUser | null } = await response.json();
+        const user = data.user ?? null;
+        const tenant: TenantContext | null = user?.tenant ?? null;
 
-      if (user) {
-        const { data } = await supabase
-          .from('users')
-          .select('tenant_id, role, onboarding_completed')
-          .eq('id', user.id)
-          .maybeSingle();
-        tenant = data
-          ? {
-              tenantId: data.tenant_id,
-              role: data.role,
-              onboardingCompleted: data.onboarding_completed,
-            }
-          : null;
+        let mfa: MfaState = { assuranceLevel: null, required: false, verified: false };
+        if (user && tenant?.role) {
+          mfa = {
+            assuranceLevel: toMfaAssuranceLevel(null),
+            required: requiresPasswordMfa(tenant.role),
+            verified: false,
+          };
+        }
+
+        if (!active) return;
+        setState({
+          user,
+          tenant,
+          mfa,
+          loading: false,
+        });
+      } catch {
+        if (!active) return;
+        setState({ ...initialState, loading: false });
       }
-
-      let mfa: MfaState = { assuranceLevel: null, required: false, verified: false };
-      if (user && tenant?.role) {
-        const { data: assurance } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-        const assuranceLevel = toMfaAssuranceLevel(assurance?.currentLevel);
-        const required = requiresPasswordMfa(tenant.role, user);
-        mfa = { assuranceLevel, required, verified: assuranceLevel === 'aal2' };
-      }
-
-      if (!active) return;
-      setState({
-        session: sessionData.session,
-        user,
-        tenant,
-        mfa,
-        loading: false,
-      });
     }
 
     void loadAuthState();
-    const { data } = supabase.auth.onAuthStateChange(() => {
-      void loadAuthState();
-    });
-
-    return () => {
-      active = false;
-      data.subscription.unsubscribe();
-    };
-  }, [supabase]);
+  }, []);
 
   return <AuthContext.Provider value={state}>{children}</AuthContext.Provider>;
 }

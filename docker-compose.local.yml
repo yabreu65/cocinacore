@@ -17,7 +17,7 @@ services:
     container_name: cocinacore_postgres_local
     restart: unless-stopped
     ports:
-      - "5432:5432"
+      - "5433:5432"
     environment:
       POSTGRES_DB: cocinacore_local_db
       POSTGRES_USER: cocinacore_user

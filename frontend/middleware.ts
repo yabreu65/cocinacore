@@ -1,10 +1,7 @@
-import { createServerClient } from '@supabase/ssr';
 import { type NextRequest, NextResponse } from 'next/server';
-import {
-  buildLoginRedirect,
-  isPrivilegedRole,
-} from '@/lib/auth/guards';
+import { buildLoginRedirect, isPrivilegedRole } from '@/lib/auth/guards';
 import type { TenantRole } from '@/lib/auth/types';
+import { getSessionFromRequest } from '@/lib/auth/session';
 
 interface UserProfileForGuard {
   role: TenantRole;
@@ -60,13 +57,11 @@ function isTenantRole(value: unknown): value is TenantRole {
   return value === 'owner' || value === 'admin' || value === 'member';
 }
 
-function toUserProfileForGuard(value: unknown): UserProfileForGuard | null {
-  if (typeof value !== 'object' || value === null) return null;
-  const record = value as Record<string, unknown>;
-  if (!isTenantRole(record.role)) return null;
+function toUserProfileForGuard(user: { role: string; tenantId: string | null }): UserProfileForGuard | null {
+  if (!isTenantRole(user.role)) return null;
   return {
-    role: record.role,
-    tenantId: typeof record.tenant_id === 'string' ? record.tenant_id : null,
+    role: user.role,
+    tenantId: user.tenantId,
   };
 }
 
@@ -88,41 +83,8 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Build a response we can mutate (needed for cookie sync)
-  const supabaseResponse = NextResponse.next({ request });
-
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-  if (!supabaseUrl || !supabaseAnonKey) {
-    // If Supabase is not configured, block protected routes
-    if (isApiRoute(pathname)) {
-      return NextResponse.json({ error: 'Authentication not configured' }, { status: 401 });
-    }
-    return NextResponse.redirect(buildLoginRedirect(request.url, pathname, search));
-  }
-
-  const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
-    cookies: {
-      getAll() {
-        return request.cookies.getAll();
-      },
-      setAll(cookiesToSet, headers) {
-        cookiesToSet.forEach(({ name, value, options }) => {
-          supabaseResponse.cookies.set(name, value, options);
-        });
-        // Apply any security headers the Supabase client requires
-        Object.entries(headers).forEach(([key, value]) => {
-          supabaseResponse.headers.set(key, value);
-        });
-      },
-    },
-  });
-
-  // IMPORTANT: no logic between createServerClient and getUser()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const session = await getSessionFromRequest(request);
+  const user = session?.user ?? null;
 
   // No authenticated user → deny access
   if (!user) {
@@ -134,21 +96,14 @@ export async function middleware(request: NextRequest) {
   }
 
   if (isOwnerRoute(pathname) || isTenantPrivilegedRoute(pathname)) {
-    const profileResult = await supabase
-      .from('users')
-      .select('role, tenant_id')
-      .eq('id', user.id)
-      .maybeSingle();
-    const profile = toUserProfileForGuard(profileResult.data);
+    const profile = toUserProfileForGuard({
+      role: user.tenant?.role ?? 'member',
+      tenantId: user.tenant?.tenantId ?? null,
+    });
 
     let authorized = false;
     if (isOwnerRoute(pathname)) {
-      const ownerResult: unknown = await supabase.rpc('is_platform_owner');
-      authorized =
-        typeof ownerResult === 'object' &&
-        ownerResult !== null &&
-        'data' in ownerResult &&
-        (ownerResult as { data: unknown }).data === true;
+      authorized = user.tenant?.role === 'owner' || false;
     } else {
       authorized = Boolean(profile?.tenantId && isPrivilegedRole(profile.role));
     }
@@ -159,12 +114,9 @@ export async function middleware(request: NextRequest) {
       }
       return NextResponse.redirect(new URL('/app', request.url));
     }
-
-    // MFA redirect enforcement is intentionally deferred until the MFA page can verify/enroll factors.
-    // PR2 establishes role boundaries; PR3 activates the MFA gate once `/mfa` is functional.
   }
 
-  return supabaseResponse;
+  return NextResponse.next({ request });
 }
 
 // ---------------------------------------------------------------------------
@@ -173,16 +125,6 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    /*
-     * Match all request paths except:
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
-     * - favicon.ico (favicon file)
-     * - public files (images, fonts, etc.)
-     *
-     * We still run middleware broadly so we can protect api routes,
-     * but return early for public paths to keep it cheap.
-     */
     '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)',
   ],
 };

@@ -1,8 +1,11 @@
-import { createServerClient } from '@supabase/ssr';
 import { type NextRequest, NextResponse } from 'next/server';
 import { mapAuthError } from '@/lib/auth/errors';
 import { SignupSchema } from '@/lib/auth/schemas';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { findUserByEmail, createUser } from '@/lib/db/repositories/userRepository';
+import { createTenant } from '@/lib/db/repositories/tenantRepository';
+import { hashPassword } from '@/lib/auth/password';
+import { createSession, setSessionCookie } from '@/lib/auth/session';
 
 function getIp(request: NextRequest): string {
   return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
@@ -19,10 +22,17 @@ export async function POST(request: NextRequest) {
   const body: unknown = await request.json().catch(() => null);
   const parsed = SignupSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.issues[0]?.message ?? 'Datos inválidos.' }, { status: 400 });
+    return NextResponse.json(
+      { error: parsed.error.issues[0]?.message ?? 'Datos inválidos.' },
+      { status: 400 }
+    );
   }
 
-  const rateLimit = await checkRateLimit('auth/signup', getIp(request), await hashIdentity(parsed.data.email));
+  const rateLimit = await checkRateLimit(
+    'auth/signup',
+    getIp(request),
+    await hashIdentity(parsed.data.email)
+  );
   if (!rateLimit.success) {
     const retryAfter = Math.max(1, rateLimit.resetAt - Math.floor(Date.now() / 1000));
     return NextResponse.json(
@@ -31,39 +41,43 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!supabaseUrl || !supabaseAnonKey) {
-    return NextResponse.json({ error: 'Autenticación no configurada.' }, { status: 500 });
+  const existingUser = await findUserByEmail(parsed.data.email);
+  if (existingUser) {
+    return NextResponse.json(
+      { error: mapAuthError({ message: 'User already registered' }, 'signup') },
+      { status: 400 }
+    );
   }
 
-  const response = NextResponse.json({ ok: true });
-  const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
-    cookies: {
-      getAll: () => request.cookies.getAll(),
-      setAll(cookiesToSet, headers) {
-        cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options));
-        Object.entries(headers).forEach(([key, value]) => response.headers.set(key, value));
-      },
-    },
-  });
+  try {
+    const tenant = await createTenant({ name: `Tenant of ${parsed.data.email}` });
+    const passwordHash = await hashPassword(parsed.data.password);
+    const now = new Date().toISOString();
 
-  const { data, error } = await supabase.auth.signUp({
-    email: parsed.data.email,
-    password: parsed.data.password,
-    options: {
-      data: {
-        full_name: parsed.data.fullName,
-        terms_accepted_at: new Date().toISOString(),
-        terms_version: 'v1',
-      },
-    },
-  });
+    const user = await createUser({
+      email: parsed.data.email,
+      passwordHash,
+      fullName: parsed.data.fullName,
+      tenantId: tenant.id,
+      role: 'owner',
+      termsAcceptedAt: now,
+      termsVersion: 'v1',
+    });
 
-  if (error) {
-    return NextResponse.json({ error: mapAuthError(error, 'signup') }, { status: 400 });
+    const session = await createSession(user.id);
+    const response = NextResponse.json({ ok: true, user: session.user });
+    await setSessionCookie(response, session);
+
+    return response;
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error: mapAuthError(
+          { message: error instanceof Error ? error.message : 'Signup failed' },
+          'signup'
+        ),
+      },
+      { status: 400 }
+    );
   }
-
-  response.headers.set('X-Auth-Has-Session', String(Boolean(data.session)));
-  return response;
 }

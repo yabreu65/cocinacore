@@ -1,4 +1,8 @@
-export type ServerSecretKey = 'GEMINI_API_KEY' | 'SUPABASE_SERVICE_ROLE_KEY';
+export type ServerSecretKey =
+  | 'GEMINI_API_KEY'
+  | 'DATABASE_URL'
+  | 'REDIS_URL'
+  | 'AUTH_SECRET';
 
 export type ServerEnvSecrets = Readonly<Record<ServerSecretKey, string>>;
 
@@ -20,7 +24,7 @@ function readNonEmptyEnv(key: ServerSecretKey): string {
   }
 
   const value = process.env[key];
-  if (!value || value.trim() === '') {
+  if (!value || value.trim() === '' || value === 'CHANGE_ME') {
     throw new Error(`Missing required server environment variable: ${key}`);
   }
 
@@ -34,6 +38,14 @@ export function getServerSecret(key: ServerSecretKey): string {
 export function getServerEnvSecrets(): ServerEnvSecrets {
   return {
     GEMINI_API_KEY: readNonEmptyEnv('GEMINI_API_KEY'),
-    SUPABASE_SERVICE_ROLE_KEY: readNonEmptyEnv('SUPABASE_SERVICE_ROLE_KEY'),
+    DATABASE_URL: readNonEmptyEnv('DATABASE_URL'),
+    REDIS_URL: readNonEmptyEnv('REDIS_URL'),
+    AUTH_SECRET: readNonEmptyEnv('AUTH_SECRET'),
   };
+}
+
+export function getOptionalServerSecret(key: ServerSecretKey): string | undefined {
+  assertServerRuntime();
+  const value = process.env[key];
+  return value && value.trim() !== '' && value !== 'CHANGE_ME' ? value : undefined;
 }

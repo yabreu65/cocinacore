@@ -1,12 +1,27 @@
-import type { Session, User } from '@supabase/supabase-js';
-import type { Database } from '@/lib/database.types';
-
-export type TenantRole = Database['public']['Tables']['users']['Row']['role'];
+export type TenantRole = 'owner' | 'admin' | 'member';
+export type TenantType = 'home' | 'professional';
 
 export interface TenantContext {
-  tenantId: string | null;
-  role: TenantRole | null;
-  onboardingCompleted: boolean | null;
+  tenantId: string;
+  role: TenantRole;
+  tenantType: TenantType;
+  onboardingCompleted: boolean;
+}
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  fullName: string | null;
+  tenant: TenantContext | null;
+  termsAcceptedAt: string | null;
+  termsVersion: string | null;
+  onboardingCompleted: boolean;
+}
+
+export interface AuthSession {
+  user: AuthUser;
+  token: string;
+  expiresAt: Date;
 }
 
 export interface MfaState {
@@ -16,8 +31,7 @@ export interface MfaState {
 }
 
 export interface AuthState {
-  session: Session | null;
-  user: User | null;
+  user: AuthUser | null;
   tenant: TenantContext | null;
   mfa: MfaState;
   loading: boolean;

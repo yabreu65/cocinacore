@@ -26,16 +26,28 @@ describe('server environment validation', () => {
     );
   });
 
-  it('returns only declared server secrets when both values are present', () => {
+  it('rejects placeholder CHANGE_ME values', () => {
+    process.env = { ...ORIGINAL_ENV, AUTH_SECRET: 'CHANGE_ME' };
+
+    expect(() => getServerSecret('AUTH_SECRET')).toThrow(
+      'Missing required server environment variable: AUTH_SECRET'
+    );
+  });
+
+  it('returns only declared server secrets when all values are present', () => {
     process.env = {
       ...ORIGINAL_ENV,
       GEMINI_API_KEY: 'gemini-secret-value',
-      SUPABASE_SERVICE_ROLE_KEY: 'supabase-secret-value',
+      DATABASE_URL: 'postgresql://localhost/cocinacore',
+      REDIS_URL: 'redis://localhost:6379',
+      AUTH_SECRET: 'auth-secret-value',
     };
 
     expect(getServerEnvSecrets()).toEqual({
       GEMINI_API_KEY: 'gemini-secret-value',
-      SUPABASE_SERVICE_ROLE_KEY: 'supabase-secret-value',
+      DATABASE_URL: 'postgresql://localhost/cocinacore',
+      REDIS_URL: 'redis://localhost:6379',
+      AUTH_SECRET: 'auth-secret-value',
     });
   });
 });
