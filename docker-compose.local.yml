@@ -1,0 +1,57 @@
+# Local development stack for CocinaCore (PostgreSQL direct + Redis)
+#
+# Usage:
+#   docker compose -f docker-compose.local.yml up -d
+#   cd frontend
+#   npm install
+#   npm run db:migrate
+#   npm run db:seed
+#   npm run dev
+#
+# To stop:
+#   docker compose -f docker-compose.local.yml down
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: cocinacore_postgres_local
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: cocinacore_local_db
+      POSTGRES_USER: cocinacore_user
+      POSTGRES_PASSWORD: cocinacore_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - cocinacore
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cocinacore_user -d cocinacore_local_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: cocinacore_redis_local
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - cocinacore
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  cocinacore:
+    driver: bridge
