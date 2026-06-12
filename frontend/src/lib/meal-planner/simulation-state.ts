@@ -30,7 +30,7 @@ export function moveMealAcrossDayState<T extends PlannerDayState>(
   dayIndex: number,
   mealType: MealType,
   direction: -1 | 1,
-  lockedMeals: string[],
+  lockedMeals: string[]
 ): T[] {
   if (days.length === 0) return days;
   const sourceDay = days[dayIndex];
@@ -57,7 +57,7 @@ export function moveMealAcrossSlotState<T extends PlannerDayState>(
   dayIndex: number,
   mealType: MealType,
   direction: -1 | 1,
-  lockedMeals: string[],
+  lockedMeals: string[]
 ): T[] {
   const day = days[dayIndex];
   if (!day) return days;
@@ -90,7 +90,7 @@ function swapMeal(
   fromDay: number,
   toDay: number,
   mealType: MealType,
-  lockedMeals: string[],
+  lockedMeals: string[]
 ): void {
   if (!days[fromDay] || !days[toDay]) return;
   const sourceKey = buildMealKey(days[fromDay].day, mealType);
@@ -104,7 +104,7 @@ function swapMeal(
 export function applyOptimizationState<T extends PlannerDayState>(
   days: T[],
   mode: OptimizationMode,
-  lockedMeals: string[],
+  lockedMeals: string[]
 ): T[] {
   if (days.length < 2) return days;
   const copy = cloneDays(days);

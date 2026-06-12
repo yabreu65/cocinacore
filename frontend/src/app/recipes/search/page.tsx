@@ -40,7 +40,16 @@ const STYLE_CONFIG: TaxonomySelectionConfig = {
   title: 'Estilo culinario',
   subtitle: 'Selecciona el estilo de comida ideal.',
   max: 2,
-  options: ['Casera', 'Gourmet', 'Rápida', 'Comfort food', 'Parrilla', 'Saludable', 'Vegana', 'Postres'],
+  options: [
+    'Casera',
+    'Gourmet',
+    'Rápida',
+    'Comfort food',
+    'Parrilla',
+    'Saludable',
+    'Vegana',
+    'Postres',
+  ],
 };
 
 const GOAL_CONFIG: TaxonomySelectionConfig = {
@@ -143,10 +152,14 @@ function inferCleanTitle(lines: string[]): string {
   if (direct) return direct;
 
   const joined = lines.join(' ');
-  const recipePattern = joined.match(/(?:receta de|prepara(?:ción)? de)\s+([A-ZÁÉÍÓÚÑ][^,.]{3,60})/i);
+  const recipePattern = joined.match(
+    /(?:receta de|prepara(?:ción)? de)\s+([A-ZÁÉÍÓÚÑ][^,.]{3,60})/i
+  );
   if (recipePattern?.[1]) return normalizeTitleCandidate(recipePattern[1]);
 
-  const laPattern = joined.match(/\b([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑa-záéíóúñ]+){0,5})\s+es\s+un/i);
+  const laPattern = joined.match(
+    /\b([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑa-záéíóúñ]+){0,5})\s+es\s+un/i
+  );
   if (laPattern?.[1]) return normalizeTitleCandidate(laPattern[1]);
 
   return 'Receta CocinaCore';
@@ -154,7 +167,10 @@ function inferCleanTitle(lines: string[]): string {
 
 function parseRecipeSections(raw: string): RecipeSections {
   const cleaned = cleanRecipeText(raw);
-  const lines = cleaned.split('\n').map((line) => line.trim()).filter(Boolean);
+  const lines = cleaned
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
   const title = inferCleanTitle(lines);
 
   const ingredients: string[] = [];
@@ -209,7 +225,11 @@ type HistoryRow = {
     full_recipe?: string;
     mode?: GenerationMode;
     structured_ingredients?: StructuredRecipeIngredient[];
-    citations?: Array<{ id?: string; similarity?: number; metadata?: { page_number?: number; book_title?: string } }>;
+    citations?: Array<{
+      id?: string;
+      similarity?: number;
+      metadata?: { page_number?: number; book_title?: string };
+    }>;
   };
   is_saved: boolean;
   expires_at: string | null;
@@ -283,11 +303,17 @@ export default function RecipeSearchPage() {
   const [recipeSessions, setRecipeSessions] = useState<RecipeSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [savingRecipe, setSavingRecipe] = useState(false);
-  const [structuredIngredients, setStructuredIngredients] = useState<StructuredRecipeIngredient[]>([]);
+  const [structuredIngredients, setStructuredIngredients] = useState<StructuredRecipeIngredient[]>(
+    []
+  );
 
   const normalizedIngredients = useMemo(
-    () => ingredients.split(',').map((value) => value.trim()).filter((value) => value.length > 0),
-    [ingredients],
+    () =>
+      ingredients
+        .split(',')
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0),
+    [ingredients]
   );
 
   const coherenceScore = useMemo(() => {
@@ -298,7 +324,13 @@ export default function RecipeSearchPage() {
     if (selectedGoals.length > 0) score += 15;
     if (level) score += 10;
     return Math.min(100, score);
-  }, [normalizedIngredients.length, selectedRegional.length, selectedStyle.length, selectedGoals.length, level]);
+  }, [
+    normalizedIngredients.length,
+    selectedRegional.length,
+    selectedStyle.length,
+    selectedGoals.length,
+    level,
+  ]);
   const parsedRecipe = useMemo(() => (recipe ? parseRecipeSections(recipe) : null), [recipe]);
 
   useEffect(() => {
@@ -315,7 +347,13 @@ export default function RecipeSearchPage() {
         level: string;
       };
       setIngredients(parsed.ingredients ?? '');
-      setPeopleCount(typeof parsed.peopleCount === 'number' && Number.isFinite(parsed.peopleCount) && parsed.peopleCount > 0 ? Math.floor(parsed.peopleCount) : 4);
+      setPeopleCount(
+        typeof parsed.peopleCount === 'number' &&
+          Number.isFinite(parsed.peopleCount) &&
+          parsed.peopleCount > 0
+          ? Math.floor(parsed.peopleCount)
+          : 4
+      );
       setSelectedRegional(parsed.regional ?? []);
       setSelectedStyle(parsed.style ?? []);
       setSelectedGoals(parsed.goals ?? []);
@@ -346,27 +384,38 @@ export default function RecipeSearchPage() {
         .order('created_at', { ascending: false })
         .limit(20);
 
-      const dbSessions: RecipeSession[] = ((rows ?? []) as HistoryRow[]).map((row) => {
-        const mappedMode: GenerationMode = row.recipe_payload?.mode === 'rag' ? 'rag' : 'free';
-        return {
-          id: row.id,
-          historyId: row.id,
-          title: row.recipe_title ?? parseRecipeSections(String(row.recipe_payload?.full_recipe ?? '')).title,
-          recipe: String(row.recipe_payload?.full_recipe ?? ''),
-          mode: mappedMode,
-          peopleCount: 4,
-          structuredIngredients: Array.isArray(row.recipe_payload?.structured_ingredients)
-            ? row.recipe_payload.structured_ingredients
-            : [],
-          saved: Boolean(row.is_saved),
-          createdAt: new Date(row.created_at).getTime(),
-          expiresAt: row.is_saved ? Number.MAX_SAFE_INTEGER : (row.expires_at ? new Date(row.expires_at).getTime() : now + RECIPE_TTL_MS),
-        };
-      }).filter((item) => item.recipe.trim().length > 0);
+      const dbSessions: RecipeSession[] = ((rows ?? []) as HistoryRow[])
+        .map((row) => {
+          const mappedMode: GenerationMode = row.recipe_payload?.mode === 'rag' ? 'rag' : 'free';
+          return {
+            id: row.id,
+            historyId: row.id,
+            title:
+              row.recipe_title ??
+              parseRecipeSections(String(row.recipe_payload?.full_recipe ?? '')).title,
+            recipe: String(row.recipe_payload?.full_recipe ?? ''),
+            mode: mappedMode,
+            peopleCount: 4,
+            structuredIngredients: Array.isArray(row.recipe_payload?.structured_ingredients)
+              ? row.recipe_payload.structured_ingredients
+              : [],
+            saved: Boolean(row.is_saved),
+            createdAt: new Date(row.created_at).getTime(),
+            expiresAt: row.is_saved
+              ? Number.MAX_SAFE_INTEGER
+              : row.expires_at
+                ? new Date(row.expires_at).getTime()
+                : now + RECIPE_TTL_MS,
+          };
+        })
+        .filter((item) => item.recipe.trim().length > 0);
 
       const merged: RecipeSession[] = [...dbSessions, ...local]
         .sort((a, b) => b.createdAt - a.createdAt)
-        .filter((item, index, arr) => arr.findIndex((x) => x.title === item.title && x.createdAt === item.createdAt) === index)
+        .filter(
+          (item, index, arr) =>
+            arr.findIndex((x) => x.title === item.title && x.createdAt === item.createdAt) === index
+        )
         .slice(0, 20)
         .filter((item) => item.saved || item.expiresAt > now);
 
@@ -374,18 +423,6 @@ export default function RecipeSearchPage() {
       saveRecipeSessions(merged);
     };
     void loadRecentRecipes();
-  }, []);
-
-  useEffect(() => {
-    const cleanupExpiredHistory = async () => {
-      const supabase = getSupabaseBrowserClient();
-      await supabase
-        .from('recipe_ai_history')
-        .delete()
-        .eq('is_saved', false)
-        .lte('expires_at', new Date().toISOString());
-    };
-    void cleanupExpiredHistory();
   }, []);
 
   useEffect(() => {
@@ -399,15 +436,27 @@ export default function RecipeSearchPage() {
         goals: selectedGoals,
         avoid: selectedAvoid,
         level,
-      }),
+      })
     );
-  }, [ingredients, peopleCount, level, selectedAvoid, selectedGoals, selectedRegional, selectedStyle]);
+  }, [
+    ingredients,
+    peopleCount,
+    level,
+    selectedAvoid,
+    selectedGoals,
+    selectedRegional,
+    selectedStyle,
+  ]);
 
   useEffect(() => {
     const loadTerms = async () => {
       const supabase = getSupabaseBrowserClient();
       const [{ data: termsData }, { data: dimensionsData }] = await Promise.all([
-        supabase.from('culinary_terms').select('id,label,dimension_id').eq('is_active', true).limit(120),
+        supabase
+          .from('culinary_terms')
+          .select('id,label,dimension_id')
+          .eq('is_active', true)
+          .limit(120),
         supabase.from('culinary_dimensions').select('id,key'),
       ]);
 
@@ -418,7 +467,7 @@ export default function RecipeSearchPage() {
           id: row.id,
           label: row.label,
           dimension: dimensionById.get(row.dimension_id) ?? '',
-        })),
+        }))
       );
     };
     void loadTerms();
@@ -434,7 +483,7 @@ export default function RecipeSearchPage() {
   const toggleWithMax = (
     setFn: React.Dispatch<React.SetStateAction<string[]>>,
     value: string,
-    max: number,
+    max: number
   ) => {
     setFn((prev) => {
       if (prev.includes(value)) return prev.filter((v) => v !== value);
@@ -454,7 +503,8 @@ export default function RecipeSearchPage() {
     try {
       const supabase = getSupabaseBrowserClient();
       const selectedPreferred = [...selectedRegional, ...selectedStyle];
-      const safePeopleCount = Number.isFinite(peopleCount) && peopleCount > 0 ? Math.floor(peopleCount) : 4;
+      const safePeopleCount =
+        Number.isFinite(peopleCount) && peopleCount > 0 ? Math.floor(peopleCount) : 4;
       let safeChunks: MatchChunkRow[] = [];
       if (mode === 'rag') {
         const query = `Receta con ingredientes: ${normalizedIngredients.join(', ') || 'libre'}. Preferencias: ${selectedPreferred.join(', ') || 'sin preferencia'}.`;
@@ -483,7 +533,12 @@ export default function RecipeSearchPage() {
         if (rpcErr) throw rpcErr;
 
         safeChunks = ((chunkRows ?? []) as MatchChunkRow[])
-          .filter((row) => row.content && safeSimilarity(row.similarity) > 0 && safeSimilarity(row.similarity) >= RAG_SIMILARITY_THRESHOLD)
+          .filter(
+            (row) =>
+              row.content &&
+              safeSimilarity(row.similarity) > 0 &&
+              safeSimilarity(row.similarity) >= RAG_SIMILARITY_THRESHOLD
+          )
           .sort((a, b) => safeSimilarity(b.similarity) - safeSimilarity(a.similarity));
       }
 
@@ -517,7 +572,11 @@ export default function RecipeSearchPage() {
       };
       setRecipe(recipePayload.recipe);
       setRecipeMode(recipePayload.mode ?? mode);
-      setStructuredIngredients(Array.isArray(recipePayload.structuredIngredients) ? recipePayload.structuredIngredients : []);
+      setStructuredIngredients(
+        Array.isArray(recipePayload.structuredIngredients)
+          ? recipePayload.structuredIngredients
+          : []
+      );
       setCitations(mode === 'rag' ? safeChunks.slice(0, 4) : []);
       setRecipeModalOpen(true);
 
@@ -544,11 +603,14 @@ export default function RecipeSearchPage() {
                 title: recipeTitle,
                 full_recipe: recipePayload.recipe,
                 mode,
-                citations: mode === 'rag' ? safeChunks.slice(0, 4).map((row) => ({
-                  id: row.id,
-                  similarity: safeSimilarity(row.similarity),
-                  metadata: row.metadata ?? {},
-                })) : [],
+                citations:
+                  mode === 'rag'
+                    ? safeChunks.slice(0, 4).map((row) => ({
+                        id: row.id,
+                        similarity: safeSimilarity(row.similarity),
+                        metadata: row.metadata ?? {},
+                      }))
+                    : [],
                 structured_ingredients: Array.isArray(recipePayload.structuredIngredients)
                   ? recipePayload.structuredIngredients
                   : [],
@@ -585,7 +647,9 @@ export default function RecipeSearchPage() {
         createdAt: now,
         expiresAt: now + RECIPE_TTL_MS,
       };
-      const updatedSessions = [newSession, ...recipeSessions].slice(0, 20).filter((item) => item.expiresAt > now);
+      const updatedSessions = [newSession, ...recipeSessions]
+        .slice(0, 20)
+        .filter((item) => item.expiresAt > now);
       setRecipeSessions(updatedSessions);
       saveRecipeSessions(updatedSessions);
       setActiveSessionId(newSession.id);
@@ -631,7 +695,9 @@ export default function RecipeSearchPage() {
       }
 
       const updated = recipeSessions.map((session) =>
-        session.id === activeSessionId ? { ...session, saved: true, expiresAt: Number.MAX_SAFE_INTEGER } : session
+        session.id === activeSessionId
+          ? { ...session, saved: true, expiresAt: Number.MAX_SAFE_INTEGER }
+          : session
       );
       setRecipeSessions(updated);
       saveRecipeSessions(updated);
@@ -648,7 +714,9 @@ export default function RecipeSearchPage() {
             <h1 className="text-3xl font-semibold">Sistema culinario inteligente</h1>
             <p className="text-[#6B5A50]">CocinaCore entiende cómo cocinas para sugerir mejor.</p>
           </div>
-          <Link href="/app" className="text-sm font-semibold text-[#A55412]">Volver</Link>
+          <Link href="/app" className="text-sm font-semibold text-[#A55412]">
+            Volver
+          </Link>
         </div>
 
         <form onSubmit={handleSubmit} className="grid gap-4">
@@ -670,7 +738,9 @@ export default function RecipeSearchPage() {
           </article>
 
           <div className="rounded-2xl border border-[#E8DDD2] bg-white/70 p-4">
-            <label htmlFor="ingredients" className="text-sm font-semibold text-[#6B5A50]">Ingredientes</label>
+            <label htmlFor="ingredients" className="text-sm font-semibold text-[#6B5A50]">
+              Ingredientes
+            </label>
             <input
               id="ingredients"
               value={ingredients}
@@ -678,20 +748,29 @@ export default function RecipeSearchPage() {
               placeholder="pollo, tomate, arroz, cebolla"
               className="mt-2 h-12 w-full rounded-xl border border-[#E8DDD2] bg-white px-3 text-sm outline-none transition focus:border-[#6D4AFF] focus:ring-2 focus:ring-[#6D4AFF]/20"
             />
-            <label htmlFor="peopleCount" className="mt-3 block text-sm font-semibold text-[#6B5A50]">Comensales</label>
+            <label
+              htmlFor="peopleCount"
+              className="mt-3 block text-sm font-semibold text-[#6B5A50]"
+            >
+              Comensales
+            </label>
             <input
               id="peopleCount"
               type="number"
               min={1}
               max={20}
               value={peopleCount}
-              onChange={(event) => setPeopleCount(Math.max(1, Math.min(20, Number(event.target.value) || 1)))}
+              onChange={(event) =>
+                setPeopleCount(Math.max(1, Math.min(20, Number(event.target.value) || 1)))
+              }
               className="mt-2 h-12 w-full rounded-xl border border-[#E8DDD2] bg-white px-3 text-sm outline-none transition focus:border-[#6D4AFF] focus:ring-2 focus:ring-[#6D4AFF]/20"
             />
           </div>
           <article className="rounded-2xl border border-[#E8DDD2] bg-white/70 p-4">
             <p className="text-base font-semibold">Modo de generación</p>
-            <p className="text-sm text-[#6B5A50]">Elegí si querés receta libre o receta basada en biblioteca.</p>
+            <p className="text-sm text-[#6B5A50]">
+              Elegí si querés receta libre o receta basada en biblioteca.
+            </p>
             <div className="mt-3 flex flex-wrap gap-2">
               <button
                 type="button"
@@ -775,7 +854,8 @@ export default function RecipeSearchPage() {
           </article>
 
           <div className="rounded-2xl border border-[#E8DDD2] bg-[#faf2e9] px-3 py-2 text-xs text-[#6B5A50]">
-            Máximo: 2 cocinas regionales, 2 estilos y 3 objetivos para mantener recomendaciones coherentes.
+            Máximo: 2 cocinas regionales, 2 estilos y 3 objetivos para mantener recomendaciones
+            coherentes.
           </div>
 
           <div className="rounded-2xl border border-[#E8DDD2] bg-white/70 px-3 py-2">
@@ -784,11 +864,18 @@ export default function RecipeSearchPage() {
               <span>{coherenceScore}%</span>
             </div>
             <div className="mt-2 h-2 rounded-full bg-[#EEE3D9]">
-              <div className="h-2 rounded-full bg-[#6D4AFF]" style={{ width: `${coherenceScore}%` }} />
+              <div
+                className="h-2 rounded-full bg-[#6D4AFF]"
+                style={{ width: `${coherenceScore}%` }}
+              />
             </div>
           </div>
 
-          <button type="submit" disabled={loading} className="h-12 rounded-xl bg-[#C56A1A] text-base font-semibold text-white transition hover:bg-[#A55412] disabled:opacity-60">
+          <button
+            type="submit"
+            disabled={loading}
+            className="h-12 rounded-xl bg-[#C56A1A] text-base font-semibold text-white transition hover:bg-[#A55412] disabled:opacity-60"
+          >
             {loading ? 'Generando...' : 'Generar receta'}
           </button>
         </form>
@@ -798,10 +885,16 @@ export default function RecipeSearchPage() {
             <h2 className="text-lg font-semibold">Recetas recientes (12h)</h2>
             <div className="mt-2 grid gap-2 sm:grid-cols-2">
               {recipeSessions.map((session) => (
-                <article key={session.id} className="rounded-xl border border-[#E8DDD2] bg-white p-3">
-                  <p className="line-clamp-1 text-sm font-semibold text-[#241A14]">{session.title}</p>
+                <article
+                  key={session.id}
+                  className="rounded-xl border border-[#E8DDD2] bg-white p-3"
+                >
+                  <p className="line-clamp-1 text-sm font-semibold text-[#241A14]">
+                    {session.title}
+                  </p>
                   <p className="mt-1 text-xs text-[#6B5A50]">
-                    {session.mode === 'rag' ? humanCopy.basedOnLibrary : humanCopy.freeGeneration} · {session.peopleCount} comensales · {session.saved ? 'Guardada' : 'Temporal 12h'}
+                    {session.mode === 'rag' ? humanCopy.basedOnLibrary : humanCopy.freeGeneration} ·{' '}
+                    {session.peopleCount} comensales · {session.saved ? 'Guardada' : 'Temporal 12h'}
                   </p>
                   <button
                     type="button"
@@ -816,7 +909,11 @@ export default function RecipeSearchPage() {
           </section>
         ) : null}
 
-        {error ? <p className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
+        {error ? (
+          <p className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            {error}
+          </p>
+        ) : null}
 
         <RecipeView
           open={recipeModalOpen && Boolean(recipe)}
@@ -827,7 +924,12 @@ export default function RecipeSearchPage() {
           region={selectedRegional[0] ?? 'Fusión'}
           style={selectedStyle[0] ?? 'Casera'}
           parsedRecipe={parsedRecipe}
-          citations={citations.map((item, index) => ({ ...item, id: item.id || `citation-${index}` })) as RecipeCitation[]}
+          citations={
+            citations.map((item, index) => ({
+              ...item,
+              id: item.id || `citation-${index}`,
+            })) as RecipeCitation[]
+          }
           structuredIngredients={structuredIngredients}
           selectedInventory={normalizedIngredients}
           savingRecipe={savingRecipe}

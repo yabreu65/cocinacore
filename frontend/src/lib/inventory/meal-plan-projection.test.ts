@@ -80,9 +80,21 @@ describe('meal-plan-projection', () => {
         },
       ],
       [
-        { ingredient_name: 'tomate', quantity: '3', unit: 'unidad', category: 'Verduras', estimated_unit_price: 0.5 },
-        { ingredient_name: 'pollo', quantity: '1 kg', unit: null, category: 'Proteínas', estimated_unit_price: 6 },
-      ],
+        {
+          ingredient_name: 'tomate',
+          quantity: '3',
+          unit: 'unidad',
+          category: 'Verduras',
+          estimated_unit_price: 0.5,
+        },
+        {
+          ingredient_name: 'pollo',
+          quantity: '1 kg',
+          unit: null,
+          category: 'Proteínas',
+          estimated_unit_price: 6,
+        },
+      ]
     );
 
     const items = shopping.groups.flatMap((group) => group.items);
@@ -102,9 +114,27 @@ describe('meal-plan-projection', () => {
 
   it('aggregates repeated ingredients and calculates projection', () => {
     const projection = buildMealPlanInventoryProjection(recipeRequirements, [
-      { ingredient_name: 'tomate', quantity: '3', unit: 'unidad', category: 'Verduras', estimated_unit_price: 0.5 },
-      { ingredient_name: 'arroz', quantity: '1 kg', unit: null, category: 'Granos', estimated_unit_price: 0.01 },
-      { ingredient_name: 'leche', quantity: '500 ml', unit: null, category: 'Lácteos', estimated_unit_price: 1.2 },
+      {
+        ingredient_name: 'tomate',
+        quantity: '3',
+        unit: 'unidad',
+        category: 'Verduras',
+        estimated_unit_price: 0.5,
+      },
+      {
+        ingredient_name: 'arroz',
+        quantity: '1 kg',
+        unit: null,
+        category: 'Granos',
+        estimated_unit_price: 0.01,
+      },
+      {
+        ingredient_name: 'leche',
+        quantity: '500 ml',
+        unit: null,
+        category: 'Lácteos',
+        estimated_unit_price: 1.2,
+      },
     ]);
 
     const tomato = projection.items.find((item) => item.normalizedName === 'tomate');
@@ -125,8 +155,20 @@ describe('meal-plan-projection', () => {
 
   it('consolidates missing ingredients from partial/missing/unknown', () => {
     const projection = buildMealPlanInventoryProjection(recipeRequirements, [
-      { ingredient_name: 'tomate', quantity: '1', unit: 'unidad', category: 'Verduras', estimated_unit_price: 0.5 },
-      { ingredient_name: 'arroz', quantity: '100 g', unit: null, category: 'Granos', estimated_unit_price: 0.01 },
+      {
+        ingredient_name: 'tomate',
+        quantity: '1',
+        unit: 'unidad',
+        category: 'Verduras',
+        estimated_unit_price: 0.5,
+      },
+      {
+        ingredient_name: 'arroz',
+        quantity: '100 g',
+        unit: null,
+        category: 'Granos',
+        estimated_unit_price: 0.01,
+      },
     ]);
 
     const consolidated = consolidateMissingIngredients(projection.items);
@@ -137,15 +179,31 @@ describe('meal-plan-projection', () => {
 
   it('builds smart shopping list grouped by category', () => {
     const projection = buildMealPlanInventoryProjection(recipeRequirements, [
-      { ingredient_name: 'tomate', quantity: '1', unit: 'unidad', category: 'Verduras', estimated_unit_price: 0.5 },
-      { ingredient_name: 'arroz', quantity: '100 g', unit: null, category: 'Granos', estimated_unit_price: 0.01 },
+      {
+        ingredient_name: 'tomate',
+        quantity: '1',
+        unit: 'unidad',
+        category: 'Verduras',
+        estimated_unit_price: 0.5,
+      },
+      {
+        ingredient_name: 'arroz',
+        quantity: '100 g',
+        unit: null,
+        category: 'Granos',
+        estimated_unit_price: 0.01,
+      },
     ]);
 
     const shopping = buildSmartShoppingList(projection);
     expect(shopping.groups.length).toBeGreaterThan(0);
-    expect(shopping.groups.find((group) => group.category === 'Verduras')?.items.length).toBeGreaterThan(0);
+    expect(
+      shopping.groups.find((group) => group.category === 'Verduras')?.items.length
+    ).toBeGreaterThan(0);
 
-    const unknownItem = shopping.groups.flatMap((group) => group.items).find((item) => item.normalizedName === 'sal');
+    const unknownItem = shopping.groups
+      .flatMap((group) => group.items)
+      .find((item) => item.normalizedName === 'sal');
     expect(unknownItem?.status).toBe('review');
   });
 
@@ -170,7 +228,7 @@ describe('meal-plan-projection', () => {
           usedInRecipes: ['A'],
         },
       ],
-      [{ ingredient_name: 'Leche', quantity: '1 kg', unit: null, category: 'Lácteos' }],
+      [{ ingredient_name: 'Leche', quantity: '1 kg', unit: null, category: 'Lácteos' }]
     );
 
     expect(projection.items[0].status).toBe('unknown');
@@ -194,7 +252,7 @@ describe('meal-plan-projection', () => {
           usedInRecipes: ['B'],
         },
       ],
-      [],
+      []
     );
 
     const statuses = shopping.groups.flatMap((group) => group.items).map((item) => item.status);
@@ -212,10 +270,20 @@ describe('meal-plan-projection', () => {
           usedInRecipes: ['Amatriciana', 'Caprese'],
         },
       ],
-      [{ ingredient_name: 'Tomate', quantity: '3', unit: 'unidad', category: 'Verduras', estimated_unit_price: 0.5 }],
+      [
+        {
+          ingredient_name: 'Tomate',
+          quantity: '3',
+          unit: 'unidad',
+          category: 'Verduras',
+          estimated_unit_price: 0.5,
+        },
+      ]
     );
 
-    const tomato = shopping.groups.flatMap((group) => group.items).find((item) => item.normalizedName === 'tomate');
+    const tomato = shopping.groups
+      .flatMap((group) => group.items)
+      .find((item) => item.normalizedName === 'tomate');
     expect(tomato).toBeDefined();
     expect(tomato?.requiredQuantity).toBe(20);
     expect(tomato?.availableQuantity).toBe(3);
@@ -244,7 +312,7 @@ describe('meal-plan-projection', () => {
       [
         { ingredient_name: 'Arroz', quantity: '1 kg', unit: null, category: 'Granos' },
         { ingredient_name: 'Leche', quantity: '500 ml', unit: null, category: 'Lácteos' },
-      ],
+      ]
     );
     const items = shopping.groups.flatMap((group) => group.items);
     expect(items.find((item) => item.normalizedName === 'arroz')?.quantityToBuy).toBe(200);
@@ -262,9 +330,11 @@ describe('meal-plan-projection', () => {
           usedInRecipes: ['Sopa'],
         },
       ],
-      [],
+      []
     );
-    const sal = shopping.groups.flatMap((group) => group.items).find((item) => item.normalizedName === 'sal');
+    const sal = shopping.groups
+      .flatMap((group) => group.items)
+      .find((item) => item.normalizedName === 'sal');
     expect(sal?.status).toBe('review');
   });
 });

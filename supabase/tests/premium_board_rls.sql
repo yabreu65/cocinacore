@@ -31,6 +31,22 @@ values
   )
 on conflict (id) do nothing;
 
+update public.users
+set tenant_id = '30000000-0000-0000-0000-000000000003', role = 'member'
+where id = 'aaaaaaaa-aaaa-0000-0000-000000000011';
+
+update public.users
+set tenant_id = '40000000-0000-0000-0000-000000000004', role = 'member'
+where id = 'bbbbbbbb-bbbb-0000-0000-000000000022';
+
+update public.users
+set tenant_id = '30000000-0000-0000-0000-000000000003', role = 'owner'
+where id = 'cccccccc-cccc-0000-0000-000000000033';
+
+insert into public.platform_owners (user_id, requires_manual_review)
+values ('cccccccc-cccc-0000-0000-000000000033', false)
+on conflict (user_id) do update set requires_manual_review = false;
+
 insert into public.recipe_ai_history (
   id,
   tenant_id,
@@ -110,11 +126,15 @@ select extensions.is(
   'Cross-tenant authenticated member can read published premium recipe'
 );
 
-select extensions.throws_ok(
-  $$update public.premium_recipes
-      set creator_display_name = 'Hijacked'
-    where id = '60000000-0000-0000-0000-000000000002'$$,
-  '42501',
+select extensions.is(
+  (with updated as (
+    update public.premium_recipes
+    set creator_display_name = 'Hijacked'
+    where id = '60000000-0000-0000-0000-000000000002'
+    returning id
+  )
+  select count(*)::integer from updated),
+  0,
   'Cross-tenant member cannot mutate premium recipe (read-only)'
 );
 

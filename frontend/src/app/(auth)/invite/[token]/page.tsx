@@ -24,7 +24,8 @@ export default function InvitePage() {
     try {
       const supabase = getSupabaseBrowserClient();
       const { data: authData, error: authErr } = await supabase.auth.getUser();
-      if (authErr || !authData.user) throw new Error('Primero inicia sesión para aceptar la invitación.');
+      if (authErr || !authData.user)
+        throw new Error('Primero inicia sesión para aceptar la invitación.');
 
       const { error: rpcErr } = await supabase.rpc('accept_tenant_invitation', {
         p_invitation_token: token,
@@ -34,7 +35,9 @@ export default function InvitePage() {
       setMessage('Invitación aceptada correctamente. Te redirigimos al panel.');
       window.setTimeout(() => router.push('/app'), 800);
     } catch (caughtError) {
-      setError(caughtError instanceof Error ? caughtError.message : 'No se pudo aceptar la invitación.');
+      setError(
+        caughtError instanceof Error ? caughtError.message : 'No se pudo aceptar la invitación.'
+      );
     } finally {
       setLoading(false);
     }
@@ -47,15 +50,16 @@ export default function InvitePage() {
         <p className="mt-2 text-sm text-[#6B5A50]">
           Estás por aceptar una invitación para colaborar en CocinaCore.
         </p>
-        <p className="mt-2 rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] px-3 py-2 text-xs text-[#6B5A50]">
-          Token: <code>{token}</code>
-        </p>
 
         {error ? (
-          <p className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+          <p className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            {error}
+          </p>
         ) : null}
         {message ? (
-          <p className="mt-3 rounded-xl border border-[#567A3B]/30 bg-[#567A3B]/10 px-3 py-2 text-sm text-[#567A3B]">{message}</p>
+          <p className="mt-3 rounded-xl border border-[#567A3B]/30 bg-[#567A3B]/10 px-3 py-2 text-sm text-[#567A3B]">
+            {message}
+          </p>
         ) : null}
 
         <form className="mt-4 grid gap-3" onSubmit={acceptInvitation}>

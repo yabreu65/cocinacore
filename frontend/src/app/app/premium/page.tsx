@@ -87,7 +87,9 @@ function inferRegion(tags: string[]): string {
   const normalizedTags = tags.map((tag) => normalize(tag));
 
   for (const [region, keys] of Object.entries(REGION_GROUPS)) {
-    const hasRegion = keys.some((key) => normalizedTags.some((tag) => tag.includes(normalize(key))));
+    const hasRegion = keys.some((key) =>
+      normalizedTags.some((tag) => tag.includes(normalize(key)))
+    );
     if (hasRegion) return region;
   }
 
@@ -119,7 +121,10 @@ function scoreRecipe(input: {
   const engagement = likes * 3 - dislikes * 2;
   const inventoryWeight = inventoryMatch * 4;
   const profileWeight = profileMatch * 3;
-  return Math.max(0, Math.min(100, quality + engagement + inventoryWeight + profileWeight + freshnessBoost));
+  return Math.max(
+    0,
+    Math.min(100, quality + engagement + inventoryWeight + profileWeight + freshnessBoost)
+  );
 }
 
 function mapProfile(
@@ -151,7 +156,8 @@ function mapProfile(
 function buildExplainReason(card: PremiumCard, profile: DashboardProfile): string {
   const reasons: string[] = [];
 
-  if (profile.preferred.length > 0) reasons.push(`preferencias como ${profile.preferred.slice(0, 2).join(' y ')}`);
+  if (profile.preferred.length > 0)
+    reasons.push(`preferencias como ${profile.preferred.slice(0, 2).join(' y ')}`);
   if (profile.goals.length > 0) reasons.push(`objetivos ${profile.goals.slice(0, 1).join(', ')}`);
   if (card.inventoryMatch > 0) reasons.push('ingredientes que ya tenés en inventario');
 
@@ -213,23 +219,38 @@ export default function PremiumBoardIntelligentPage() {
         { data: ownHistoryRows },
         { data: savedRows },
       ] = await Promise.all([
-        supabase.from('recipe_inventory_items').select('*').order('created_at', { ascending: false }).limit(80),
+        supabase
+          .from('recipe_inventory_items')
+          .select('*')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false })
+          .limit(80),
         supabase
           .from('premium_recipes')
           .select('*')
           .eq('status', 'published')
           .order('published_at', { ascending: false })
           .limit(120),
-        supabase.from('premium_recipe_reviews').select('*').order('created_at', { ascending: false }).limit(600),
-        supabase.from('user_culinary_profiles').select('*').maybeSingle(),
-        supabase.from('user_culinary_profile_terms').select('*'),
+        supabase
+          .from('premium_recipe_reviews')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(600),
+        supabase.from('user_culinary_profiles').select('*').eq('user_id', userId).maybeSingle(),
+        supabase.from('user_culinary_profile_terms').select('*').eq('user_id', userId),
         supabase.from('culinary_terms').select('*').limit(400),
         supabase
           .from('recipe_ai_history')
           .select('*')
+          .eq('user_id', userId)
           .order('created_at', { ascending: false })
           .limit(80),
-        supabase.from('saved_premium_recipes').select('*').order('created_at', { ascending: false }).limit(80),
+        supabase
+          .from('saved_premium_recipes')
+          .select('*')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false })
+          .limit(80),
       ]);
 
       if (premiumError) {
@@ -259,14 +280,23 @@ export default function PremiumBoardIntelligentPage() {
         const title = toRecipeTitle(sourceHistory ?? null, RECIPES_PLACEHOLDER);
         const titleNormalized = normalize(title);
 
-        const likes = safeReviewRows.filter((review) => review.premium_recipe_id === row.id && review.stars >= 4).length;
-        const dislikes = safeReviewRows.filter((review) => review.premium_recipe_id === row.id && review.stars <= 2).length;
-        const savedCount = safeReviewRows.filter((review) => review.premium_recipe_id === row.id).length;
+        const likes = safeReviewRows.filter(
+          (review) => review.premium_recipe_id === row.id && review.stars >= 4
+        ).length;
+        const dislikes = safeReviewRows.filter(
+          (review) => review.premium_recipe_id === row.id && review.stars <= 2
+        ).length;
+        const savedCount = safeReviewRows.filter(
+          (review) => review.premium_recipe_id === row.id
+        ).length;
 
-        const payloadIngredients = sourceHistory ? parsePayloadIngredients(sourceHistory.recipe_payload) : [];
+        const payloadIngredients = sourceHistory
+          ? parsePayloadIngredients(sourceHistory.recipe_payload)
+          : [];
         const inventoryMatch = inventoryNames.reduce((acc, ingredient) => {
           if (titleNormalized.includes(ingredient)) return acc + 1;
-          if (payloadIngredients.some((entry) => normalize(entry).includes(ingredient))) return acc + 1;
+          if (payloadIngredients.some((entry) => normalize(entry).includes(ingredient)))
+            return acc + 1;
           return acc;
         }, 0);
 
@@ -277,12 +307,18 @@ export default function PremiumBoardIntelligentPage() {
         }, 0);
 
         const publishedTime = row.published_at ? Date.parse(row.published_at) : Date.now();
-        const daysSincePublish = Math.max(0, Math.floor((Date.now() - publishedTime) / (1000 * 60 * 60 * 24)));
+        const daysSincePublish = Math.max(
+          0,
+          Math.floor((Date.now() - publishedTime) / (1000 * 60 * 60 * 24))
+        );
         const freshnessBoost = daysSincePublish <= 7 ? 4 : daysSincePublish <= 21 ? 2 : 0;
 
         const region = inferRegion([...profile.identity, ...profile.preferred, title]);
         const culture = profile.identity[0] ?? 'Cocina global';
-        const fusion = profile.identity.length >= 2 ? `${profile.identity[0]} + ${profile.identity[1]}` : `${culture} + local`;
+        const fusion =
+          profile.identity.length >= 2
+            ? `${profile.identity[0]} + ${profile.identity[1]}`
+            : `${culture} + local`;
 
         const aiScore = scoreRecipe({
           base: row,
@@ -332,7 +368,10 @@ export default function PremiumBoardIntelligentPage() {
         savedRows: safeSavedRows,
       });
     } catch (caughtError) {
-      const message = caughtError instanceof Error ? caughtError.message : 'Error inesperado al cargar el board premium.';
+      const message =
+        caughtError instanceof Error
+          ? caughtError.message
+          : 'Error inesperado al cargar el board premium.';
       setError(message);
     } finally {
       setLoading(false);
@@ -353,7 +392,7 @@ export default function PremiumBoardIntelligentPage() {
   const recommendedForYou = useMemo(() => {
     return data.premiumCards
       .slice()
-      .sort((a, b) => (b.inventoryMatch + b.aiScore) - (a.inventoryMatch + a.aiScore))
+      .sort((a, b) => b.inventoryMatch + b.aiScore - (a.inventoryMatch + a.aiScore))
       .slice(0, 6);
   }, [data.premiumCards]);
 
@@ -379,7 +418,9 @@ export default function PremiumBoardIntelligentPage() {
       map.set(card.fusion, current);
     }
 
-    return Array.from(map.values()).sort((a, b) => b.count - a.count).slice(0, 6);
+    return Array.from(map.values())
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 6);
   }, [data.premiumCards]);
 
   const inventoryDriven = useMemo(() => {
@@ -401,7 +442,15 @@ export default function PremiumBoardIntelligentPage() {
     const supabase = getSupabaseBrowserClient();
 
     await supabase.from('premium_recipe_reviews').upsert(
-      [{ premium_recipe_id: recipeId, user_id: data.userId, stars, comment: null, updated_at: new Date().toISOString() }],
+      [
+        {
+          premium_recipe_id: recipeId,
+          user_id: data.userId,
+          stars,
+          comment: null,
+          updated_at: new Date().toISOString(),
+        },
+      ],
       { onConflict: 'premium_recipe_id,user_id' }
     );
 
@@ -409,9 +458,15 @@ export default function PremiumBoardIntelligentPage() {
   }
 
   const profileSummary = [
-    data.profile.identity.length > 0 ? `Identidad: ${data.profile.identity.slice(0, 2).join(', ')}` : null,
-    data.profile.preferred.length > 0 ? `Preferencias: ${data.profile.preferred.slice(0, 2).join(', ')}` : null,
-    data.profile.goals.length > 0 ? `Objetivos: ${data.profile.goals.slice(0, 2).join(', ')}` : null,
+    data.profile.identity.length > 0
+      ? `Identidad: ${data.profile.identity.slice(0, 2).join(', ')}`
+      : null,
+    data.profile.preferred.length > 0
+      ? `Preferencias: ${data.profile.preferred.slice(0, 2).join(', ')}`
+      : null,
+    data.profile.goals.length > 0
+      ? `Objetivos: ${data.profile.goals.slice(0, 2).join(', ')}`
+      : null,
     data.profile.level ? `Nivel: ${data.profile.level}` : null,
   ].filter((item): item is string => Boolean(item));
 
@@ -421,10 +476,15 @@ export default function PremiumBoardIntelligentPage() {
         <header className="rounded-3xl border border-[#E8DDD2] bg-white/80 p-6 premium-shadow">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#6D4AFF]">Premium Board Inteligente</p>
-              <h1 className="mt-2 text-3xl font-semibold text-[#241A14] md:text-4xl">Descubrimiento culinario con contexto real</h1>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#6D4AFF]">
+                Premium Board Inteligente
+              </p>
+              <h1 className="mt-2 text-3xl font-semibold text-[#241A14] md:text-4xl">
+                Descubrimiento culinario con contexto real
+              </h1>
               <p className="mt-2 max-w-3xl text-[#6B5A50]">
-                Recomendaciones construidas con tu perfil culinario, tu inventario, tu feedback y señales reales de la comunidad premium.
+                Recomendaciones construidas con tu perfil culinario, tu inventario, tu feedback y
+                señales reales de la comunidad premium.
               </p>
             </div>
             <Link
@@ -437,7 +497,10 @@ export default function PremiumBoardIntelligentPage() {
           <div className="mt-4 flex flex-wrap gap-2">
             {profileSummary.length > 0 ? (
               profileSummary.map((item) => (
-                <span key={item} className="rounded-full border border-[#E8DDD2] bg-white px-3 py-1 text-xs text-[#6B5A50]">
+                <span
+                  key={item}
+                  className="rounded-full border border-[#E8DDD2] bg-white px-3 py-1 text-xs text-[#6B5A50]"
+                >
                   {item}
                 </span>
               ))
@@ -449,20 +512,36 @@ export default function PremiumBoardIntelligentPage() {
           </div>
         </header>
 
-        {error ? <p className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</p> : null}
+        {error ? (
+          <p className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+            {error}
+          </p>
+        ) : null}
 
         <section className="space-y-3">
           <div className="flex items-center gap-2">
-            <span className="text-[#6D4AFF]"><BookHeart size={18} /></span>
+            <span className="text-[#6D4AFF]">
+              <BookHeart size={18} />
+            </span>
             <h2 className="text-2xl font-semibold text-[#241A14]">Mis recetas premium guardadas</h2>
           </div>
-          <p className="text-sm text-[#6B5A50]">Tu colección personal para cocinar después y reutilizar en meal planner.</p>
+          <p className="text-sm text-[#6B5A50]">
+            Tu colección personal para cocinar después y reutilizar en meal planner.
+          </p>
           {savedRecipes.length > 0 ? (
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
               {savedRecipes.map((card) => (
-                <Link key={card.id} href={`/app/premium/${card.id}`} className="rounded-2xl border border-[#E8DDD2] bg-white/75 p-4 premium-shadow hover:border-[#C56A1A]/35">
-                  <p className="text-base font-semibold text-[#241A14] line-clamp-1">{card.title}</p>
-                  <p className="mt-1 text-xs text-[#6B5A50]">{card.fusion} · score {card.aiScore.toFixed(0)}</p>
+                <Link
+                  key={card.id}
+                  href={`/app/premium/${card.id}`}
+                  className="rounded-2xl border border-[#E8DDD2] bg-white/75 p-4 premium-shadow hover:border-[#C56A1A]/35"
+                >
+                  <p className="text-base font-semibold text-[#241A14] line-clamp-1">
+                    {card.title}
+                  </p>
+                  <p className="mt-1 text-xs text-[#6B5A50]">
+                    {card.fusion} · score {card.aiScore.toFixed(0)}
+                  </p>
                   <p className="mt-2 text-xs text-[#6B5A50]">Guardada para tu tenant.</p>
                 </Link>
               ))}
@@ -490,23 +569,40 @@ export default function PremiumBoardIntelligentPage() {
             {fusionTrending.length > 0 ? (
               <ul className="space-y-2">
                 {fusionTrending.map((item) => (
-                  <li key={item.label} className="flex items-center justify-between rounded-xl border border-[#E8DDD2] bg-white/70 px-3 py-2">
+                  <li
+                    key={item.label}
+                    className="flex items-center justify-between rounded-xl border border-[#E8DDD2] bg-white/70 px-3 py-2"
+                  >
                     <span className="text-sm font-medium text-[#241A14]">{item.label}</span>
                     <span className="text-xs text-[#6B5A50]">{item.count} recetas</span>
                   </li>
                 ))}
               </ul>
             ) : (
-              <p className="text-sm text-[#6B5A50]">Todavía no hay combinaciones de fusión suficientes para mostrar tendencia.</p>
+              <p className="text-sm text-[#6B5A50]">
+                Todavía no hay combinaciones de fusión suficientes para mostrar tendencia.
+              </p>
             )}
           </SimplePanel>
 
           <SimplePanel title="Estado de personalización" icon={<CheckCircle2 size={18} />}>
             <ul className="space-y-2 text-sm text-[#6B5A50]">
-              <li>• Inventario cargado: <strong className="text-[#241A14]">{data.inventory.length} ingredientes</strong></li>
-              <li>• Historial propio: <strong className="text-[#241A14]">{data.recentHistory.length} recetas</strong></li>
-              <li>• Feedback premium: <strong className="text-[#241A14]">activo en tiempo real</strong></li>
-              <li>• Recomendaciones IA explicables: <strong className="text-[#241A14]">habilitadas</strong></li>
+              <li>
+                • Inventario cargado:{' '}
+                <strong className="text-[#241A14]">{data.inventory.length} ingredientes</strong>
+              </li>
+              <li>
+                • Historial propio:{' '}
+                <strong className="text-[#241A14]">{data.recentHistory.length} recetas</strong>
+              </li>
+              <li>
+                • Feedback premium:{' '}
+                <strong className="text-[#241A14]">activo en tiempo real</strong>
+              </li>
+              <li>
+                • Recomendaciones IA explicables:{' '}
+                <strong className="text-[#241A14]">habilitadas</strong>
+              </li>
             </ul>
           </SimplePanel>
         </section>
@@ -516,7 +612,9 @@ export default function PremiumBoardIntelligentPage() {
             {inventoryDriven.length > 0 ? (
               <MiniRecipeList cards={inventoryDriven} />
             ) : (
-              <p className="text-sm text-[#6B5A50]">Agregá ingredientes para activar recomendaciones basadas en lo que ya tenés.</p>
+              <p className="text-sm text-[#6B5A50]">
+                Agregá ingredientes para activar recomendaciones basadas en lo que ya tenés.
+              </p>
             )}
           </SimplePanel>
 
@@ -524,7 +622,9 @@ export default function PremiumBoardIntelligentPage() {
             {learnByLevel.length > 0 ? (
               <MiniRecipeList cards={learnByLevel} />
             ) : (
-              <p className="text-sm text-[#6B5A50]">No hay suficientes recetas para tu nivel aún. Seguimos aprendiendo.</p>
+              <p className="text-sm text-[#6B5A50]">
+                No hay suficientes recetas para tu nivel aún. Seguimos aprendiendo.
+              </p>
             )}
           </SimplePanel>
 
@@ -532,7 +632,9 @@ export default function PremiumBoardIntelligentPage() {
             {topRecipes.length > 0 ? (
               <MiniRecipeList cards={topRecipes} />
             ) : (
-              <p className="text-sm text-[#6B5A50]">Sin ranking todavía: faltan publicaciones premium.</p>
+              <p className="text-sm text-[#6B5A50]">
+                Sin ranking todavía: faltan publicaciones premium.
+              </p>
             )}
           </SimplePanel>
         </section>
@@ -542,7 +644,11 @@ export default function PremiumBoardIntelligentPage() {
             <h2 className="text-2xl font-semibold text-[#241A14]">Explorar por región</h2>
             <div className="grid gap-4 lg:grid-cols-2">
               {byRegion.map((group) => (
-                <SimplePanel key={group.region} title={group.region} icon={<UtensilsCrossed size={18} />}>
+                <SimplePanel
+                  key={group.region}
+                  title={group.region}
+                  icon={<UtensilsCrossed size={18} />}
+                >
                   <MiniRecipeList cards={group.recipes.slice(0, 4)} />
                 </SimplePanel>
               ))}
@@ -564,7 +670,16 @@ function Section(props: {
   onLike: (recipeId: string, stars: 1 | 5) => Promise<void>;
   savedRecipeIds?: string[];
 }) {
-  const { title, subtitle, icon, loading, emptyMessage, cards, onLike, savedRecipeIds = [] } = props;
+  const {
+    title,
+    subtitle,
+    icon,
+    loading,
+    emptyMessage,
+    cards,
+    onLike,
+    savedRecipeIds = [],
+  } = props;
   const savedSet = new Set(savedRecipeIds);
 
   return (
@@ -577,7 +692,9 @@ function Section(props: {
 
       {loading ? <p className="text-sm text-[#6B5A50]">Cargando recomendaciones…</p> : null}
 
-      {!loading && cards.length === 0 ? <p className="text-sm text-[#6B5A50]">{emptyMessage}</p> : null}
+      {!loading && cards.length === 0 ? (
+        <p className="text-sm text-[#6B5A50]">{emptyMessage}</p>
+      ) : null}
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {cards.map((card, index) => (
@@ -590,33 +707,60 @@ function Section(props: {
           >
             <div className="relative h-32 overflow-hidden rounded-2xl bg-gradient-to-br from-[#16110D] via-[#2A1E18] to-[#6B5A50]">
               <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(197,106,26,0.35),_transparent_60%)]" />
-              <div className="absolute bottom-2 left-2 rounded-lg bg-black/30 px-2 py-1 text-xs text-white">{card.region} · {card.fusion}</div>
+              <div className="absolute bottom-2 left-2 rounded-lg bg-black/30 px-2 py-1 text-xs text-white">
+                {card.region} · {card.fusion}
+              </div>
             </div>
 
             <div className="mt-3 flex items-center justify-between gap-2">
-              <Link href={`/app/premium/${card.id}`} className="block text-lg font-semibold text-[#241A14] line-clamp-2 hover:text-[#A55412]">{card.title}</Link>
-              {savedSet.has(card.id) ? <span className="rounded-full border border-[#E8DDD2] px-2 py-0.5 text-[10px] text-[#567A3B]">Guardada</span> : null}
+              <Link
+                href={`/app/premium/${card.id}`}
+                className="block text-lg font-semibold text-[#241A14] line-clamp-2 hover:text-[#A55412]"
+              >
+                {card.title}
+              </Link>
+              {savedSet.has(card.id) ? (
+                <span className="rounded-full border border-[#E8DDD2] px-2 py-0.5 text-[10px] text-[#567A3B]">
+                  Guardada
+                </span>
+              ) : null}
             </div>
             <p className="text-xs text-[#6B5A50]">Por {card.creator}</p>
 
             <div className="mt-2 flex flex-wrap gap-2 text-xs">
-              <span className="rounded-full border border-[#E8DDD2] px-2 py-1 text-[#6B5A50]">{card.minutes} min</span>
-              <span className="rounded-full border border-[#E8DDD2] px-2 py-1 text-[#6B5A50]">{card.difficulty}</span>
-              <span className="rounded-full border border-[#E8DDD2] px-2 py-1 text-[#6D4AFF]">Score {card.aiScore.toFixed(0)}</span>
+              <span className="rounded-full border border-[#E8DDD2] px-2 py-1 text-[#6B5A50]">
+                {card.minutes} min
+              </span>
+              <span className="rounded-full border border-[#E8DDD2] px-2 py-1 text-[#6B5A50]">
+                {card.difficulty}
+              </span>
+              <span className="rounded-full border border-[#E8DDD2] px-2 py-1 text-[#6D4AFF]">
+                Score {card.aiScore.toFixed(0)}
+              </span>
             </div>
 
             <p className="mt-2 text-xs text-[#6B5A50]">{card.explainWhy}</p>
 
             <div className="mt-2 text-xs text-[#6B5A50]">
-              <span className="inline-flex items-center gap-1"><Heart size={12} /> {card.likes}</span>
-              <span className="ml-3 inline-flex items-center gap-1"><ThumbsDown size={12} /> {card.dislikes}</span>
-              <span className="ml-3 inline-flex items-center gap-1"><Clock3 size={12} /> {card.savedCount} reviews</span>
+              <span className="inline-flex items-center gap-1">
+                <Heart size={12} /> {card.likes}
+              </span>
+              <span className="ml-3 inline-flex items-center gap-1">
+                <ThumbsDown size={12} /> {card.dislikes}
+              </span>
+              <span className="ml-3 inline-flex items-center gap-1">
+                <Clock3 size={12} /> {card.savedCount} reviews
+              </span>
             </div>
 
             {card.missingIngredients.length > 0 ? (
-              <p className="mt-2 text-xs text-[#A55412]">Faltantes: {card.missingIngredients.join(', ')}</p>
+              <p className="mt-2 text-xs text-[#A55412]">
+                Faltantes: {card.missingIngredients.join(', ')}
+              </p>
             ) : (
-              <p className="mt-2 text-xs text-[#567A3B]">Usa ingredientes disponibles en tu cocina.</p>
+              <p className="mt-2 text-xs text-[#567A3B]">
+                Usa ingredientes disponibles en tu cocina.
+              </p>
             )}
 
             <div className="mt-3 flex flex-wrap gap-2">
@@ -673,7 +817,9 @@ function MiniRecipeList(props: { cards: PremiumCard[] }) {
       {props.cards.map((card) => (
         <li key={card.id} className="rounded-xl border border-[#E8DDD2] bg-white/60 p-3">
           <p className="text-sm font-semibold text-[#241A14] line-clamp-1">{card.title}</p>
-          <p className="mt-1 text-xs text-[#6B5A50]">{card.fusion} · score {card.aiScore.toFixed(0)}</p>
+          <p className="mt-1 text-xs text-[#6B5A50]">
+            {card.fusion} · score {card.aiScore.toFixed(0)}
+          </p>
         </li>
       ))}
     </ul>

@@ -20,11 +20,14 @@ export function normalizeInventoryName(value: string): string {
 export function detectInventoryCategory(ingredientName: string): InventoryCategory {
   const text = normalizeInventoryName(ingredientName);
   if (/(pollo|carne|res|cerdo|pescado|atun|huevo|jamon)/.test(text)) return 'Proteínas';
-  if (/(tomate|cebolla|pimenton|zanahoria|lechuga|ajo|brocoli|pepino)/.test(text)) return 'Verduras';
+  if (/(tomate|cebolla|pimenton|zanahoria|lechuga|ajo|brocoli|pepino)/.test(text))
+    return 'Verduras';
   if (/(manzana|banana|platano|fresa|frutilla|uva|naranja|limon)/.test(text)) return 'Frutas';
   if (/(leche|queso|mantequilla|yogur|yogurt|crema)/.test(text)) return 'Lácteos';
-  if (/(arroz|avena|quinoa|maiz|pasta|harina|trigo|lenteja|garbanzo|frijol)/.test(text)) return 'Granos';
-  if (/(sal|pimienta|comino|oregano|oregano|cilantro|perejil|canela|romero|tomillo)/.test(text)) return 'Especias';
+  if (/(arroz|avena|quinoa|maiz|pasta|harina|trigo|lenteja|garbanzo|frijol)/.test(text))
+    return 'Granos';
+  if (/(sal|pimienta|comino|oregano|oregano|cilantro|perejil|canela|romero|tomillo)/.test(text))
+    return 'Especias';
   if (/(aceite|vinagre|azucar|azúcar|salsa|caldo|conserva)/.test(text)) return 'Despensa';
   return 'Otros';
 }
@@ -40,11 +43,15 @@ function parseLeadingNumber(value: string | null): number | null {
 
 export function getStockBadge(
   quantity: string | null,
-  lowStockThreshold: number | null,
+  lowStockThreshold: number | null
 ): 'suficiente' | 'bajo stock' | 'sin cantidad' {
   const qty = parseLeadingNumber(quantity);
   if (qty === null) return 'sin cantidad';
-  if (typeof lowStockThreshold === 'number' && Number.isFinite(lowStockThreshold) && qty <= lowStockThreshold) {
+  if (
+    typeof lowStockThreshold === 'number' &&
+    Number.isFinite(lowStockThreshold) &&
+    qty <= lowStockThreshold
+  ) {
     return 'bajo stock';
   }
   return 'suficiente';

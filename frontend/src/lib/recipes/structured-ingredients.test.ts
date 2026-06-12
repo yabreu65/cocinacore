@@ -28,7 +28,7 @@ describe('structured ingredients', () => {
   });
 
   it('extracts only ingredients section and merges duplicates', () => {
-    const recipe = `[TITULO]\n\nINGREDIENTES\n- 2 tomate\n- 3 tomates\n- 500 g arroz\n\nPREPARACIÓN\n1. Mezclar`; 
+    const recipe = `[TITULO]\n\nINGREDIENTES\n- 2 tomate\n- 3 tomates\n- 500 g arroz\n\nPREPARACIÓN\n1. Mezclar`;
     const extracted = extractStructuredIngredients(recipe);
     const tomato = extracted.find((item) => item.normalized_name === 'tomate');
     expect(tomato?.quantity).toBe(5);

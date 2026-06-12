@@ -28,6 +28,7 @@ export default function MembersPage() {
     () => currentUser?.role === 'owner' || currentUser?.role === 'admin',
     [currentUser?.role]
   );
+  const canChangeRoles = currentUser?.role === 'owner';
 
   const load = async () => {
     setLoading(true);
@@ -127,7 +128,9 @@ export default function MembersPage() {
       setMessage('Invitación revocada.');
       await load();
     } catch (caughtError) {
-      setError(caughtError instanceof Error ? caughtError.message : 'No se pudo revocar invitación.');
+      setError(
+        caughtError instanceof Error ? caughtError.message : 'No se pudo revocar invitación.'
+      );
     } finally {
       setWorking(false);
     }
@@ -140,16 +143,17 @@ export default function MembersPage() {
     setMessage(null);
     try {
       const supabase = getSupabaseBrowserClient();
-      const { error: updateErr } = await supabase
-        .from('users')
-        .update({ role })
-        .eq('id', memberId)
-        .eq('tenant_id', currentUser.tenant_id);
+      const { error: updateErr } = await supabase.rpc('update_tenant_member_role', {
+        p_member_id: memberId,
+        p_role: role,
+      });
       if (updateErr) throw updateErr;
       setMessage('Rol actualizado correctamente.');
       await load();
     } catch (caughtError) {
-      setError(caughtError instanceof Error ? caughtError.message : 'No se pudo actualizar el rol.');
+      setError(
+        caughtError instanceof Error ? caughtError.message : 'No se pudo actualizar el rol.'
+      );
     } finally {
       setWorking(false);
     }
@@ -162,7 +166,9 @@ export default function MembersPage() {
     setMessage(null);
     try {
       const supabase = getSupabaseBrowserClient();
-      const { error: removeErr } = await supabase.rpc('remove_tenant_member', { p_member_id: memberId });
+      const { error: removeErr } = await supabase.rpc('remove_tenant_member', {
+        p_member_id: memberId,
+      });
       if (removeErr) throw removeErr;
       setMessage('Miembro removido del tenant.');
       await load();
@@ -179,15 +185,25 @@ export default function MembersPage() {
         <div className="mb-4 flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-semibold">Miembros</h1>
-            <p className="text-[#6B5A50]">Gestioná quién puede participar en tu cocina compartida.</p>
+            <p className="text-[#6B5A50]">
+              Gestioná quién puede participar en tu cocina compartida.
+            </p>
           </div>
           <Link href="/app" className="text-sm font-semibold text-[#A55412]">
             Volver
           </Link>
         </div>
 
-        {error ? <p className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
-        {message ? <p className="mb-3 rounded-xl border border-[#567A3B]/40 bg-[#567A3B]/10 px-3 py-2 text-sm text-[#567A3B]">{message}</p> : null}
+        {error ? (
+          <p className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            {error}
+          </p>
+        ) : null}
+        {message ? (
+          <p className="mb-3 rounded-xl border border-[#567A3B]/40 bg-[#567A3B]/10 px-3 py-2 text-sm text-[#567A3B]">
+            {message}
+          </p>
+        ) : null}
 
         <article className="rounded-2xl border border-[#E8DDD2] bg-white/70 p-4">
           <p className="text-sm font-semibold text-[#6B5A50]">Tu rol actual</p>
@@ -204,7 +220,10 @@ export default function MembersPage() {
             <h2 className="text-lg font-semibold">Equipo del tenant</h2>
             <ul className="mt-3 space-y-2">
               {users.map((user) => (
-                <li key={user.id} className="flex items-center justify-between rounded-xl border border-[#E8DDD2] bg-white/80 px-3 py-2 text-sm">
+                <li
+                  key={user.id}
+                  className="flex items-center justify-between rounded-xl border border-[#E8DDD2] bg-white/80 px-3 py-2 text-sm"
+                >
                   <div>
                     <p className="font-medium">{user.full_name ?? user.email ?? 'Miembro'}</p>
                     <p className="text-xs text-[#6B5A50]">{user.email}</p>
@@ -215,20 +234,22 @@ export default function MembersPage() {
                     </span>
                     {canManage && user.id !== currentUser?.id && user.role !== 'owner' ? (
                       <>
-                        <select
-                          className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1 text-xs text-[#6B5A50]"
-                          value={user.role}
-                          disabled={working}
-                          onChange={(event) => {
-                            const value = event.target.value;
-                            if (value === 'admin' || value === 'member') {
-                              void updateMemberRole(user.id, value);
-                            }
-                          }}
-                        >
-                          <option value="member">Miembro</option>
-                          <option value="admin">Admin</option>
-                        </select>
+                        {canChangeRoles ? (
+                          <select
+                            className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1 text-xs text-[#6B5A50]"
+                            value={user.role}
+                            disabled={working}
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              if (value === 'admin' || value === 'member') {
+                                void updateMemberRole(user.id, value);
+                              }
+                            }}
+                          >
+                            <option value="member">Miembro</option>
+                            <option value="admin">Admin</option>
+                          </select>
+                        ) : null}
                         <button
                           type="button"
                           onClick={() => void removeMember(user.id)}
@@ -242,7 +263,9 @@ export default function MembersPage() {
                   </div>
                 </li>
               ))}
-              {!loading && users.length === 0 ? <li className="text-sm text-[#6B5A50]">No hay miembros cargados.</li> : null}
+              {!loading && users.length === 0 ? (
+                <li className="text-sm text-[#6B5A50]">No hay miembros cargados.</li>
+              ) : null}
             </ul>
           </article>
 
@@ -268,12 +291,16 @@ export default function MembersPage() {
 
             <ul className="mt-3 space-y-2">
               {invitations.map((invitation) => (
-                <li key={invitation.id} className="rounded-xl border border-[#E8DDD2] bg-white/80 p-3 text-sm">
+                <li
+                  key={invitation.id}
+                  className="rounded-xl border border-[#E8DDD2] bg-white/80 p-3 text-sm"
+                >
                   <div className="flex items-center justify-between gap-2">
                     <div>
                       <p className="font-medium">{invitation.email}</p>
                       <p className="text-xs text-[#6B5A50]">
-                        Estado: {invitation.status} · expira {new Date(invitation.expires_at).toLocaleDateString()}
+                        Estado: {invitation.status} · expira{' '}
+                        {new Date(invitation.expires_at).toLocaleDateString()}
                       </p>
                     </div>
                     {canManage && invitation.status === 'pending' ? (

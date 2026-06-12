@@ -50,11 +50,11 @@ export class PdfChunker implements PdfChunkerService {
         // Try to find the nearest semantic boundary (paragraph double-newlines, single-newline, or sentence period)
         // to avoid splitting mid-sentence or mid-instruction
         const windowSlice = cleanText.substring(cursor, end);
-        
+
         // Look for double newlines (paragraph boundary) within the last 30% of the chunk size
         const lastThirtyPercent = Math.floor(chunkSize * 0.3);
         const searchStart = chunkSize - lastThirtyPercent;
-        
+
         const doubleNewlineIndex = windowSlice.indexOf('\n\n', searchStart);
         if (doubleNewlineIndex !== -1) {
           end = cursor + doubleNewlineIndex;
@@ -63,7 +63,7 @@ export class PdfChunker implements PdfChunkerService {
           const lastTwentyPercent = Math.floor(chunkSize * 0.2);
           const periodSearchStart = chunkSize - lastTwentyPercent;
           const periodIndex = windowSlice.search(/(?<=\.)\s+(?=[A-Z])/g); // Period followed by spaces and a capital letter
-          
+
           if (periodIndex !== -1 && periodIndex > periodSearchStart) {
             end = cursor + periodIndex + 1; // Include the period
           } else {
@@ -83,7 +83,8 @@ export class PdfChunker implements PdfChunkerService {
       }
 
       const content = cleanText.substring(cursor, end).trim();
-      if (content.length > 50) { // Filter out extremely tiny or empty chunks
+      if (content.length > 50) {
+        // Filter out extremely tiny or empty chunks
         chunks.push({
           book_id: metadata.book_id,
           content,
@@ -91,7 +92,7 @@ export class PdfChunker implements PdfChunkerService {
             page_number: metadata.page_number,
             book_title: metadata.book_title,
             chunk_start: cursor,
-            chunk_end: end
+            chunk_end: end,
           },
         });
       }

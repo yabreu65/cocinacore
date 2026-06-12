@@ -43,7 +43,7 @@ describe('meal-plan-simulation', () => {
         { day: 'Martes', meals: [{ label: 'Cena', title: 'Ensalada de Martes' }] },
         { day: 'Miércoles', meals: [{ label: 'Almuerzo', title: 'Pollo de Miércoles' }] },
       ],
-      projectionItems,
+      projectionItems
     );
 
     expect(simulation.dayStates).toHaveLength(3);

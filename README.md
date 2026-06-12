@@ -43,6 +43,94 @@ supabase/tests/rls_tenant_isolation.sql
 
 Use it as the allow/deny proof for same-tenant access and denied cross-tenant access when changing Supabase policies or tenant-scoped data paths.
 
+## Local Development with Docker
+
+The current Compose file is intentionally small: it starts auxiliary services only.
+Run the Next.js app directly from `frontend/` during local development.
+
+```bash
+docker compose up -d
+cd frontend
+npm install
+npm run dev
+```
+
+This will start:
+- Redis on port `6379` through Docker Compose.
+- Next.js on http://localhost:3000 through `npm run dev`.
+
+Supabase local development is managed by the Supabase CLI, not by `docker-compose.yml`.
+
+## Supabase Local Development
+
+Initialize and start Supabase locally:
+
+```bash
+supabase start
+```
+
+This uses the configuration in `supabase/config.toml` and applies migrations from `supabase/migrations/`.
+
+## Deployment
+
+The project includes a deploy workflow (`.github/workflows/deploy.yml`) that currently
+validates staging and production builds. Real deployment is intentionally not wired yet;
+connect it after the target host is selected.
+
+### Required secrets
+- `STAGING_SUPABASE_URL` / `STAGING_SUPABASE_ANON_KEY`
+- `PROD_SUPABASE_URL` / `PROD_SUPABASE_ANON_KEY`
+- `SENTRY_DSN`
+
+### Hosting options
+
+**Vercel (recommended for Next.js):**
+1. Connect GitHub repo to Vercel
+2. Configure environment variables in Vercel dashboard
+3. Deploys happen automatically on push to main
+
+**Docker / Self-hosted:**
+```bash
+docker build -t cocinacore .
+docker run -p 3000:3000 --env-file .env.local cocinacore
+```
+
+### Future VPS checklist
+
+Use this path when the production VPS is ready:
+
+1. Point DNS to the VPS and configure TLS with a reverse proxy such as Caddy, Traefik, or Nginx.
+2. Store production secrets on the server or provider secret store; never bake them into the Docker image.
+3. Build and run the app container with `NODE_ENV=production`, Supabase public env vars, server-only AI keys, Sentry env vars, and `REDIS_URL`.
+4. Use a managed Supabase project for production unless you intentionally choose to operate Postgres/Supabase yourself.
+5. Add a health check against `/api/health` for dashboards, and add a stricter readiness check before using it for load balancer removal decisions.
+6. Enable automated backups/snapshots and define a rollback process before the first real customer.
+7. Wire `.github/workflows/deploy.yml` to the chosen VPS deployment mechanism only after SSH host, user, key, registry, and rollback strategy are known.
+
+### Platform owner bootstrap
+
+Security hardening quarantines all existing `platform_owners` rows until a database administrator reviews them. After confirming the correct owner user id in Supabase, approve it from a privileged database session:
+
+```sql
+select public.approve_platform_owner('<user-id>'::uuid);
+```
+
+Do not expose this as an application action. It is intentionally not granted to `authenticated` or `anon` roles.
+
+## Architecture
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────────┐
+│   Client    │────▶│  Next.js    │────▶│   Supabase      │
+│  (Browser)  │     │  (Vercel)   │     │  (PostgreSQL)  │
+└─────────────┘     └──────┬──────┘     └─────────────────┘
+                           │
+                    ┌──────┴──────┐
+                    │    Redis     │
+                    │   (Upstash)  │
+                    └──────────────┘
+```
+
 ## Tenant security guarantees
 - Shared database model with strict RLS and required `tenant_id` scoping on tenant-owned data.
 - Deny-by-default posture: RLS-enabled tables allow access only through explicit policies.

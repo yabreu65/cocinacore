@@ -2,7 +2,16 @@
 
 import Link from 'next/link';
 import { ReactNode, useEffect, useState } from 'react';
-import { Activity, AlertTriangle, Building2, Database, FileText, Library, Sparkles, Users } from 'lucide-react';
+import {
+  Activity,
+  AlertTriangle,
+  Building2,
+  Database,
+  FileText,
+  Library,
+  Sparkles,
+  Users,
+} from 'lucide-react';
 import { getSupabaseBrowserClient } from '@/lib/supabaseClient';
 
 type OwnerOverview = {
@@ -17,19 +26,41 @@ type OwnerOverview = {
 };
 
 const quickSections = [
-  { href: '/owner/global-books', title: 'Global Books', description: 'Catálogo global compartido.' },
-  { href: '/owner/global-pdfs', title: 'Global PDFs', description: 'Documentos globales del sistema.' },
-  { href: '/owner/indexing', title: 'Indexación', description: 'Estado y cobertura de chunks/embeddings.' },
-  { href: '/owner/premium-moderation', title: 'Moderación Premium', description: 'Reportes pendientes y señal comunitaria.' },
+  {
+    href: '/owner/global-books',
+    title: 'Global Books',
+    description: 'Catálogo global compartido.',
+  },
+  {
+    href: '/owner/global-pdfs',
+    title: 'Global PDFs',
+    description: 'Documentos globales del sistema.',
+  },
+  {
+    href: '/owner/indexing',
+    title: 'Indexación',
+    description: 'Estado y cobertura de chunks/embeddings.',
+  },
+  {
+    href: '/owner/premium-moderation',
+    title: 'Moderación Premium',
+    description: 'Reportes pendientes y señal comunitaria.',
+  },
   { href: '/owner/tenants', title: 'Tenants', description: 'Visión general multi-tenant.' },
-  { href: '/owner/system-health', title: 'System Health', description: 'Estado operativo de módulos clave.' },
+  {
+    href: '/owner/system-health',
+    title: 'System Health',
+    description: 'Estado operativo de módulos clave.',
+  },
 ];
 
 function metricCard(label: string, value: number, icon: ReactNode) {
   return (
     <article className="rounded-2xl border border-[#E8DDD2] bg-white/75 p-4 premium-shadow">
       <p className="flex items-center gap-2 text-sm text-[#6B5A50]">
-        <span className="inline-flex rounded-lg border border-[#E8DDD2] bg-[#FAF6F1] p-1.5 text-[#A55412]">{icon}</span>
+        <span className="inline-flex rounded-lg border border-[#E8DDD2] bg-[#FAF6F1] p-1.5 text-[#A55412]">
+          {icon}
+        </span>
         {label}
       </p>
       <p className="mt-2 text-3xl font-semibold text-[#241A14]">{value}</p>
@@ -72,7 +103,9 @@ export default function OwnerOverviewPage() {
           trials_expired: payload?.trials_expired ?? 0,
         });
       } catch (caughtError) {
-        setError(caughtError instanceof Error ? caughtError.message : 'No se pudo cargar owner overview.');
+        setError(
+          caughtError instanceof Error ? caughtError.message : 'No se pudo cargar owner overview.'
+        );
       } finally {
         setLoading(false);
       }
@@ -89,12 +122,15 @@ export default function OwnerOverviewPage() {
         </p>
         <h2 className="mt-3 text-2xl font-semibold text-[#241A14]">Owner Console Overview</h2>
         <p className="mt-1 text-sm text-[#6B5A50]">
-          Supervisá catálogos globales, moderación premium, tenants y salud general sin mezclar permisos de tenant.
+          Supervisá catálogos globales, moderación premium, tenants y salud general sin mezclar
+          permisos de tenant.
         </p>
       </article>
 
       {error ? (
-        <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+        <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {error}
+        </p>
       ) : null}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -103,17 +139,27 @@ export default function OwnerOverviewPage() {
         {metricCard('Global books', metrics.global_books_total, <Library size={14} />)}
         {metricCard('Global PDFs', metrics.global_pdfs_total, <FileText size={14} />)}
         {metricCard('Chunks globales', metrics.global_chunks_total, <Database size={14} />)}
-        {metricCard('Reports premium pendientes', metrics.premium_reports_pending, <AlertTriangle size={14} />)}
+        {metricCard(
+          'Reports premium pendientes',
+          metrics.premium_reports_pending,
+          <AlertTriangle size={14} />
+        )}
         {metricCard('Trials activos', metrics.trials_active, <Activity size={14} />)}
         {metricCard('Trials vencidos', metrics.trials_expired, <Activity size={14} />)}
       </div>
 
       <article className="rounded-2xl border border-[#E8DDD2] bg-white/80 p-4 premium-shadow">
         <h2 className="text-lg font-semibold">Secciones rápidas</h2>
-        <p className="mt-1 text-sm text-[#6B5A50]">Navegación owner en modo solo lectura para esta fase.</p>
+        <p className="mt-1 text-sm text-[#6B5A50]">
+          Navegación owner en modo solo lectura para esta fase.
+        </p>
         <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {quickSections.map((section) => (
-            <Link key={section.href} href={section.href} className="rounded-xl border border-[#E8DDD2] bg-white/70 p-3 transition hover:border-[#C56A1A]/35">
+            <Link
+              key={section.href}
+              href={section.href}
+              className="rounded-xl border border-[#E8DDD2] bg-white/70 p-3 transition hover:border-[#C56A1A]/35"
+            >
               <p className="font-semibold text-[#241A14]">{section.title}</p>
               <p className="mt-1 text-sm text-[#6B5A50]">{section.description}</p>
             </Link>

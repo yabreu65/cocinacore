@@ -29,20 +29,24 @@ export type OpenRouterRecipeInput = {
 };
 
 function getOpenRouterConfig() {
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  const model = process.env.OPENROUTER_TEXT_MODEL ?? DEFAULT_OPENROUTER_MODEL;
-  const baseUrl = process.env.OPENROUTER_BASE_URL ?? DEFAULT_OPENROUTER_BASE_URL;
+  const apiKey = process.env.AI_API_KEY ?? process.env.OPENROUTER_API_KEY;
+  const model =
+    process.env.AI_MODEL ?? process.env.OPENROUTER_TEXT_MODEL ?? DEFAULT_OPENROUTER_MODEL;
+  const baseUrl =
+    process.env.AI_BASE_URL ?? process.env.OPENROUTER_BASE_URL ?? DEFAULT_OPENROUTER_BASE_URL;
   const appUrl = process.env.APP_PUBLIC_URL ?? DEFAULT_APP_URL;
   const appName = process.env.APP_NAME ?? DEFAULT_APP_NAME;
 
   if (!apiKey) {
-    throw new Error('OPENROUTER_API_KEY no está configurada.');
+    throw new Error('AI_API_KEY/OPENROUTER_API_KEY no está configurada.');
   }
 
   return { apiKey, model, baseUrl, appUrl, appName };
 }
 
-async function openRouterChatCompletion(messages: OpenRouterMessage[]): Promise<{ model: string; content: string }> {
+async function openRouterChatCompletion(
+  messages: OpenRouterMessage[]
+): Promise<{ model: string; content: string }> {
   const { apiKey, model, baseUrl, appUrl, appName } = getOpenRouterConfig();
   const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
 
@@ -85,9 +89,12 @@ export async function generateRecipeWithOpenRouter(
   }
 
   const baseCuisine = input.baseCuisine?.trim() || 'Latinoamericana';
-  const peopleCount = typeof input.peopleCount === 'number' && Number.isFinite(input.peopleCount) && input.peopleCount > 0
-    ? Math.floor(input.peopleCount)
-    : 4;
+  const peopleCount =
+    typeof input.peopleCount === 'number' &&
+    Number.isFinite(input.peopleCount) &&
+    input.peopleCount > 0
+      ? Math.floor(input.peopleCount)
+      : 4;
   const fusion = (input.fusionCuisine ?? []).filter((item) => item.trim().length > 0);
   const restrictions = (input.restrictions ?? []).filter((item) => item.trim().length > 0);
   const culinaryLevel = input.culinaryLevel?.trim() || 'principiante';
@@ -99,7 +106,7 @@ export async function generateRecipeWithOpenRouter(
     {
       role: 'system',
       content:
-        'Sos un chef profesional y devolvés recetas claras en español con: título, ingredientes, preparación paso a paso, tiempo total y tips prácticos.',
+        'Sos un chef profesional y devolvés recetas claras en español con: título, ingredientes estructurados, preparación paso a paso, tiempo total y tips prácticos. La sección de ingredientes debe ser estrictamente parseable.',
     },
     {
       role: 'user',
@@ -112,6 +119,30 @@ export async function generateRecipeWithOpenRouter(
 - Nivel culinario: ${culinaryLevel}
 
 La receta debe ser realista para cocina casera y fácil de seguir, ajustada en cantidades para ${peopleCount} personas.`,
+    },
+    {
+      role: 'assistant',
+      content: `Formato obligatorio de salida:
+[TITULO]
+
+INGREDIENTES
+- 2 unidades tomate
+- 1 taza arroz
+- 200 g pollo
+
+PREPARACIÓN
+1. ...
+2. ...
+
+TIPS
+- ...
+
+Reglas estrictas:
+- Cada ingrediente debe ir en una sola línea.
+- Cada línea de ingrediente debe empezar con cantidad numérica + unidad + nombre.
+- Evitá subtítulos dentro de INGREDIENTES.
+- Evitá frases largas tipo “para el sofrito” dentro de la lista; dejá solo el ingrediente base.
+- Si algo no tiene cantidad clara, escribilo como “al gusto” para que se marque como no estructurado.`,
     },
   ];
 

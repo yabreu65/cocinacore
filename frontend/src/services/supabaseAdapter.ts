@@ -13,6 +13,7 @@ import {
   SemanticSearchService,
   TenantContext,
 } from './types';
+import { serverLogger } from '@/lib/serverLogger';
 
 type SupabaseResult<T> = Promise<ExternalApiResult<T | null>>;
 
@@ -21,13 +22,22 @@ export type SupabaseBookChunksTable = {
 };
 
 type SupabaseTenantPdfLibrarySelectBuilder = {
-  eq(column: 'tenant_id', value: string): {
-    select(columns: '*', options: { count: 'exact'; head: true }): Promise<{ count: number | null; error: ExternalApiError | null }>;
+  eq(
+    column: 'tenant_id',
+    value: string
+  ): {
+    select(
+      columns: '*',
+      options: { count: 'exact'; head: true }
+    ): Promise<{ count: number | null; error: ExternalApiError | null }>;
   };
 };
 
 export type SupabaseClientLike = {
-  rpc(functionName: 'match_chunks', args: MatchChunksRpcArgsDto): SupabaseResult<MatchChunkRpcRowDto[]>;
+  rpc(
+    functionName: 'match_chunks',
+    args: MatchChunksRpcArgsDto
+  ): SupabaseResult<MatchChunkRpcRowDto[]>;
   from(tableName: 'book_chunks'): SupabaseBookChunksTable;
   from(tableName: 'tenant_pdf_library'): SupabaseTenantPdfLibrarySelectBuilder;
 };
@@ -46,7 +56,10 @@ function toRecipeMetadata(row: MatchChunkRpcRowDto): RecipeBookChunkMetadata {
   };
 }
 
-function inferSourceType(chunk: RecipeBookChunk, tenantContext: TenantContext | null): PdfSourceType {
+function inferSourceType(
+  chunk: RecipeBookChunk,
+  tenantContext: TenantContext | null
+): PdfSourceType {
   if (chunk.sourceType) {
     return chunk.sourceType;
   }
@@ -116,7 +129,9 @@ export class SupabaseAdapter implements SemanticSearchService {
       }
 
       const filteredRows = this.tenantContext
-        ? data.filter((row) => row.tenant_id === null || row.tenant_id === this.tenantContext?.tenantId)
+        ? data.filter(
+            (row) => row.tenant_id === null || row.tenant_id === this.tenantContext?.tenantId
+          )
         : data;
 
       // Map Supabase results to RecipeBookChunk shape
@@ -129,7 +144,7 @@ export class SupabaseAdapter implements SemanticSearchService {
         similarity: row.similarity,
       }));
     } catch (error) {
-      console.error('SupabaseAdapter: Semantic search failed', error);
+      serverLogger.error('supabase_adapter.search_failed', { error: String(error) });
       throw error;
     }
   }
@@ -162,28 +177,28 @@ export class SupabaseAdapter implements SemanticSearchService {
 
     try {
       // Map data structure for database table `book_chunks`
-      const dbRows = chunks.map((chunk): BookChunkInsertRowDto => ({
-        tenant_id: this.tenantContext?.tenantId ?? null,
-        global_book_id:
-          chunk.metadata.global_book_id ?? (!this.tenantContext ? chunk.book_id : null),
-        tenant_book_id:
-          chunk.metadata.tenant_book_id ?? (this.tenantContext ? chunk.book_id : null),
-        content: chunk.content,
-        metadata: chunk.metadata,
-        source_type: inferSourceType(chunk, this.tenantContext),
-        embedding: chunk.embedding,
-      }));
+      const dbRows = chunks.map(
+        (chunk): BookChunkInsertRowDto => ({
+          tenant_id: this.tenantContext?.tenantId ?? null,
+          global_book_id:
+            chunk.metadata.global_book_id ?? (!this.tenantContext ? chunk.book_id : null),
+          tenant_book_id:
+            chunk.metadata.tenant_book_id ?? (this.tenantContext ? chunk.book_id : null),
+          content: chunk.content,
+          metadata: chunk.metadata,
+          source_type: inferSourceType(chunk, this.tenantContext),
+          embedding: chunk.embedding,
+        })
+      );
 
       // Perform a bulk insert.
-      const { error } = await this.supabase
-        .from('book_chunks')
-        .insert(dbRows);
+      const { error } = await this.supabase.from('book_chunks').insert(dbRows);
 
       if (error) {
         throw error;
       }
     } catch (error) {
-      console.error('SupabaseAdapter: Failed to save chunks to database', error);
+      serverLogger.error('supabase_adapter.save_chunks_failed', { error: String(error) });
       throw error;
     }
   }

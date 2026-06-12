@@ -20,11 +20,32 @@ type PreferenceType = 'identity' | 'prefer' | 'avoid' | 'goal';
 const STORAGE_KEY = 'cocinacore_onboarding_v1';
 
 const step1 = ['Hogar', 'Chef', 'Familia', 'Estudiante culinario', 'Creador de recetas'];
-const step2 = ['Italiana', 'Latina', 'Asiática', 'Parrilla', 'Postres', 'Vegana', 'Mediterránea', 'Mexicana'];
+const step2 = [
+  'Italiana',
+  'Latina',
+  'Asiática',
+  'Parrilla',
+  'Postres',
+  'Vegana',
+  'Mediterránea',
+  'Mexicana',
+];
 const step3 = ['Sin gluten', 'Sin lactosa', 'Vegano', 'Keto', 'Frutos secos', 'Mariscos'];
-const step4 = ['Aprender cocina', 'Organizar recetas', 'Cocinar para mi familia', 'Usar asistencia culinaria', 'Guardar recetas familiares'];
+const step4 = [
+  'Aprender cocina',
+  'Organizar recetas',
+  'Cocinar para mi familia',
+  'Usar asistencia culinaria',
+  'Guardar recetas familiares',
+];
 
-const steps: Array<{ key: StepKey; title: string; subtitle: string; options: string[]; single?: boolean }> = [
+const steps: Array<{
+  key: StepKey;
+  title: string;
+  subtitle: string;
+  options: string[];
+  single?: boolean;
+}> = [
   {
     key: 'usage',
     title: '¿Cómo quieres usar CocinaCore?',
@@ -143,10 +164,19 @@ export default function OnboardingPage() {
 
         if (tenantId) {
           const preferenceMap: Array<{ label: string; type: PreferenceType }> = [
-            ...data.usage.map((value) => ({ label: usageToTermLabel[value], type: 'identity' as const })),
+            ...data.usage.map((value) => ({
+              label: usageToTermLabel[value],
+              type: 'identity' as const,
+            })),
             ...data.cuisine.map((value) => ({ label: value, type: 'prefer' as const })),
-            ...data.avoid.map((value) => ({ label: avoidToTermLabel[value], type: 'avoid' as const })),
-            ...data.goals.map((value) => ({ label: goalToTermLabel[value], type: 'goal' as const })),
+            ...data.avoid.map((value) => ({
+              label: avoidToTermLabel[value],
+              type: 'avoid' as const,
+            })),
+            ...data.goals.map((value) => ({
+              label: goalToTermLabel[value],
+              type: 'goal' as const,
+            })),
           ].filter((item) => Boolean(item.label));
 
           const uniqueLabels = Array.from(new Set(preferenceMap.map((item) => item.label)));
@@ -172,8 +202,15 @@ export default function OnboardingPage() {
                 preference_type: item.type,
                 weight: 1,
               }))
-              .filter((row): row is { user_id: string; term_id: string; preference_type: PreferenceType; weight: number } =>
-                typeof row.term_id === 'string' && row.term_id.length > 0,
+              .filter(
+                (
+                  row
+                ): row is {
+                  user_id: string;
+                  term_id: string;
+                  preference_type: PreferenceType;
+                  weight: number;
+                } => typeof row.term_id === 'string' && row.term_id.length > 0
               );
 
             if (payload.length > 0) {
@@ -198,12 +235,15 @@ export default function OnboardingPage() {
         <section className="relative hidden overflow-hidden border-r border-[#E8DDD2] p-10 lg:block">
           <div className="pointer-events-none absolute -left-10 top-8 h-52 w-52 rounded-full bg-[#C56A1A]/10 blur-3xl" />
           <div className="pointer-events-none absolute right-6 top-1/3 h-52 w-52 rounded-full bg-[#6D4AFF]/10 blur-3xl" />
-          <p className="text-xs font-bold tracking-[0.15em] text-[#C56A1A]">COCINACORE • ONBOARDING</p>
+          <p className="text-xs font-bold tracking-[0.15em] text-[#C56A1A]">
+            COCINACORE • ONBOARDING
+          </p>
           <h1 className="mt-4 text-5xl font-semibold leading-[1.08] text-[#241A14]">
             CocinaCore está entendiendo cómo cocinas para ayudarte mejor.
           </h1>
           <p className="mt-4 max-w-lg text-lg text-[#6B5A50]">
-            Tu configuración crea una biblioteca culinaria inteligente, cálida y personalizada para tu familia.
+            Tu configuración crea una biblioteca culinaria inteligente, cálida y personalizada para
+            tu familia.
           </p>
 
           <div className="dark-panel-shadow mt-8 rounded-3xl border border-white/10 bg-[#16110D] p-5 text-[#F5ECE2]">
@@ -233,7 +273,9 @@ export default function OnboardingPage() {
           <div className="rounded-3xl border border-white/70 bg-white/70 p-6 shadow-[0_20px_36px_rgba(36,26,20,0.12)] backdrop-blur-md md:p-8">
             <div className="mb-6">
               <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#8D786A]">Paso {Math.min(currentStep + 1, 5)} de 5</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#8D786A]">
+                  Paso {Math.min(currentStep + 1, 5)} de 5
+                </p>
                 <p className="text-xs text-[#8D786A]">{Math.round(progress)}%</p>
               </div>
               <div className="mt-2 h-2 rounded-full bg-[#EEE3D9]">
@@ -291,9 +333,12 @@ export default function OnboardingPage() {
                   exit={{ opacity: 0, y: -12 }}
                   transition={{ duration: 0.2 }}
                 >
-                  <h2 className="text-3xl font-semibold text-[#241A14]">Tu cocina inteligente está lista</h2>
+                  <h2 className="text-3xl font-semibold text-[#241A14]">
+                    Tu cocina inteligente está lista
+                  </h2>
                   <p className="mt-2 text-[#6B5A50]">
-                    CocinaCore ya puede ayudarte con recetas, organización culinaria y aprendizaje personalizado.
+                    CocinaCore ya puede ayudarte con recetas, organización culinaria y aprendizaje
+                    personalizado.
                   </p>
 
                   <div className="mt-6 rounded-2xl border border-[#E8DDD2] bg-white/80 p-4 text-sm text-[#6B5A50]">

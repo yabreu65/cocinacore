@@ -76,21 +76,35 @@ export function isGeminiEmbeddingDto(value: unknown): value is GeminiEmbeddingDt
   return isRecord(value) && isNumberArray(value.values);
 }
 
-export function isGeminiEmbedContentResponseDto(value: unknown): value is GeminiEmbedContentResponseDto {
+export function isGeminiEmbedContentResponseDto(
+  value: unknown
+): value is GeminiEmbedContentResponseDto {
   return isRecord(value) && isGeminiEmbeddingDto(value.embedding);
 }
 
-export function isGeminiBatchEmbedContentsResponseDto(value: unknown): value is GeminiBatchEmbedContentsResponseDto {
-  return isRecord(value) && Array.isArray(value.embeddings) && value.embeddings.every(isGeminiEmbeddingDto);
+export function isGeminiBatchEmbedContentsResponseDto(
+  value: unknown
+): value is GeminiBatchEmbedContentsResponseDto {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.embeddings) &&
+    value.embeddings.every(isGeminiEmbeddingDto)
+  );
 }
 
-export function isGeminiGenerateContentResponseDto(value: unknown): value is GeminiGenerateContentResponseDto {
+export function isGeminiGenerateContentResponseDto(
+  value: unknown
+): value is GeminiGenerateContentResponseDto {
   if (!isRecord(value) || !Array.isArray(value.candidates)) {
     return false;
   }
 
   return value.candidates.every((candidate) => {
-    if (!isRecord(candidate) || !isRecord(candidate.content) || !Array.isArray(candidate.content.parts)) {
+    if (
+      !isRecord(candidate) ||
+      !isRecord(candidate.content) ||
+      !Array.isArray(candidate.content.parts)
+    ) {
       return false;
     }
 

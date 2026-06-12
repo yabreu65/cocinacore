@@ -7,7 +7,7 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select extensions.plan(22);
+select extensions.plan(26);
 
 insert into public.tenants (id, name, tenant_type)
 values
@@ -49,12 +49,24 @@ values
 
 -- The migration trigger creates public.users profiles from auth.users metadata.
 update public.users
-set role = 'owner'
+set tenant_id = '10000000-0000-0000-0000-000000000001', role = 'owner'
 where id = 'dddddddd-0000-0000-0000-000000000004';
 
 update public.users
-set role = 'member'
-where id = 'eeeeeeee-0000-0000-0000-000000000005';
+set tenant_id = '10000000-0000-0000-0000-000000000001', role = 'member'
+where id in (
+  'aaaaaaaa-0000-0000-0000-000000000001',
+  'eeeeeeee-0000-0000-0000-000000000005',
+  'ffffffff-0000-0000-0000-000000000006'
+);
+
+update public.users
+set tenant_id = '20000000-0000-0000-0000-000000000002', role = 'member'
+where id = 'bbbbbbbb-0000-0000-0000-000000000002';
+
+insert into public.platform_owners (user_id, requires_manual_review)
+values ('cccccccc-0000-0000-0000-000000000003', false)
+on conflict (user_id) do update set requires_manual_review = false;
 
 insert into public.tenant_books (id, tenant_id, title)
 values
@@ -147,9 +159,15 @@ select extensions.is(
   'Tenant A can update its own book'
 );
 
-select extensions.throws_ok(
-  $$update public.tenant_books set title = 'Illegal cross-tenant update' where id = '22222222-0000-0000-0000-000000000002'$$,
-  '42501',
+select extensions.is(
+  (with updated as (
+    update public.tenant_books
+    set title = 'Illegal cross-tenant update'
+    where id = '22222222-0000-0000-0000-000000000002'
+    returning id
+  )
+  select count(*)::integer from updated),
+  0,
   'Tenant A cannot update Tenant B book'
 );
 
@@ -311,11 +329,47 @@ select extensions.throws_ok(
   'Tenant Owner cannot manage platform-only global books'
 );
 
--- Invalid tenant type is rejected by signup trigger casting to tenant_type enum.
 select extensions.throws_ok(
+  $$update public.tenants set tenant_type = 'professional' where id = '10000000-0000-0000-0000-000000000001'$$,
+  'P0001',
+  'Tenant owner cannot change tenant type directly'
+);
+
+select extensions.throws_ok(
+  $$update public.tenants set trial_ends_at = timezone('utc'::text, now()) + interval '10 years' where id = '10000000-0000-0000-0000-000000000001'$$,
+  'P0001',
+  'Tenant owner cannot change trial entitlement fields directly'
+);
+
+select set_config('request.jwt.claim.sub', 'cccccccc-0000-0000-0000-000000000003', true);
+
+select extensions.is(
+  (with updated as (
+    update public.tenants
+    set tenant_type = 'professional'
+    where id = '10000000-0000-0000-0000-000000000001'
+    returning id
+  )
+  select count(*)::integer from updated),
+  1,
+  'Reviewed platform owner can change tenant type'
+);
+
+-- Invalid tenant type metadata is ignored by signup trigger and defaults to home.
+select extensions.lives_ok(
   $$insert into auth.users (id, email, raw_user_meta_data) values ('99999999-0000-0000-0000-000000000009', 'bad-tenant-type@example.test', '{"role":"member","tenant_type":"enterprise"}'::jsonb)$$,
-  '22P02',
-  'Invalid tenant type is rejected'
+  'Invalid tenant type metadata is ignored'
+);
+
+select extensions.is(
+  (
+    select t.tenant_type::text
+    from public.users u
+    join public.tenants t on t.id = u.tenant_id
+    where u.id = '99999999-0000-0000-0000-000000000009'
+  ),
+  'home',
+  'Ignored invalid tenant type defaults to home'
 );
 
 -- Deny-by-default: RLS enabled table with no policy denies writes even with table grants.

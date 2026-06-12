@@ -30,7 +30,9 @@ export default function OwnerGlobalBooksPage() {
         if (queryError) throw queryError;
         setRows((data ?? []) as GlobalBookRow[]);
       } catch (caughtError) {
-        setError(caughtError instanceof Error ? caughtError.message : 'No se pudo cargar global books.');
+        setError(
+          caughtError instanceof Error ? caughtError.message : 'No se pudo cargar global books.'
+        );
       } finally {
         setLoading(false);
       }
@@ -64,14 +66,20 @@ export default function OwnerGlobalBooksPage() {
           <BookOpenText size={14} /> Biblioteca global curada
         </p>
         <h2 className="mt-3 text-2xl font-semibold text-[#241A14]">Global Books</h2>
-        <p className="mt-1 text-sm text-[#6B5A50]">Catálogo global por región, país y estilo culinario (solo lectura).</p>
+        <p className="mt-1 text-sm text-[#6B5A50]">
+          Catálogo global por región, país y estilo culinario (solo lectura).
+        </p>
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
           <div className="rounded-2xl border border-[#E8DDD2] bg-white/70 p-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#6B5A50]">Libros</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#6B5A50]">
+              Libros
+            </p>
             <p className="mt-1 text-2xl font-semibold text-[#241A14]">{rows.length}</p>
           </div>
           <div className="rounded-2xl border border-[#E8DDD2] bg-white/70 p-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#6B5A50]">Regiones</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#6B5A50]">
+              Regiones
+            </p>
             <p className="mt-1 text-2xl font-semibold text-[#241A14]">{regions.length}</p>
           </div>
           <div className="rounded-2xl border border-[#E8DDD2] bg-white/70 p-3">
@@ -138,14 +146,22 @@ export default function OwnerGlobalBooksPage() {
         </div>
       ) : null}
 
-      {error ? <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
+      {error ? (
+        <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {error}
+        </p>
+      ) : null}
 
       <ul className="grid gap-3 md:grid-cols-2">
         {filteredRows.map((row) => (
-          <li key={row.id} className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-4 premium-shadow">
+          <li
+            key={row.id}
+            className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-4 premium-shadow"
+          >
             <p className="line-clamp-2 text-base font-semibold text-[#241A14]">{row.title}</p>
             <p className="mt-2 inline-flex items-center gap-2 text-xs text-[#6B5A50]">
-              <Globe2 size={12} /> {row.cuisine_region} · {row.cuisine_country ?? 'País no definido'}
+              <Globe2 size={12} /> {row.cuisine_region} ·{' '}
+              {row.cuisine_country ?? 'País no definido'}
             </p>
             <p className="mt-1 text-xs text-[#6B5A50]">Estilo: {row.cuisine_style ?? 'General'}</p>
             <div className="mt-3 flex flex-wrap gap-2">
@@ -159,12 +175,16 @@ export default function OwnerGlobalBooksPage() {
                   </span>
                 ))
               ) : (
-                <span className="rounded-full border border-[#E8DDD2] bg-[#FAF6F1] px-2 py-1 text-[11px] text-[#6B5A50]">Sin tags</span>
+                <span className="rounded-full border border-[#E8DDD2] bg-[#FAF6F1] px-2 py-1 text-[11px] text-[#6B5A50]">
+                  Sin tags
+                </span>
               )}
             </div>
           </li>
         ))}
-        {!loading && filteredRows.length === 0 ? <li className="text-sm text-[#6B5A50]">No hay resultados para el filtro actual.</li> : null}
+        {!loading && filteredRows.length === 0 ? (
+          <li className="text-sm text-[#6B5A50]">No hay resultados para el filtro actual.</li>
+        ) : null}
       </ul>
       {loading ? <p className="text-sm text-[#6B5A50]">Cargando global books...</p> : null}
     </section>

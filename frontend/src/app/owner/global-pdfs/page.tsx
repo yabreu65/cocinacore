@@ -25,16 +25,23 @@ export default function OwnerGlobalPdfsPage() {
       setError(null);
       try {
         const supabase = getSupabaseBrowserClient();
-        const [{ data: pdfData, error: pdfError }, { data: booksData, error: booksError }] = await Promise.all([
-          supabase.from('global_pdf_library').select('*').order('created_at', { ascending: false }).limit(120),
-          supabase.from('global_books').select('*').limit(400),
-        ]);
+        const [{ data: pdfData, error: pdfError }, { data: booksData, error: booksError }] =
+          await Promise.all([
+            supabase
+              .from('global_pdf_library')
+              .select('*')
+              .order('created_at', { ascending: false })
+              .limit(120),
+            supabase.from('global_books').select('*').limit(400),
+          ]);
         if (pdfError) throw pdfError;
         if (booksError) throw booksError;
         setPdfRows((pdfData ?? []) as GlobalPdfRow[]);
         setBookRows((booksData ?? []) as GlobalBookRow[]);
       } catch (caughtError) {
-        setError(caughtError instanceof Error ? caughtError.message : 'No se pudo cargar global PDFs.');
+        setError(
+          caughtError instanceof Error ? caughtError.message : 'No se pudo cargar global PDFs.'
+        );
       } finally {
         setLoading(false);
       }
@@ -59,14 +66,16 @@ export default function OwnerGlobalPdfsPage() {
       if (!regionOk) return false;
       if (tagFilter && !(book?.tags ?? []).includes(tagFilter)) return false;
       if (!normalizedSearch) return true;
-      const text = `${book?.title ?? ''} ${book?.author ?? ''} ${book?.cuisine_country ?? ''} ${book?.cuisine_style ?? ''} ${(book?.tags ?? []).join(' ')} ${row.storage_path}`.toLowerCase();
+      const text =
+        `${book?.title ?? ''} ${book?.author ?? ''} ${book?.cuisine_country ?? ''} ${book?.cuisine_style ?? ''} ${(book?.tags ?? []).join(' ')} ${row.storage_path}`.toLowerCase();
       return text.includes(normalizedSearch);
     })
     .sort((a, b) => {
       const bookA = bookById.get(a.global_book_id);
       const bookB = bookById.get(b.global_book_id);
       if (sortBy === 'title') return (bookA?.title ?? '').localeCompare(bookB?.title ?? '');
-      if (sortBy === 'region') return (bookA?.cuisine_region ?? '').localeCompare(bookB?.cuisine_region ?? '');
+      if (sortBy === 'region')
+        return (bookA?.cuisine_region ?? '').localeCompare(bookB?.cuisine_region ?? '');
       return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
     });
 
@@ -79,7 +88,9 @@ export default function OwnerGlobalPdfsPage() {
               <FileText size={14} /> Repositorio global indexable
             </p>
             <h2 className="mt-3 text-2xl font-semibold text-[#241A14]">Global PDFs</h2>
-            <p className="mt-1 text-sm text-[#6B5A50]">PDFs globales listos para RAG y búsqueda contextual de toda la plataforma.</p>
+            <p className="mt-1 text-sm text-[#6B5A50]">
+              PDFs globales listos para RAG y búsqueda contextual de toda la plataforma.
+            </p>
           </div>
           <Link
             href="/owner/global-pdfs/upload"
@@ -95,7 +106,9 @@ export default function OwnerGlobalPdfsPage() {
             <p className="mt-1 text-2xl font-semibold text-[#241A14]">{pdfRows.length}</p>
           </div>
           <div className="rounded-2xl border border-[#E8DDD2] bg-white/70 p-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#6B5A50]">Regiones</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#6B5A50]">
+              Regiones
+            </p>
             <p className="mt-1 text-2xl font-semibold text-[#241A14]">{regions.length}</p>
           </div>
           <div className="rounded-2xl border border-[#E8DDD2] bg-white/70 p-3">
@@ -162,16 +175,26 @@ export default function OwnerGlobalPdfsPage() {
         </div>
       ) : null}
 
-      {error ? <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
+      {error ? (
+        <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {error}
+        </p>
+      ) : null}
 
       <ul className="grid gap-3 md:grid-cols-2">
         {filteredPdfRows.map((row) => {
           const book = bookById.get(row.global_book_id);
           return (
-            <li key={row.id} className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-4 premium-shadow">
-              <p className="line-clamp-2 text-base font-semibold text-[#241A14]">{book?.title ?? 'Global book sin título'}</p>
+            <li
+              key={row.id}
+              className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-4 premium-shadow"
+            >
+              <p className="line-clamp-2 text-base font-semibold text-[#241A14]">
+                {book?.title ?? 'Global book sin título'}
+              </p>
               <p className="mt-2 inline-flex items-center gap-2 text-xs text-[#6B5A50]">
-                <Globe2 size={12} /> {book?.cuisine_region ?? 'Global'} · {book?.cuisine_country ?? 'País no definido'}
+                <Globe2 size={12} /> {book?.cuisine_region ?? 'Global'} ·{' '}
+                {book?.cuisine_country ?? 'País no definido'}
               </p>
               <div className="mt-1 flex flex-wrap gap-2 text-xs text-[#6B5A50]">
                 <span className="inline-flex items-center gap-1 rounded-full border border-[#E8DDD2] bg-[#FAF6F1] px-2 py-1">
@@ -181,11 +204,15 @@ export default function OwnerGlobalPdfsPage() {
                   <Hash size={11} /> {(book?.tags ?? []).length} tags
                 </span>
               </div>
-              <p className="mt-2 line-clamp-1 text-xs text-[#6B5A50]">Archivo: {row.storage_path}</p>
+              <p className="mt-2 line-clamp-1 text-xs text-[#6B5A50]">
+                Archivo: {row.storage_path}
+              </p>
             </li>
           );
         })}
-        {!loading && filteredPdfRows.length === 0 ? <li className="text-sm text-[#6B5A50]">No hay resultados para el filtro actual.</li> : null}
+        {!loading && filteredPdfRows.length === 0 ? (
+          <li className="text-sm text-[#6B5A50]">No hay resultados para el filtro actual.</li>
+        ) : null}
       </ul>
 
       {loading ? <p className="text-sm text-[#6B5A50]">Cargando global PDFs...</p> : null}

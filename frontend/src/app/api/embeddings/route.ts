@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { serverLogger } from '@/lib/serverLogger';
-
-interface EmbeddingsRequestBody {
-  texts?: string[];
-}
+import { validateRequest, EmbeddingsSchema, type EmbeddingsBody } from '@/lib/validation';
+import { checkRateLimit } from '@/lib/rate-limit';
 
 type GeminiBatchEmbedResponse = {
   embeddings?: Array<{ values?: number[]; embedding?: { values?: number[] } }>;
@@ -12,10 +10,6 @@ type GeminiBatchEmbedResponse = {
 const ENV_MODEL = process.env.GEMINI_EMBEDDING_MODEL;
 const TARGET_EMBEDDING_DIM = Number(process.env.EMBEDDING_DIMENSIONS ?? '1536');
 const FALLBACK_MODELS = ['gemini-embedding-001', 'gemini-embedding-2-preview'];
-const RATE_WINDOW_MS = 60_000;
-const RATE_MAX_REQUESTS = 25;
-const rateStore = new Map<string, { count: number; resetAt: number }>();
-
 
 function normalizeDimensions(values: number[]): number[] {
   if (!Number.isFinite(TARGET_EMBEDDING_DIM) || TARGET_EMBEDDING_DIM <= 0) {
@@ -33,24 +27,6 @@ function normalizeDimensions(values: number[]): number[] {
   return [...values, ...Array.from({ length: TARGET_EMBEDDING_DIM - values.length }, () => 0)];
 }
 
-function isRateLimited(key: string): boolean {
-  const now = Date.now();
-  const current = rateStore.get(key);
-
-  if (!current || now > current.resetAt) {
-    rateStore.set(key, { count: 1, resetAt: now + RATE_WINDOW_MS });
-    return false;
-  }
-
-  if (current.count >= RATE_MAX_REQUESTS) {
-    return true;
-  }
-
-  current.count += 1;
-  rateStore.set(key, current);
-  return false;
-}
-
 async function requestEmbeddings(apiKey: string, model: string, texts: string[]) {
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:batchEmbedContents?key=${apiKey}`,
@@ -64,7 +40,7 @@ async function requestEmbeddings(apiKey: string, model: string, texts: string[])
           outputDimensionality: TARGET_EMBEDDING_DIM,
         })),
       }),
-    },
+    }
   );
 
   if (!response.ok) {
@@ -96,26 +72,38 @@ export async function POST(request: NextRequest) {
 
   if (!apiKey) {
     serverLogger.error('embeddings.misconfigured', { requestId });
-    return NextResponse.json({ error: 'GEMINI_API_KEY no está configurada en el servidor.' }, { status: 500 });
+    return NextResponse.json(
+      { error: 'GEMINI_API_KEY no está configurada en el servidor.' },
+      { status: 500 }
+    );
   }
 
-  const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'local';
-  if (isRateLimited(ip)) {
+  // 1. Zod validation
+  const validation = await validateRequest(request, EmbeddingsSchema);
+  if (!validation.success) {
+    return Response.json(validation.error.body, { status: validation.error.status });
+  }
+
+  const body: EmbeddingsBody = validation.data;
+  const texts = body.texts.map((text) => text.trim()).filter((text) => text.length > 0);
+
+  // 2. Rate limit via ioredis (replaces in-memory Map)
+  const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
+  const rateLimit = await checkRateLimit('embeddings', ip);
+  if (!rateLimit.success) {
     serverLogger.warn('embeddings.rate_limited', { requestId, ip });
-    return NextResponse.json({ error: 'Límite de solicitudes excedido. Espera un minuto.' }, { status: 429 });
-  }
-
-  const body = (await request.json()) as EmbeddingsRequestBody;
-  const texts = Array.isArray(body.texts) ? body.texts.map((text) => text.trim()).filter((text) => text.length > 0) : [];
-
-  if (texts.length === 0) {
-    serverLogger.warn('embeddings.invalid_input', { requestId, reason: 'empty_texts' });
-    return NextResponse.json({ error: 'Debes enviar al menos un texto.' }, { status: 400 });
-  }
-
-  if (texts.length > 120) {
-    serverLogger.warn('embeddings.invalid_input', { requestId, reason: 'too_many_texts', textsCount: texts.length });
-    return NextResponse.json({ error: 'Máximo 120 textos por solicitud.' }, { status: 400 });
+    return Response.json(
+      { error: 'Rate limit exceeded', retryAfter: rateLimit.resetAt },
+      {
+        status: 429,
+        headers: {
+          'Retry-After': String(rateLimit.resetAt),
+          'X-RateLimit-Limit': String(rateLimit.limit),
+          'X-RateLimit-Remaining': String(rateLimit.remaining),
+          'X-RateLimit-Reset': String(rateLimit.resetAt),
+        },
+      }
+    );
   }
 
   serverLogger.info('embeddings.request', {
@@ -141,8 +129,6 @@ export async function POST(request: NextRequest) {
     }
 
     errors.push(`[${model}] ${result.errorText}`);
-
-    // If model not found, continue fallback. For other statuses also try fallback just in case.
   }
 
   serverLogger.error('embeddings.failure', {
@@ -155,6 +141,6 @@ export async function POST(request: NextRequest) {
     {
       error: `No se pudieron generar embeddings con Gemini. Modelos probados: ${modelsToTry.join(', ')}. Detalles: ${errors.join(' | ')}`,
     },
-    { status: 502 },
+    { status: 502 }
   );
 }

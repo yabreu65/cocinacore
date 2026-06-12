@@ -147,9 +147,12 @@ describe('RagEngine trial gating', () => {
     const expiredTrial = createExpiredTrialState();
 
     await expect(
-      engine.generateRecipeFromFridge({ ingredients: ['tomato'] }, {
-        trialState: expiredTrial,
-      })
+      engine.generateRecipeFromFridge(
+        { ingredients: ['tomato'] },
+        {
+          trialState: expiredTrial,
+        }
+      )
     ).rejects.toThrow(TrialSoftBlockError);
 
     await expect(searchChunks([0.9, 0.1, 0.4], { matchCount: 2 })).resolves.toEqual([]);

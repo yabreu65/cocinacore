@@ -84,18 +84,21 @@ function buildSimulation(input: {
   };
 }
 
-function score(mode: OptimizationMode, params: {
-  estimatedCost: number;
-  sufficient: number;
-  partial: number;
-  missing: number;
-  unknown: number;
-  reusedIngredients: number;
-  critical: number;
-  predictions: number;
-  duplicatedMeals?: boolean;
-  lowCountByDay?: number[];
-}): MealPlanOptimizationScore {
+function score(
+  mode: OptimizationMode,
+  params: {
+    estimatedCost: number;
+    sufficient: number;
+    partial: number;
+    missing: number;
+    unknown: number;
+    reusedIngredients: number;
+    critical: number;
+    predictions: number;
+    duplicatedMeals?: boolean;
+    lowCountByDay?: number[];
+  }
+): MealPlanOptimizationScore {
   return calculateMealPlanScore(
     buildProjection({
       estimatedCost: params.estimatedCost,
@@ -111,7 +114,7 @@ function score(mode: OptimizationMode, params: {
       duplicatedMeals: params.duplicatedMeals,
       lowCountByDay: params.lowCountByDay,
     }),
-    mode,
+    mode
   );
 }
 
@@ -302,7 +305,7 @@ describe('meal-plan-optimizer comparison and explainability', () => {
   it('generates non-generic explainability notes by mode', () => {
     const comparison = compareMealPlans(
       { cost: 58, waste: 61, freshness: 54, reuse: 49, balance: 64, missing: 52, total: 57 },
-      { cost: 69, waste: 72, freshness: 74, reuse: 58, balance: 65, missing: 64, total: 67 },
+      { cost: 69, waste: 72, freshness: 74, reuse: 58, balance: 65, missing: 64, total: 67 }
     );
 
     const notes = explainOptimization(comparison, 'prioritize_fresh');

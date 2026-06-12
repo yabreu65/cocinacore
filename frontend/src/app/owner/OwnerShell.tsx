@@ -3,7 +3,17 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { ReactNode, useEffect, useMemo, useState } from 'react';
-import { Shield, Library, FileText, Database, Flag, Building2, Activity, LayoutGrid, ChevronRight } from 'lucide-react';
+import {
+  Shield,
+  Library,
+  FileText,
+  Database,
+  Flag,
+  Building2,
+  Activity,
+  LayoutGrid,
+  ChevronRight,
+} from 'lucide-react';
 import { getSupabaseBrowserClient } from '@/lib/supabaseClient';
 
 type OwnerShellProps = {
@@ -61,7 +71,9 @@ export default function OwnerShell({ children }: OwnerShellProps) {
           return;
         }
       } catch (caughtError) {
-        setAccessError(caughtError instanceof Error ? caughtError.message : 'No se pudo validar acceso owner.');
+        setAccessError(
+          caughtError instanceof Error ? caughtError.message : 'No se pudo validar acceso owner.'
+        );
       } finally {
         setCheckingAccess(false);
       }
@@ -78,7 +90,9 @@ export default function OwnerShell({ children }: OwnerShellProps) {
   if (checkingAccess) {
     return (
       <main className="texture-paper flex min-h-screen items-center justify-center bg-[#FAF6F1] text-[#241A14]">
-        <p className="rounded-xl border border-[#E8DDD2] bg-white/80 px-4 py-3 text-sm">Validando acceso owner...</p>
+        <p className="rounded-xl border border-[#E8DDD2] bg-white/80 px-4 py-3 text-sm">
+          Validando acceso owner...
+        </p>
       </main>
     );
   }
@@ -89,7 +103,10 @@ export default function OwnerShell({ children }: OwnerShellProps) {
         <section className="w-full max-w-lg rounded-2xl border border-red-200 bg-white/85 p-5">
           <h1 className="text-xl font-semibold">Acceso denegado</h1>
           <p className="mt-2 text-sm text-[#6B5A50]">{accessError}</p>
-          <Link href="/app" className="mt-4 inline-flex rounded-xl bg-[#C56A1A] px-3 py-2 text-sm font-semibold text-white">
+          <Link
+            href="/app"
+            className="mt-4 inline-flex rounded-xl bg-[#C56A1A] px-3 py-2 text-sm font-semibold text-white"
+          >
             Volver al dashboard
           </Link>
         </section>
@@ -120,7 +137,10 @@ export default function OwnerShell({ children }: OwnerShellProps) {
                 >
                   {item.icon}
                   {item.label}
-                  <ChevronRight size={14} className={`ml-auto transition ${active ? 'opacity-100' : 'opacity-0 group-hover:opacity-80'}`} />
+                  <ChevronRight
+                    size={14}
+                    className={`ml-auto transition ${active ? 'opacity-100' : 'opacity-0 group-hover:opacity-80'}`}
+                  />
                 </Link>
               );
             })}
@@ -131,11 +151,16 @@ export default function OwnerShell({ children }: OwnerShellProps) {
           <header className="mb-4 rounded-3xl border border-[#E8DDD2] bg-white/85 px-4 py-4 premium-shadow md:px-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#6B5A50]">Platform Owner</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#6B5A50]">
+                  Platform Owner
+                </p>
                 <h1 className="text-2xl font-semibold">{currentTitle}</h1>
               </div>
               <div className="flex gap-2">
-                <Link href="/app" className="rounded-xl border border-[#E8DDD2] px-3 py-2 text-sm font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40">
+                <Link
+                  href="/app"
+                  className="rounded-xl border border-[#E8DDD2] px-3 py-2 text-sm font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40"
+                >
                   Ir a /app
                 </Link>
               </div>

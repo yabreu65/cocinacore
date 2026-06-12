@@ -4,6 +4,7 @@ import {
   isGeminiGenerateContentResponseDto,
 } from './apiDtos';
 import { getServerSecret } from './env';
+import { serverLogger } from '@/lib/serverLogger';
 import {
   EmbeddingService,
   RecipeGenerationPromptInput,
@@ -55,7 +56,7 @@ export class GeminiEmbeddingService implements EmbeddingService {
 
       return data.embedding.values;
     } catch (error) {
-      console.error('Error generating embedding:', error);
+      serverLogger.error('gemini.embedding_failed', { error: String(error) });
       throw error;
     }
   }
@@ -96,7 +97,7 @@ export class GeminiEmbeddingService implements EmbeddingService {
 
       return data.embeddings.map((embedding) => embedding.values);
     } catch (error) {
-      console.error('Error generating batch embeddings:', error);
+      serverLogger.error('gemini.batch_embedding_failed', { error: String(error) });
       throw error;
     }
   }
@@ -129,12 +130,15 @@ export class GeminiRecipeGenerator implements RecipeGenerationService {
     const maxTokens = options.maxOutputTokens ?? 2048;
 
     // Build standard structure representing the retrieved context
-    const formattedContext = contextChunks.map((chunk, index) => {
-      const sourceInfo = `[Source ID: ${chunk.book_id}]` + 
-        (chunk.metadata?.book_title ? ` Book: "${chunk.metadata.book_title}"` : '') +
-        (chunk.metadata?.page_number ? ` Page: ${chunk.metadata.page_number}` : '');
-      return `--- CONTEXT CHUNK ${index + 1} (${sourceInfo}) ---\n${chunk.content}`;
-    }).join('\n\n');
+    const formattedContext = contextChunks
+      .map((chunk, index) => {
+        const sourceInfo =
+          `[Source ID: ${chunk.book_id}]` +
+          (chunk.metadata?.book_title ? ` Book: "${chunk.metadata.book_title}"` : '') +
+          (chunk.metadata?.page_number ? ` Page: ${chunk.metadata.page_number}` : '');
+        return `--- CONTEXT CHUNK ${index + 1} (${sourceInfo}) ---\n${chunk.content}`;
+      })
+      .join('\n\n');
 
     const systemPrompt = `You are a professional Michelin-star chef who specializes in crafting gourmet dishes by adapting classic techniques from legendary cookbooks.
 
@@ -181,13 +185,13 @@ Please craft the gourmet recipe based on these inputs:`;
           contents: [
             {
               role: 'user',
-              parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }]
-            }
+              parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }],
+            },
           ],
           generationConfig: {
             temperature: temperature,
             maxOutputTokens: maxTokens,
-          }
+          },
         }),
       });
 
@@ -208,7 +212,7 @@ Please craft the gourmet recipe based on these inputs:`;
 
       return textResponse;
     } catch (error) {
-      console.error('Error generating recipe via Gemini:', error);
+      serverLogger.error('gemini.recipe_generation_failed', { error: String(error) });
       throw error;
     }
   }

@@ -10,9 +10,33 @@ import {
 const makeDay = (day: string, suffix: string): PlannerDayState => ({
   day,
   meals: {
-    Desayuno: { name: `D-${suffix}`, time: '10', difficulty: 'Fácil', badge: '', fusionTag: '', missing: 0, aiScore: 90 },
-    Almuerzo: { name: `A-${suffix}`, time: '20', difficulty: 'Media', badge: '', fusionTag: '', missing: 0, aiScore: 90 },
-    Cena: { name: `C-${suffix}`, time: '30', difficulty: 'Alta', badge: '', fusionTag: '', missing: 0, aiScore: 90 },
+    Desayuno: {
+      name: `D-${suffix}`,
+      time: '10',
+      difficulty: 'Fácil',
+      badge: '',
+      fusionTag: '',
+      missing: 0,
+      aiScore: 90,
+    },
+    Almuerzo: {
+      name: `A-${suffix}`,
+      time: '20',
+      difficulty: 'Media',
+      badge: '',
+      fusionTag: '',
+      missing: 0,
+      aiScore: 90,
+    },
+    Cena: {
+      name: `C-${suffix}`,
+      time: '30',
+      difficulty: 'Alta',
+      badge: '',
+      fusionTag: '',
+      missing: 0,
+      aiScore: 90,
+    },
   },
 });
 

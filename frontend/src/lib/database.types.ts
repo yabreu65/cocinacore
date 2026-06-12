@@ -1,15 +1,8 @@
-export type Json =
-  | string
-  | number
-  | boolean
-  | null
-  | { [key: string]: Json | undefined }
-  | Json[];
+export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
 export type Database = {
   public: {
     Tables: {
-
       user_meal_plans: {
         Row: {
           id: string;
@@ -238,9 +231,9 @@ export type Database = {
           tenant_id: string;
           email: string;
           invited_by: string;
-          role: "member";
+          role: 'member';
           invitation_token: string;
-          status: "pending" | "accepted" | "revoked" | "expired";
+          status: 'pending' | 'accepted' | 'revoked' | 'expired';
           expires_at: string;
           accepted_at: string | null;
           accepted_by: string | null;
@@ -251,9 +244,9 @@ export type Database = {
           tenant_id: string;
           email: string;
           invited_by: string;
-          role?: "member";
+          role?: 'member';
           invitation_token: string;
-          status?: "pending" | "accepted" | "revoked" | "expired";
+          status?: 'pending' | 'accepted' | 'revoked' | 'expired';
           expires_at?: string;
           accepted_at?: string | null;
           accepted_by?: string | null;
@@ -264,9 +257,9 @@ export type Database = {
           tenant_id?: string;
           email?: string;
           invited_by?: string;
-          role?: "member";
+          role?: 'member';
           invitation_token?: string;
-          status?: "pending" | "accepted" | "revoked" | "expired";
+          status?: 'pending' | 'accepted' | 'revoked' | 'expired';
           expires_at?: string;
           accepted_at?: string | null;
           accepted_by?: string | null;
@@ -278,14 +271,17 @@ export type Database = {
         Row: {
           user_id: string;
           created_at: string;
+          requires_manual_review: boolean;
         };
         Insert: {
           user_id: string;
           created_at?: string;
+          requires_manual_review?: boolean;
         };
         Update: {
           user_id?: string;
           created_at?: string;
+          requires_manual_review?: boolean;
         };
         Relationships: [];
       };
@@ -470,7 +466,7 @@ export type Database = {
           recipe_payload: Json;
           restrictions_snapshot: Json;
           inventory_snapshot: Json;
-          user_feedback: "accepted" | "discarded" | null;
+          user_feedback: 'accepted' | 'discarded' | null;
           user_feedback_at: string | null;
           is_saved: boolean;
           expires_at: string | null;
@@ -485,7 +481,7 @@ export type Database = {
           recipe_payload: Json;
           restrictions_snapshot?: Json;
           inventory_snapshot?: Json;
-          user_feedback?: "accepted" | "discarded" | null;
+          user_feedback?: 'accepted' | 'discarded' | null;
           user_feedback_at?: string | null;
           is_saved?: boolean;
           expires_at?: string | null;
@@ -500,7 +496,7 @@ export type Database = {
           recipe_payload?: Json;
           restrictions_snapshot?: Json;
           inventory_snapshot?: Json;
-          user_feedback?: "accepted" | "discarded" | null;
+          user_feedback?: 'accepted' | 'discarded' | null;
           user_feedback_at?: string | null;
           is_saved?: boolean;
           expires_at?: string | null;
@@ -519,7 +515,7 @@ export type Database = {
           checksum_sha256: string | null;
           created_at: string;
           ocr_used: boolean;
-          processing_status: "processing" | "ready" | "failed";
+          processing_status: 'processing' | 'ready' | 'failed';
           processed_chunks_count: number | null;
           processing_error: string | null;
           uploaded_by: string | null;
@@ -534,7 +530,7 @@ export type Database = {
           checksum_sha256?: string | null;
           created_at?: string;
           ocr_used?: boolean;
-          processing_status?: "processing" | "ready" | "failed";
+          processing_status?: 'processing' | 'ready' | 'failed';
           processed_chunks_count?: number | null;
           processing_error?: string | null;
           uploaded_by?: string | null;
@@ -549,7 +545,7 @@ export type Database = {
           checksum_sha256?: string | null;
           created_at?: string;
           ocr_used?: boolean;
-          processing_status?: "processing" | "ready" | "failed";
+          processing_status?: 'processing' | 'ready' | 'failed';
           processed_chunks_count?: number | null;
           processing_error?: string | null;
           uploaded_by?: string | null;
@@ -611,7 +607,7 @@ export type Database = {
         Row: {
           user_id: string;
           term_id: string;
-          preference_type: "identity" | "prefer" | "avoid" | "goal";
+          preference_type: 'identity' | 'prefer' | 'avoid' | 'goal';
           weight: number;
           created_at: string;
           culinary_terms: { label: string }[] | { label: string } | null;
@@ -619,14 +615,14 @@ export type Database = {
         Insert: {
           user_id: string;
           term_id: string;
-          preference_type: "identity" | "prefer" | "avoid" | "goal";
+          preference_type: 'identity' | 'prefer' | 'avoid' | 'goal';
           weight?: number;
           created_at?: string;
         };
         Update: {
           user_id?: string;
           term_id?: string;
-          preference_type?: "identity" | "prefer" | "avoid" | "goal";
+          preference_type?: 'identity' | 'prefer' | 'avoid' | 'goal';
           weight?: number;
           created_at?: string;
         };
@@ -677,8 +673,6 @@ export type Database = {
         };
         Relationships: [];
       };
-
-
 
       saved_premium_recipes: {
         Row: {
@@ -924,6 +918,13 @@ export type Database = {
       remove_tenant_member: {
         Args: {
           p_member_id: string;
+        };
+        Returns: void;
+      };
+      update_tenant_member_role: {
+        Args: {
+          p_member_id: string;
+          p_role: 'admin' | 'member';
         };
         Returns: void;
       };

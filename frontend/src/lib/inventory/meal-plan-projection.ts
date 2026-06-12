@@ -1,11 +1,20 @@
-import { detectInventoryCategory, normalizeInventoryName, type InventoryCategory } from './normalize-inventory';
+import {
+  detectInventoryCategory,
+  normalizeInventoryName,
+  type InventoryCategory,
+} from './normalize-inventory';
 import {
   compareRecipeRequirementsToInventory,
   type ComparedRequirement,
   type InventoryComparableItem,
   type RecipeRequirement,
 } from './recipe-requirements';
-import { canCompareUnits, convertQuantity, normalizeUnit, type NormalizedUnit } from './quantity-normalization';
+import {
+  canCompareUnits,
+  convertQuantity,
+  normalizeUnit,
+  type NormalizedUnit,
+} from './quantity-normalization';
 
 export type ProjectionStatus = 'sufficient' | 'partial' | 'missing' | 'unknown';
 
@@ -99,19 +108,21 @@ function sumComparableQuantity(
   baseValue: number | null,
   baseUnit: NormalizedUnit,
   incomingValue: number | null,
-  incomingUnit: NormalizedUnit,
+  incomingUnit: NormalizedUnit
 ): number | null {
   if (baseValue === null || incomingValue === null) return null;
   if (!canCompareUnits(baseUnit, incomingUnit)) return null;
   const converted =
-    incomingUnit === baseUnit ? incomingValue : convertQuantity(incomingValue, incomingUnit, baseUnit);
+    incomingUnit === baseUnit
+      ? incomingValue
+      : convertQuantity(incomingValue, incomingUnit, baseUnit);
   if (converted === null) return null;
   return Number((baseValue + converted).toFixed(2));
 }
 
 function toProjectionItem(
   req: ComparedRequirement,
-  inv: InventoryProjectionComparableItem | undefined,
+  inv: InventoryProjectionComparableItem | undefined
 ): MealPlanProjectionItem {
   const required = req.requiredQuantity;
   const available = req.availableQuantity;
@@ -143,11 +154,13 @@ function toProjectionItem(
   };
 }
 
-export function estimateShoppingCost(items: Array<{
-  missingQuantity: number | null;
-  estimatedUnitPrice: number | null;
-  status: 'missing' | 'partial' | 'unknown' | 'sufficient';
-}>): number {
+export function estimateShoppingCost(
+  items: Array<{
+    missingQuantity: number | null;
+    estimatedUnitPrice: number | null;
+    status: 'missing' | 'partial' | 'unknown' | 'sufficient';
+  }>
+): number {
   let total = 0;
   for (const item of items) {
     if (item.status === 'unknown') continue;
@@ -159,10 +172,12 @@ export function estimateShoppingCost(items: Array<{
 
 export function buildMealPlanInventoryProjection(
   mealPlanRecipes: RecipeRequirement[],
-  inventoryItems: InventoryProjectionComparableItem[],
+  inventoryItems: InventoryProjectionComparableItem[]
 ): MealPlanInventoryProjection {
   const compared = compareRecipeRequirementsToInventory(mealPlanRecipes, inventoryItems);
-  const invMap = new Map(inventoryItems.map((item) => [normalizeInventoryName(item.ingredient_name), item]));
+  const invMap = new Map(
+    inventoryItems.map((item) => [normalizeInventoryName(item.ingredient_name), item])
+  );
   const items = compared
     .map((item) => toProjectionItem(item, invMap.get(item.normalizedName)))
     .sort((a, b) => a.normalizedName.localeCompare(b.normalizedName));
@@ -180,7 +195,7 @@ export function buildMealPlanInventoryProjection(
 }
 
 export function consolidateMissingIngredients(
-  comparisons: MealPlanProjectionItem[],
+  comparisons: MealPlanProjectionItem[]
 ): ConsolidatedMissingIngredient[] {
   const map = new Map<string, ConsolidatedMissingIngredient>();
 
@@ -195,15 +210,22 @@ export function consolidateMissingIngredients(
         unit: item.requiredUnit,
         missingQuantity: item.missingQuantity,
         usedInRecipes: [...item.usedInRecipes],
-        status: item.status === 'partial' ? 'partial' : item.status === 'missing' ? 'missing' : 'unknown',
+        status:
+          item.status === 'partial' ? 'partial' : item.status === 'missing' ? 'missing' : 'unknown',
         estimatedUnitPrice: item.estimatedUnitPrice,
       });
       continue;
     }
 
     existing.usedInRecipes = mergeRecipeSources(existing.usedInRecipes, item.usedInRecipes);
-    if (existing.missingQuantity !== null && item.missingQuantity !== null && existing.unit === item.requiredUnit) {
-      existing.missingQuantity = Number((existing.missingQuantity + item.missingQuantity).toFixed(2));
+    if (
+      existing.missingQuantity !== null &&
+      item.missingQuantity !== null &&
+      existing.unit === item.requiredUnit
+    ) {
+      existing.missingQuantity = Number(
+        (existing.missingQuantity + item.missingQuantity).toFixed(2)
+      );
     } else if (existing.missingQuantity === null && item.missingQuantity !== null) {
       existing.missingQuantity = item.missingQuantity;
       existing.unit = item.requiredUnit;
@@ -228,9 +250,7 @@ export function consolidateMissingIngredients(
   return Array.from(map.values()).sort((a, b) => a.normalizedName.localeCompare(b.normalizedName));
 }
 
-export function buildSmartShoppingList(
-  projection: MealPlanInventoryProjection,
-): SmartShoppingList {
+export function buildSmartShoppingList(projection: MealPlanInventoryProjection): SmartShoppingList {
   const consolidated = consolidateMissingIngredients(projection.items);
   const projectionByName = new Map(projection.items.map((item) => [item.normalizedName, item]));
   const byCategory = new Map<InventoryCategory, ShoppingListGroupItem[]>();
@@ -251,7 +271,12 @@ export function buildSmartShoppingList(
       availableQuantity: source?.availableQuantity ?? null,
       quantityToBuy: item.missingQuantity,
       unit: item.unit,
-      status: item.status === 'unknown' ? 'review' : item.missingQuantity && item.missingQuantity > 0 ? 'buy' : 'covered',
+      status:
+        item.status === 'unknown'
+          ? 'review'
+          : item.missingQuantity && item.missingQuantity > 0
+            ? 'buy'
+            : 'covered',
       usedInRecipes: item.usedInRecipes,
       estimatedCost,
     });
@@ -273,7 +298,9 @@ export function buildSmartShoppingList(
   const groups = orderedCategories
     .map((category) => ({
       category,
-      items: (byCategory.get(category) ?? []).sort((a, b) => a.ingredientName.localeCompare(b.ingredientName)),
+      items: (byCategory.get(category) ?? []).sort((a, b) =>
+        a.ingredientName.localeCompare(b.ingredientName)
+      ),
     }))
     .filter((group) => group.items.length > 0);
 
@@ -283,24 +310,30 @@ export function buildSmartShoppingList(
       groups
         .flatMap((group) => group.items)
         .reduce((acc, item) => acc + (item.estimatedCost ?? 0), 0)
-        .toFixed(2),
+        .toFixed(2)
     ),
   };
 }
 
 export function buildQuantifiedShoppingList(
   mealPlanRecipes: RecipeRequirement[],
-  inventoryItems: InventoryProjectionComparableItem[],
+  inventoryItems: InventoryProjectionComparableItem[]
 ): SmartShoppingList {
   const compared = compareRecipeRequirementsToInventory(mealPlanRecipes, inventoryItems);
-  const byName = new Map<string, ShoppingListGroupItem & { category: InventoryCategory; estimatedUnitPrice: number | null }>();
-  const inventoryMap = new Map(inventoryItems.map((item) => [normalizeInventoryName(item.ingredient_name), item]));
+  const byName = new Map<
+    string,
+    ShoppingListGroupItem & { category: InventoryCategory; estimatedUnitPrice: number | null }
+  >();
+  const inventoryMap = new Map(
+    inventoryItems.map((item) => [normalizeInventoryName(item.ingredient_name), item])
+  );
 
   for (const row of compared) {
     const inventory = inventoryMap.get(row.normalizedName);
     const category = inferCategory(row.ingredientName, inventory?.category);
     const estimatedUnitPrice =
-      typeof inventory?.estimated_unit_price === 'number' && Number.isFinite(inventory.estimated_unit_price)
+      typeof inventory?.estimated_unit_price === 'number' &&
+      Number.isFinite(inventory.estimated_unit_price)
         ? inventory.estimated_unit_price
         : null;
     const missing =
@@ -320,14 +353,12 @@ export function buildQuantifiedShoppingList(
         quantityToBuy: missing,
         unit: row.requiredUnit,
         status:
-          row.status === 'unknown'
-            ? 'review'
-            : missing !== null && missing > 0
-              ? 'buy'
-              : 'covered',
+          row.status === 'unknown' ? 'review' : missing !== null && missing > 0 ? 'buy' : 'covered',
         usedInRecipes: [...row.usedInRecipes],
         estimatedCost:
-          missing !== null && estimatedUnitPrice !== null ? Number((missing * estimatedUnitPrice).toFixed(2)) : null,
+          missing !== null && estimatedUnitPrice !== null
+            ? Number((missing * estimatedUnitPrice).toFixed(2))
+            : null,
         category,
         estimatedUnitPrice,
       });
@@ -338,19 +369,19 @@ export function buildQuantifiedShoppingList(
       existing.requiredQuantity,
       existing.unit,
       row.requiredQuantity,
-      row.requiredUnit,
+      row.requiredUnit
     );
     existing.availableQuantity = sumComparableQuantity(
       existing.availableQuantity,
       existing.unit,
       row.availableQuantity,
-      normalizeUnit(row.availableUnit),
+      normalizeUnit(row.availableUnit)
     );
     existing.quantityToBuy = sumComparableQuantity(
       existing.quantityToBuy,
       existing.unit,
       missing,
-      row.requiredUnit,
+      row.requiredUnit
     );
     existing.usedInRecipes = mergeRecipeSources(existing.usedInRecipes, row.usedInRecipes);
     existing.estimatedCost =
@@ -404,7 +435,7 @@ export function buildQuantifiedShoppingList(
       groups
         .flatMap((group) => group.items)
         .reduce((acc, item) => acc + (item.estimatedCost ?? 0), 0)
-        .toFixed(2),
+        .toFixed(2)
     ),
   };
 }

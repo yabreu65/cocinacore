@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { Inter, Manrope, Playfair_Display } from 'next/font/google';
+import { AuthProvider } from '@/context/AuthContext';
 import './globals.css';
 
 const inter = Inter({
@@ -22,7 +23,8 @@ const playfair = Playfair_Display({
 
 export const metadata: Metadata = {
   title: 'CocinaCore | Recetario familiar inteligente',
-  description: 'SaaS premium para recetas personalizadas, biblioteca PDF e inventario culinario familiar.',
+  description:
+    'SaaS premium para recetas personalizadas, biblioteca PDF e inventario culinario familiar.',
 };
 
 export default function RootLayout({
@@ -32,7 +34,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="es" className={`${inter.variable} ${manrope.variable} ${playfair.variable}`}>
-      <body>{children}</body>
+      <body>
+        <AuthProvider>{children}</AuthProvider>
+      </body>
     </html>
   );
 }

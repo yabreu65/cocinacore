@@ -37,7 +37,9 @@ export function EditableMealTimeline(props: Props) {
   return (
     <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
       <h3 className="text-lg font-semibold text-[#241A14]">Timeline editable del menú</h3>
-      <p className="mt-1 text-sm text-[#6B5A50]">Mové recetas entre días/comidas y recalculá la simulación en tiempo real.</p>
+      <p className="mt-1 text-sm text-[#6B5A50]">
+        Mové recetas entre días/comidas y recalculá la simulación en tiempo real.
+      </p>
 
       <div className="mt-3 grid gap-3 lg:grid-cols-2">
         {props.days.map((day, dayIndex) => (
@@ -67,18 +69,27 @@ export function EditableMealTimeline(props: Props) {
                 const cannotMoveMealUp = mealIdx === 0;
                 const cannotMoveMealDown = mealIdx === MEALS.length - 1;
                 return (
-                  <div key={`${day.day}-${mealType}`} className="rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] p-2">
+                  <div
+                    key={`${day.day}-${mealType}`}
+                    className="rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] p-2"
+                  >
                     <div className="flex items-start justify-between gap-2">
                       <div>
                         <p className="text-xs font-semibold text-[#6B5A50]">{mealType}</p>
-                        <p className="text-sm font-semibold text-[#241A14] line-clamp-1">{card.name}</p>
+                        <p className="text-sm font-semibold text-[#241A14] line-clamp-1">
+                          {card.name}
+                        </p>
                       </div>
                       <button
                         type="button"
                         onClick={() => props.onToggleLock(day.day, mealType)}
                         className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1 text-xs text-[#6B5A50]"
                       >
-                        {locked ? <Lock size={12} className="inline" /> : <Unlock size={12} className="inline" />}
+                        {locked ? (
+                          <Lock size={12} className="inline" />
+                        ) : (
+                          <Unlock size={12} className="inline" />
+                        )}
                       </button>
                     </div>
 

@@ -166,7 +166,7 @@ export interface SemanticSearchService {
       bookIds?: string[];
     }
   ): Promise<RecipeBookChunk[]>;
-  
+
   saveChunks(chunks: RecipeBookChunk[]): Promise<void>;
 
   getTenantPdfCount?(): Promise<number>;
@@ -234,7 +234,6 @@ export interface TrialState {
   canGenerate: boolean;
   canUploadPdf: boolean;
 }
-
 
 export type PremiumRecipeStatus = 'published' | 'withdrawn' | 'moderation_hidden';
 

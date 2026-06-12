@@ -62,7 +62,10 @@ function normalize(text: string): string {
     .toLowerCase();
 }
 
-function parseIngredients(payload: HistoryRow['recipe_payload'], inventory: InventoryRow[]): RecipeIngredient[] {
+function parseIngredients(
+  payload: HistoryRow['recipe_payload'],
+  inventory: InventoryRow[]
+): RecipeIngredient[] {
   if (!payload || typeof payload !== 'object' || !('ingredients' in payload)) return [];
   const raw = (payload as { ingredients?: unknown }).ingredients;
   if (!Array.isArray(raw)) return [];
@@ -77,7 +80,9 @@ function parseIngredients(payload: HistoryRow['recipe_payload'], inventory: Inve
       const [namePart, ...qtyParts] = entry.split(':');
       const cleanName = namePart.trim();
       const quantity = qtyParts.join(':').trim() || 'Cantidad a gusto';
-      const available = inventoryNames.some((item) => normalize(cleanName).includes(item) || item.includes(normalize(cleanName)));
+      const available = inventoryNames.some(
+        (item) => normalize(cleanName).includes(item) || item.includes(normalize(cleanName))
+      );
       return {
         name: cleanName,
         quantity,
@@ -151,15 +156,38 @@ export default function PremiumRecipeDetailPage() {
         { data: premiumRows },
         { data: savedRows },
       ] = await Promise.all([
-        supabase.from('users').select('id,tenant_id,full_name,onboarding_completed').eq('id', userId).maybeSingle(),
+        supabase
+          .from('users')
+          .select('id,tenant_id,full_name,onboarding_completed')
+          .eq('id', userId)
+          .maybeSingle(),
         supabase.from('premium_recipes').select('*').eq('id', recipeId).maybeSingle(),
-        supabase.from('premium_recipe_reviews').select('*').eq('premium_recipe_id', recipeId).order('created_at', { ascending: false }),
-        supabase.from('recipe_inventory_items').select('*').order('created_at', { ascending: false }).limit(100),
-        supabase.from('user_culinary_profiles').select('*').maybeSingle(),
-        supabase.from('user_culinary_profile_terms').select('*'),
+        supabase
+          .from('premium_recipe_reviews')
+          .select('*')
+          .eq('premium_recipe_id', recipeId)
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('recipe_inventory_items')
+          .select('*')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false })
+          .limit(100),
+        supabase.from('user_culinary_profiles').select('*').eq('user_id', userId).maybeSingle(),
+        supabase.from('user_culinary_profile_terms').select('*').eq('user_id', userId),
         supabase.from('culinary_terms').select('*').limit(400),
-        supabase.from('premium_recipes').select('*').eq('status', 'published').order('published_at', { ascending: false }).limit(120),
-        supabase.from('saved_premium_recipes').select('premium_recipe_id').eq('premium_recipe_id', recipeId).maybeSingle(),
+        supabase
+          .from('premium_recipes')
+          .select('*')
+          .eq('status', 'published')
+          .order('published_at', { ascending: false })
+          .limit(120),
+        supabase
+          .from('saved_premium_recipes')
+          .select('premium_recipe_id')
+          .eq('user_id', userId)
+          .eq('premium_recipe_id', recipeId)
+          .maybeSingle(),
       ]);
 
       if (recipeError || !recipeRow) {
@@ -171,6 +199,7 @@ export default function PremiumRecipeDetailPage() {
       const historyResult = await supabase
         .from('recipe_ai_history')
         .select('*')
+        .eq('user_id', userId)
         .eq('id', recipeRow.source_recipe_history_id)
         .maybeSingle();
 
@@ -196,13 +225,20 @@ export default function PremiumRecipeDetailPage() {
         if (row.preference_type === 'goal') profile.goals.push(label);
       }
 
-      const targetNormalized = normalize(historyRow?.recipe_title ?? recipeRow.creator_display_name ?? '');
+      const targetNormalized = normalize(
+        historyRow?.recipe_title ?? recipeRow.creator_display_name ?? ''
+      );
 
       const similarRecipes = (premiumRows ?? [])
         .filter((row) => row.id !== recipeRow.id)
         .map((row) => ({ row, key: normalize(row.creator_display_name ?? '') }))
         .map((entry) => {
-          const score = targetNormalized.length > 0 && entry.key.length > 0 && (targetNormalized.includes(entry.key) || entry.key.includes(targetNormalized)) ? 2 : 0;
+          const score =
+            targetNormalized.length > 0 &&
+            entry.key.length > 0 &&
+            (targetNormalized.includes(entry.key) || entry.key.includes(targetNormalized))
+              ? 2
+              : 0;
           return { row: entry.row, score };
         })
         .sort((a, b) => b.score - a.score)
@@ -221,7 +257,11 @@ export default function PremiumRecipeDetailPage() {
         similarRecipes,
       });
     } catch (caughtError) {
-      setError(caughtError instanceof Error ? caughtError.message : 'Error inesperado cargando la receta premium.');
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : 'Error inesperado cargando la receta premium.'
+      );
     } finally {
       setLoading(false);
     }
@@ -241,23 +281,38 @@ export default function PremiumRecipeDetailPage() {
     return parseSteps(data.history?.recipe_payload ?? null);
   }, [data]);
 
-  const likes = useMemo(() => (data?.reviews ?? []).filter((review) => review.stars >= 4).length, [data]);
-  const dislikes = useMemo(() => (data?.reviews ?? []).filter((review) => review.stars <= 2).length, [data]);
+  const likes = useMemo(
+    () => (data?.reviews ?? []).filter((review) => review.stars >= 4).length,
+    [data]
+  );
+  const dislikes = useMemo(
+    () => (data?.reviews ?? []).filter((review) => review.stars <= 2).length,
+    [data]
+  );
 
   const explanation = useMemo(() => {
     if (!data) return [];
     const reasons: string[] = [];
-    if (data.profile.preferred.length > 0) reasons.push(`Coincide con tus preferencias: ${data.profile.preferred.slice(0, 2).join(', ')}`);
-    if (ingredients.some((item) => item.available)) reasons.push('Usa ingredientes que ya tenés disponibles en inventario');
+    if (data.profile.preferred.length > 0)
+      reasons.push(
+        `Coincide con tus preferencias: ${data.profile.preferred.slice(0, 2).join(', ')}`
+      );
+    if (ingredients.some((item) => item.available))
+      reasons.push('Usa ingredientes que ya tenés disponibles en inventario');
     if (data.profile.level) reasons.push(`Encaja con tu nivel culinario: ${data.profile.level}`);
     if (likes > dislikes) reasons.push('Tiene feedback positivo en la comunidad premium');
 
-    return reasons.length > 0 ? reasons : ['Se recomienda por calidad premium y señales positivas recientes.'];
+    return reasons.length > 0
+      ? reasons
+      : ['Se recomienda por calidad premium y señales positivas recientes.'];
   }, [data, ingredients, likes, dislikes]);
 
   const cuisineRegion = data?.profile.identity[0] ?? 'Global';
   const baseCulture = data?.profile.identity[0] ?? 'Cocina de autor';
-  const fusionCulture = data && data.profile.identity.length > 1 ? data.profile.identity.slice(0, 2).join(' + ') : `${baseCulture} + local`;
+  const fusionCulture =
+    data && data.profile.identity.length > 1
+      ? data.profile.identity.slice(0, 2).join(' + ')
+      : `${baseCulture} + local`;
 
   async function vote(stars: 1 | 5): Promise<void> {
     if (!data) return;
@@ -266,7 +321,15 @@ export default function PremiumRecipeDetailPage() {
 
     const supabase = getSupabaseBrowserClient();
     const { error: voteError } = await supabase.from('premium_recipe_reviews').upsert(
-      [{ premium_recipe_id: data.recipe.id, user_id: data.userId, stars, comment: null, updated_at: new Date().toISOString() }],
+      [
+        {
+          premium_recipe_id: data.recipe.id,
+          user_id: data.userId,
+          stars,
+          comment: null,
+          updated_at: new Date().toISOString(),
+        },
+      ],
       { onConflict: 'premium_recipe_id,user_id' }
     );
 
@@ -450,22 +513,35 @@ export default function PremiumRecipeDetailPage() {
   if (error || !data) {
     return (
       <main className="min-h-screen bg-[#FAF6F1] p-6">
-        <Link href="/app/premium" className="text-sm text-[#A55412]">← Volver al Premium Board</Link>
-        <p className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error ?? 'No se encontró la receta.'}</p>
+        <Link href="/app/premium" className="text-sm text-[#A55412]">
+          ← Volver al Premium Board
+        </Link>
+        <p className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          {error ?? 'No se encontró la receta.'}
+        </p>
       </main>
     );
   }
 
   const recipeTitle = data.history?.recipe_title ?? `Receta premium #${data.recipe.id.slice(0, 8)}`;
-  const prepTime = parseMetaField(data.history?.recipe_payload ?? null, 'estimated_time') ?? '30-40 min';
-  const origin = parseMetaField(data.history?.recipe_payload ?? null, 'origin') ?? 'Inspiración culinaria premium';
-  const fusionApplied = parseMetaField(data.history?.recipe_payload ?? null, 'fusion') ?? fusionCulture;
-  const techniques = parseMetaField(data.history?.recipe_payload ?? null, 'techniques') ?? 'Salteado, montaje y equilibrio de sabores';
+  const prepTime =
+    parseMetaField(data.history?.recipe_payload ?? null, 'estimated_time') ?? '30-40 min';
+  const origin =
+    parseMetaField(data.history?.recipe_payload ?? null, 'origin') ??
+    'Inspiración culinaria premium';
+  const fusionApplied =
+    parseMetaField(data.history?.recipe_payload ?? null, 'fusion') ?? fusionCulture;
+  const techniques =
+    parseMetaField(data.history?.recipe_payload ?? null, 'techniques') ??
+    'Salteado, montaje y equilibrio de sabores';
 
   return (
     <main className="min-h-screen bg-[#FAF6F1] px-4 pb-12 pt-6 md:px-8">
       <div className="mx-auto max-w-6xl space-y-6">
-        <Link href="/app/premium" className="inline-flex items-center gap-1 text-sm font-semibold text-[#A55412] hover:text-[#C56A1A]">
+        <Link
+          href="/app/premium"
+          className="inline-flex items-center gap-1 text-sm font-semibold text-[#A55412] hover:text-[#C56A1A]"
+        >
           ← Volver al Premium Board
         </Link>
 
@@ -473,22 +549,36 @@ export default function PremiumRecipeDetailPage() {
           <div className="relative h-56 bg-gradient-to-br from-[#16110D] via-[#2A1E18] to-[#6B5A50] md:h-72">
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(197,106,26,0.45),_transparent_65%)]" />
             <div className="absolute left-6 top-6 flex flex-wrap gap-2 text-xs">
-              <span className="rounded-full border border-white/30 bg-black/30 px-3 py-1 text-white">Premium</span>
-              <span className="rounded-full border border-white/30 bg-black/30 px-3 py-1 text-white">Recomendada</span>
+              <span className="rounded-full border border-white/30 bg-black/30 px-3 py-1 text-white">
+                Premium
+              </span>
+              <span className="rounded-full border border-white/30 bg-black/30 px-3 py-1 text-white">
+                Recomendada
+              </span>
               {ingredients.some((item) => item.available) ? (
-                <span className="rounded-full border border-white/30 bg-[#567A3B]/70 px-3 py-1 text-white">Usa inventario</span>
+                <span className="rounded-full border border-white/30 bg-[#567A3B]/70 px-3 py-1 text-white">
+                  Usa inventario
+                </span>
               ) : null}
             </div>
             <div className="absolute bottom-5 left-6 right-6">
               <h1 className="text-3xl font-semibold text-white md:text-4xl">{recipeTitle}</h1>
-              <p className="mt-2 text-sm text-white/85">{cuisineRegion} · {baseCulture} · Fusión {fusionCulture}</p>
+              <p className="mt-2 text-sm text-white/85">
+                {cuisineRegion} · {baseCulture} · Fusión {fusionCulture}
+              </p>
             </div>
           </div>
 
           <div className="grid gap-4 p-5 md:grid-cols-4">
             <Badge icon={<Clock3 size={14} />} label={prepTime} />
-            <Badge icon={<Utensils size={14} />} label={difficultyFromScore(Number(data.recipe.eligibility_score))} />
-            <Badge icon={<Sparkles size={14} />} label={`Score IA ${Number(data.recipe.eligibility_score).toFixed(1)}`} />
+            <Badge
+              icon={<Utensils size={14} />}
+              label={difficultyFromScore(Number(data.recipe.eligibility_score))}
+            />
+            <Badge
+              icon={<Sparkles size={14} />}
+              label={`Score IA ${Number(data.recipe.eligibility_score).toFixed(1)}`}
+            />
             <Badge icon={<Heart size={14} />} label={`${likes} likes · ${dislikes} dislikes`} />
           </div>
         </section>
@@ -507,23 +597,57 @@ export default function PremiumRecipeDetailPage() {
 
           <Card title="Contexto culinario" icon={<MapPin size={16} />}>
             <ul className="space-y-2 text-sm text-[#6B5A50]">
-              <li><strong className="text-[#241A14]">Origen:</strong> {origin}</li>
-              <li><strong className="text-[#241A14]">Cultura base:</strong> {baseCulture}</li>
-              <li><strong className="text-[#241A14]">Fusión aplicada:</strong> {fusionApplied}</li>
-              <li><strong className="text-[#241A14]">Técnicas:</strong> {techniques}</li>
+              <li>
+                <strong className="text-[#241A14]">Origen:</strong> {origin}
+              </li>
+              <li>
+                <strong className="text-[#241A14]">Cultura base:</strong> {baseCulture}
+              </li>
+              <li>
+                <strong className="text-[#241A14]">Fusión aplicada:</strong> {fusionApplied}
+              </li>
+              <li>
+                <strong className="text-[#241A14]">Técnicas:</strong> {techniques}
+              </li>
             </ul>
           </Card>
 
           <Card title="Acciones" icon={<ShieldCheck size={16} />}>
             <div className="flex flex-wrap gap-2">
-              <ActionButton disabled={saving} onClick={() => void vote(5)} icon={<ThumbsUp size={14} />} label="Me gusta" />
-              <ActionButton disabled={saving} onClick={() => void vote(1)} icon={<ThumbsDown size={14} />} label="No me gusta" />
-              <ActionButton disabled={saving || data.alreadySaved} onClick={() => void saveRecipe()} icon={<Bookmark size={14} />} label={data.alreadySaved ? "Guardada" : "Guardar"} />
-              <ActionButton disabled={saving || !data.alreadySaved} onClick={() => void unsaveRecipe()} icon={<Bookmark size={14} />} label="Quitar guardada" />
-              <Link href="/meal-planner" className="inline-flex items-center gap-1 rounded-lg border border-[#E8DDD2] px-3 py-1.5 text-xs font-semibold text-[#241A14] hover:border-[#C56A1A]/40">
+              <ActionButton
+                disabled={saving}
+                onClick={() => void vote(5)}
+                icon={<ThumbsUp size={14} />}
+                label="Me gusta"
+              />
+              <ActionButton
+                disabled={saving}
+                onClick={() => void vote(1)}
+                icon={<ThumbsDown size={14} />}
+                label="No me gusta"
+              />
+              <ActionButton
+                disabled={saving || data.alreadySaved}
+                onClick={() => void saveRecipe()}
+                icon={<Bookmark size={14} />}
+                label={data.alreadySaved ? 'Guardada' : 'Guardar'}
+              />
+              <ActionButton
+                disabled={saving || !data.alreadySaved}
+                onClick={() => void unsaveRecipe()}
+                icon={<Bookmark size={14} />}
+                label="Quitar guardada"
+              />
+              <Link
+                href="/meal-planner"
+                className="inline-flex items-center gap-1 rounded-lg border border-[#E8DDD2] px-3 py-1.5 text-xs font-semibold text-[#241A14] hover:border-[#C56A1A]/40"
+              >
                 <ListPlus size={14} /> Agregar al menú
               </Link>
-              <a href="#similares" className="inline-flex items-center gap-1 rounded-lg border border-[#E8DDD2] px-3 py-1.5 text-xs font-semibold text-[#241A14] hover:border-[#C56A1A]/40">
+              <a
+                href="#similares"
+                className="inline-flex items-center gap-1 rounded-lg border border-[#E8DDD2] px-3 py-1.5 text-xs font-semibold text-[#241A14] hover:border-[#C56A1A]/40"
+              >
                 <ArrowUpRight size={14} /> Ver similares
               </a>
             </div>
@@ -535,20 +659,37 @@ export default function PremiumRecipeDetailPage() {
             {ingredients.length > 0 ? (
               <ul className="space-y-2">
                 {ingredients.map((item) => (
-                  <li key={`${item.name}-${item.quantity}`} className="flex items-center justify-between rounded-xl border border-[#E8DDD2] bg-white/60 px-3 py-2 text-sm">
-                    <span className="text-[#241A14]">{item.name} <span className="text-[#6B5A50]">({item.quantity})</span></span>
-                    <span className={`rounded-full px-2 py-0.5 text-xs ${item.available ? 'bg-[#567A3B]/15 text-[#567A3B]' : 'bg-[#A55412]/12 text-[#A55412]'}`}>
+                  <li
+                    key={`${item.name}-${item.quantity}`}
+                    className="flex items-center justify-between rounded-xl border border-[#E8DDD2] bg-white/60 px-3 py-2 text-sm"
+                  >
+                    <span className="text-[#241A14]">
+                      {item.name} <span className="text-[#6B5A50]">({item.quantity})</span>
+                    </span>
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-xs ${item.available ? 'bg-[#567A3B]/15 text-[#567A3B]' : 'bg-[#A55412]/12 text-[#A55412]'}`}
+                    >
                       {item.available ? 'Disponible' : 'Falta comprar'}
                     </span>
                   </li>
                 ))}
               </ul>
             ) : (
-              <p className="text-sm text-[#6B5A50]">Esta receta no expone ingredientes estructurados por RLS/privacidad del origen.</p>
+              <p className="text-sm text-[#6B5A50]">
+                Esta receta no expone ingredientes estructurados por RLS/privacidad del origen.
+              </p>
             )}
             <div className="mt-3 flex flex-wrap gap-2">
-              <ActionButton disabled={saving} onClick={() => void addMissingToShoppingList()} icon={<ListPlus size={14} />} label="Agregar faltantes a compras" />
-              <Link href="/meal-planner" className="inline-flex items-center gap-1 rounded-lg border border-[#E8DDD2] px-3 py-1.5 text-xs font-semibold text-[#241A14] hover:border-[#C56A1A]/40">
+              <ActionButton
+                disabled={saving}
+                onClick={() => void addMissingToShoppingList()}
+                icon={<ListPlus size={14} />}
+                label="Agregar faltantes a compras"
+              />
+              <Link
+                href="/meal-planner"
+                className="inline-flex items-center gap-1 rounded-lg border border-[#E8DDD2] px-3 py-1.5 text-xs font-semibold text-[#241A14] hover:border-[#C56A1A]/40"
+              >
                 <ArrowUpRight size={14} /> Usar en meal planner
               </Link>
             </div>
@@ -558,14 +699,21 @@ export default function PremiumRecipeDetailPage() {
             {steps.length > 0 ? (
               <ol className="space-y-2">
                 {steps.map((step) => (
-                  <li key={step.index} className="rounded-xl border border-[#E8DDD2] bg-white/60 px-3 py-2 text-sm text-[#241A14]">
-                    <span className="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full bg-[#C56A1A]/15 text-xs font-semibold text-[#A55412]">{step.index}</span>
+                  <li
+                    key={step.index}
+                    className="rounded-xl border border-[#E8DDD2] bg-white/60 px-3 py-2 text-sm text-[#241A14]"
+                  >
+                    <span className="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full bg-[#C56A1A]/15 text-xs font-semibold text-[#A55412]">
+                      {step.index}
+                    </span>
                     {step.text}
                   </li>
                 ))}
               </ol>
             ) : (
-              <p className="text-sm text-[#6B5A50]">No hay pasos estructurados visibles en esta receta premium.</p>
+              <p className="text-sm text-[#6B5A50]">
+                No hay pasos estructurados visibles en esta receta premium.
+              </p>
             )}
           </Card>
         </section>
@@ -590,15 +738,26 @@ export default function PremiumRecipeDetailPage() {
 
         <section id="similares" className="space-y-3">
           <h2 className="text-2xl font-semibold text-[#241A14]">Más recetas similares</h2>
-          <p className="text-sm text-[#6B5A50]">Basadas en región, cultura, fusión y señales de feedback.</p>
+          <p className="text-sm text-[#6B5A50]">
+            Basadas en región, cultura, fusión y señales de feedback.
+          </p>
 
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {data.similarRecipes.length > 0 ? (
               data.similarRecipes.map((recipe) => (
-                <Link key={recipe.id} href={`/app/premium/${recipe.id}`} className="rounded-2xl border border-[#E8DDD2] bg-white/75 p-4 premium-shadow hover:border-[#C56A1A]/35">
+                <Link
+                  key={recipe.id}
+                  href={`/app/premium/${recipe.id}`}
+                  className="rounded-2xl border border-[#E8DDD2] bg-white/75 p-4 premium-shadow hover:border-[#C56A1A]/35"
+                >
                   <p className="text-base font-semibold text-[#241A14]">Receta premium</p>
-                  <p className="mt-1 text-xs text-[#6B5A50]">Score {Number(recipe.eligibility_score).toFixed(1)} · {difficultyFromScore(Number(recipe.eligibility_score))}</p>
-                  <p className="mt-2 text-sm text-[#6B5A50]">Creador: {recipe.creator_display_name ?? 'Miembro premium'}</p>
+                  <p className="mt-1 text-xs text-[#6B5A50]">
+                    Score {Number(recipe.eligibility_score).toFixed(1)} ·{' '}
+                    {difficultyFromScore(Number(recipe.eligibility_score))}
+                  </p>
+                  <p className="mt-2 text-sm text-[#6B5A50]">
+                    Creador: {recipe.creator_display_name ?? 'Miembro premium'}
+                  </p>
                 </Link>
               ))
             ) : (
@@ -608,7 +767,9 @@ export default function PremiumRecipeDetailPage() {
         </section>
 
         {message ? (
-          <p className="rounded-xl border border-[#E8DDD2] bg-white/80 px-3 py-2 text-sm text-[#241A14]">{message}</p>
+          <p className="rounded-xl border border-[#E8DDD2] bg-white/80 px-3 py-2 text-sm text-[#241A14]">
+            {message}
+          </p>
         ) : null}
       </div>
     </main>
@@ -636,7 +797,12 @@ function Badge(props: { icon: React.ReactNode; label: string }) {
   );
 }
 
-function ActionButton(props: { disabled?: boolean; onClick: () => void; icon: React.ReactNode; label: string }) {
+function ActionButton(props: {
+  disabled?: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+}) {
   return (
     <button
       type="button"

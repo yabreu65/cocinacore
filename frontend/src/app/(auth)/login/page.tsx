@@ -1,11 +1,13 @@
 'use client';
 
 import Link from 'next/link';
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useRouter } from 'next/navigation';
 import { getSupabaseBrowserClient } from '@/lib/supabaseClient';
 import { humanCopy } from '@/lib/copy';
+import { mapAuthError } from '@/lib/auth/errors';
+import { getSafeRedirectPath } from '@/lib/auth/safeRedirect';
 
 const features = [
   'Biblioteca culinaria inteligente',
@@ -16,7 +18,11 @@ const features = [
 ];
 
 const floatingCards = [
-  { title: humanCopy.suggestedRecipesForYou, text: 'Risotto cremoso según tu inventario', accent: '#6D4AFF' },
+  {
+    title: humanCopy.suggestedRecipesForYou,
+    text: 'Risotto cremoso según tu inventario',
+    accent: '#6D4AFF',
+  },
   { title: 'Tip del chef', text: 'Sellá proteína antes de bajar el fuego', accent: '#C56A1A' },
   { title: 'PDF consultado', text: 'Cocina Familiar Vol.2.pdf', accent: '#567A3B' },
   { title: 'Ingredientes disponibles', text: 'Tomate · Pollo · Ajo · Cebolla', accent: '#C56A1A' },
@@ -28,8 +34,14 @@ export default function LoginPage() {
   const [oauthLoading, setOauthLoading] = useState<'google' | 'github' | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [rememberSession, setRememberSession] = useState(true);
+  const [oauthTermsAccepted, setOauthTermsAccepted] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    const error = new URLSearchParams(window.location.search).get('error');
+    if (error) setErrorMessage(error);
+  }, []);
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -42,19 +54,24 @@ export default function LoginPage() {
     const password = String(formData.get('password') ?? '');
 
     try {
-      const supabase = getSupabaseBrowserClient();
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
 
-      if (error) {
-        setErrorMessage(error.message);
+      if (!response.ok) {
+        setErrorMessage(body.error ?? mapAuthError(null, 'login'));
         return;
       }
 
       setSuccessMessage('Sesión iniciada correctamente. Redirigiendo...');
-      router.push('/app');
+      const next = getSafeRedirectPath(new URLSearchParams(window.location.search).get('next'));
+      router.push(next);
       router.refresh();
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'No se pudo iniciar sesión.');
+      setErrorMessage(mapAuthError(error, 'login'));
     } finally {
       setLoading(false);
     }
@@ -65,20 +82,31 @@ export default function LoginPage() {
     setSuccessMessage(null);
     setOauthLoading(provider);
 
+    if (!oauthTermsAccepted) {
+      setErrorMessage('Aceptá términos y privacidad para continuar con OAuth.');
+      setOauthLoading(null);
+      return;
+    }
+
     try {
+      document.cookie = `cc_terms_accepted_at=${encodeURIComponent(
+        new Date().toISOString()
+      )}; path=/; max-age=600; samesite=lax`;
       const supabase = getSupabaseBrowserClient();
       const { error } = await supabase.auth.signInWithOAuth({
         provider,
         options: {
-          redirectTo: `${window.location.origin}/app`,
+          redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(
+            getSafeRedirectPath(new URLSearchParams(window.location.search).get('next'))
+          )}`,
         },
       });
 
       if (error) {
-        setErrorMessage(error.message);
+        setErrorMessage(mapAuthError(error, 'oauth'));
       }
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : `No se pudo continuar con ${provider}.`);
+      setErrorMessage(mapAuthError(error, 'oauth'));
     } finally {
       setOauthLoading(null);
     }
@@ -89,13 +117,20 @@ export default function LoginPage() {
       <div className="mx-auto grid w-full max-w-[1220px] overflow-hidden rounded-[2rem] border border-[#E8DDD2] bg-white/55 premium-shadow lg:grid-cols-[1.08fr_0.92fr]">
         <section className="relative overflow-hidden border-b border-[#E8DDD2] p-6 md:p-10 lg:border-b-0 lg:border-r">
           <div className="pointer-events-none absolute right-0 top-0 h-72 w-72 rounded-full bg-[#6D4AFF]/10 blur-3xl" />
-          <motion.div initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.45 }}>
-            <p className="text-xs font-bold tracking-[0.15em] text-[#C56A1A]">COCINACORE • LOGIN PREMIUM</p>
+          <motion.div
+            initial={{ opacity: 0, y: 24 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.45 }}
+          >
+            <p className="text-xs font-bold tracking-[0.15em] text-[#C56A1A]">
+              COCINACORE • LOGIN PREMIUM
+            </p>
             <h1 className="mt-4 text-4xl font-semibold leading-[1.08] text-[#241A14] md:text-5xl">
               Bienvenido de nuevo a tu cocina inteligente
             </h1>
             <p className="mt-4 max-w-xl text-lg text-[#6B5A50]">
-              Accede a tus recetas, biblioteca culinaria, inventario y recetas sugeridas desde cualquier lugar.
+              Accede a tus recetas, biblioteca culinaria, inventario y recetas sugeridas desde
+              cualquier lugar.
             </p>
 
             <div className="mt-7 rounded-2xl border border-[#E8DDD2] bg-[#16110D] p-4 text-[#F5ECE2] dark-panel-shadow">
@@ -139,7 +174,9 @@ export default function LoginPage() {
             <ul className="mt-7 grid gap-2 text-sm text-[#6B5A50] sm:grid-cols-2">
               {features.map((feature) => (
                 <li key={feature} className="flex items-center gap-2">
-                  <span className="inline-grid h-5 w-5 place-items-center rounded-full bg-[#567A3B]/20 text-xs font-bold text-[#567A3B]">✓</span>
+                  <span className="inline-grid h-5 w-5 place-items-center rounded-full bg-[#567A3B]/20 text-xs font-bold text-[#567A3B]">
+                    ✓
+                  </span>
                   {feature}
                 </li>
               ))}
@@ -155,16 +192,28 @@ export default function LoginPage() {
             className="w-full rounded-3xl border border-white/70 bg-white/70 p-6 shadow-[0_20px_36px_rgba(36,26,20,0.12)] backdrop-blur-md md:p-8"
           >
             <h2 className="text-3xl font-semibold text-[#241A14]">Iniciar sesión</h2>
-            <p className="mt-2 text-[#6B5A50]">Continúa organizando tu cocina con asistencia inteligente.</p>
+            <p className="mt-2 text-[#6B5A50]">
+              Continúa organizando tu cocina con asistencia inteligente.
+            </p>
 
             <form onSubmit={onSubmit} className="mt-6 grid gap-4" noValidate>
               <div className="grid gap-2">
-                <label htmlFor="login-email" className="text-sm font-semibold text-[#3A2D24]">Correo electrónico</label>
-                <input id="login-email" type="email" name="email" required className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 text-[#241A14] outline-none transition focus:border-[#C56A1A]" />
+                <label htmlFor="login-email" className="text-sm font-semibold text-[#3A2D24]">
+                  Correo electrónico
+                </label>
+                <input
+                  id="login-email"
+                  type="email"
+                  name="email"
+                  required
+                  className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 text-[#241A14] outline-none transition focus:border-[#C56A1A]"
+                />
               </div>
 
               <div className="grid gap-2">
-                <label htmlFor="login-password" className="text-sm font-semibold text-[#3A2D24]">Contraseña</label>
+                <label htmlFor="login-password" className="text-sm font-semibold text-[#3A2D24]">
+                  Contraseña
+                </label>
                 <div className="relative">
                   <input
                     id="login-password"
@@ -184,7 +233,10 @@ export default function LoginPage() {
               </div>
 
               <div className="flex items-center justify-between gap-3 text-sm">
-                <label className="flex items-center gap-2 text-[#6B5A50]" title="Próximamente persistencia configurable de sesión">
+                <label
+                  className="flex items-center gap-2 text-[#6B5A50]"
+                  title="Próximamente persistencia configurable de sesión"
+                >
                   <input
                     type="checkbox"
                     checked={rememberSession}
@@ -193,22 +245,48 @@ export default function LoginPage() {
                   />
                   Recordar sesión
                 </label>
-                <a href="#" className="font-semibold text-[#A55412] hover:text-[#C56A1A]">¿Olvidaste tu contraseña?</a>
+                <Link href="/forgot-password" className="font-semibold text-[#A55412] hover:text-[#C56A1A]">
+                  ¿Olvidaste tu contraseña?
+                </Link>
               </div>
 
-              {errorMessage && <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{errorMessage}</p>}
-              {successMessage && <p className="rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{successMessage}</p>}
+              {errorMessage && (
+                <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">
+                  {errorMessage}
+                </p>
+              )}
+              {successMessage && (
+                <p className="rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+                  {successMessage}
+                </p>
+              )}
 
-              <button type="submit" disabled={loading} className="mt-1 h-11 rounded-xl bg-[#C56A1A] font-semibold text-white transition hover:bg-[#A55412] disabled:opacity-70">
+              <button
+                type="submit"
+                disabled={loading}
+                className="mt-1 h-11 rounded-xl bg-[#C56A1A] font-semibold text-white transition hover:bg-[#A55412] disabled:opacity-70"
+              >
                 {loading ? 'Ingresando...' : 'Ingresar'}
               </button>
             </form>
 
             <div className="my-5 flex items-center gap-3">
               <div className="h-px flex-1 bg-[#E8DDD2]" />
-              <span className="text-xs font-semibold uppercase tracking-[0.08em] text-[#8B796B]">o continuar con</span>
+              <span className="text-xs font-semibold uppercase tracking-[0.08em] text-[#8B796B]">
+                o continuar con
+              </span>
               <div className="h-px flex-1 bg-[#E8DDD2]" />
             </div>
+
+            <label className="mb-3 flex items-start gap-3 text-sm text-[#6B5A50]">
+              <input
+                type="checkbox"
+                checked={oauthTermsAccepted}
+                onChange={(event) => setOauthTermsAccepted(event.target.checked)}
+                className="mt-1 h-4 w-4 rounded border-[#E8DDD2] accent-[#C56A1A]"
+              />
+              Acepto términos y privacidad si esta es mi primera vez con OAuth.
+            </label>
 
             <div className="grid gap-3 sm:grid-cols-2">
               <button

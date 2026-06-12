@@ -38,7 +38,11 @@ type DashboardData = {
   tenantType: 'home' | 'professional';
   trialEndsAt: string | null;
   inventory: Array<{ name: string; quantity: string | null }>;
-  recentRecipes: Array<{ title: string; createdAt: string; feedback: 'accepted' | 'discarded' | null }>;
+  recentRecipes: Array<{
+    title: string;
+    createdAt: string;
+    feedback: 'accepted' | 'discarded' | null;
+  }>;
   pdfCount: number;
   latestPdfOcrUsed: boolean;
   latestPdfs: DashboardPdfItem[];
@@ -54,22 +58,70 @@ type DashboardData = {
 };
 
 const sidebarItems = [
-  { label: 'Inicio', icon: LayoutGrid, active: true, href: '/app', description: 'Vista general con accesos rápidos y actividad reciente.' },
-  { label: humanCopy.assistantRecipesNav, icon: Sparkles, href: '/recipes/search', description: 'Genera recetas con ayuda o busca recetas usando tus PDFs.' },
-  { label: 'Planificador', icon: CalendarDays, href: '/meal-planner', description: 'Crea menús semanales o mensuales según tu inventario o estilo de cocina.' },
-  { label: 'Inventario', icon: Package, href: '/recipes/inventory', description: 'Gestiona tus ingredientes para mejorar recomendaciones y menús.' },
-  { label: 'Biblioteca', icon: Library, href: '/library', description: 'Consulta y administra tus libros y recetas en PDF.' },
-  { label: 'Tablero Premium', icon: Crown, href: '/app/premium', description: 'Descubrí recetas premium recomendadas con señales inteligentes.' },
-  { label: 'Miembros', icon: Users, href: '/members', description: 'Invitá y gestiona miembros de tu tenant con roles y estados.' },
-  { label: 'Perfil', icon: User, href: '/profile', description: 'Configura tu cuenta, seguridad y preferencias personales.' },
-  { label: 'Facturación', icon: CreditCard, href: '/billing', description: 'Revisa estado de plan, trial y futuras opciones de pago.' },
+  {
+    label: 'Inicio',
+    icon: LayoutGrid,
+    active: true,
+    href: '/app',
+    description: 'Vista general con accesos rápidos y actividad reciente.',
+  },
+  {
+    label: humanCopy.assistantRecipesNav,
+    icon: Sparkles,
+    href: '/recipes/search',
+    description: 'Genera recetas con ayuda o busca recetas usando tus PDFs.',
+  },
+  {
+    label: 'Planificador',
+    icon: CalendarDays,
+    href: '/meal-planner',
+    description: 'Crea menús semanales o mensuales según tu inventario o estilo de cocina.',
+  },
+  {
+    label: 'Inventario',
+    icon: Package,
+    href: '/recipes/inventory',
+    description: 'Gestiona tus ingredientes para mejorar recomendaciones y menús.',
+  },
+  {
+    label: 'Biblioteca',
+    icon: Library,
+    href: '/library',
+    description: 'Consulta y administra tus libros y recetas en PDF.',
+  },
+  {
+    label: 'Tablero Premium',
+    icon: Crown,
+    href: '/app/premium',
+    description: 'Descubrí recetas premium recomendadas con señales inteligentes.',
+  },
+  {
+    label: 'Miembros',
+    icon: Users,
+    href: '/members',
+    description: 'Invitá y gestiona miembros de tu tenant con roles y estados.',
+  },
+  {
+    label: 'Perfil',
+    icon: User,
+    href: '/profile',
+    description: 'Configura tu cuenta, seguridad y preferencias personales.',
+  },
+  {
+    label: 'Facturación',
+    icon: CreditCard,
+    href: '/billing',
+    description: 'Revisa estado de plan, trial y futuras opciones de pago.',
+  },
 ];
 
 const quickChips = ['Receta rápida', 'Cena familiar', 'Sin gluten', 'Postre', 'Pasta', 'Parrilla'];
 
 function Card({ children, className = '' }: { children: React.ReactNode; className?: string }) {
   return (
-    <article className={`rounded-3xl border border-[#E8DDD2] bg-white/75 p-5 premium-shadow ${className}`}>
+    <article
+      className={`rounded-3xl border border-[#E8DDD2] bg-white/75 p-5 premium-shadow ${className}`}
+    >
       {children}
     </article>
   );
@@ -116,7 +168,9 @@ async function generateEmbeddingsFromApi(texts: string[]): Promise<number[][]> {
   });
 
   if (!response.ok) {
-    const payload = (await response.json().catch(() => ({ error: 'Error desconocido.' }))) as { error?: string };
+    const payload = (await response.json().catch(() => ({ error: 'Error desconocido.' }))) as {
+      error?: string;
+    };
     throw new Error(payload.error ?? 'No se pudieron generar embeddings.');
   }
 
@@ -141,7 +195,6 @@ function getMetadataFullName(user: SupabaseUser): string | null {
   const fullName = (raw as { full_name?: unknown }).full_name;
   return typeof fullName === 'string' && fullName.trim().length > 0 ? fullName : null;
 }
-
 
 async function renderPageToPngDataUrl(page: PdfPageLike): Promise<string> {
   const viewport = page.getViewport({ scale: 1.75 });
@@ -181,7 +234,9 @@ function chunkText(content: string, maxChars = 900, overlap = 120): string[] {
   return chunks;
 }
 
-async function extractPdfChunks(file: File): Promise<{ pageCount: number; chunks: ParsedChunk[]; usedOcr: boolean }> {
+async function extractPdfChunks(
+  file: File
+): Promise<{ pageCount: number; chunks: ParsedChunk[]; usedOcr: boolean }> {
   const pdfjsLib = await import('pdfjs-dist');
   pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
 
@@ -253,7 +308,11 @@ export default function AppDashboardPage() {
       avoid: [],
       goals: [],
     },
-    activity: ['Creaste tu cuenta', 'Completaste onboarding', 'Listo para generar tu primera receta'],
+    activity: [
+      'Creaste tu cuenta',
+      'Completaste onboarding',
+      'Listo para generar tu primera receta',
+    ],
   });
 
   const load = useCallback(async () => {
@@ -272,25 +331,40 @@ export default function AppDashboardPage() {
 
       const authUser = userData.user;
 
-      const [{ data: profile }, { data: inventoryRows }, { data: recipeRows }, { data: culinaryProfileRow }, { data: profileTermRows }] = await Promise.all([
-        supabase.from('users').select('full_name,tenant_id,onboarding_completed').eq('id', authUser.id).maybeSingle(),
+      const [
+        { data: profile },
+        { data: inventoryRows },
+        { data: recipeRows },
+        { data: culinaryProfileRow },
+        { data: profileTermRows },
+      ] = await Promise.all([
+        supabase
+          .from('users')
+          .select('full_name,tenant_id,onboarding_completed')
+          .eq('id', authUser.id)
+          .maybeSingle(),
         supabase
           .from('recipe_inventory_items')
-          .select('ingredient_name,quantity,created_at')
-          .order('created_at', { ascending: false })
+          .select('ingredient_name,quantity,updated_at')
+          .eq('user_id', authUser.id)
+          .order('updated_at', { ascending: false })
           .limit(50),
         supabase
           .from('recipe_ai_history')
           .select('recipe_title,created_at,user_feedback')
+          .eq('user_id', authUser.id)
           .order('created_at', { ascending: false })
           .limit(8),
-        supabase.from('user_culinary_profiles').select('level').eq('user_id', authUser.id).maybeSingle(),
+        supabase
+          .from('user_culinary_profiles')
+          .select('level')
+          .eq('user_id', authUser.id)
+          .maybeSingle(),
         supabase
           .from('user_culinary_profile_terms')
           .select('preference_type,term_id')
           .eq('user_id', authUser.id),
       ]);
-
 
       if (profile && profile.onboarding_completed === false) {
         router.push('/onboarding');
@@ -306,9 +380,22 @@ export default function AppDashboardPage() {
       let tenantBooks: Array<{ id: string; title: string }> = [];
 
       if (tenantId) {
-        const [{ data: tenant }, { count }, { data: latestPdf }, { data: pdfRows }, { data: bookRows }] = await Promise.all([
-          supabase.from('tenants').select('trial_ends_at,tenant_type').eq('id', tenantId).maybeSingle(),
-          supabase.from('tenant_pdf_library').select('*', { count: 'exact', head: true }).eq('tenant_id', tenantId),
+        const [
+          { data: tenant },
+          { count },
+          { data: latestPdf },
+          { data: pdfRows },
+          { data: bookRows },
+        ] = await Promise.all([
+          supabase
+            .from('tenants')
+            .select('trial_ends_at,tenant_type')
+            .eq('id', tenantId)
+            .maybeSingle(),
+          supabase
+            .from('tenant_pdf_library')
+            .select('*', { count: 'exact', head: true })
+            .eq('tenant_id', tenantId),
           supabase
             .from('tenant_pdf_library')
             .select('ocr_used')
@@ -394,7 +481,9 @@ export default function AppDashboardPage() {
         activity: [
           'Creaste tu cuenta',
           'Completaste onboarding',
-          (recipeRows?.length ?? 0) > 0 ? 'Generaste recetas con ayuda' : 'Listo para generar tu primera receta',
+          (recipeRows?.length ?? 0) > 0
+            ? 'Generaste recetas con ayuda'
+            : 'Listo para generar tu primera receta',
         ],
       });
     } catch (e) {
@@ -408,7 +497,6 @@ export default function AppDashboardPage() {
     void load();
   }, [load]);
 
-
   const prettyPdfName = (storagePath: string): string => {
     const name = storagePath.split('/').pop() ?? storagePath;
     return decodeURIComponent(name).replace(/^[0-9]+-/, '');
@@ -421,43 +509,72 @@ export default function AppDashboardPage() {
     return 'Buenas noches';
   }, []);
 
-
   const normalizedSearch = headerQuery.trim().toLowerCase();
-  const searchResults = normalizedSearch.length < 2
-    ? []
-    : [
-        ...data.inventory
-          .filter((item) => item.name.toLowerCase().includes(normalizedSearch))
-          .map((item) => ({ type: 'Ingrediente', label: item.name, href: '/recipes/inventory' })),
-        ...data.recentRecipes
-          .filter((item) => item.title.toLowerCase().includes(normalizedSearch))
-          .map((item) => ({ type: 'Receta', label: item.title, href: '/recipes/history' })),
-        ...data.tenantBooks
-          .filter((item) => item.title.toLowerCase().includes(normalizedSearch))
-          .map((item) => ({ type: 'PDF', label: item.title, href: '/app' })),
-      ].slice(0, 8);
+  const searchResults =
+    normalizedSearch.length < 2
+      ? []
+      : [
+          ...data.inventory
+            .filter((item) => item.name.toLowerCase().includes(normalizedSearch))
+            .map((item) => ({ type: 'Ingrediente', label: item.name, href: '/recipes/inventory' })),
+          ...data.recentRecipes
+            .filter((item) => item.title.toLowerCase().includes(normalizedSearch))
+            .map((item) => ({ type: 'Receta', label: item.title, href: '/recipes/history' })),
+          ...data.tenantBooks
+            .filter((item) => item.title.toLowerCase().includes(normalizedSearch))
+            .map((item) => ({ type: 'PDF', label: item.title, href: '/app' })),
+        ].slice(0, 8);
 
   const hasProfile =
-    data.culinaryProfile.preferred.length > 0
-    || data.culinaryProfile.goals.length > 0
-    || data.culinaryProfile.avoid.length > 0
-    || Boolean(data.culinaryProfile.level);
+    data.culinaryProfile.preferred.length > 0 ||
+    data.culinaryProfile.goals.length > 0 ||
+    data.culinaryProfile.avoid.length > 0 ||
+    Boolean(data.culinaryProfile.level);
   const hasInventory = data.inventory.length > 0;
   const hasRecipes = data.recentRecipes.length > 0;
   const feedbackGiven = data.recentRecipes.filter((recipe) => recipe.feedback !== null).length;
-  const positiveFeedback = data.recentRecipes.filter((recipe) => recipe.feedback === 'accepted').length;
-  const negativeFeedback = data.recentRecipes.filter((recipe) => recipe.feedback === 'discarded').length;
+  const positiveFeedback = data.recentRecipes.filter(
+    (recipe) => recipe.feedback === 'accepted'
+  ).length;
+  const negativeFeedback = data.recentRecipes.filter(
+    (recipe) => recipe.feedback === 'discarded'
+  ).length;
 
   const nextAction = !hasProfile
-    ? { title: 'Completar perfil culinario', description: 'Definí preferencias y objetivos para recetas más precisas.', href: '/onboarding', cta: 'Completar perfil' }
+    ? {
+        title: 'Completar perfil culinario',
+        description: 'Definí preferencias y objetivos para recetas más precisas.',
+        href: '/onboarding',
+        cta: 'Completar perfil',
+      }
     : !hasInventory
-      ? { title: 'Agregar ingredientes', description: 'Sin inventario activo, las sugerencias pierden contexto real.', href: '/recipes/inventory', cta: 'Gestionar inventario' }
+      ? {
+          title: 'Agregar ingredientes',
+          description: 'Sin inventario activo, las sugerencias pierden contexto real.',
+          href: '/recipes/inventory',
+          cta: 'Gestionar inventario',
+        }
       : !hasRecipes
-        ? { title: 'Crear primera receta', description: 'Ya tienes contexto suficiente para generar una receta personalizada.', href: '/recipes/search', cta: 'Crear receta' }
+        ? {
+            title: 'Crear primera receta',
+            description: 'Ya tienes contexto suficiente para generar una receta personalizada.',
+            href: '/recipes/search',
+            cta: 'Crear receta',
+          }
         : feedbackGiven === 0
-          ? { title: 'Calificar recetas recientes', description: 'Marca Me gustó / No me gustó para mejorar próximas sugerencias.', href: '/recipes/history', cta: 'Ir al historial' }
-          : { title: 'Crear meal plan personalizado', description: 'Con tu feedback activo, ya puedes planificar semana o mes con más precisión.', href: '/meal-planner', cta: 'Planificar menú' };
-
+          ? {
+              title: 'Calificar recetas recientes',
+              description: 'Marca Me gustó / No me gustó para mejorar próximas sugerencias.',
+              href: '/recipes/history',
+              cta: 'Ir al historial',
+            }
+          : {
+              title: 'Crear meal plan personalizado',
+              description:
+                'Con tu feedback activo, ya puedes planificar semana o mes con más precisión.',
+              href: '/meal-planner',
+              cta: 'Planificar menú',
+            };
 
   const openRecipeAi = (mode: 'pdf' | 'ai' = 'pdf') => {
     setRecipeMode(mode);
@@ -477,10 +594,17 @@ export default function AppDashboardPage() {
       const supabase = getSupabaseBrowserClient();
       const fallbackTitle = `Receta sugerida: ${basePrompt.split(',')[0]?.trim() || 'Personalizada'}`;
       let titleFromModel: string | null = null;
-      const ingredientList = basePrompt.split(',').map((v) => v.trim()).filter(Boolean);
+      const ingredientList = basePrompt
+        .split(',')
+        .map((v) => v.trim())
+        .filter(Boolean);
 
       let recipeText = '';
-      let citations: Array<{ id: string; similarity: number | string | null; metadata?: { page_number?: number; book_title?: string } }> = [];
+      let citations: Array<{
+        id: string;
+        similarity: number | string | null;
+        metadata?: { page_number?: number; book_title?: string };
+      }> = [];
 
       if (recipeMode === 'pdf') {
         const embedRes = await fetch('/api/embeddings', {
@@ -501,13 +625,19 @@ export default function AppDashboardPage() {
           query_embedding: queryEmbedding,
           match_threshold: 0.35,
           match_count: 8,
-          filter_tenant_id: null,
+          filter_tenant_id: data.tenantId,
         });
 
         if (rpcErr) throw rpcErr;
 
-        const safeChunks = ((chunkRows ?? []) as Array<{ id: string; content: string; similarity: number | string | null; metadata?: { page_number?: number; book_title?: string } }>)
-          .filter((row) => row.content);
+        const safeChunks = (
+          (chunkRows ?? []) as Array<{
+            id: string;
+            content: string;
+            similarity: number | string | null;
+            metadata?: { page_number?: number; book_title?: string };
+          }>
+        ).filter((row) => row.content);
 
         citations = safeChunks.slice(0, 4);
 
@@ -636,7 +766,6 @@ export default function AppDashboardPage() {
     }
   };
 
-
   const applyRecentRecipeAsPrompt = (title: string) => {
     setPrompt(title.replace(/^Receta sugerida:\s*/i, '').trim());
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -649,7 +778,9 @@ export default function AppDashboardPage() {
     if (!file || !data.tenantId || !data.userId) return;
 
     if (!canUploadMorePdfs) {
-      setError(`Límite de PDFs alcanzado para plan ${data.tenantType === 'professional' ? 'Professional' : 'Home'} (${pdfLimit}).`);
+      setError(
+        `Límite de PDFs alcanzado para plan ${data.tenantType === 'professional' ? 'Professional' : 'Home'} (${pdfLimit}).`
+      );
       return;
     }
 
@@ -671,10 +802,12 @@ export default function AppDashboardPage() {
       const storagePath = `tenant/${data.tenantId}/${Date.now()}-${safeName}`;
       const { pageCount, chunks, usedOcr } = await extractPdfChunks(file);
 
-      const { error: storageErr } = await supabase.storage.from('tenant-pdfs').upload(storagePath, file, {
-        contentType: 'application/pdf',
-        upsert: false,
-      });
+      const { error: storageErr } = await supabase.storage
+        .from('tenant-pdfs')
+        .upload(storagePath, file, {
+          contentType: 'application/pdf',
+          upsert: false,
+        });
 
       if (storageErr) throw storageErr;
 
@@ -712,8 +845,12 @@ export default function AppDashboardPage() {
       if (pdfErr || !pdfRow) throw pdfErr || new Error('No se pudo crear tenant_pdf_library.');
       insertedPdfId = pdfRow.id;
 
-      const chunkCandidates = (chunks.length > 0 ? chunks : [{ content: `Documento cargado: ${file.name}`, pageNumber: 1 }]).slice(0, 120);
-      const embeddings = await generateEmbeddingsFromApi(chunkCandidates.map((chunk) => chunk.content));
+      const chunkCandidates = (
+        chunks.length > 0 ? chunks : [{ content: `Documento cargado: ${file.name}`, pageNumber: 1 }]
+      ).slice(0, 120);
+      const embeddings = await generateEmbeddingsFromApi(
+        chunkCandidates.map((chunk) => chunk.content)
+      );
 
       const rows = chunkCandidates.map((chunk, index) => ({
         tenant_id: data.tenantId,
@@ -736,17 +873,26 @@ export default function AppDashboardPage() {
 
       await supabase
         .from('tenant_pdf_library')
-        .update({ processing_status: 'ready', processed_chunks_count: rows.length, processing_error: null })
+        .update({
+          processing_status: 'ready',
+          processed_chunks_count: rows.length,
+          processing_error: null,
+        })
         .eq('tenant_book_id', bookRow.id);
 
-      setMessage(`PDF cargado e indexado con ${rows.length} chunk(s)${usedOcr ? ' (incluyendo OCR)' : ''}.`);
+      setMessage(
+        `PDF cargado e indexado con ${rows.length} chunk(s)${usedOcr ? ' (incluyendo OCR)' : ''}.`
+      );
       await load();
     } catch (e) {
       const supabase = getSupabaseBrowserClient();
       if (insertedPdfId) {
         await supabase
           .from('tenant_pdf_library')
-          .update({ processing_status: 'failed', processing_error: e instanceof Error ? e.message : 'Error de procesamiento' })
+          .update({
+            processing_status: 'failed',
+            processing_error: e instanceof Error ? e.message : 'Error de procesamiento',
+          })
           .eq('id', insertedPdfId);
       } else if (insertedBookId) {
         await supabase.from('tenant_books').delete().eq('id', insertedBookId);
@@ -763,7 +909,9 @@ export default function AppDashboardPage() {
       <div className="mx-auto flex w-full max-w-[1440px] gap-4 p-4 md:p-6">
         <aside className="dark-panel-shadow sticky top-4 z-40 hidden h-[calc(100vh-2rem)] w-[260px] flex-col rounded-3xl border border-white/10 bg-[#16110D] p-4 text-[#F4EBDD] lg:flex">
           <div>
-            <p className="text-xl font-extrabold">Cocina<span className="text-[#E39A5A]">Core</span></p>
+            <p className="text-xl font-extrabold">
+              Cocina<span className="text-[#E39A5A]">Core</span>
+            </p>
             <p className="text-xs text-[#BFAE9F]">Tu cocina inteligente</p>
           </div>
           <nav className="mt-6 space-y-1">
@@ -805,7 +953,9 @@ export default function AppDashboardPage() {
                 <Menu size={18} />
               </button>
               <div>
-                <h1 className="text-2xl font-semibold">{greeting}, {data.fullName}</h1>
+                <h1 className="text-2xl font-semibold">
+                  {greeting}, {data.fullName}
+                </h1>
                 <p className="text-sm text-[#6B5A50]">¿Qué quieres cocinar hoy?</p>
               </div>
             </div>
@@ -830,28 +980,45 @@ export default function AppDashboardPage() {
                           className="flex items-center justify-between rounded-lg px-2 py-2 text-sm hover:bg-[#faf2e9]"
                         >
                           <span className="truncate text-[#241A14]">{result.label}</span>
-                          <span className="ml-2 rounded-full border border-[#E8DDD2] px-2 py-0.5 text-[10px] font-semibold text-[#6B5A50]">{result.type}</span>
+                          <span className="ml-2 rounded-full border border-[#E8DDD2] px-2 py-0.5 text-[10px] font-semibold text-[#6B5A50]">
+                            {result.type}
+                          </span>
                         </Link>
                       </li>
                     ))}
                   </ul>
                 ) : null}
               </div>
-              <span className="rounded-full border border-[#567A3B]/30 bg-[#567A3B]/10 px-3 py-1 text-xs font-semibold text-[#567A3B]">Trial activo</span>
+              <span className="rounded-full border border-[#567A3B]/30 bg-[#567A3B]/10 px-3 py-1 text-xs font-semibold text-[#567A3B]">
+                Trial activo
+              </span>
               <div className="grid h-10 w-10 place-items-center rounded-full bg-[#16110D] text-sm font-bold text-[#F5ECE2]">
                 {data.fullName.slice(0, 1).toUpperCase()}
               </div>
             </div>
           </header>
 
-          {error && <p className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
-          {message && <p className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{message}</p>}
+          {error && (
+            <p className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {error}
+            </p>
+          )}
+          {message && (
+            <p className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+              {message}
+            </p>
+          )}
 
-          <motion.section initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} className="grid gap-4">
+          <motion.section
+            initial={{ opacity: 0, y: 14 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="grid gap-4"
+          >
             <Card className="relative overflow-hidden bg-[linear-gradient(155deg,#fff,#fff7f0)]">
               <h2 className="text-3xl font-semibold">¿Qué quieres cocinar hoy?</h2>
               <p className="mt-2 max-w-2xl text-[#6B5A50]">
-                Genera recetas inteligentes usando tus ingredientes, preferencias y biblioteca culinaria.
+                Genera recetas inteligentes usando tus ingredientes, preferencias y biblioteca
+                culinaria.
               </p>
               <div className="mt-4 flex flex-col gap-3 lg:flex-row">
                 <input
@@ -895,7 +1062,9 @@ export default function AppDashboardPage() {
                   {humanCopy.createWithMe}
                 </button>
                 <span className="text-xs text-[#8C7A6D]">
-                  {recipeMode === 'pdf' ? 'Usa contexto de tu biblioteca PDF.' : 'Ignora PDFs y genera libre con ayuda.'}
+                  {recipeMode === 'pdf'
+                    ? 'Usa contexto de tu biblioteca PDF.'
+                    : 'Ignora PDFs y genera libre con ayuda.'}
                 </span>
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
@@ -912,18 +1081,27 @@ export default function AppDashboardPage() {
               <div className="mt-5 grid gap-3 md:grid-cols-3">
                 <div className="rounded-2xl border border-[#E8DDD2] bg-white/80 p-3">
                   <p className="text-xs font-semibold text-[#6D4AFF]">Tip del chef</p>
-                  <p className="mt-1 text-sm text-[#6B5A50]">Sellá las proteínas antes de cocción lenta.</p>
+                  <p className="mt-1 text-sm text-[#6B5A50]">
+                    Sellá las proteínas antes de cocción lenta.
+                  </p>
                 </div>
                 <div className="rounded-2xl border border-[#E8DDD2] bg-white/80 p-3">
                   <p className="text-xs font-semibold text-[#567A3B]">Ingredientes disponibles</p>
                   <p className="mt-1 text-sm text-[#6B5A50]">
-                    {data.inventory.length ? data.inventory.slice(0, 5).map((item) => item.name).join(', ') : 'Agrega ingredientes para mejorar tus recetas'}
+                    {data.inventory.length
+                      ? data.inventory
+                          .slice(0, 5)
+                          .map((item) => item.name)
+                          .join(', ')
+                      : 'Agrega ingredientes para mejorar tus recetas'}
                   </p>
                 </div>
                 <div className="rounded-2xl border border-[#E8DDD2] bg-white/80 p-3">
                   <p className="text-xs font-semibold text-[#C56A1A]">PDF culinarios</p>
                   <p className="mt-1 text-sm text-[#6B5A50]">
-                    {data.pdfCount > 0 ? `${data.pdfCount} PDF cargados` : 'Sube tu primer PDF culinario'}
+                    {data.pdfCount > 0
+                      ? `${data.pdfCount} PDF cargados`
+                      : 'Sube tu primer PDF culinario'}
                   </p>
                 </div>
               </div>
@@ -932,7 +1110,9 @@ export default function AppDashboardPage() {
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               <Card>
                 <h3 className="text-xl font-semibold">{humanCopy.assistedCookingTitle}</h3>
-                <p className="mt-2 text-[#6B5A50]">Crea recetas personalizadas con ayuda usando tu inventario y preferencias.</p>
+                <p className="mt-2 text-[#6B5A50]">
+                  Crea recetas personalizadas con ayuda usando tu inventario y preferencias.
+                </p>
                 <div className="mt-4 flex flex-wrap gap-2">
                   <button
                     type="button"
@@ -948,10 +1128,16 @@ export default function AppDashboardPage() {
                   >
                     {humanCopy.createWithMe} <ArrowUpRight size={14} />
                   </button>
-                  <Link href="/recipes/search" className="inline-flex items-center gap-1 rounded-xl border border-[#E8DDD2] px-3 py-2 text-sm font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40">
+                  <Link
+                    href="/recipes/search"
+                    className="inline-flex items-center gap-1 rounded-xl border border-[#E8DDD2] px-3 py-2 text-sm font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40"
+                  >
                     Abrir módulo <ArrowUpRight size={14} />
                   </Link>
-                  <Link href="/meal-planner" className="inline-flex items-center gap-1 rounded-xl border border-[#E8DDD2] px-3 py-2 text-sm font-semibold text-[#6B5A50] hover:border-[#567A3B]/40">
+                  <Link
+                    href="/meal-planner"
+                    className="inline-flex items-center gap-1 rounded-xl border border-[#E8DDD2] px-3 py-2 text-sm font-semibold text-[#6B5A50] hover:border-[#567A3B]/40"
+                  >
                     Planificar menú <ArrowUpRight size={14} />
                   </Link>
                 </div>
@@ -959,12 +1145,25 @@ export default function AppDashboardPage() {
 
               <Card>
                 <h3 className="text-xl font-semibold">Inventario</h3>
-                <p className="mt-2 text-[#6B5A50]">Gestiona ingredientes disponibles y mejora las recomendaciones.</p>
-                <p className="mt-2 text-xs font-semibold text-[#567A3B]">{data.inventory.length} ingrediente(s) activos</p>
+                <p className="mt-2 text-[#6B5A50]">
+                  Gestiona ingredientes disponibles y mejora las recomendaciones.
+                </p>
+                <p className="mt-2 text-xs font-semibold text-[#567A3B]">
+                  {data.inventory.length} ingrediente(s) activos
+                </p>
                 <ul className="mt-3 space-y-1 text-sm text-[#6B5A50]">
-                  {data.inventory.length
-                    ? data.inventory.slice(0, 5).map((item) => <li key={item.name}>• {item.name}{item.quantity ? ` · ${item.quantity}` : ''}</li>)
-                    : <li>Agrega ingredientes para que CocinaCore pueda recomendar recetas más útiles.</li>}
+                  {data.inventory.length ? (
+                    data.inventory.slice(0, 5).map((item) => (
+                      <li key={item.name}>
+                        • {item.name}
+                        {item.quantity ? ` · ${item.quantity}` : ''}
+                      </li>
+                    ))
+                  ) : (
+                    <li>
+                      Agrega ingredientes para que CocinaCore pueda recomendar recetas más útiles.
+                    </li>
+                  )}
                 </ul>
                 <div className="mt-3 grid grid-cols-2 gap-2">
                   <input
@@ -987,15 +1186,23 @@ export default function AppDashboardPage() {
                 >
                   Agregar ingrediente
                 </button>
-                <Link href="/recipes/inventory" className="mt-2 inline-flex text-xs font-semibold text-[#A55412] hover:text-[#C56A1A]">Gestionar inventario</Link>
+                <Link
+                  href="/recipes/inventory"
+                  className="mt-2 inline-flex text-xs font-semibold text-[#A55412] hover:text-[#C56A1A]"
+                >
+                  Gestionar inventario
+                </Link>
               </Card>
 
               <Card>
                 <h3 className="text-xl font-semibold">Biblioteca</h3>
-                <p className="mt-2 text-[#6B5A50]">Consulta tus libros y recetas PDF con búsqueda inteligente.</p>
+                <p className="mt-2 text-[#6B5A50]">
+                  Consulta tus libros y recetas PDF con búsqueda inteligente.
+                </p>
                 <p className="mt-2 text-sm text-[#6B5A50]">PDFs cargados: {data.pdfCount}</p>
                 <p className="mt-1 text-xs text-[#6B5A50]">
-                  Plan {data.tenantType === 'professional' ? 'Professional' : 'Home'} · límite {pdfLimit} PDFs
+                  Plan {data.tenantType === 'professional' ? 'Professional' : 'Home'} · límite{' '}
+                  {pdfLimit} PDFs
                 </p>
                 {data.pdfCount > 0 && data.latestPdfOcrUsed ? (
                   <span className="mt-2 inline-flex rounded-full border border-[#6D4AFF]/30 bg-[#6D4AFF]/10 px-2 py-1 text-xs font-semibold text-[#6D4AFF]">
@@ -1006,11 +1213,21 @@ export default function AppDashboardPage() {
                 {data.latestPdfs.length > 0 ? (
                   <ul className="mt-3 space-y-2 text-xs text-[#6B5A50]">
                     {data.latestPdfs.map((pdf) => (
-                      <li key={pdf.id} className="flex items-center justify-between rounded-xl border border-[#E8DDD2] bg-white/70 px-2.5 py-2">
-                        <span className="max-w-[70%] truncate" title={prettyPdfName(pdf.storagePath)}>{prettyPdfName(pdf.storagePath)}</span>
+                      <li
+                        key={pdf.id}
+                        className="flex items-center justify-between rounded-xl border border-[#E8DDD2] bg-white/70 px-2.5 py-2"
+                      >
+                        <span
+                          className="max-w-[70%] truncate"
+                          title={prettyPdfName(pdf.storagePath)}
+                        >
+                          {prettyPdfName(pdf.storagePath)}
+                        </span>
                         <div className="flex items-center gap-1">
                           {pdf.processingStatus === 'processing' ? (
-                            <span className="rounded-full border border-[#C56A1A]/30 bg-[#C56A1A]/10 px-2 py-0.5 text-[10px] font-semibold text-[#C56A1A]">Proc</span>
+                            <span className="rounded-full border border-[#C56A1A]/30 bg-[#C56A1A]/10 px-2 py-0.5 text-[10px] font-semibold text-[#C56A1A]">
+                              Proc
+                            </span>
                           ) : pdf.processingStatus === 'failed' ? (
                             <span
                               className="rounded-full border border-red-300 bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-700"
@@ -1020,9 +1237,13 @@ export default function AppDashboardPage() {
                             </span>
                           ) : null}
                           {pdf.ocrUsed ? (
-                            <span className="rounded-full border border-[#6D4AFF]/30 bg-[#6D4AFF]/10 px-2 py-0.5 text-[10px] font-semibold text-[#6D4AFF]">OCR</span>
+                            <span className="rounded-full border border-[#6D4AFF]/30 bg-[#6D4AFF]/10 px-2 py-0.5 text-[10px] font-semibold text-[#6D4AFF]">
+                              OCR
+                            </span>
                           ) : (
-                            <span className="rounded-full border border-[#567A3B]/30 bg-[#567A3B]/10 px-2 py-0.5 text-[10px] font-semibold text-[#567A3B]">Texto</span>
+                            <span className="rounded-full border border-[#567A3B]/30 bg-[#567A3B]/10 px-2 py-0.5 text-[10px] font-semibold text-[#567A3B]">
+                              Texto
+                            </span>
                           )}
                         </div>
                       </li>
@@ -1061,11 +1282,22 @@ export default function AppDashboardPage() {
                 <ul className="mt-3 space-y-2 text-sm text-[#6B5A50]">
                   {data.recentRecipes.length ? (
                     data.recentRecipes.map((r) => (
-                      <li key={`${r.title}-${r.createdAt}`} className="rounded-xl border border-[#E8DDD2] bg-white/70 px-3 py-2">
+                      <li
+                        key={`${r.title}-${r.createdAt}`}
+                        className="rounded-xl border border-[#E8DDD2] bg-white/70 px-3 py-2"
+                      >
                         <p className="font-medium text-[#241A14]">{r.title}</p>
-                        <p className="mt-1 text-xs text-[#6B5A50]">{new Date(r.createdAt).toLocaleString()}</p>
-                        <p className={`mt-1 text-xs font-semibold ${r.feedback === 'accepted' ? 'text-[#567A3B]' : r.feedback === 'discarded' ? 'text-red-700' : 'text-[#8C7A6D]'}`}>
-                          {r.feedback === 'accepted' ? 'Me gustó' : r.feedback === 'discarded' ? 'No me gustó' : 'Sin feedback'}
+                        <p className="mt-1 text-xs text-[#6B5A50]">
+                          {new Date(r.createdAt).toLocaleString()}
+                        </p>
+                        <p
+                          className={`mt-1 text-xs font-semibold ${r.feedback === 'accepted' ? 'text-[#567A3B]' : r.feedback === 'discarded' ? 'text-red-700' : 'text-[#8C7A6D]'}`}
+                        >
+                          {r.feedback === 'accepted'
+                            ? 'Me gustó'
+                            : r.feedback === 'discarded'
+                              ? 'No me gustó'
+                              : 'Sin feedback'}
                         </p>
                         <div className="mt-2 flex gap-2">
                           <button
@@ -1085,7 +1317,9 @@ export default function AppDashboardPage() {
                       </li>
                     ))
                   ) : (
-                    <li className="rounded-xl border border-[#E8DDD2] bg-white/70 px-3 py-2">Aún no tienes recetas generadas</li>
+                    <li className="rounded-xl border border-[#E8DDD2] bg-white/70 px-3 py-2">
+                      Aún no tienes recetas generadas
+                    </li>
                   )}
                 </ul>
               </Card>
@@ -1094,22 +1328,42 @@ export default function AppDashboardPage() {
                 <h3 className="text-xl font-semibold">Señales de aprendizaje</h3>
                 {data.recentRecipes.length > 0 ? (
                   <>
-                    <p className="mt-2 text-sm text-[#6B5A50]">CocinaCore aprende de tu feedback para mejorar próximas sugerencias.</p>
+                    <p className="mt-2 text-sm text-[#6B5A50]">
+                      CocinaCore aprende de tu feedback para mejorar próximas sugerencias.
+                    </p>
                     <ul className="mt-3 space-y-1 text-sm text-[#6B5A50]">
-                      <li>• Me gustó: <span className="font-semibold text-[#567A3B]">{positiveFeedback}</span></li>
-                      <li>• No me gustó: <span className="font-semibold text-red-700">{negativeFeedback}</span></li>
-                      <li>• Personalización: <span className="font-semibold">{feedbackGiven > 0 ? 'Activa' : 'Inicial'}</span></li>
+                      <li>
+                        • Me gustó:{' '}
+                        <span className="font-semibold text-[#567A3B]">{positiveFeedback}</span>
+                      </li>
+                      <li>
+                        • No me gustó:{' '}
+                        <span className="font-semibold text-red-700">{negativeFeedback}</span>
+                      </li>
+                      <li>
+                        • Personalización:{' '}
+                        <span className="font-semibold">
+                          {feedbackGiven > 0 ? 'Activa' : 'Inicial'}
+                        </span>
+                      </li>
                     </ul>
                   </>
                 ) : (
-                  <p className="mt-2 text-[#6B5A50]">Marca recetas como Me gustó o No me gustó para mejorar tus recomendaciones.</p>
+                  <p className="mt-2 text-[#6B5A50]">
+                    Marca recetas como Me gustó o No me gustó para mejorar tus recomendaciones.
+                  </p>
                 )}
               </Card>
 
               <Card>
                 <div className="flex items-start justify-between gap-2">
                   <h3 className="text-xl font-semibold">Perfil culinario aplicado</h3>
-                  <Link href="/onboarding" className="text-xs font-semibold text-[#A55412] hover:text-[#C56A1A]">Actualizar perfil</Link>
+                  <Link
+                    href="/onboarding"
+                    className="text-xs font-semibold text-[#A55412] hover:text-[#C56A1A]"
+                  >
+                    Actualizar perfil
+                  </Link>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {[
@@ -1117,11 +1371,22 @@ export default function AppDashboardPage() {
                     ...data.culinaryProfile.goals,
                     ...data.culinaryProfile.avoid.map((item) => `Evitar: ${item}`),
                     ...(data.culinaryProfile.level ? [`Nivel: ${data.culinaryProfile.level}`] : []),
-                  ].slice(0, 8).map((item) => (
-                    <span key={item} className="rounded-full border border-[#E8DDD2] bg-white px-2.5 py-1 text-xs text-[#6B5A50]">{item}</span>
-                  ))}
-                  {data.culinaryProfile.preferred.length === 0 && data.culinaryProfile.goals.length === 0 && data.culinaryProfile.avoid.length === 0 ? (
-                    <span className="text-sm text-[#6B5A50]">Completa tu perfil para recibir recetas más precisas.</span>
+                  ]
+                    .slice(0, 8)
+                    .map((item) => (
+                      <span
+                        key={item}
+                        className="rounded-full border border-[#E8DDD2] bg-white px-2.5 py-1 text-xs text-[#6B5A50]"
+                      >
+                        {item}
+                      </span>
+                    ))}
+                  {data.culinaryProfile.preferred.length === 0 &&
+                  data.culinaryProfile.goals.length === 0 &&
+                  data.culinaryProfile.avoid.length === 0 ? (
+                    <span className="text-sm text-[#6B5A50]">
+                      Completa tu perfil para recibir recetas más precisas.
+                    </span>
                   ) : null}
                 </div>
               </Card>
@@ -1130,7 +1395,10 @@ export default function AppDashboardPage() {
                 <h3 className="text-xl font-semibold">Próxima acción recomendada</h3>
                 <p className="mt-2 font-semibold text-[#241A14]">{nextAction.title}</p>
                 <p className="mt-1 text-sm text-[#6B5A50]">{nextAction.description}</p>
-                <Link href={nextAction.href} className="mt-3 inline-flex rounded-xl border border-[#E8DDD2] px-3 py-2 text-sm font-semibold text-[#A55412] hover:border-[#C56A1A]/40">
+                <Link
+                  href={nextAction.href}
+                  className="mt-3 inline-flex rounded-xl border border-[#E8DDD2] px-3 py-2 text-sm font-semibold text-[#A55412] hover:border-[#C56A1A]/40"
+                >
                   {nextAction.cta}
                 </Link>
               </Card>
@@ -1138,25 +1406,83 @@ export default function AppDashboardPage() {
               <Card>
                 <h3 className="text-xl font-semibold">Estado del sistema</h3>
                 <ul className="mt-3 space-y-2 text-sm text-[#6B5A50]">
-                  <li>• Perfil culinario: <span className={hasProfile ? 'text-[#567A3B] font-semibold' : 'text-[#A55412] font-semibold'}>{hasProfile ? 'Listo' : 'Pendiente'}</span></li>
-                  <li>• Inventario: <span className={hasInventory ? 'text-[#567A3B] font-semibold' : 'text-[#A55412] font-semibold'}>{hasInventory ? 'Listo' : 'Pendiente'}</span></li>
-                  <li>• Cocina asistida: <span className={hasRecipes ? 'text-[#567A3B] font-semibold' : 'text-[#A55412] font-semibold'}>{hasRecipes ? 'Listo' : 'Recomendado'}</span></li>
-                  <li>• Meal Planner: <span className={hasProfile && hasInventory ? 'text-[#567A3B] font-semibold' : 'text-[#A55412] font-semibold'}>{hasProfile && hasInventory ? 'Listo' : 'Recomendado'}</span></li>
-                  <li>• Feedback: <span className={feedbackGiven > 0 ? 'text-[#567A3B] font-semibold' : 'text-[#A55412] font-semibold'}>{feedbackGiven > 0 ? 'Listo' : 'Pendiente'}</span></li>
+                  <li>
+                    • Perfil culinario:{' '}
+                    <span
+                      className={
+                        hasProfile ? 'text-[#567A3B] font-semibold' : 'text-[#A55412] font-semibold'
+                      }
+                    >
+                      {hasProfile ? 'Listo' : 'Pendiente'}
+                    </span>
+                  </li>
+                  <li>
+                    • Inventario:{' '}
+                    <span
+                      className={
+                        hasInventory
+                          ? 'text-[#567A3B] font-semibold'
+                          : 'text-[#A55412] font-semibold'
+                      }
+                    >
+                      {hasInventory ? 'Listo' : 'Pendiente'}
+                    </span>
+                  </li>
+                  <li>
+                    • Cocina asistida:{' '}
+                    <span
+                      className={
+                        hasRecipes ? 'text-[#567A3B] font-semibold' : 'text-[#A55412] font-semibold'
+                      }
+                    >
+                      {hasRecipes ? 'Listo' : 'Recomendado'}
+                    </span>
+                  </li>
+                  <li>
+                    • Meal Planner:{' '}
+                    <span
+                      className={
+                        hasProfile && hasInventory
+                          ? 'text-[#567A3B] font-semibold'
+                          : 'text-[#A55412] font-semibold'
+                      }
+                    >
+                      {hasProfile && hasInventory ? 'Listo' : 'Recomendado'}
+                    </span>
+                  </li>
+                  <li>
+                    • Feedback:{' '}
+                    <span
+                      className={
+                        feedbackGiven > 0
+                          ? 'text-[#567A3B] font-semibold'
+                          : 'text-[#A55412] font-semibold'
+                      }
+                    >
+                      {feedbackGiven > 0 ? 'Listo' : 'Pendiente'}
+                    </span>
+                  </li>
                 </ul>
               </Card>
 
               <Card>
                 <h3 className="text-xl font-semibold">Premium Board</h3>
-                <p className="mt-2 text-[#6B5A50]">Explora y publica recetas premium de la comunidad.</p>
-                <Link href="/app/premium" className="mt-4 inline-flex items-center gap-1 font-semibold text-[#A55412]">
+                <p className="mt-2 text-[#6B5A50]">
+                  Explora y publica recetas premium de la comunidad.
+                </p>
+                <Link
+                  href="/app/premium"
+                  className="mt-4 inline-flex items-center gap-1 font-semibold text-[#A55412]"
+                >
                   Explorar <ArrowUpRight size={14} />
                 </Link>
               </Card>
             </div>
           </motion.section>
 
-          {loading && <p className="mt-4 text-sm text-[#6B5A50]">Cargando tu cocina inteligente...</p>}
+          {loading && (
+            <p className="mt-4 text-sm text-[#6B5A50]">Cargando tu cocina inteligente...</p>
+          )}
         </section>
       </div>
     </main>

@@ -44,6 +44,14 @@ function normalizeFraction(value: string): number | null {
   return null;
 }
 
+function normalizeMarkdownLine(value: string): string {
+  return value
+    .replace(/^[\s>*-]+/, '')
+    .replace(/\*\*/g, '')
+    .replace(/__/g, '')
+    .trim();
+}
+
 export function normalizeIngredientName(name: string): string {
   return name
     .normalize('NFD')
@@ -75,7 +83,9 @@ function inferCategory(name: string): string | null {
 }
 
 export function parseStructuredIngredient(line: string): StructuredRecipeIngredient {
-  const clean = line.replace(/^[-•]\s*/, '').trim();
+  const clean = normalizeMarkdownLine(line)
+    .replace(/^[-•*]\s*/, '')
+    .trim();
   if (!clean) {
     return {
       name: '',
@@ -103,7 +113,7 @@ export function parseStructuredIngredient(line: string): StructuredRecipeIngredi
   }
 
   const match = clean.match(
-    /^(\d+(?:[.,]\d+)?|\d+\/\d+|\d+\s+\d+\/\d+)\s*(kg|kilo(?:s)?|kilogramo(?:s)?|g|gr|gramo(?:s)?|l|litro(?:s)?|ml|mililitro(?:s)?|taza(?:s)?|cucharada(?:s)?|cucharadita(?:s)?|unidad(?:es)?|u|diente(?:s)?|ramita(?:s)?|paquete(?:s)?)?\s+(.+)$/i,
+    /^(\d+(?:[.,]\d+)?|\d+\/\d+|\d+\s+\d+\/\d+)\s*(kg|kilo(?:s)?|kilogramo(?:s)?|g|gr|gramo(?:s)?|l|litro(?:s)?|ml|mililitro(?:s)?|taza(?:s)?|cucharada(?:s)?|cucharadita(?:s)?|unidad(?:es)?|u|diente(?:s)?|ramita(?:s)?|paquete(?:s)?)?\s+(.+)$/i
   );
 
   if (!match) {
@@ -158,12 +168,18 @@ export function extractStructuredIngredients(recipe: string): StructuredRecipeIn
   let inIngredients = false;
 
   for (const line of lines) {
-    const lower = line.toLowerCase();
+    const lower = normalizeMarkdownLine(line).toLowerCase().replace(/:$/, '');
     if (lower.startsWith('ingredientes')) {
       inIngredients = true;
       continue;
     }
-    if (inIngredients && (lower.startsWith('preparación') || lower.startsWith('preparacion') || lower.startsWith('fuente') || lower.startsWith('tips'))) {
+    if (
+      inIngredients &&
+      (lower.startsWith('preparación') ||
+        lower.startsWith('preparacion') ||
+        lower.startsWith('fuente') ||
+        lower.startsWith('tips'))
+    ) {
       inIngredients = false;
     }
     if (!inIngredients) continue;
@@ -175,10 +191,17 @@ export function extractStructuredIngredients(recipe: string): StructuredRecipeIn
 
 export function validateStructuredIngredients(items: StructuredRecipeIngredient[]): boolean {
   if (!Array.isArray(items) || items.length === 0) return false;
-  return items.every((item) => typeof item.name === 'string' && typeof item.normalized_name === 'string' && typeof item.structured === 'boolean');
+  return items.every(
+    (item) =>
+      typeof item.name === 'string' &&
+      typeof item.normalized_name === 'string' &&
+      typeof item.structured === 'boolean'
+  );
 }
 
-export function mergeDuplicateIngredients(items: StructuredRecipeIngredient[]): StructuredRecipeIngredient[] {
+export function mergeDuplicateIngredients(
+  items: StructuredRecipeIngredient[]
+): StructuredRecipeIngredient[] {
   const map = new Map<string, StructuredRecipeIngredient>();
 
   for (const item of items) {
@@ -189,12 +212,18 @@ export function mergeDuplicateIngredients(items: StructuredRecipeIngredient[]): 
       continue;
     }
 
-    if (existing.structured && item.structured && existing.quantity !== null && item.quantity !== null) {
+    if (
+      existing.structured &&
+      item.structured &&
+      existing.quantity !== null &&
+      item.quantity !== null
+    ) {
       existing.quantity = Number((existing.quantity + item.quantity).toFixed(3));
     } else {
       existing.structured = false;
       existing.quantity = existing.quantity ?? item.quantity;
-      existing.optional_quantity_text = existing.optional_quantity_text ?? item.optional_quantity_text;
+      existing.optional_quantity_text =
+        existing.optional_quantity_text ?? item.optional_quantity_text;
     }
 
     if (!existing.category && item.category) existing.category = item.category;

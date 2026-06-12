@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import {
-  AuthService,
-  PasswordCredentials,
-  SupabaseAuthClientLike,
-} from '../authService';
+import { AuthService, PasswordCredentials, SupabaseAuthClientLike } from '../authService';
 import { AuthProvider, AuthSession, AuthUser, Invitation, TenantRole } from '../types';
 
 interface AuthHarness {
@@ -159,7 +155,9 @@ describe('AuthService', () => {
   it('starts google oauth flow and does not require extra in-app 2FA for privileged roles', async () => {
     const { service, signInWithOAuth } = createClientStub();
 
-    const oauthResult = await service.signInWithGoogle({ redirectTo: 'http://localhost:3000/auth/callback' });
+    const oauthResult = await service.signInWithGoogle({
+      redirectTo: 'http://localhost:3000/auth/callback',
+    });
     const ownerNeedsExtraMfa = await service.requiresMfaEnrollment('owner', 'google');
     const adminNeedsExtraMfa = await service.requiresMfaEnrollment('admin', 'google');
 

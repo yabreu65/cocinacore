@@ -1,0 +1,22 @@
+# Development Dockerfile for CocinaCore
+# Hot-reload with volume mounts
+
+FROM node:20-alpine
+
+RUN apk add --no-cache libc6-compat
+
+WORKDIR /app
+
+# Copy package file and install dependencies
+COPY package.json ./
+RUN npm install
+
+# Copy config files
+COPY next.config.ts tsconfig.json vitest.config.ts eslint.config.mjs .prettierrc postcss.config.mjs ./
+COPY sentry.client.config.ts sentry.server.config.ts sentry.edge.config.ts instrumentation.ts ./
+
+# Expose port
+EXPOSE 3000
+
+# Run dev server
+CMD ["npm", "run", "dev"]

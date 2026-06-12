@@ -1,0 +1,4 @@
+# .git-blame-ignore-revs
+# Para usar: git config blame.ignoreRevsFile .git-blame-ignore-revs
+# Commit de reformato masivo con Prettier
+# (el hash se agrega DESPUÉS del commit)

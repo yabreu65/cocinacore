@@ -188,7 +188,7 @@ export function canCompareUnits(a: NormalizedUnit, b: NormalizedUnit): boolean {
 export function convertQuantity(
   value: number,
   fromUnit: NormalizedUnit,
-  toUnit: NormalizedUnit,
+  toUnit: NormalizedUnit
 ): number | null {
   if (!Number.isFinite(value)) return null;
   if (fromUnit === toUnit) return value;
@@ -204,13 +204,16 @@ export function convertQuantity(
 
 export function compareInventoryToRequirement(
   inventoryItem: { quantity: string | null; unit: string | null },
-  requiredIngredient: { quantity: string | null; unit: string | null },
+  requiredIngredient: { quantity: string | null; unit: string | null }
 ): QuantityComparisonResult {
   const inventoryParsed = parseQuantity(
-    [inventoryItem.quantity ?? '', inventoryItem.unit ?? ''].filter(Boolean).join(' ').trim(),
+    [inventoryItem.quantity ?? '', inventoryItem.unit ?? ''].filter(Boolean).join(' ').trim()
   );
   const requiredParsed = parseQuantity(
-    [requiredIngredient.quantity ?? '', requiredIngredient.unit ?? ''].filter(Boolean).join(' ').trim(),
+    [requiredIngredient.quantity ?? '', requiredIngredient.unit ?? '']
+      .filter(Boolean)
+      .join(' ')
+      .trim()
   );
 
   if (!inventoryParsed.structured || !requiredParsed.structured) {
@@ -225,7 +228,10 @@ export function compareInventoryToRequirement(
   }
 
   const targetUnit = requiredParsed.unit !== 'unknown' ? requiredParsed.unit : inventoryParsed.unit;
-  if (!canCompareUnits(inventoryParsed.unit, targetUnit) || !canCompareUnits(requiredParsed.unit, targetUnit)) {
+  if (
+    !canCompareUnits(inventoryParsed.unit, targetUnit) ||
+    !canCompareUnits(requiredParsed.unit, targetUnit)
+  ) {
     return {
       available: inventoryParsed.value,
       required: requiredParsed.value,

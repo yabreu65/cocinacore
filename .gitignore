@@ -1,0 +1,34 @@
+# Local Pi runtime state
+.atl/
+
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Next.js build output
+.next/
+frontend/.next/
+out/
+frontend/out/
+
+# Test and coverage output
+coverage/
+frontend/coverage/
+playwright-report/
+frontend/playwright-report/
+test-results/
+frontend/test-results/
+
+# Local environment files
+.env
+.env.*
+!.env.example
+!frontend/.env.example
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+
+# Logs and OS files
+*.log
+npm-debug.log*
+.DS_Store

@@ -64,7 +64,10 @@ function canonicalUnit(unit: string): string {
   return UNIT_CANONICAL[normalized] ?? normalized;
 }
 
-function convertToCanonical(quantity: number | null, unit: string): { quantity: number | null; unit: string } {
+function convertToCanonical(
+  quantity: number | null,
+  unit: string
+): { quantity: number | null; unit: string } {
   if (quantity === null || !Number.isFinite(quantity)) {
     return { quantity: null, unit: canonicalUnit(unit || 'unidad') || 'unidad' };
   }
@@ -82,7 +85,10 @@ function convertToCanonical(quantity: number | null, unit: string): { quantity: 
   return { quantity, unit: baseUnit };
 }
 
-export function buildInventorySuggestion(rawItems: RawSuggestedItem[], peopleCount: number): SuggestedInventoryItem[] {
+export function buildInventorySuggestion(
+  rawItems: RawSuggestedItem[],
+  peopleCount: number
+): SuggestedInventoryItem[] {
   const safePeople = Number.isFinite(peopleCount) && peopleCount > 0 ? peopleCount : 4;
   const map = new Map<string, SuggestedInventoryItem>();
 
@@ -93,11 +99,18 @@ export function buildInventorySuggestion(rawItems: RawSuggestedItem[], peopleCou
     const canonical_name = canonicalIngredient(ingredient);
     const source = (raw.source ?? '').trim();
     const estimated = Boolean(raw.estimated);
-    const confidence = typeof raw.confidence === 'number' ? Math.max(0, Math.min(1, raw.confidence)) : estimated ? 0.6 : 1;
+    const confidence =
+      typeof raw.confidence === 'number'
+        ? Math.max(0, Math.min(1, raw.confidence))
+        : estimated
+          ? 0.6
+          : 1;
 
-    const quantityValue = typeof raw.quantity === 'number' && Number.isFinite(raw.quantity) ? raw.quantity : null;
+    const quantityValue =
+      typeof raw.quantity === 'number' && Number.isFinite(raw.quantity) ? raw.quantity : null;
     const converted = convertToCanonical(quantityValue, raw.unit ?? 'unidad');
-    const scaledQuantity = converted.quantity === null ? null : Number((converted.quantity * safePeople).toFixed(2));
+    const scaledQuantity =
+      converted.quantity === null ? null : Number((converted.quantity * safePeople).toFixed(2));
 
     const existing = map.get(canonical_name);
     if (!existing) {

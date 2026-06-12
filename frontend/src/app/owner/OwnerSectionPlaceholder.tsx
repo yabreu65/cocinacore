@@ -3,7 +3,10 @@ type OwnerSectionPlaceholderProps = {
   description: string;
 };
 
-export default function OwnerSectionPlaceholder({ title, description }: OwnerSectionPlaceholderProps) {
+export default function OwnerSectionPlaceholder({
+  title,
+  description,
+}: OwnerSectionPlaceholderProps) {
   return (
     <section className="rounded-2xl border border-[#E8DDD2] bg-white/80 p-5 premium-shadow">
       <h2 className="text-2xl font-semibold text-[#241A14]">{title}</h2>

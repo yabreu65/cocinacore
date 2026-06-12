@@ -9,7 +9,7 @@ describe('buildInventorySuggestion', () => {
         { ingredient: 'tomate', quantity: 2, unit: 'unidad', source: 'Lunes almuerzo' },
         { ingredient: 'jitomate', quantity: 1, unit: 'unidad', source: 'Martes cena' },
       ],
-      2,
+      2
     );
 
     const tomate = rows.find((item) => item.canonical_name === 'tomate');
@@ -25,7 +25,7 @@ describe('buildInventorySuggestion', () => {
         { ingredient: 'pollo', quantity: 1, unit: 'kg' },
         { ingredient: 'leche', quantity: 0.5, unit: 'l' },
       ],
-      1,
+      1
     );
 
     const pollo = rows.find((item) => item.canonical_name === 'pollo');
@@ -49,7 +49,7 @@ describe('buildInventorySuggestion', () => {
         { ingredient: 'ajo', quantity: null, unit: 'unidad', estimated: true, confidence: 0.4 },
         { ingredient: 'ajo', quantity: 2, unit: 'unidad', estimated: false, confidence: 1 },
       ],
-      1,
+      1
     );
 
     const ajo = rows.find((item) => item.canonical_name === 'ajo');

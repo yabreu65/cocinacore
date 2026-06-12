@@ -8,7 +8,9 @@ export function ReorderSuggestionCard(props: Props) {
       <h3 className="text-lg font-semibold text-[#241A14]">Sugerencias IA de reordenamiento</h3>
       <ul className="mt-3 space-y-2 text-sm text-[#6B5A50]">
         {props.suggestions.length === 0 ? (
-          <li className="rounded-xl border border-[#E8DDD2] bg-white/80 px-3 py-2">Aún no hay sugerencias para este estado de simulación.</li>
+          <li className="rounded-xl border border-[#E8DDD2] bg-white/80 px-3 py-2">
+            Aún no hay sugerencias para este estado de simulación.
+          </li>
         ) : (
           props.suggestions.map((item) => (
             <li key={item} className="rounded-xl border border-[#E8DDD2] bg-white/80 px-3 py-2">

@@ -23,9 +23,15 @@ function toPrettyPayload(payload: unknown): string {
 
     const title = typeof obj.title === 'string' ? obj.title : null;
     const summary = typeof obj.summary === 'string' ? obj.summary : null;
-    const ingredients = Array.isArray(obj.ingredients) ? obj.ingredients.filter((item): item is string => typeof item === 'string') : [];
-    const steps = Array.isArray(obj.steps) ? obj.steps.filter((item): item is string => typeof item === 'string') : [];
-    const tips = Array.isArray(obj.tips) ? obj.tips.filter((item): item is string => typeof item === 'string') : [];
+    const ingredients = Array.isArray(obj.ingredients)
+      ? obj.ingredients.filter((item): item is string => typeof item === 'string')
+      : [];
+    const steps = Array.isArray(obj.steps)
+      ? obj.steps.filter((item): item is string => typeof item === 'string')
+      : [];
+    const tips = Array.isArray(obj.tips)
+      ? obj.tips.filter((item): item is string => typeof item === 'string')
+      : [];
 
     const blocks: string[] = [];
     if (title) blocks.push(`# ${title}`);
@@ -107,7 +113,9 @@ export default function RecipeHistoryPage() {
         .update({ user_feedback: value, user_feedback_at: new Date().toISOString() })
         .eq('id', id);
       if (updateErr) throw updateErr;
-      setRows((prev) => prev.map((row) => (row.id === id ? { ...row, user_feedback: value } : row)));
+      setRows((prev) =>
+        prev.map((row) => (row.id === id ? { ...row, user_feedback: value } : row))
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo guardar feedback.');
     } finally {
@@ -122,8 +130,14 @@ export default function RecipeHistoryPage() {
         <p className="mt-1 text-[#6B5A50]">Recetas sugeridas para tu usuario y tenant.</p>
 
         {loading ? <p className="mt-4 text-sm text-[#6B5A50]">Cargando historial...</p> : null}
-        {error ? <p className="mt-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
-        {!loading && rows.length === 0 ? <p className="mt-4 text-sm text-[#6B5A50]">Aún no tienes recetas guardadas.</p> : null}
+        {error ? (
+          <p className="mt-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            {error}
+          </p>
+        ) : null}
+        {!loading && rows.length === 0 ? (
+          <p className="mt-4 text-sm text-[#6B5A50]">Aún no tienes recetas guardadas.</p>
+        ) : null}
 
         <ul className="mt-4 grid gap-3">
           {rows.map((entry) => {
@@ -132,7 +146,10 @@ export default function RecipeHistoryPage() {
               <li key={entry.id} className="rounded-2xl border border-[#E8DDD2] bg-white/70 p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-sm text-[#3B2F26]">
-                    <span className="font-semibold">{entry.recipe_title ?? humanCopy.suggestedRecipesForYou}</span> — {new Date(entry.created_at).toLocaleString()}
+                    <span className="font-semibold">
+                      {entry.recipe_title ?? humanCopy.suggestedRecipesForYou}
+                    </span>{' '}
+                    — {new Date(entry.created_at).toLocaleString()}
                   </p>
                   <div className="flex flex-wrap gap-2">
                     <button
@@ -179,7 +196,10 @@ export default function RecipeHistoryPage() {
         </ul>
 
         <div className="mt-4">
-          <Link href="/recipes/search" className="text-sm font-semibold text-[#A55412] hover:text-[#C56A1A]">
+          <Link
+            href="/recipes/search"
+            className="text-sm font-semibold text-[#A55412] hover:text-[#C56A1A]"
+          >
             Ir a búsqueda de recetas
           </Link>
         </div>

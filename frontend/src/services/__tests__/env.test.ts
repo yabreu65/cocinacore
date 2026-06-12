@@ -14,7 +14,7 @@ describe('server environment validation', () => {
     vi.stubGlobal('window', { document: {} });
 
     expect(() => getServerSecret('GEMINI_API_KEY')).toThrow(
-      'Server environment secrets cannot be read from a browser runtime.',
+      'Server environment secrets cannot be read from a browser runtime.'
     );
   });
 
@@ -22,7 +22,7 @@ describe('server environment validation', () => {
     process.env = { ...ORIGINAL_ENV, GEMINI_API_KEY: '   ' };
 
     expect(() => getServerSecret('GEMINI_API_KEY')).toThrow(
-      'Missing required server environment variable: GEMINI_API_KEY',
+      'Missing required server environment variable: GEMINI_API_KEY'
     );
   });
 

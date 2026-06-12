@@ -1,0 +1,13 @@
+node_modules
+npm-debug.log
+.next
+out
+.env.local
+.env.*.local
+coverage
+*.log
+.DS_Store
+.git
+.github
+*.md
+!.env.example

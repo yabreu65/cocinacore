@@ -33,12 +33,54 @@ type ScoreWeights = {
 };
 
 const MODE_WEIGHTS: Record<OptimizationMode, ScoreWeights> = {
-  optimize_cost: { cost: 0.48, waste: 0.12, freshness: 0.1, reuse: 0.1, balance: 0.07, missing: 0.13 },
-  reduce_waste: { cost: 0.1, waste: 0.36, freshness: 0.2, reuse: 0.22, balance: 0.04, missing: 0.08 },
-  prioritize_fresh: { cost: 0.08, waste: 0.16, freshness: 0.48, reuse: 0.08, balance: 0.08, missing: 0.12 },
-  reduce_missing: { cost: 0.1, waste: 0.08, freshness: 0.08, reuse: 0.08, balance: 0.06, missing: 0.6 },
-  reuse_proteins: { cost: 0.16, waste: 0.22, freshness: 0.12, reuse: 0.38, balance: 0.04, missing: 0.08 },
-  balance_ingredients: { cost: 0.08, waste: 0.1, freshness: 0.12, reuse: 0.15, balance: 0.45, missing: 0.1 },
+  optimize_cost: {
+    cost: 0.48,
+    waste: 0.12,
+    freshness: 0.1,
+    reuse: 0.1,
+    balance: 0.07,
+    missing: 0.13,
+  },
+  reduce_waste: {
+    cost: 0.1,
+    waste: 0.36,
+    freshness: 0.2,
+    reuse: 0.22,
+    balance: 0.04,
+    missing: 0.08,
+  },
+  prioritize_fresh: {
+    cost: 0.08,
+    waste: 0.16,
+    freshness: 0.48,
+    reuse: 0.08,
+    balance: 0.08,
+    missing: 0.12,
+  },
+  reduce_missing: {
+    cost: 0.1,
+    waste: 0.08,
+    freshness: 0.08,
+    reuse: 0.08,
+    balance: 0.06,
+    missing: 0.6,
+  },
+  reuse_proteins: {
+    cost: 0.16,
+    waste: 0.22,
+    freshness: 0.12,
+    reuse: 0.38,
+    balance: 0.04,
+    missing: 0.08,
+  },
+  balance_ingredients: {
+    cost: 0.08,
+    waste: 0.1,
+    freshness: 0.12,
+    reuse: 0.15,
+    balance: 0.45,
+    missing: 0.1,
+  },
 };
 
 function clamp(value: number): number {
@@ -46,7 +88,9 @@ function clamp(value: number): number {
 }
 
 function computeBalanceScore(simulation: MealPlanSimulation): number {
-  const mealNames = simulation.dayStates.flatMap((day) => day.meals.map((meal) => meal.title.toLowerCase().trim()));
+  const mealNames = simulation.dayStates.flatMap((day) =>
+    day.meals.map((meal) => meal.title.toLowerCase().trim())
+  );
   if (mealNames.length <= 1) return 100;
 
   const uniqueRatio = new Set(mealNames).size / mealNames.length;
@@ -61,11 +105,17 @@ function computeBalanceScore(simulation: MealPlanSimulation): number {
 
 function computeCostScore(projection: MealPlanInventoryProjection): number {
   const estimatedCost = projection.summary.estimatedCost;
-  const missingLoad = projection.summary.missing * 8 + projection.summary.partial * 4 + projection.summary.unknown * 3;
+  const missingLoad =
+    projection.summary.missing * 8 +
+    projection.summary.partial * 4 +
+    projection.summary.unknown * 3;
   return clamp(100 - estimatedCost * 1.6 - missingLoad);
 }
 
-function computeWasteScore(projection: MealPlanInventoryProjection, simulation: MealPlanSimulation): number {
+function computeWasteScore(
+  projection: MealPlanInventoryProjection,
+  simulation: MealPlanSimulation
+): number {
   const totalItems = Math.max(1, projection.items.length);
   const reuseRatio = simulation.reusedIngredients.length / totalItems;
   const missingRatio = (projection.summary.missing + projection.summary.partial) / totalItems;
@@ -78,7 +128,8 @@ function computeFreshnessScore(simulation: MealPlanSimulation): number {
   const totalDays = Math.max(1, simulation.dayStates.length);
   const criticalPressure = simulation.criticalIngredients.length * 9;
   const predictionPressure = simulation.predictions.length * 5;
-  const lowPressure = simulation.dayStates.reduce((acc, day) => acc + day.summary.lowCount, 0) / totalDays;
+  const lowPressure =
+    simulation.dayStates.reduce((acc, day) => acc + day.summary.lowCount, 0) / totalDays;
 
   return clamp(100 - criticalPressure - predictionPressure - lowPressure * 6);
 }
@@ -86,7 +137,7 @@ function computeFreshnessScore(simulation: MealPlanSimulation): number {
 export function calculateMealPlanScore(
   projection: MealPlanInventoryProjection,
   simulation: MealPlanSimulation,
-  mode: OptimizationMode,
+  mode: OptimizationMode
 ): MealPlanOptimizationScore {
   const itemCount = projection.items.length || 1;
   const missingRatio = (projection.summary.missing + projection.summary.partial) / itemCount;
@@ -104,7 +155,7 @@ export function calculateMealPlanScore(
       freshnessScore * weights.freshness +
       reuseScore * weights.reuse +
       balanceScore * weights.balance +
-      missingScore * weights.missing,
+      missingScore * weights.missing
   );
 
   return {
@@ -120,7 +171,7 @@ export function calculateMealPlanScore(
 
 export function compareMealPlans(
   before: MealPlanOptimizationScore,
-  after: MealPlanOptimizationScore,
+  after: MealPlanOptimizationScore
 ): MealPlanComparison {
   return {
     before,
@@ -134,7 +185,10 @@ export function compareMealPlans(
   };
 }
 
-export function explainOptimization(comparison: MealPlanComparison, mode: OptimizationMode): string[] {
+export function explainOptimization(
+  comparison: MealPlanComparison,
+  mode: OptimizationMode
+): string[] {
   const notes: string[] = [];
 
   if (comparison.deltas.cost > 0) {

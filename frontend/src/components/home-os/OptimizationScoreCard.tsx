@@ -39,7 +39,9 @@ export function OptimizationScoreCard({ score }: Props) {
         {SCORE_ROWS.map((row) => (
           <div key={row.key} className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-2">
             <p className="text-xs text-[#6B5A50]">{row.label}</p>
-            <p className={`text-base font-semibold ${scoreTone(score[row.key])}`}>{score[row.key]}/100</p>
+            <p className={`text-base font-semibold ${scoreTone(score[row.key])}`}>
+              {score[row.key]}/100
+            </p>
           </div>
         ))}
       </div>

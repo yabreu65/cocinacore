@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { getSupabaseBrowserClient } from '@/lib/supabaseClient';
 import { humanCopy } from '@/lib/copy';
+import { mapAuthError } from '@/lib/auth/errors';
 
 const features = [
   'Recetas personalizadas',
@@ -16,7 +17,11 @@ const features = [
 ];
 
 const floatingCards = [
-  { title: humanCopy.suggestedRecipesForYou, text: 'Pasta cremosa con ingredientes disponibles', accent: '#6D4AFF' },
+  {
+    title: humanCopy.suggestedRecipesForYou,
+    text: 'Pasta cremosa con ingredientes disponibles',
+    accent: '#6D4AFF',
+  },
   { title: 'Tip del chef', text: 'Dejá reposar la salsa 10 minutos', accent: '#C56A1A' },
   { title: 'PDF culinario', text: 'Recetario Familiar.pdf indexado', accent: '#567A3B' },
   { title: 'Inventario', text: 'Tomate x6 · Pollo 1.2kg · Ajo x2', accent: '#C56A1A' },
@@ -28,10 +33,11 @@ export default function SignupPage() {
   const [oauthLoading, setOauthLoading] = useState<'google' | 'github' | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [termsAccepted, setTermsAccepted] = useState(false);
 
   const passwordStrengthHint = useMemo(
     () => 'Usá 8+ caracteres, incluyendo mayúsculas, minúsculas y número.',
-    [],
+    []
   );
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -45,6 +51,7 @@ export default function SignupPage() {
     const email = String(formData.get('email') ?? '').trim();
     const password = String(formData.get('password') ?? '');
     const confirmPassword = String(formData.get('confirmPassword') ?? '');
+    const termsAccepted = formData.get('termsAccepted') === 'on';
 
     if (fullName.length < 3) {
       setErrorMessage('Ingresá tu nombre completo.');
@@ -59,34 +66,31 @@ export default function SignupPage() {
     }
 
     try {
-      const supabase = getSupabaseBrowserClient();
-      const signUpPromise = supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: {
-            full_name: fullName,
-            terms_accepted_at: new Date().toISOString(),
-            terms_version: 'v1',
-          },
-        },
+      const signUpPromise = fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fullName, email, password, confirmPassword, termsAccepted }),
       });
 
       const timeoutPromise = new Promise<never>((_, reject) => {
         window.setTimeout(
-          () => reject(new Error('Timeout creando la cuenta. Verificá que Supabase local esté activo.')),
-          15000,
+          () =>
+            reject(
+              new Error('Timeout creando la cuenta. Verificá que Supabase local esté activo.')
+            ),
+          15000
         );
       });
 
-      const { data, error } = await Promise.race([signUpPromise, timeoutPromise]);
+      const response = await Promise.race([signUpPromise, timeoutPromise]);
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
 
-      if (error) {
-        setErrorMessage(error.message);
+      if (!response.ok) {
+        setErrorMessage(body.error ?? mapAuthError(null, 'signup'));
         return;
       }
 
-      if (data.session) {
+      if (response.headers.get('X-Auth-Has-Session') === 'true') {
         setSuccessMessage('Cuenta creada. Redirigiendo al dashboard...');
         event.currentTarget.reset();
         router.push('/app');
@@ -97,7 +101,7 @@ export default function SignupPage() {
       setSuccessMessage('Cuenta creada. Revisá tu correo para confirmar el registro.');
       event.currentTarget.reset();
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'No se pudo crear la cuenta.');
+      setErrorMessage(mapAuthError(error, 'signup'));
     } finally {
       setLoading(false);
     }
@@ -108,20 +112,29 @@ export default function SignupPage() {
     setSuccessMessage(null);
     setOauthLoading(provider);
 
+    if (!termsAccepted) {
+      setErrorMessage('Debés aceptar términos y privacidad.');
+      setOauthLoading(null);
+      return;
+    }
+
     try {
+      document.cookie = `cc_terms_accepted_at=${encodeURIComponent(
+        new Date().toISOString()
+      )}; path=/; max-age=600; samesite=lax`;
       const supabase = getSupabaseBrowserClient();
       const { error } = await supabase.auth.signInWithOAuth({
         provider,
         options: {
-          redirectTo: `${window.location.origin}/app`,
+          redirectTo: `${window.location.origin}/auth/callback?next=/app`,
         },
       });
 
       if (error) {
-        setErrorMessage(error.message);
+        setErrorMessage(mapAuthError(error, 'oauth'));
       }
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : `No se pudo continuar con ${provider}.`);
+      setErrorMessage(mapAuthError(error, 'oauth'));
     } finally {
       setOauthLoading(null);
     }
@@ -132,13 +145,20 @@ export default function SignupPage() {
       <div className="mx-auto grid w-full max-w-[1220px] overflow-hidden rounded-[2rem] border border-[#E8DDD2] bg-white/55 premium-shadow lg:grid-cols-[1.08fr_0.92fr]">
         <section className="relative overflow-hidden border-b border-[#E8DDD2] p-6 md:p-10 lg:border-b-0 lg:border-r">
           <div className="pointer-events-none absolute right-0 top-0 h-72 w-72 rounded-full bg-[#C56A1A]/10 blur-3xl" />
-          <motion.div initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.45 }}>
-            <p className="text-xs font-bold tracking-[0.15em] text-[#C56A1A]">COCINACORE • REGISTRO PREMIUM</p>
+          <motion.div
+            initial={{ opacity: 0, y: 24 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.45 }}
+          >
+            <p className="text-xs font-bold tracking-[0.15em] text-[#C56A1A]">
+              COCINACORE • REGISTRO PREMIUM
+            </p>
             <h1 className="mt-4 text-4xl font-semibold leading-[1.08] text-[#241A14] md:text-5xl">
               Empieza a construir tu recetario familiar inteligente
             </h1>
             <p className="mt-4 max-w-xl text-lg text-[#6B5A50]">
-              Guarda recetas, crea platos con ayuda, organiza ingredientes y deja tu cocina viva para tu familia.
+              Guarda recetas, crea platos con ayuda, organiza ingredientes y deja tu cocina viva
+              para tu familia.
             </p>
 
             <div className="mt-7 grid gap-3 sm:grid-cols-2">
@@ -160,13 +180,17 @@ export default function SignupPage() {
 
             <div className="mt-8 rounded-2xl border border-[#E8DDD2] bg-[#16110D] p-4 text-[#F3E6D8]">
               <p className="text-sm font-medium">Biblioteca culinaria viva</p>
-              <p className="mt-1 text-sm text-[#D8C8B8]">Todo lo que cocinan hoy, queda organizado para mañana.</p>
+              <p className="mt-1 text-sm text-[#D8C8B8]">
+                Todo lo que cocinan hoy, queda organizado para mañana.
+              </p>
             </div>
 
             <ul className="mt-7 grid gap-2 text-sm text-[#6B5A50] sm:grid-cols-2">
               {features.map((feature) => (
                 <li key={feature} className="flex items-center gap-2">
-                  <span className="inline-grid h-5 w-5 place-items-center rounded-full bg-[#567A3B]/20 text-xs font-bold text-[#567A3B]">✓</span>
+                  <span className="inline-grid h-5 w-5 place-items-center rounded-full bg-[#567A3B]/20 text-xs font-bold text-[#567A3B]">
+                    ✓
+                  </span>
                   {feature}
                 </li>
               ))}
@@ -182,44 +206,103 @@ export default function SignupPage() {
             className="w-full rounded-3xl border border-white/70 bg-white/70 p-6 shadow-[0_20px_36px_rgba(36,26,20,0.12)] backdrop-blur-md md:p-8"
           >
             <h2 className="text-3xl font-semibold text-[#241A14]">Crear cuenta</h2>
-            <p className="mt-2 text-[#6B5A50]">Empieza gratis y organiza tu cocina con asistencia inteligente.</p>
+            <p className="mt-2 text-[#6B5A50]">
+              Empieza gratis y organiza tu cocina con asistencia inteligente.
+            </p>
 
             <form onSubmit={onSubmit} className="mt-6 grid gap-4" noValidate>
               <div className="grid gap-2">
-                <label htmlFor="signup-name" className="text-sm font-semibold text-[#3A2D24]">Nombre completo</label>
-                <input id="signup-name" name="fullName" required className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 text-[#241A14] outline-none transition focus:border-[#C56A1A]" />
+                <label htmlFor="signup-name" className="text-sm font-semibold text-[#3A2D24]">
+                  Nombre completo
+                </label>
+                <input
+                  id="signup-name"
+                  name="fullName"
+                  required
+                  className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 text-[#241A14] outline-none transition focus:border-[#C56A1A]"
+                />
               </div>
               <div className="grid gap-2">
-                <label htmlFor="signup-email" className="text-sm font-semibold text-[#3A2D24]">Correo</label>
-                <input id="signup-email" type="email" name="email" required className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 text-[#241A14] outline-none transition focus:border-[#C56A1A]" />
+                <label htmlFor="signup-email" className="text-sm font-semibold text-[#3A2D24]">
+                  Correo
+                </label>
+                <input
+                  id="signup-email"
+                  type="email"
+                  name="email"
+                  required
+                  className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 text-[#241A14] outline-none transition focus:border-[#C56A1A]"
+                />
               </div>
               <div className="grid gap-2">
-                <label htmlFor="signup-password" className="text-sm font-semibold text-[#3A2D24]">Contraseña</label>
-                <input id="signup-password" type="password" name="password" minLength={8} required className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 text-[#241A14] outline-none transition focus:border-[#C56A1A]" />
+                <label htmlFor="signup-password" className="text-sm font-semibold text-[#3A2D24]">
+                  Contraseña
+                </label>
+                <input
+                  id="signup-password"
+                  type="password"
+                  name="password"
+                  minLength={8}
+                  required
+                  className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 text-[#241A14] outline-none transition focus:border-[#C56A1A]"
+                />
               </div>
               <div className="grid gap-2">
-                <label htmlFor="signup-confirm-password" className="text-sm font-semibold text-[#3A2D24]">Confirmar contraseña</label>
-                <input id="signup-confirm-password" type="password" name="confirmPassword" minLength={8} required className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 text-[#241A14] outline-none transition focus:border-[#C56A1A]" />
+                <label
+                  htmlFor="signup-confirm-password"
+                  className="text-sm font-semibold text-[#3A2D24]"
+                >
+                  Confirmar contraseña
+                </label>
+                <input
+                  id="signup-confirm-password"
+                  type="password"
+                  name="confirmPassword"
+                  minLength={8}
+                  required
+                  className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 text-[#241A14] outline-none transition focus:border-[#C56A1A]"
+                />
               </div>
 
               <p className="text-xs text-[#7D6A5D]">{passwordStrengthHint}</p>
 
               <label className="flex items-start gap-3 text-sm text-[#6B5A50]">
-                <input type="checkbox" required className="mt-1 h-4 w-4 rounded border-[#E8DDD2] accent-[#C56A1A]" />
+                <input
+                  name="termsAccepted"
+                  type="checkbox"
+                  required
+                  checked={termsAccepted}
+                  onChange={(event) => setTermsAccepted(event.target.checked)}
+                  className="mt-1 h-4 w-4 rounded border-[#E8DDD2] accent-[#C56A1A]"
+                />
                 Acepto términos y privacidad
               </label>
 
-              {errorMessage && <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{errorMessage}</p>}
-              {successMessage && <p className="rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{successMessage}</p>}
+              {errorMessage && (
+                <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">
+                  {errorMessage}
+                </p>
+              )}
+              {successMessage && (
+                <p className="rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+                  {successMessage}
+                </p>
+              )}
 
-              <button type="submit" disabled={loading} className="mt-1 h-11 rounded-xl bg-[#C56A1A] font-semibold text-white transition hover:bg-[#A55412] disabled:opacity-70">
+              <button
+                type="submit"
+                disabled={loading}
+                className="mt-1 h-11 rounded-xl bg-[#C56A1A] font-semibold text-white transition hover:bg-[#A55412] disabled:opacity-70"
+              >
                 {loading ? 'Creando cuenta...' : 'Crear cuenta gratis'}
               </button>
             </form>
 
             <div className="my-5 flex items-center gap-3">
               <div className="h-px flex-1 bg-[#E8DDD2]" />
-              <span className="text-xs font-semibold uppercase tracking-[0.08em] text-[#8B796B]">o continuar con</span>
+              <span className="text-xs font-semibold uppercase tracking-[0.08em] text-[#8B796B]">
+                o continuar con
+              </span>
               <div className="h-px flex-1 bg-[#E8DDD2]" />
             </div>
 

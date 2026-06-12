@@ -54,8 +54,12 @@ export interface TrialStateRow {
 }
 
 export interface AuthApiLike {
-  signUpWithPassword(credentials: PasswordCredentials): Result<{ user: AuthUser | null; session: AuthSession | null }>;
-  signInWithPassword(credentials: PasswordCredentials): Result<{ user: AuthUser; session: AuthSession }>;
+  signUpWithPassword(
+    credentials: PasswordCredentials
+  ): Result<{ user: AuthUser | null; session: AuthSession | null }>;
+  signInWithPassword(
+    credentials: PasswordCredentials
+  ): Result<{ user: AuthUser; session: AuthSession }>;
   signInWithOAuth(params: {
     provider: Exclude<AuthProvider, 'password'>;
     options?: OAuthSignInOptions;
@@ -70,14 +74,20 @@ export interface AuthApiLike {
 
 export interface SupabaseAuthClientLike {
   auth: AuthApiLike;
-  rpc(functionName: 'accept_tenant_invitation', args: { p_invitation_token: string }): Result<string>;
+  rpc(
+    functionName: 'accept_tenant_invitation',
+    args: { p_invitation_token: string }
+  ): Result<string>;
   from(tableName: 'tenant_invitations'): {
     insert(values: InvitationUpsertRow[]): Result<null>;
     select(columns: string): InvitationSelectBuilder;
   };
   from(tableName: 'tenants'): {
     select(columns: string): {
-      eq(column: 'id', value: string): {
+      eq(
+        column: 'id',
+        value: string
+      ): {
         maybeSingle(): Result<TrialStateRow>;
       };
     };
@@ -123,7 +133,10 @@ function toTrialState(row: TrialStateRow): TrialState {
 export class AuthService {
   constructor(private readonly client: SupabaseAuthClientLike) {}
 
-  isInvitationExpired(invitation: Pick<Invitation, 'expiresAt'>, nowMs: number = Date.now()): boolean {
+  isInvitationExpired(
+    invitation: Pick<Invitation, 'expiresAt'>,
+    nowMs: number = Date.now()
+  ): boolean {
     const expiresAtMs = Date.parse(invitation.expiresAt);
     if (Number.isNaN(expiresAtMs)) {
       return true;

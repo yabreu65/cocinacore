@@ -17,8 +17,20 @@ describe('recipe-requirements', () => {
 
   it('groups duplicated ingredients', () => {
     const grouped = groupRequirementsByIngredient([
-      { ingredientName: 'arroz', normalizedName: 'arroz', requiredQuantity: 200, requiredUnit: 'g', usedInRecipes: [] },
-      { ingredientName: 'Arroz', normalizedName: 'arroz', requiredQuantity: 300, requiredUnit: 'g', usedInRecipes: [] },
+      {
+        ingredientName: 'arroz',
+        normalizedName: 'arroz',
+        requiredQuantity: 200,
+        requiredUnit: 'g',
+        usedInRecipes: [],
+      },
+      {
+        ingredientName: 'Arroz',
+        normalizedName: 'arroz',
+        requiredQuantity: 300,
+        requiredUnit: 'g',
+        usedInRecipes: [],
+      },
     ]);
     expect(grouped).toHaveLength(1);
     expect(grouped[0].requiredQuantity).toBe(500);
@@ -26,32 +38,64 @@ describe('recipe-requirements', () => {
 
   it('compares sufficient inventory', () => {
     const result = compareRecipeRequirementsToInventory(
-      [{ ingredientName: 'arroz', normalizedName: 'arroz', requiredQuantity: 300, requiredUnit: 'g', usedInRecipes: [] }],
-      [{ ingredient_name: 'Arroz', quantity: '1 kg', unit: null }],
+      [
+        {
+          ingredientName: 'arroz',
+          normalizedName: 'arroz',
+          requiredQuantity: 300,
+          requiredUnit: 'g',
+          usedInRecipes: [],
+        },
+      ],
+      [{ ingredient_name: 'Arroz', quantity: '1 kg', unit: null }]
     );
     expect(result[0].status).toBe('sufficient');
   });
 
   it('compares partial inventory', () => {
     const result = compareRecipeRequirementsToInventory(
-      [{ ingredientName: 'arroz', normalizedName: 'arroz', requiredQuantity: 500, requiredUnit: 'g', usedInRecipes: [] }],
-      [{ ingredient_name: 'Arroz', quantity: '250 g', unit: null }],
+      [
+        {
+          ingredientName: 'arroz',
+          normalizedName: 'arroz',
+          requiredQuantity: 500,
+          requiredUnit: 'g',
+          usedInRecipes: [],
+        },
+      ],
+      [{ ingredient_name: 'Arroz', quantity: '250 g', unit: null }]
     );
     expect(result[0].status).toBe('partial');
   });
 
   it('detects missing ingredient', () => {
     const result = compareRecipeRequirementsToInventory(
-      [{ ingredientName: 'pollo', normalizedName: 'pollo', requiredQuantity: 1, requiredUnit: 'kg', usedInRecipes: [] }],
-      [{ ingredient_name: 'Arroz', quantity: '1 kg', unit: null }],
+      [
+        {
+          ingredientName: 'pollo',
+          normalizedName: 'pollo',
+          requiredQuantity: 1,
+          requiredUnit: 'kg',
+          usedInRecipes: [],
+        },
+      ],
+      [{ ingredient_name: 'Arroz', quantity: '1 kg', unit: null }]
     );
     expect(result[0].status).toBe('missing');
   });
 
   it('marks non comparable units as unknown', () => {
     const result = compareRecipeRequirementsToInventory(
-      [{ ingredientName: 'leche', normalizedName: 'leche', requiredQuantity: 1, requiredUnit: 'l', usedInRecipes: [] }],
-      [{ ingredient_name: 'leche', quantity: '1 kg', unit: null }],
+      [
+        {
+          ingredientName: 'leche',
+          normalizedName: 'leche',
+          requiredQuantity: 1,
+          requiredUnit: 'l',
+          usedInRecipes: [],
+        },
+      ],
+      [{ ingredient_name: 'leche', quantity: '1 kg', unit: null }]
     );
     expect(result[0].status).toBe('unknown');
   });
@@ -83,10 +127,10 @@ describe('recipe-requirements', () => {
     });
     expect(requirements.length).toBeGreaterThan(0);
     const hasStructuredRice = requirements.some(
-      (item) => item.requiredQuantity === 500 && item.requiredUnit === 'g',
+      (item) => item.requiredQuantity === 500 && item.requiredUnit === 'g'
     );
     const hasUnknownSalt = requirements.some(
-      (item) => item.requiredQuantity === null && item.requiredUnit === 'unknown',
+      (item) => item.requiredQuantity === null && item.requiredUnit === 'unknown'
     );
     expect(hasStructuredRice).toBe(true);
     expect(hasUnknownSalt).toBe(true);

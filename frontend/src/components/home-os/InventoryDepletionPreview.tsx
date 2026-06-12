@@ -5,12 +5,19 @@ type Props = {
 };
 
 function ratio(item: MealPlanProjectionItem): number | null {
-  if (item.availableQuantity === null || item.requiredTotalQuantity === null || item.availableQuantity <= 0) return null;
+  if (
+    item.availableQuantity === null ||
+    item.requiredTotalQuantity === null ||
+    item.availableQuantity <= 0
+  )
+    return null;
   const remaining = item.projectedRemainingQuantity ?? 0;
   return Math.max(0, Math.min(1, remaining / item.availableQuantity));
 }
 
-function depletionStatus(item: MealPlanProjectionItem): 'suficiente' | 'bajo' | 'critico' | 'revisar' {
+function depletionStatus(
+  item: MealPlanProjectionItem
+): 'suficiente' | 'bajo' | 'critico' | 'revisar' {
   if (item.status === 'unknown') return 'revisar';
   if (item.status === 'missing') return 'critico';
   if (item.status === 'partial') return 'bajo';
@@ -23,7 +30,9 @@ export function InventoryDepletionPreview(props: Props) {
   return (
     <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
       <h3 className="text-lg font-semibold text-[#241A14]">Simulación operativa del menú</h3>
-      <p className="mt-1 text-sm text-[#6B5A50]">Vista previa antes/después del menú. No modifica tu inventario real.</p>
+      <p className="mt-1 text-sm text-[#6B5A50]">
+        Vista previa antes/después del menú. No modifica tu inventario real.
+      </p>
 
       <div className="mt-3 space-y-3">
         {topItems.map((item) => {
@@ -39,15 +48,22 @@ export function InventoryDepletionPreview(props: Props) {
                   : 'text-[#6B5A50]';
 
           return (
-            <div key={item.normalizedName} className="rounded-xl border border-[#E8DDD2] bg-white/80 p-3">
+            <div
+              key={item.normalizedName}
+              className="rounded-xl border border-[#E8DDD2] bg-white/80 p-3"
+            >
               <div className="flex items-center justify-between gap-2">
                 <p className="text-sm font-semibold text-[#241A14]">{item.ingredientName}</p>
                 <span className={`text-xs font-semibold ${statusTone}`}>{status}</span>
               </div>
 
               <div className="mt-2 grid gap-1 text-xs text-[#6B5A50]">
-                <p>Antes: {item.availableQuantity ?? '—'} {item.availableUnit}</p>
-                <p>Después: {item.projectedRemainingQuantity ?? '—'} {item.requiredUnit}</p>
+                <p>
+                  Antes: {item.availableQuantity ?? '—'} {item.availableUnit}
+                </p>
+                <p>
+                  Después: {item.projectedRemainingQuantity ?? '—'} {item.requiredUnit}
+                </p>
               </div>
 
               <div className="mt-2 h-2 overflow-hidden rounded-full bg-[#E8DDD2]">

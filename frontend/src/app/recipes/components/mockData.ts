@@ -1,4 +1,9 @@
-import { InventoryItemDto, RecipeHistoryItemDto, RecipeRatingDto, RestrictionProfile } from '@/services/types';
+import {
+  InventoryItemDto,
+  RecipeHistoryItemDto,
+  RecipeRatingDto,
+  RestrictionProfile,
+} from '@/services/types';
 
 export const defaultRestrictionProfile: RestrictionProfile = {
   allergies: ['maní'],
@@ -46,7 +51,8 @@ export function addRatingOrThrow(
   nextRating: RecipeRatingDto
 ): RecipeRatingDto[] {
   const duplicate = ratings.some(
-    (rating) => rating.generationId === nextRating.generationId && rating.userId === nextRating.userId
+    (rating) =>
+      rating.generationId === nextRating.generationId && rating.userId === nextRating.userId
   );
 
   if (duplicate) {

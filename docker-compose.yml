@@ -1,0 +1,19 @@
+# Docker Compose - ONLY auxiliary services
+# For development, run Next.js directly: cd frontend && npm run dev
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - cocinacore
+
+volumes:
+  redis_data:
+
+networks:
+  cocinacore:
+    driver: bridge

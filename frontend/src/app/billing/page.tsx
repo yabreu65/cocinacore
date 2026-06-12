@@ -37,13 +37,20 @@ export default function BillingPage() {
         if (userError || !userRow?.tenant_id) throw new Error('No se encontró tenant del usuario.');
         setRole(userRow.role ?? null);
 
-        const [{ data: tenantRow, error: tenantError }, { count: usersCount, error: membersError }, { count: invitesCount, error: invitesError }] = await Promise.all([
+        const [
+          { data: tenantRow, error: tenantError },
+          { count: usersCount, error: membersError },
+          { count: invitesCount, error: invitesError },
+        ] = await Promise.all([
           supabase
             .from('tenants')
             .select('trial_ends_at,tenant_type')
             .eq('id', userRow.tenant_id)
             .maybeSingle(),
-          supabase.from('users').select('*', { count: 'exact', head: true }).eq('tenant_id', userRow.tenant_id),
+          supabase
+            .from('users')
+            .select('*', { count: 'exact', head: true })
+            .eq('tenant_id', userRow.tenant_id),
           supabase
             .from('tenant_invitations')
             .select('*', { count: 'exact', head: true })
@@ -59,7 +66,9 @@ export default function BillingPage() {
         setMembersCount(usersCount ?? 0);
         setPendingInvitations(invitesCount ?? 0);
       } catch (caughtError) {
-        setError(caughtError instanceof Error ? caughtError.message : 'No se pudo cargar facturación.');
+        setError(
+          caughtError instanceof Error ? caughtError.message : 'No se pudo cargar facturación.'
+        );
       } finally {
         setLoading(false);
       }
@@ -78,16 +87,26 @@ export default function BillingPage() {
             <h1 className="text-3xl font-semibold">Facturación</h1>
             <p className="text-[#6B5A50]">Estado actual de tu plan y trial.</p>
           </div>
-          <Link href="/app" className="text-sm font-semibold text-[#A55412]">Volver</Link>
+          <Link href="/app" className="text-sm font-semibold text-[#A55412]">
+            Volver
+          </Link>
         </div>
 
-        {error ? <p className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
+        {error ? (
+          <p className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            {error}
+          </p>
+        ) : null}
 
         <div className="grid gap-3 md:grid-cols-2">
           <article className="rounded-2xl border border-[#E8DDD2] bg-white/70 p-4">
             <p className="text-sm text-[#6B5A50]">Plan actual</p>
-            <p className="text-xl font-semibold">{tenantType === 'professional' ? 'Professional' : 'Home'} (trial)</p>
-            <p className="mt-1 text-xs text-[#6B5A50]">Rol: {role ?? 'member'} · Miembros activos: {membersCount}</p>
+            <p className="text-xl font-semibold">
+              {tenantType === 'professional' ? 'Professional' : 'Home'} (trial)
+            </p>
+            <p className="mt-1 text-xs text-[#6B5A50]">
+              Rol: {role ?? 'member'} · Miembros activos: {membersCount}
+            </p>
             <p className="mt-1 text-xs text-[#6B5A50]">
               Límite PDFs: {tenantType === 'professional' ? 15 : 5}
             </p>
@@ -95,22 +114,35 @@ export default function BillingPage() {
           <article className="rounded-2xl border border-[#E8DDD2] bg-white/70 p-4">
             <p className="text-sm text-[#6B5A50]">Trial</p>
             <p className="text-xl font-semibold">
-              {remaining === null ? 'No disponible' : remaining > 0 ? `${remaining} días restantes` : 'Vencido'}
+              {remaining === null
+                ? 'No disponible'
+                : remaining > 0
+                  ? `${remaining} días restantes`
+                  : 'Vencido'}
             </p>
-            <p className="mt-1 text-xs text-[#6B5A50]">Fin: {trialEndsAt ? new Date(trialEndsAt).toLocaleString() : '-'}</p>
+            <p className="mt-1 text-xs text-[#6B5A50]">
+              Fin: {trialEndsAt ? new Date(trialEndsAt).toLocaleString() : '-'}
+            </p>
           </article>
         </div>
 
         <article className="mt-4 rounded-2xl border border-[#E8DDD2] bg-white/70 p-4">
           <p className="text-sm text-[#6B5A50]">Estado comercial actual</p>
           <p className="mt-1 text-sm text-[#241A14]">
-            Invitaciones pendientes: {pendingInvitations}. Mientras estés en trial, podés seguir usando generación, biblioteca y planificación.
+            Invitaciones pendientes: {pendingInvitations}. Mientras estés en trial, podés seguir
+            usando generación, biblioteca y planificación.
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
-            <Link href="/members" className="rounded-xl border border-[#E8DDD2] px-3 py-2 text-sm font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40">
+            <Link
+              href="/members"
+              className="rounded-xl border border-[#E8DDD2] px-3 py-2 text-sm font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40"
+            >
               Gestionar miembros
             </Link>
-            <Link href="/app" className="rounded-xl bg-[#C56A1A] px-3 py-2 text-sm font-semibold text-white hover:bg-[#A55412]">
+            <Link
+              href="/app"
+              className="rounded-xl bg-[#C56A1A] px-3 py-2 text-sm font-semibold text-white hover:bg-[#A55412]"
+            >
               Volver al panel
             </Link>
           </div>

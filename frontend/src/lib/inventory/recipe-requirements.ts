@@ -47,7 +47,9 @@ function extractIngredientsNode(recipePayload: unknown): unknown[] {
     Array.isArray((payload.recipe as Record<string, unknown>).structured_ingredients) &&
     ((payload.recipe as Record<string, unknown>).structured_ingredients as unknown[]).length > 0
   ) {
-    return Array.from((payload.recipe as Record<string, unknown>).structured_ingredients as unknown[]);
+    return Array.from(
+      (payload.recipe as Record<string, unknown>).structured_ingredients as unknown[]
+    );
   }
 
   const candidates: unknown[] = [];
@@ -82,7 +84,11 @@ function extractIngredientsNode(recipePayload: unknown): unknown[] {
   return candidates;
 }
 
-function parseIngredientObject(input: Record<string, unknown>): { name: string; quantity: number | null; unit: NormalizedUnit } {
+function parseIngredientObject(input: Record<string, unknown>): {
+  name: string;
+  quantity: number | null;
+  unit: NormalizedUnit;
+} {
   const rawName =
     (typeof input.name === 'string' && input.name) ||
     (typeof input.ingredient === 'string' && input.ingredient) ||
@@ -103,7 +109,10 @@ export function normalizeRecipeIngredient(input: unknown): RecipeRequirement | n
     if (!clean) return null;
     const parsed = parseQuantity(clean);
     const ingredientName = parsed.structured
-      ? clean.replace(/^(\d+([.,]\d+)?|\d+\s*\/\s*\d+|\d+\s+\d+\s*\/\s*\d+)\s*/u, '').replace(/^(de)\s+/i, '').trim()
+      ? clean
+          .replace(/^(\d+([.,]\d+)?|\d+\s*\/\s*\d+|\d+\s+\d+\s*\/\s*\d+)\s*/u, '')
+          .replace(/^(de)\s+/i, '')
+          .trim()
       : clean;
     const normalizedName = normalizeInventoryName(ingredientName);
     if (!normalizedName) return null;
@@ -134,7 +143,9 @@ export function normalizeRecipeIngredient(input: unknown): RecipeRequirement | n
 export function extractRecipeRequirements(recipePayload: unknown): RecipeRequirement[] {
   const nodes = extractIngredientsNode(recipePayload);
   const recipeTitle =
-    recipePayload && typeof recipePayload === 'object' && typeof (recipePayload as Record<string, unknown>).title === 'string'
+    recipePayload &&
+    typeof recipePayload === 'object' &&
+    typeof (recipePayload as Record<string, unknown>).title === 'string'
       ? ((recipePayload as Record<string, unknown>).title as string)
       : undefined;
 
@@ -148,7 +159,9 @@ export function extractRecipeRequirements(recipePayload: unknown): RecipeRequire
   return requirements;
 }
 
-export function groupRequirementsByIngredient(requirements: RecipeRequirement[]): RecipeRequirement[] {
+export function groupRequirementsByIngredient(
+  requirements: RecipeRequirement[]
+): RecipeRequirement[] {
   const map = new Map<string, RecipeRequirement>();
   for (const item of requirements) {
     const existing = map.get(item.normalizedName);
@@ -157,8 +170,14 @@ export function groupRequirementsByIngredient(requirements: RecipeRequirement[])
       continue;
     }
 
-    if (existing.requiredUnit === item.requiredUnit && existing.requiredQuantity !== null && item.requiredQuantity !== null) {
-      existing.requiredQuantity = Number((existing.requiredQuantity + item.requiredQuantity).toFixed(2));
+    if (
+      existing.requiredUnit === item.requiredUnit &&
+      existing.requiredQuantity !== null &&
+      item.requiredQuantity !== null
+    ) {
+      existing.requiredQuantity = Number(
+        (existing.requiredQuantity + item.requiredQuantity).toFixed(2)
+      );
     } else if (existing.requiredQuantity === null && item.requiredQuantity !== null) {
       existing.requiredQuantity = item.requiredQuantity;
       existing.requiredUnit = item.requiredUnit;
@@ -178,11 +197,11 @@ export function groupRequirementsByIngredient(requirements: RecipeRequirement[])
 
 export function compareRecipeRequirementsToInventory(
   requirements: RecipeRequirement[],
-  inventoryItems: InventoryComparableItem[],
+  inventoryItems: InventoryComparableItem[]
 ): ComparedRequirement[] {
   const groupedRequirements = groupRequirementsByIngredient(requirements);
   const inventoryByName = new Map(
-    inventoryItems.map((item) => [normalizeInventoryName(item.ingredient_name), item]),
+    inventoryItems.map((item) => [normalizeInventoryName(item.ingredient_name), item])
   );
 
   return groupedRequirements.map((req) => {
@@ -207,7 +226,7 @@ export function compareRecipeRequirementsToInventory(
       {
         quantity: req.requiredQuantity === null ? null : String(req.requiredQuantity),
         unit: req.requiredUnit === 'unknown' ? null : req.requiredUnit,
-      },
+      }
     );
 
     return {

@@ -62,8 +62,14 @@ export interface PremiumRecipesSelectBuilder {
     };
   };
   update(values: PremiumRecipeUpdateRow): {
-    eq(column: 'id', value: string): {
-      eq(column: 'creator_user_id', value: string): {
+    eq(
+      column: 'id',
+      value: string
+    ): {
+      eq(
+        column: 'creator_user_id',
+        value: string
+      ): {
         select(columns: '*'): {
           single(): Result<PremiumRecipeDto>;
         };
@@ -71,14 +77,20 @@ export interface PremiumRecipesSelectBuilder {
     };
   };
   select(columns: string): {
-    eq(column: 'id', value: string): {
+    eq(
+      column: 'id',
+      value: string
+    ): {
       maybeSingle(): Result<PremiumRecipeDetailDto>;
     };
   };
 }
 
 export interface PremiumRecipeReviewsTable {
-  upsert(values: PremiumRecipeReviewUpsertRow[], options: { onConflict: 'premium_recipe_id,user_id' }): {
+  upsert(
+    values: PremiumRecipeReviewUpsertRow[],
+    options: { onConflict: 'premium_recipe_id,user_id' }
+  ): {
     select(columns: '*'): {
       single(): Result<PremiumRecipeReviewResult>;
     };
@@ -102,7 +114,9 @@ export interface PremiumBoardClientLike {
 export class PremiumBoardService {
   constructor(private readonly client: PremiumBoardClientLike) {}
 
-  async publishRecipe(input: PremiumRecipePublishInput): Promise<PremiumBoardResult<PremiumRecipePublishResult>> {
+  async publishRecipe(
+    input: PremiumRecipePublishInput
+  ): Promise<PremiumBoardResult<PremiumRecipePublishResult>> {
     const publishedAt = new Date().toISOString();
 
     return this.client

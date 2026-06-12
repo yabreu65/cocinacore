@@ -12,7 +12,6 @@ import {
   Download,
   Eye,
   History,
-  Lock,
   MessageCircle,
   RefreshCw,
   RotateCcw,
@@ -54,6 +53,9 @@ import { DailyKitchenCard } from '@/components/home-os/DailyKitchenCard';
 import { InventoryPlaybackCard } from '@/components/home-os/InventoryPlaybackCard';
 import { HomeIntelligenceDashboard } from '@/components/home-os/HomeIntelligenceDashboard';
 import { SmartPredictionCard } from '@/components/home-os/SmartPredictionCard';
+import { MenuHealthCard } from '@/components/home-os/MenuHealthCard';
+import { RecipeReplacementModal } from '@/components/home-os/RecipeReplacementModal';
+import { AdvancedTimelineSection } from '@/components/home-os/AdvancedTimelineSection';
 import { buildMealPlanSimulation } from '@/lib/inventory/meal-plan-simulation';
 import { normalizeInventoryName } from '@/lib/inventory/normalize-inventory';
 import { EditableMealTimeline } from '@/components/home-os/EditableMealTimeline';
@@ -73,7 +75,10 @@ import { OptimizationScoreCard } from '@/components/home-os/OptimizationScoreCar
 import { BeforeAfterComparisonCard } from '@/components/home-os/BeforeAfterComparisonCard';
 import { AIOptimizationInsights } from '@/components/home-os/AIOptimizationInsights';
 import type { Database } from '@/lib/database.types';
-import type { StructuredRecipeIngredient } from '@/lib/recipes/structured-ingredients';
+import {
+  extractStructuredIngredients,
+  type StructuredRecipeIngredient,
+} from '@/lib/recipes/structured-ingredients';
 import {
   applyOptimizationState,
   buildMealKey,
@@ -81,7 +86,15 @@ import {
   moveMealAcrossSlotState,
 } from '@/lib/meal-planner/simulation-state';
 
-const CUISINES = ['Venezolana', 'Colombiana', 'Latinoamericana', 'Asiática', 'Italiana', 'Mediterránea', 'Mexicana'];
+const CUISINES = [
+  'Venezolana',
+  'Colombiana',
+  'Latinoamericana',
+  'Asiática',
+  'Italiana',
+  'Mediterránea',
+  'Mexicana',
+];
 const CUISINE_FLAGS: Record<string, string> = {
   Venezolana: '🇻🇪',
   Colombiana: '🇨🇴',
@@ -92,7 +105,14 @@ const CUISINE_FLAGS: Record<string, string> = {
   Mexicana: '🇲🇽',
 };
 const GOALS = ['Familiar', 'Meal prep', 'Fitness', 'Cena rápida', 'Aprender cocina'];
-const RESTRICTIONS = ['Sin gluten', 'Sin lactosa', 'Keto', 'Frutos secos', 'Mariscos', 'Vegetariano'];
+const RESTRICTIONS = [
+  'Sin gluten',
+  'Sin lactosa',
+  'Keto',
+  'Frutos secos',
+  'Mariscos',
+  'Vegetariano',
+];
 
 const PERIOD_OPTIONS = [
   { key: 'week', label: 'Semana' },
@@ -106,7 +126,15 @@ const MODE_OPTIONS = [
   { key: 'balanced_ai', label: 'Balanceado IA' },
 ] as const;
 
-const DAY_NAMES = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'] as const;
+const DAY_NAMES = [
+  'Lunes',
+  'Martes',
+  'Miércoles',
+  'Jueves',
+  'Viernes',
+  'Sábado',
+  'Domingo',
+] as const;
 const MEALS = ['Desayuno', 'Almuerzo', 'Cena'] as const;
 
 type PlannerMode = (typeof MODE_OPTIONS)[number]['key'];
@@ -132,6 +160,7 @@ type PlannerMealCard = {
   aiScore: number;
   structured_ingredients?: StructuredRecipeIngredient[];
   recipe_content?: string | null;
+  rag_context?: string[];
 };
 
 type PlannerDay = {
@@ -153,7 +182,16 @@ type ErrorPayload = { error?: string };
 type MatchChunkRow = { content: string; similarity: number | string | null };
 type MealDetailTab = 'summary' | 'ingredients' | 'preparation';
 type SelectedMealState = { day: string; mealType: MealType } | null;
-type OptimizationSnapshotRow = Database['public']['Tables']['user_meal_plan_optimization_snapshots']['Row'];
+type RecipeAlternative = {
+  id: string;
+  title: string;
+  description: string;
+  reasons: string[];
+  time: string;
+  difficulty: 'Fácil' | 'Media' | 'Alta';
+};
+type OptimizationSnapshotRow =
+  Database['public']['Tables']['user_meal_plan_optimization_snapshots']['Row'];
 type OptimizationSnapshotView = {
   id: string;
   createdAt: string;
@@ -182,12 +220,24 @@ type ConsumptionPreviewItem = {
 };
 
 const HISTORY_PAGE_SIZE = 5;
+const ENABLE_HOME_INTELLIGENCE_DASHBOARD =
+  process.env.NEXT_PUBLIC_ENABLE_HOME_INTELLIGENCE_DASHBOARD === 'true';
 type InventoryItemExtended = InventoryComparableItem & {
   id?: string;
   normalized_name?: string | null;
   category?: string | null;
   estimated_unit_price?: number | null;
 };
+type ShoppingInventoryRow = {
+  id: string;
+  ingredient_name: string;
+  normalized_name?: string | null;
+  quantity: string | null;
+  unit?: string | null;
+  category?: string | null;
+  estimated_unit_price?: number | null;
+};
+type InventorySchemaMode = 'normalized' | 'legacy';
 
 async function readErrorPayload(response: Response, fallback: string): Promise<ErrorPayload> {
   const payload: unknown = await response.json().catch(() => ({ error: fallback }));
@@ -198,12 +248,67 @@ async function readErrorPayload(response: Response, fallback: string): Promise<E
   return { error: fallback };
 }
 
+function getErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === 'object') {
+    const candidate = error as {
+      message?: unknown;
+      details?: unknown;
+      hint?: unknown;
+      code?: unknown;
+    };
+    const message = typeof candidate.message === 'string' ? candidate.message : null;
+    const details = typeof candidate.details === 'string' ? candidate.details : null;
+    const hint = typeof candidate.hint === 'string' ? candidate.hint : null;
+    const code = typeof candidate.code === 'string' ? candidate.code : null;
+    return (
+      [message, details, hint, code ? `Código: ${code}` : null].filter(Boolean).join(' · ') ||
+      fallback
+    );
+  }
+  return fallback;
+}
+
+function isMissingDbColumnError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { code?: unknown; message?: unknown };
+  return (
+    candidate.code === '42703' ||
+    (typeof candidate.message === 'string' && candidate.message.includes('does not exist'))
+  );
+}
+
+function toInventoryRows(rows: ShoppingInventoryRow[]): InventoryItemExtended[] {
+  return rows.map((row) => ({
+    id: row.id,
+    ingredient_name: row.ingredient_name,
+    normalized_name: row.normalized_name ?? null,
+    quantity: row.quantity ?? null,
+    unit: row.unit ?? null,
+    category: row.category ?? null,
+    estimated_unit_price: row.estimated_unit_price ?? null,
+  }));
+}
+
 function buildFusionLabel(baseCuisine: string, fusionCuisines: string[]): string {
   if (fusionCuisines.length === 0) return baseCuisine;
   return `${baseCuisine} + ${fusionCuisines.join(' + ')}`;
 }
 
-function createDefaultCard(day: string, meal: MealType, fusionLabel: string): PlannerMealCard {
+function sanitizeStringArray(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function createDefaultCard(
+  day: string,
+  meal: MealType,
+  fusionLabel: string,
+  ragContext: string[] = []
+): PlannerMealCard {
   return {
     name: `${meal} de ${day}`,
     time: meal === 'Desayuno' ? '15 min' : meal === 'Almuerzo' ? '30 min' : '25 min',
@@ -214,25 +319,35 @@ function createDefaultCard(day: string, meal: MealType, fusionLabel: string): Pl
     aiScore: 88,
     structured_ingredients: [],
     recipe_content: null,
+    rag_context: ragContext,
   };
 }
 
-function buildDefaultWeek(fusionLabel: string): PlannerDay[] {
+function buildDefaultWeek(fusionLabel: string, ragContext: string[] = []): PlannerDay[] {
   return DAY_NAMES.map((day) => ({
     day,
     meals: {
-      Desayuno: createDefaultCard(day, 'Desayuno', fusionLabel),
-      Almuerzo: createDefaultCard(day, 'Almuerzo', fusionLabel),
-      Cena: createDefaultCard(day, 'Cena', fusionLabel),
+      Desayuno: createDefaultCard(day, 'Desayuno', fusionLabel, ragContext),
+      Almuerzo: createDefaultCard(day, 'Almuerzo', fusionLabel, ragContext),
+      Cena: createDefaultCard(day, 'Cena', fusionLabel, ragContext),
     },
   }));
 }
 
-function parseMenuToCalendar(content: string, fusionLabel: string): PlannerDay[] {
-  const week = buildDefaultWeek(fusionLabel);
+function parseMenuToCalendar(
+  content: string,
+  fusionLabel: string,
+  ragContext: string[] = []
+): PlannerDay[] {
+  const week = buildDefaultWeek(fusionLabel, ragContext);
   const lines = content
     .split('\n')
-    .map((line) => line.trim().replace(/\*\*/g, '').replace(/^[-•]\s*/, ''))
+    .map((line) =>
+      line
+        .trim()
+        .replace(/\*\*/g, '')
+        .replace(/^[-•]\s*/, '')
+    )
     .filter(Boolean);
 
   const dayIndexByName = new Map(DAY_NAMES.map((d, idx) => [d.toLowerCase(), idx]));
@@ -273,6 +388,7 @@ function parseMenuToCalendar(content: string, fusionLabel: string): PlannerDay[]
       aiScore: 86,
       structured_ingredients: [],
       recipe_content: null,
+      rag_context: ragContext,
     };
   }
 
@@ -308,6 +424,7 @@ function parseMenuToCalendar(content: string, fusionLabel: string): PlannerDay[]
       difficulty: nextLine.length > 58 ? 'Alta' : nextLine.length > 42 ? 'Media' : 'Fácil',
       badge: 'Perfil aplicado',
       structured_ingredients: current.structured_ingredients ?? [],
+      rag_context: current.rag_context ?? ragContext,
     };
   }
 
@@ -321,13 +438,15 @@ function sanitizeStructuredIngredients(input: unknown): StructuredRecipeIngredie
     .map((item) => ({
       name: typeof item.name === 'string' ? item.name : '',
       normalized_name: typeof item.normalized_name === 'string' ? item.normalized_name : '',
-      quantity: typeof item.quantity === 'number' && Number.isFinite(item.quantity) ? item.quantity : null,
+      quantity:
+        typeof item.quantity === 'number' && Number.isFinite(item.quantity) ? item.quantity : null,
       unit: typeof item.unit === 'string' ? item.unit : null,
       optional_quantity_text:
         typeof item.optional_quantity_text === 'string' ? item.optional_quantity_text : null,
       category: typeof item.category === 'string' ? item.category : null,
       estimated_cost_optional:
-        typeof item.estimated_cost_optional === 'number' && Number.isFinite(item.estimated_cost_optional)
+        typeof item.estimated_cost_optional === 'number' &&
+        Number.isFinite(item.estimated_cost_optional)
           ? item.estimated_cost_optional
           : null,
       structured: Boolean(item.structured),
@@ -350,7 +469,14 @@ function normalizePlannerDay(day: unknown): PlannerDay | null {
       meal?.difficulty === 'Media' || meal?.difficulty === 'Alta' ? meal.difficulty : 'Fácil';
     return {
       name: typeof meal?.name === 'string' ? meal.name : `${mealType} de ${source.day}`,
-      time: typeof meal?.time === 'string' ? meal.time : mealType === 'Desayuno' ? '15 min' : mealType === 'Almuerzo' ? '35 min' : '30 min',
+      time:
+        typeof meal?.time === 'string'
+          ? meal.time
+          : mealType === 'Desayuno'
+            ? '15 min'
+            : mealType === 'Almuerzo'
+              ? '35 min'
+              : '30 min',
       difficulty,
       badge: typeof meal?.badge === 'string' ? meal.badge : 'Perfil aplicado',
       fusionTag: typeof meal?.fusionTag === 'string' ? meal.fusionTag : 'Fusión personalizada',
@@ -358,6 +484,7 @@ function normalizePlannerDay(day: unknown): PlannerDay | null {
       aiScore: typeof meal?.aiScore === 'number' ? meal.aiScore : 86,
       structured_ingredients: sanitizeStructuredIngredients(meal?.structured_ingredients),
       recipe_content: typeof meal?.recipe_content === 'string' ? meal.recipe_content : null,
+      rag_context: sanitizeStringArray(meal?.rag_context),
     };
   };
 
@@ -377,6 +504,28 @@ function normalizePlannerCalendar(input: unknown): PlannerDay[] {
     .map((day) => normalizePlannerDay(day))
     .filter((day): day is PlannerDay => day !== null);
   return normalized;
+}
+
+function patchMealInCalendar(
+  calendar: PlannerDay[],
+  day: string,
+  mealType: MealType,
+  patch: Partial<PlannerMealCard>
+): PlannerDay[] {
+  return calendar.map((dayEntry) =>
+    dayEntry.day !== day
+      ? dayEntry
+      : {
+          ...dayEntry,
+          meals: {
+            ...dayEntry.meals,
+            [mealType]: {
+              ...dayEntry.meals[mealType],
+              ...patch,
+            },
+          },
+        }
+  );
 }
 
 function extractShoppingItems(content: string): string[] {
@@ -451,7 +600,10 @@ function parseSnapshot(rows: OptimizationSnapshotRow[]): OptimizationSnapshotVie
     .filter((row): row is OptimizationSnapshotView => row !== null);
 }
 
-function toSimulationDays(days: PlannerDay[]): Array<{ day: string; meals: Array<{ label: string; title: string; time: string; difficulty: string }> }> {
+function toSimulationDays(days: PlannerDay[]): Array<{
+  day: string;
+  meals: Array<{ label: string; title: string; time: string; difficulty: string }>;
+}> {
   return days.map((day) => ({
     day: day.day,
     meals: MEALS.map((mealType) => ({
@@ -470,6 +622,19 @@ function formatInventoryQuantityValue(value: number): string {
 function convertToUnit(value: number, from: NormalizedUnit, to: NormalizedUnit): number | null {
   if (from === to) return value;
   return convertQuantity(value, from, to);
+}
+
+function normalizeIngredientKey(value: string): string {
+  return normalizeInventoryName(value)
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getCurrentPlannerDayIndex(): number {
+  // JS: Sunday=0 ... Saturday=6 | Planner: Monday=0 ... Sunday=6
+  const jsDay = new Date().getDay();
+  return jsDay === 0 ? 6 : jsDay - 1;
 }
 
 function buildRecipeRequirementsFromCalendar(days: PlannerDay[]): RecipeRequirement[] {
@@ -505,7 +670,8 @@ function parseNarrativeMenu(content: string): NarrativeDaySection[] {
     .map((line) => line.trim())
     .filter(Boolean);
 
-  const dayRegex = /^(?:\*{0,2})?(lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado|domingo)(?:\*{0,2})?$/i;
+  const dayRegex =
+    /^(?:\*{0,2})?(lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado|domingo)(?:\*{0,2})?$/i;
   const mealRegex = /^(desayuno|almuerzo|cena)\s*:\s*(.+)$/i;
   let currentSection: NarrativeDaySection | null = null;
 
@@ -536,9 +702,10 @@ function buildShoppingWhatsappText(
   shoppingList: ReturnType<typeof buildQuantifiedShoppingList>,
   peopleCount: number,
   period: PlannerPeriod,
-  format: ShoppingShareFormat,
+  format: ShoppingShareFormat
 ): string {
-  const periodLabel = period === 'week' ? 'semanal' : period === 'fortnight' ? 'quincenal' : 'mensual';
+  const periodLabel =
+    period === 'week' ? 'semanal' : period === 'fortnight' ? 'quincenal' : 'mensual';
   const lines: string[] = [
     `🛒 Lista de mercado CocinaCore (${periodLabel})`,
     `👥 ${peopleCount} personas`,
@@ -585,11 +752,17 @@ export default function MealPlannerPage() {
     goals: string[];
     level: string | null;
   }>({ preferred: [], avoid: [], goals: [], level: null });
-  const fusionLabel = useMemo(() => buildFusionLabel(baseCuisine, fusionCuisines), [baseCuisine, fusionCuisines]);
-  const [calendarData, setCalendarData] = useState<PlannerDay[]>(() => buildDefaultWeek('Latinoamericana'));
+  const fusionLabel = useMemo(
+    () => buildFusionLabel(baseCuisine, fusionCuisines),
+    [baseCuisine, fusionCuisines]
+  );
+  const [calendarData, setCalendarData] = useState<PlannerDay[]>(() =>
+    buildDefaultWeek('Latinoamericana')
+  );
   const [loadingInventory, setLoadingInventory] = useState(true);
   const [applyingShoppingItemKey, setApplyingShoppingItemKey] = useState<string | null>(null);
   const [shoppingApplySummary, setShoppingApplySummary] = useState<string | null>(null);
+  const [shoppingApplyStage, setShoppingApplyStage] = useState<string | null>(null);
   const [consumingRecipe, setConsumingRecipe] = useState(false);
   const [recentMovements, setRecentMovements] = useState<InventoryMovementRow[]>([]);
   const [shoppingShareFeedback, setShoppingShareFeedback] = useState<string | null>(null);
@@ -599,8 +772,11 @@ export default function MealPlannerPage() {
   const [result, setResult] = useState('');
   const [pdfContextCount, setPdfContextCount] = useState(0);
   const [inventorySuggestion, setInventorySuggestion] = useState<SuggestedInventoryItem[]>([]);
-  const [inventorySuggestionUpdatedAt, setInventorySuggestionUpdatedAt] = useState<string | null>(null);
+  const [inventorySuggestionUpdatedAt, setInventorySuggestionUpdatedAt] = useState<string | null>(
+    null
+  );
   const [tenantId, setTenantId] = useState<string | null>(null);
+  const [tenantType, setTenantType] = useState<string>('home');
   const [userId, setUserId] = useState<string | null>(null);
   const [mealPlanId, setMealPlanId] = useState<string | null>(null);
   const [optimizationHistory, setOptimizationHistory] = useState<OptimizationSnapshotView[]>([]);
@@ -623,12 +799,20 @@ export default function MealPlannerPage() {
   const [selectedMeal, setSelectedMeal] = useState<SelectedMealState>(null);
   const [lockedMeals, setLockedMeals] = useState<string[]>([]);
   const [activeWeekIndex, setActiveWeekIndex] = useState(0);
-  const [activeDayIndex, setActiveDayIndex] = useState(0);
+  const [activeDayIndex, setActiveDayIndex] = useState(() => getCurrentPlannerDayIndex());
   const [shoppingCollapsed, setShoppingCollapsed] = useState(false);
-  const [simulatedDayIndex, setSimulatedDayIndex] = useState(0);
-  const [simulationCalendar, setSimulationCalendar] = useState<PlannerDay[]>(() => buildDefaultWeek('Latinoamericana'));
+  const [simulatedDayIndex, setSimulatedDayIndex] = useState(() => getCurrentPlannerDayIndex());
+  const [simulationCalendar, setSimulationCalendar] = useState<PlannerDay[]>(() =>
+    buildDefaultWeek('Latinoamericana')
+  );
   const [ingredientConstraints, setIngredientConstraints] = useState<string[]>([]);
-  const [activeOptimizationMode, setActiveOptimizationMode] = useState<OptimizationMode | null>(null);
+  const [activeOptimizationMode, setActiveOptimizationMode] = useState<OptimizationMode | null>(
+    null
+  );
+  const [showSimulationDetails, setShowSimulationDetails] = useState(false);
+  const [showAdvancedTimeline, setShowAdvancedTimeline] = useState(false);
+  const [replacementTarget, setReplacementTarget] = useState<SelectedMealState>(null);
+  const [replacementAlternatives, setReplacementAlternatives] = useState<RecipeAlternative[]>([]);
 
   useEffect(() => {
     const loadProfileAndInventory = async () => {
@@ -639,40 +823,86 @@ export default function MealPlannerPage() {
         const authUserId = authData.user?.id ?? null;
         setUserId(authUserId);
 
-        const [{ data: userRow }, { data: invRows }, { data: profileRow }, { data: profileTermRows }, { data: termsRows }, { data: savedPlanRow }, { data: suggestionRow }, { data: movementsRows }] = await Promise.all([
-          authUserId ? supabase.from('users').select('tenant_id').eq('id', authUserId).maybeSingle() : Promise.resolve({ data: null }),
+        const inventoryQuery = supabase
+          .from('recipe_inventory_items')
+          .select('id,ingredient_name,normalized_name,quantity,unit,category,estimated_unit_price')
+          .eq('user_id', authUserId ?? '')
+          .order('updated_at', { ascending: false })
+          .limit(200);
+
+        const [
+          { data: userRow },
+          inventoryResult,
+          { data: profileRow },
+          { data: profileTermRows },
+          { data: termsRows },
+          { data: savedPlanRow },
+          { data: suggestionRow },
+          { data: movementsRows },
+        ] = await Promise.all([
+          authUserId
+            ? supabase.from('users').select('tenant_id').eq('id', authUserId).maybeSingle()
+            : Promise.resolve({ data: null }),
+          inventoryQuery,
           supabase
-            .from('recipe_inventory_items')
-            .select('id,ingredient_name,normalized_name,quantity,unit,category,estimated_unit_price')
-            .order('created_at', { ascending: false })
-            .limit(200),
-          supabase.from('user_culinary_profiles').select('level').maybeSingle(),
-          supabase.from('user_culinary_profile_terms').select('preference_type,term_id'),
+            .from('user_culinary_profiles')
+            .select('level')
+            .eq('user_id', authUserId ?? '')
+            .maybeSingle(),
+          supabase
+            .from('user_culinary_profile_terms')
+            .select('preference_type,term_id')
+            .eq('user_id', authUserId ?? ''),
           supabase.from('culinary_terms').select('id,label').limit(300),
-          supabase.from('user_meal_plans').select('*').maybeSingle(),
-          supabase.from('user_meal_plan_inventory_suggestions').select('normalized_items,updated_at').maybeSingle(),
-          supabase.from('inventory_movements').select('*').order('created_at', { ascending: false }).limit(8),
+          supabase
+            .from('user_meal_plans')
+            .select('*')
+            .eq('user_id', authUserId ?? '')
+            .maybeSingle(),
+          supabase
+            .from('user_meal_plan_inventory_suggestions')
+            .select('normalized_items,updated_at')
+            .eq('user_id', authUserId ?? '')
+            .maybeSingle(),
+          supabase
+            .from('inventory_movements')
+            .select('*')
+            .eq('user_id', authUserId ?? '')
+            .order('created_at', { ascending: false })
+            .limit(8),
         ]);
 
         const resolvedTenantId = userRow?.tenant_id ?? null;
         setTenantId(resolvedTenantId);
+        if (resolvedTenantId) {
+          const { data: tenantRow } = await supabase
+            .from('tenants')
+            .select('tenant_type')
+            .eq('id', resolvedTenantId)
+            .maybeSingle();
+          if (tenantRow?.tenant_type) setTenantType(tenantRow.tenant_type);
+        }
 
-        const items = (invRows ?? []).map((row) => row.ingredient_name).filter(Boolean);
+        let inventoryRows = (inventoryResult.data ?? []) as ShoppingInventoryRow[];
+        if (inventoryResult.error && isMissingDbColumnError(inventoryResult.error)) {
+          const { data: legacyRows } = await supabase
+            .from('recipe_inventory_items')
+            .select('id,ingredient_name,quantity')
+            .eq('user_id', authUserId ?? '')
+            .order('updated_at', { ascending: false })
+            .limit(200);
+          inventoryRows = (legacyRows ?? []) as ShoppingInventoryRow[];
+        }
+
+        const items = inventoryRows.map((row) => row.ingredient_name).filter(Boolean);
         setInventory(items);
-        setInventoryItems(
-          (invRows ?? []).map((row) => ({
-            id: row.id,
-            ingredient_name: row.ingredient_name,
-            normalized_name: row.normalized_name ?? null,
-            quantity: row.quantity ?? null,
-            unit: row.unit ?? null,
-            category: row.category ?? null,
-            estimated_unit_price: row.estimated_unit_price ?? null,
-          })),
-        );
+        setInventoryItems(toInventoryRows(inventoryRows));
         setRecentMovements((movementsRows ?? []) as InventoryMovementRow[]);
         const termById = new Map((termsRows ?? []).map((row) => [row.id, row.label]));
-        const mappedRows = (profileTermRows ?? []) as Array<{ preference_type: 'identity' | 'prefer' | 'avoid' | 'goal'; term_id: string }>;
+        const mappedRows = (profileTermRows ?? []) as Array<{
+          preference_type: 'identity' | 'prefer' | 'avoid' | 'goal';
+          term_id: string;
+        }>;
         const labelsByType = (type: 'identity' | 'prefer' | 'avoid' | 'goal') =>
           mappedRows
             .filter((row) => row.preference_type === type)
@@ -753,13 +983,17 @@ export default function MealPlannerPage() {
   }, [simulatedDayIndex, simulationCalendar.length]);
 
   const filteredProfileBadges = useMemo(
-    () => pick([
-      ...culinaryProfile.preferred,
-      ...culinaryProfile.goals,
-      ...culinaryProfile.avoid.map((item) => `Evitar: ${item}`),
-      ...(culinaryProfile.level ? [`Nivel: ${culinaryProfile.level}`] : []),
-    ], 8),
-    [culinaryProfile],
+    () =>
+      pick(
+        [
+          ...culinaryProfile.preferred,
+          ...culinaryProfile.goals,
+          ...culinaryProfile.avoid.map((item) => `Evitar: ${item}`),
+          ...(culinaryProfile.level ? [`Nivel: ${culinaryProfile.level}`] : []),
+        ],
+        8
+      ),
+    [culinaryProfile]
   );
 
   const profileFlags = [
@@ -771,24 +1005,21 @@ export default function MealPlannerPage() {
     { label: 'Objetivos', active: culinaryProfile.goals.length > 0 || Boolean(goal) },
   ];
 
-  const mealPlanRequirements = useMemo<RecipeRequirement[]>(
-    () => {
-      const fromCalendar = buildRecipeRequirementsFromCalendar(simulationCalendar);
-      if (fromCalendar.length > 0) return fromCalendar;
-      return inventorySuggestion.map((item) => ({
-        ingredientName: item.display_name || item.canonical_name,
-        normalizedName: item.canonical_name.toLowerCase(),
-        requiredQuantity: item.quantity,
-        requiredUnit: item.unit as RecipeRequirement['requiredUnit'],
-        usedInRecipes: item.sources,
-      }));
-    },
-    [inventorySuggestion, simulationCalendar],
-  );
+  const mealPlanRequirements = useMemo<RecipeRequirement[]>(() => {
+    const fromCalendar = buildRecipeRequirementsFromCalendar(simulationCalendar);
+    if (fromCalendar.length > 0) return fromCalendar;
+    return inventorySuggestion.map((item) => ({
+      ingredientName: item.display_name || item.canonical_name,
+      normalizedName: item.canonical_name.toLowerCase(),
+      requiredQuantity: item.quantity,
+      requiredUnit: item.unit as RecipeRequirement['requiredUnit'],
+      usedInRecipes: item.sources,
+    }));
+  }, [inventorySuggestion, simulationCalendar]);
 
   const inventoryProjection = useMemo(
     () => buildMealPlanInventoryProjection(mealPlanRequirements, inventoryItems),
-    [mealPlanRequirements, inventoryItems],
+    [mealPlanRequirements, inventoryItems]
   );
 
   const smartShoppingList = useMemo(
@@ -796,14 +1027,16 @@ export default function MealPlannerPage() {
       mealPlanRequirements.length > 0
         ? buildQuantifiedShoppingList(mealPlanRequirements, inventoryItems)
         : buildSmartShoppingList(inventoryProjection),
-    [inventoryProjection, inventoryItems, mealPlanRequirements],
+    [inventoryProjection, inventoryItems, mealPlanRequirements]
   );
 
   const narrativeSections = useMemo(() => parseNarrativeMenu(result), [result]);
   const shoppingWhatsappText = useMemo(
-    () => buildShoppingWhatsappText(smartShoppingList, peopleCount || 4, period, shoppingShareFormat),
-    [smartShoppingList, peopleCount, period, shoppingShareFormat],
+    () =>
+      buildShoppingWhatsappText(smartShoppingList, peopleCount || 4, period, shoppingShareFormat),
+    [smartShoppingList, peopleCount, period, shoppingShareFormat]
   );
+  const isRestaurantMode = tenantType === 'restaurant';
 
   const inventoryInsights = useMemo(() => {
     const projectionItems = inventoryProjection.items;
@@ -814,25 +1047,29 @@ export default function MealPlannerPage() {
 
     const insights: string[] = [];
     if (reuseCandidate && reuseCandidate.uses > 1) {
-      insights.push(`Este menú reutiliza ${reuseCandidate.item.ingredientName} en ${reuseCandidate.uses} recetas.`);
+      insights.push(
+        `Este menú reutiliza ${reuseCandidate.item.ingredientName} en ${reuseCandidate.uses} recetas.`
+      );
     }
     if (inventoryProjection.summary.missing + inventoryProjection.summary.partial > 0) {
       insights.push(
         `Tu inventario cubre parte del menú, pero faltan ${
           inventoryProjection.summary.missing + inventoryProjection.summary.partial
-        } ingredientes.`,
+        } ingredientes.`
       );
     }
     if (inventoryProjection.summary.unknown > 0) {
       insights.push(
-        `Hay ${inventoryProjection.summary.unknown} ingredientes que requieren revisión manual por cantidad no estructurada.`,
+        `Hay ${inventoryProjection.summary.unknown} ingredientes que requieren revisión manual por cantidad no estructurada.`
       );
     }
     return insights;
   }, [inventoryProjection]);
 
   const supermarketMetrics = useMemo(() => {
-    const reusedCount = inventoryProjection.items.filter((item) => item.usedInRecipes.length > 1).length;
+    const reusedCount = inventoryProjection.items.filter(
+      (item) => item.usedInRecipes.length > 1
+    ).length;
     return {
       estimatedCost: smartShoppingList.estimatedCostTotal,
       missingCount: inventoryProjection.summary.missing + inventoryProjection.summary.partial,
@@ -853,45 +1090,65 @@ export default function MealPlannerPage() {
           projectedUsedQuantity: adjustedRequired,
         };
       }),
-    [inventoryProjection.items, ingredientConstraints],
+    [inventoryProjection.items, ingredientConstraints]
   );
 
   const mealSimulation = useMemo(
-    () =>
-      buildMealPlanSimulation(
-        toSimulationDays(simulationCalendar),
-        constrainedProjectionItems,
-      ),
-    [simulationCalendar, constrainedProjectionItems],
+    () => buildMealPlanSimulation(toSimulationDays(simulationCalendar), constrainedProjectionItems),
+    [simulationCalendar, constrainedProjectionItems]
   );
 
   const baselineSimulation = useMemo(
-    () =>
-      buildMealPlanSimulation(
-        toSimulationDays(calendarData),
-        constrainedProjectionItems,
-      ),
-    [calendarData, constrainedProjectionItems],
+    () => buildMealPlanSimulation(toSimulationDays(calendarData), constrainedProjectionItems),
+    [calendarData, constrainedProjectionItems]
   );
 
+  const menuHealthSummary = useMemo(() => {
+    const coveredMessage =
+      mealSimulation.weeklyCoverage >= 80
+        ? 'Tu inventario cubre gran parte del menú.'
+        : mealSimulation.weeklyCoverage >= 50
+          ? 'Tu inventario cubre una parte relevante del menú.'
+          : 'Tu inventario cubre poco del menú actual.';
+    return {
+      coveredMessage,
+      lowIngredientsCount: mealSimulation.criticalIngredients.length,
+      shoppingItemsCount: smartShoppingList.groups.reduce(
+        (acc, group) => acc + group.items.filter((item) => item.status === 'buy').length,
+        0
+      ),
+      estimatedCost: smartShoppingList.estimatedCostTotal,
+    };
+  }, [mealSimulation, smartShoppingList]);
+
   const optimizationScore = useMemo(
-    () => calculateMealPlanScore(inventoryProjection, mealSimulation, activeOptimizationMode ?? 'reduce_waste'),
-    [inventoryProjection, mealSimulation, activeOptimizationMode],
+    () =>
+      calculateMealPlanScore(
+        inventoryProjection,
+        mealSimulation,
+        activeOptimizationMode ?? 'reduce_waste'
+      ),
+    [inventoryProjection, mealSimulation, activeOptimizationMode]
   );
 
   const baselineScore = useMemo(
-    () => calculateMealPlanScore(inventoryProjection, baselineSimulation, activeOptimizationMode ?? 'reduce_waste'),
-    [inventoryProjection, baselineSimulation, activeOptimizationMode],
+    () =>
+      calculateMealPlanScore(
+        inventoryProjection,
+        baselineSimulation,
+        activeOptimizationMode ?? 'reduce_waste'
+      ),
+    [inventoryProjection, baselineSimulation, activeOptimizationMode]
   );
 
   const optimizationComparison = useMemo(
     () => compareMealPlans(baselineScore, optimizationScore),
-    [baselineScore, optimizationScore],
+    [baselineScore, optimizationScore]
   );
 
   const optimizationNotes = useMemo(
     () => explainOptimization(optimizationComparison, activeOptimizationMode ?? 'reduce_waste'),
-    [optimizationComparison, activeOptimizationMode],
+    [optimizationComparison, activeOptimizationMode]
   );
 
   const filteredOptimizationHistory = useMemo(() => {
@@ -906,14 +1163,15 @@ export default function MealPlannerPage() {
 
     return optimizationHistory.filter((snapshot) => {
       if (historyModeFilter !== 'all' && snapshot.mode !== historyModeFilter) return false;
-      if (maxAgeMs !== null && historyNow - new Date(snapshot.createdAt).getTime() > maxAgeMs) return false;
+      if (maxAgeMs !== null && historyNow - new Date(snapshot.createdAt).getTime() > maxAgeMs)
+        return false;
       return true;
     });
   }, [optimizationHistory, historyDateFilter, historyModeFilter, historyNow]);
 
   const visibleOptimizationHistory = useMemo(
     () => filteredOptimizationHistory.slice(0, historyPage * HISTORY_PAGE_SIZE),
-    [filteredOptimizationHistory, historyPage],
+    [filteredOptimizationHistory, historyPage]
   );
 
   const hasMoreHistory = visibleOptimizationHistory.length < filteredOptimizationHistory.length;
@@ -926,19 +1184,29 @@ export default function MealPlannerPage() {
   const reorderSuggestions = useMemo(() => {
     const suggestions: string[] = [];
     if (ingredientConstraints.length > 0) {
-      suggestions.push(`Priorizá ahorro de ${ingredientConstraints.join(', ')} moviendo recetas de alto consumo al final de la semana.`);
+      suggestions.push(
+        `Priorizá ahorro de ${ingredientConstraints.join(', ')} moviendo recetas de alto consumo al final de la semana.`
+      );
     }
     if (mealSimulation.predictions.length > 0) {
-      suggestions.push(`Podés adelantar recetas antes de ${mealSimulation.predictions[0].split(' el ')[1] ?? 'días críticos'} para reducir faltantes.`);
+      suggestions.push(
+        `Podés adelantar recetas antes de ${mealSimulation.predictions[0].split(' el ')[1] ?? 'días críticos'} para reducir faltantes.`
+      );
     }
     if (activeOptimizationMode === 'optimize_cost') {
-      suggestions.push('Reordenamos almuerzos para concentrar ingredientes compartidos y reducir compras duplicadas.');
+      suggestions.push(
+        'Reordenamos almuerzos para concentrar ingredientes compartidos y reducir compras duplicadas.'
+      );
     }
     if (activeOptimizationMode === 'prioritize_fresh') {
-      suggestions.push('Conviene cocinar ingredientes frescos entre lunes y miércoles para evitar pérdida de calidad.');
+      suggestions.push(
+        'Conviene cocinar ingredientes frescos entre lunes y miércoles para evitar pérdida de calidad.'
+      );
     }
     if (suggestions.length === 0 && mealSimulation.reusedIngredients.length > 0) {
-      suggestions.push(`El menú ya reutiliza ${mealSimulation.reusedIngredients.slice(0, 2).join(' y ')} de forma eficiente.`);
+      suggestions.push(
+        `El menú ya reutiliza ${mealSimulation.reusedIngredients.slice(0, 2).join(' y ')} de forma eficiente.`
+      );
     }
     return suggestions.slice(0, 4);
   }, [ingredientConstraints, mealSimulation, activeOptimizationMode]);
@@ -950,110 +1218,159 @@ export default function MealPlannerPage() {
         meals: MEALS.map((mealType) => day.meals[mealType].name),
       }));
 
-    return JSON.stringify(toComparable(simulationCalendar)) !== JSON.stringify(toComparable(calendarData));
+    return (
+      JSON.stringify(toComparable(simulationCalendar)) !==
+      JSON.stringify(toComparable(calendarData))
+    );
   }, [simulationCalendar, calendarData]);
+
+  const hasActiveMenu = hasSavedPlan || result.trim().length > 0;
+  const recipeWarmupProgress = useMemo(() => {
+    const totalSlots = calendarData.length * MEALS.length;
+    const readySlots = calendarData.reduce((count, day) => {
+      return (
+        count +
+        MEALS.filter(
+          (mealType) =>
+            typeof day.meals[mealType].recipe_content === 'string' &&
+            day.meals[mealType].recipe_content.trim().length > 0
+        ).length
+      );
+    }, 0);
+    return {
+      totalSlots,
+      readySlots,
+      percent: totalSlots > 0 ? Math.round((readySlots / totalSlots) * 100) : 0,
+      isPartial: readySlots > 0 && readySlots < totalSlots,
+    };
+  }, [calendarData]);
 
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
+    if (hasSavedPlan) {
+      setError('Ya tenés un menú guardado. Primero usá “Borrar guardado” para crear uno nuevo.');
+      return;
+    }
     setLoading(true);
     setError(null);
 
     try {
-      const effectivePeopleCount = Number.isFinite(peopleCount) && peopleCount > 0 ? peopleCount : 4;
+      const effectivePeopleCount =
+        Number.isFinite(peopleCount) && peopleCount > 0 ? peopleCount : 4;
       const apiMode: 'inventory_to_menu' | 'menu_to_shopping' =
         mode === 'inventory_to_menu' ? 'inventory_to_menu' : 'menu_to_shopping';
-      const apiPeriod: 'week' | 'month' = period === 'month' ? 'month' : 'week';
-
-      let pdfChunks: string[] = [];
-      if (usePdfContext) {
-        const supabase = getSupabaseBrowserClient();
-        const query = `Menu ${period}. Cocina base ${baseCuisine}. Fusión ${fusionCuisines.join(', ') || 'sin fusión'}. Objetivo ${goal}. Ingredientes: ${inventory.join(', ') || 'sin inventario'}.`;
-        const embedRes = await fetch('/api/embeddings', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ texts: [query] }),
-        });
-
-        if (!embedRes.ok) {
-          const payload = await readErrorPayload(embedRes, 'No se pudo crear contexto PDF.');
-          throw new Error(payload.error ?? 'No se pudo crear contexto PDF.');
-        }
-
-        const embedPayload = (await embedRes.json()) as { embeddings: number[][] };
-        const queryEmbedding = embedPayload.embeddings[0];
-        const { data: chunkRows, error: chunksError } = await supabase.rpc('match_chunks', {
-          query_embedding: queryEmbedding,
-          match_threshold: 0.35,
-          match_count: 8,
-          filter_tenant_id: null,
-        });
-        if (chunksError) throw chunksError;
-
-        pdfChunks = ((chunkRows ?? []) as MatchChunkRow[])
-          .filter((row) => typeof row.content === 'string' && row.content.trim().length > 0)
-          .sort((a, b) => Number(b.similarity ?? 0) - Number(a.similarity ?? 0))
-          .map((row) => row.content)
-          .slice(0, 8);
-      }
-
-      const res = await fetch('/api/meal-plan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mode: apiMode,
-          period: apiPeriod,
-          baseCuisine,
-          fusionCuisines,
-          fusionIntensity,
-          peopleCount: effectivePeopleCount,
-          inventory,
-          culinaryProfile: {
-            preferred: [...culinaryProfile.preferred, goal],
-            avoid: selectedRestrictions,
-            goals: culinaryProfile.goals,
-            level: culinaryProfile.level,
-          },
-          chunks: pdfChunks,
-        }),
-      });
-
-      if (!res.ok) {
-        const payload = await readErrorPayload(res, 'Error generando menú.');
-        throw new Error(payload.error ?? 'Error generando menú.');
-      }
-
-      const payload = (await res.json()) as { content: string };
-      const content = payload.content;
-      const parsedCalendar = parseMenuToCalendar(content, fusionLabel);
-      setResult(content);
-      setPdfContextCount(pdfChunks.length);
-      setCalendarData(parsedCalendar);
+      const apiPeriod: PlannerPeriod = period;
+      const skeletonCalendar = buildDefaultWeek(fusionLabel, []);
+      setResult('');
+      setPdfContextCount(0);
+      setCalendarData(skeletonCalendar);
+      setSimulationCalendar(skeletonCalendar);
       setPeopleCount(effectivePeopleCount);
 
       if (tenantId && userId) {
-        const supabase = getSupabaseBrowserClient();
-        const parsedShopping = extractShoppingItems(content);
-        await supabase
-          .from('shopping_list_items')
-          .delete()
-          .eq('tenant_id', tenantId)
-          .eq('user_id', userId)
-          .eq('source', 'meal_planner');
-
-        const toInsert = parsedShopping.slice(0, 80).map((item) => ({
-          tenant_id: tenantId,
-          user_id: userId,
-          source: 'meal_planner',
-          ingredient_name: item,
-          quantity: null,
-          status: 'pending' as const,
-        }));
-
-        if (toInsert.length > 0) {
-          await supabase.from('shopping_list_items').insert(toInsert);
-        }
-
+        await persistMealPlan(skeletonCalendar, '', effectivePeopleCount);
       }
+
+      setError('Menú inicial listo. Las recetas se generan al abrir cada comida.');
+
+      void (async () => {
+        try {
+          let pdfChunks: string[] = [];
+          if (usePdfContext) {
+            const supabase = getSupabaseBrowserClient();
+            const query = `Menu ${period}. Cocina base ${baseCuisine}. Fusión ${fusionCuisines.join(', ') || 'sin fusión'}. Objetivo ${goal}. Ingredientes: ${inventory.join(', ') || 'sin inventario'}.`;
+            const embedRes = await fetch('/api/embeddings', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ texts: [query] }),
+            });
+
+            if (embedRes.ok) {
+              const embedPayload = (await embedRes.json()) as { embeddings: number[][] };
+              const queryEmbedding = embedPayload.embeddings[0];
+              const { data: chunkRows, error: chunksError } = await supabase.rpc('match_chunks', {
+                query_embedding: queryEmbedding,
+                match_threshold: 0.35,
+                match_count: 8,
+                filter_tenant_id: tenantId,
+              });
+              if (!chunksError) {
+                pdfChunks = ((chunkRows ?? []) as MatchChunkRow[])
+                  .filter((row) => typeof row.content === 'string' && row.content.trim().length > 0)
+                  .sort((a, b) => Number(b.similarity ?? 0) - Number(a.similarity ?? 0))
+                  .map((row) => row.content)
+                  .slice(0, 8);
+                setPdfContextCount(pdfChunks.length);
+              }
+            }
+          }
+
+          const res = await fetch('/api/meal-plan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              mode: apiMode,
+              period: apiPeriod,
+              baseCuisine,
+              fusionCuisines,
+              fusionIntensity,
+              peopleCount: effectivePeopleCount,
+              inventory,
+              culinaryProfile: {
+                preferred: [...culinaryProfile.preferred, goal],
+                avoid: selectedRestrictions,
+                goals: culinaryProfile.goals,
+                level: culinaryProfile.level,
+              },
+              chunks: pdfChunks,
+            }),
+          });
+
+          if (!res.ok) {
+            const payload = await readErrorPayload(res, 'Error generando menú.');
+            throw new Error(payload.error ?? 'Error generando menú.');
+          }
+
+          const payload = (await res.json()) as { content: string };
+          const content = payload.content;
+          const parsedCalendar = parseMenuToCalendar(content, fusionLabel, pdfChunks);
+          setResult(content);
+          setCalendarData(parsedCalendar);
+          setSimulationCalendar(parsedCalendar);
+
+          if (tenantId && userId) {
+            await persistMealPlan(parsedCalendar, content, effectivePeopleCount);
+
+            const supabase = getSupabaseBrowserClient();
+            const parsedShopping = extractShoppingItems(content);
+            await supabase
+              .from('shopping_list_items')
+              .delete()
+              .eq('tenant_id', tenantId)
+              .eq('user_id', userId)
+              .eq('source', 'meal_planner');
+
+            const toInsert = parsedShopping.slice(0, 80).map((item) => ({
+              tenant_id: tenantId,
+              user_id: userId,
+              source: 'meal_planner',
+              ingredient_name: item,
+              quantity: null,
+              status: 'pending' as const,
+            }));
+
+            if (toInsert.length > 0) {
+              await supabase.from('shopping_list_items').insert(toInsert);
+            }
+          }
+        } catch (backgroundError) {
+          setError(
+            backgroundError instanceof Error ? backgroundError.message : 'Error generando menú.'
+          );
+          setCalendarData(skeletonCalendar);
+          setSimulationCalendar(skeletonCalendar);
+        }
+      })();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error generando menú.');
     } finally {
@@ -1062,7 +1379,14 @@ export default function MealPlannerPage() {
   };
 
   const exportPlan = () => {
-    const text = result || calendarData.map((day) => `${day.day}\n- Desayuno: ${day.meals.Desayuno.name}\n- Almuerzo: ${day.meals.Almuerzo.name}\n- Cena: ${day.meals.Cena.name}`).join('\n\n');
+    const text =
+      result ||
+      calendarData
+        .map(
+          (day) =>
+            `${day.day}\n- Desayuno: ${day.meals.Desayuno.name}\n- Almuerzo: ${day.meals.Almuerzo.name}\n- Cena: ${day.meals.Cena.name}`
+        )
+        .join('\n\n');
     const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1074,7 +1398,14 @@ export default function MealPlannerPage() {
   };
 
   const sharePlan = async () => {
-    const text = result || calendarData.map((day) => `${day.day}: ${day.meals.Desayuno.name} / ${day.meals.Almuerzo.name} / ${day.meals.Cena.name}`).join('\n');
+    const text =
+      result ||
+      calendarData
+        .map(
+          (day) =>
+            `${day.day}: ${day.meals.Desayuno.name} / ${day.meals.Almuerzo.name} / ${day.meals.Cena.name}`
+        )
+        .join('\n');
     if (navigator.share) {
       await navigator.share({ title: 'Mi menú CocinaCore', text });
       return;
@@ -1087,144 +1418,20 @@ export default function MealPlannerPage() {
     await onSubmit({ preventDefault: () => undefined } as FormEvent);
   };
 
-  const regenerateDay = async () => {
-    if (!selectedMeal) {
-      setError('Seleccioná una comida primero para regenerar su día.');
-      return;
-    }
-    const targetDay = selectedMeal.day;
-    const lockSet = new Set(lockedMeals);
-    setLoading(true);
-    setError(null);
-    try {
-      const updated = calendarData.map((d) => ({ ...d, meals: { ...d.meals } }));
-      const day = updated.find((d) => d.day === targetDay);
-      if (!day) return;
-      for (const mealType of MEALS) {
-        if (lockSet.has(mealKey(targetDay, mealType))) continue;
-        const baseName = day.meals[mealType].name;
-        const response = await fetch('/api/recipe-generate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            ingredients: [baseName, ...inventory.slice(0, 8)],
-            culinaryProfile: {
-              level: culinaryProfile.level,
-              preferred: culinaryProfile.preferred,
-              avoid: selectedRestrictions,
-              goals: culinaryProfile.goals,
-              identity: [baseCuisine, ...fusionCuisines],
-            },
-          }),
-        });
-        if (!response.ok) continue;
-        const payload = (await response.json()) as {
-          title?: string;
-          structuredIngredients?: StructuredRecipeIngredient[];
-          recipe?: string;
-        };
-        if (payload.title?.trim()) {
-          day.meals[mealType] = {
-            ...day.meals[mealType],
-            name: payload.title.trim(),
-            badge: 'Regenerada',
-            structured_ingredients: sanitizeStructuredIngredients(payload.structuredIngredients),
-            recipe_content: typeof payload.recipe === 'string' ? payload.recipe : null,
-          };
-        }
-      }
-      setCalendarData(updated);
-      setError(`Día ${targetDay} regenerado.`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const changeSelectedRecipe = async () => {
-    if (!selectedMeal) {
-      setError('Seleccioná una comida para cambiar receta.');
-      return;
-    }
-    const dayName = selectedMeal.day;
-    const mealType = selectedMeal.mealType;
-    if (lockedMeals.includes(mealKey(dayName, mealType))) {
-      setError('Esa receta está bloqueada.');
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const day = calendarData.find((d) => d.day === dayName);
-      if (!day) return;
-      const response = await fetch('/api/recipe-generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ingredients: [day.meals[mealType].name, ...inventory.slice(0, 8)],
-          culinaryProfile: {
-            level: culinaryProfile.level,
-            preferred: culinaryProfile.preferred,
-            avoid: selectedRestrictions,
-            goals: culinaryProfile.goals,
-            identity: [baseCuisine, ...fusionCuisines],
-          },
-        }),
-      });
-      if (!response.ok) return;
-      const payload = (await response.json()) as {
-        title?: string;
-        structuredIngredients?: StructuredRecipeIngredient[];
-        recipe?: string;
-      };
-      if (!payload.title?.trim()) return;
-      setCalendarData((prev) =>
-        prev.map((d) =>
-          d.day !== dayName
-            ? d
-            : {
-                ...d,
-                meals: {
-                  ...d.meals,
-                  [mealType]: {
-                    ...d.meals[mealType],
-                    name: payload.title!.trim(),
-                    badge: 'Cambiada',
-                    structured_ingredients: sanitizeStructuredIngredients(payload.structuredIngredients),
-                    recipe_content: typeof payload.recipe === 'string' ? payload.recipe : null,
-                  },
-                },
-              }
-        )
-      );
-      setError('Receta cambiada.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const toggleLockSelectedRecipe = () => {
-    if (!selectedMeal) {
-      setError('Seleccioná una comida para bloquear.');
-      return;
-    }
-    const key = mealKey(selectedMeal.day, selectedMeal.mealType);
-    setLockedMeals((prev) => (prev.includes(key) ? prev.filter((v) => v !== key) : [...prev, key]));
-    setError('Estado de bloqueo actualizado.');
-  };
-
-  const savePlan = async () => {
+  const persistMealPlan = async (
+    calendarToSave: PlannerDay[],
+    aiContent: string,
+    effectivePeopleCount: number
+  ) => {
     if (!tenantId || !userId) {
-      setError('No se pudo guardar: falta sesión o tenant.');
+      setError('No se pudo guardar automáticamente: falta sesión o tenant.');
       return;
     }
 
-    setLoading(true);
-    setError(null);
-    try {
-      const effectivePeopleCount = Number.isFinite(peopleCount) && peopleCount > 0 ? peopleCount : 4;
-      const calendarToSave = simulationCalendar.length > 0 ? simulationCalendar : calendarData;
-      const supabase = getSupabaseBrowserClient();
-      const { data: upsertedPlan, error: upsertError } = await supabase.from('user_meal_plans').upsert(
+    const supabase = getSupabaseBrowserClient();
+    const { data: upsertedPlan, error: upsertError } = await supabase
+      .from('user_meal_plans')
+      .upsert(
         {
           tenant_id: tenantId,
           user_id: userId,
@@ -1238,25 +1445,23 @@ export default function MealPlannerPage() {
           restrictions: selectedRestrictions,
           inventory_snapshot: inventory,
           calendar_payload: calendarToSave,
-          ai_content: result || null,
+          ai_content: aiContent || null,
           updated_at: new Date().toISOString(),
         },
         { onConflict: 'tenant_id,user_id' }
-      ).select('id').single();
+      )
+      .select('id')
+      .single();
 
-      if (upsertError) {
-        setError(`No se pudo guardar menú: ${upsertError.message}`);
-        return;
-      }
-
-      setMealPlanId(upsertedPlan?.id ?? null);
-      setHasSavedPlan(true);
-      setPeopleCount(effectivePeopleCount);
-      setCalendarData(calendarToSave);
-      setError('Menú guardado correctamente. Si guardás otro, reemplaza este.');
-    } finally {
-      setLoading(false);
+    if (upsertError) {
+      setError(`No se pudo guardar menú automáticamente: ${upsertError.message}`);
+      return;
     }
+
+    setMealPlanId(upsertedPlan?.id ?? null);
+    setHasSavedPlan(true);
+    setPeopleCount(effectivePeopleCount);
+    setCalendarData(calendarToSave);
   };
 
   const deleteSavedPlan = async () => {
@@ -1268,18 +1473,34 @@ export default function MealPlannerPage() {
     setError(null);
     try {
       const supabase = getSupabaseBrowserClient();
-      const { error: deleteError } = await supabase
+      const deleteQuery = supabase
         .from('user_meal_plans')
         .delete()
         .eq('tenant_id', tenantId)
         .eq('user_id', userId);
 
+      const scopedDeleteQuery = mealPlanId ? deleteQuery.eq('id', mealPlanId) : deleteQuery;
+      const { data: deletedRows, error: deleteError } = await scopedDeleteQuery.select('id');
+
       if (deleteError) {
         setError(`No se pudo borrar menú: ${deleteError.message}`);
         return;
       }
+      if (!deletedRows || deletedRows.length === 0) {
+        setError('No se borró ningún menú guardado en BD para esta sesión.');
+        return;
+      }
       setHasSavedPlan(false);
       setMealPlanId(null);
+      setResult('');
+      const fallbackCalendar = buildDefaultWeek(buildFusionLabel(baseCuisine, fusionCuisines));
+      setCalendarData(fallbackCalendar);
+      setSimulationCalendar(fallbackCalendar);
+      setInventorySuggestion([]);
+      setInventorySuggestionUpdatedAt(null);
+      setOptimizationHistory([]);
+      setExpandedSnapshotId(null);
+      setMealDetail((prev) => ({ ...prev, open: false, content: '', error: null, loading: false }));
       setError('Menú guardado eliminado.');
     } finally {
       setLoading(false);
@@ -1316,7 +1537,10 @@ export default function MealPlannerPage() {
         throw new Error(payload.error ?? 'No se pudo generar inventario sugerido.');
       }
 
-      const payload = (await response.json()) as { items?: RawSuggestedItem[]; peopleCount?: number };
+      const payload = (await response.json()) as {
+        items?: RawSuggestedItem[];
+        peopleCount?: number;
+      };
       const rawItems = Array.isArray(payload.items) ? payload.items : [];
       const normalizedItems = buildInventorySuggestion(rawItems, effectivePeopleCount);
 
@@ -1355,7 +1579,11 @@ export default function MealPlannerPage() {
       setInventorySuggestionUpdatedAt(nowIso);
       setError(`Inventario sugerido generado para ${effectivePeopleCount} personas.`);
     } catch (caughtError) {
-      setError(caughtError instanceof Error ? caughtError.message : 'No se pudo generar inventario sugerido.');
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : 'No se pudo generar inventario sugerido.'
+      );
     } finally {
       setLoading(false);
     }
@@ -1365,62 +1593,149 @@ export default function MealPlannerPage() {
     category: string;
     item: (typeof smartShoppingList.groups)[number]['items'][number];
   }) => {
+    setShoppingApplySummary(null);
+    setShoppingApplyStage('Iniciando aplicación de compra...');
+
     if (!tenantId || !userId) {
       setError('No se pudo aplicar compra: falta sesión o tenant.');
+      setShoppingApplyStage('No se detectó sesión/tenant para aplicar compra.');
       return;
     }
     const { item, category } = payload;
-    if (item.status !== 'buy') return;
+    const uiItemKey = `${category}-${item.normalizedName || item.ingredientName}`;
+    if (item.status !== 'buy') {
+      setShoppingApplyStage('El ingrediente seleccionado no requiere compra.');
+      return;
+    }
     if (item.quantityToBuy === null || item.quantityToBuy <= 0) {
       setError('Cantidad de compra no válida para aplicar.');
+      setShoppingApplyStage('Cantidad a comprar inválida.');
       return;
     }
 
     const unit = normalizeUnit(item.unit);
     if (unit === 'unknown') {
       setError(`No se pudo aplicar ${item.ingredientName}: unidad no estructurada.`);
+      setShoppingApplyStage('Unidad no estructurada: requiere revisión manual.');
       return;
     }
 
-    const itemKey = `${category}-${item.normalizedName}`;
-    setApplyingShoppingItemKey(itemKey);
+    setApplyingShoppingItemKey(uiItemKey);
     setError(null);
-    setShoppingApplySummary(null);
+    setShoppingApplyStage(`Validando ${item.ingredientName}...`);
 
     try {
+      const normalizedTarget = normalizeIngredientKey(item.normalizedName || item.ingredientName);
+      if (!normalizedTarget) {
+        setError(`No se pudo aplicar ${item.ingredientName}: nombre no normalizado.`);
+        setShoppingApplyStage('No se pudo normalizar el nombre del ingrediente.');
+        return;
+      }
+
       const supabase = getSupabaseBrowserClient();
-      const { data: existingRows, error: fetchError } = await supabase
+      setShoppingApplyStage('Buscando ingrediente existente...');
+      let schemaMode: InventorySchemaMode = 'normalized';
+      let existingRows: ShoppingInventoryRow[] = [];
+      const { data: normalizedRows, error: fetchError } = await supabase
         .from('recipe_inventory_items')
         .select('id, ingredient_name, normalized_name, quantity, unit, category')
         .eq('tenant_id', tenantId)
         .eq('user_id', userId)
-        .eq('normalized_name', item.normalizedName)
         .order('updated_at', { ascending: false })
-        .limit(10);
-      if (fetchError) throw fetchError;
+        .limit(120);
 
-      const targetRow = (existingRows ?? []).find((row) => {
-        const rowUnit = normalizeUnit(row.unit);
-        if (rowUnit === 'unknown') return row.quantity === null || row.quantity.trim().length === 0;
-        return canCompareUnits(rowUnit, unit);
+      if (fetchError && isMissingDbColumnError(fetchError)) {
+        schemaMode = 'legacy';
+        const { data: legacyRows, error: legacyFetchError } = await supabase
+          .from('recipe_inventory_items')
+          .select('id, ingredient_name, quantity')
+          .eq('tenant_id', tenantId)
+          .eq('user_id', userId)
+          .order('updated_at', { ascending: false })
+          .limit(120);
+        if (legacyFetchError) throw legacyFetchError;
+        existingRows = (legacyRows ?? []) as ShoppingInventoryRow[];
+        setShoppingApplyStage(
+          'Inventario con esquema anterior detectado. Aplicando compatibilidad...'
+        );
+      } else if (fetchError) {
+        throw fetchError;
+      } else {
+        existingRows = (normalizedRows ?? []) as ShoppingInventoryRow[];
+      }
+
+      const candidateRows = (existingRows ?? []).filter((row) => {
+        const rowNormalized = normalizeIngredientKey(row.normalized_name ?? row.ingredient_name);
+        const rowIngredientName = normalizeIngredientKey(row.ingredient_name);
+        return rowNormalized === normalizedTarget || rowIngredientName === normalizedTarget;
       });
 
+      const targetRow =
+        candidateRows.find((row) => {
+          const rowUnit =
+            schemaMode === 'normalized'
+              ? normalizeUnit(row.unit ?? null)
+              : parseQuantity(row.quantity ?? '').unit;
+          if (rowUnit === 'unknown')
+            return row.quantity === null || row.quantity.trim().length === 0;
+          return canCompareUnits(rowUnit, unit);
+        }) ?? candidateRows[0];
+
       if (!targetRow) {
-        const { error: insertError } = await supabase.from('recipe_inventory_items').insert({
+        setShoppingApplyStage('Insertando ingrediente en inventario...');
+        const insertPayload: Database['public']['Tables']['recipe_inventory_items']['Insert'] = {
           tenant_id: tenantId,
           user_id: userId,
           ingredient_name: item.ingredientName,
-          normalized_name: item.normalizedName,
-          quantity: formatInventoryQuantityValue(item.quantityToBuy),
-          unit: item.unit,
-          category,
+          quantity:
+            schemaMode === 'normalized'
+              ? formatInventoryQuantityValue(item.quantityToBuy)
+              : `${formatInventoryQuantityValue(item.quantityToBuy)} ${item.unit}`,
           notes: 'Agregado desde lista inteligente de compras',
-        });
+        };
+        if (schemaMode === 'normalized') {
+          insertPayload.normalized_name = normalizedTarget;
+          insertPayload.unit = item.unit;
+          insertPayload.category = category;
+        }
+        const { data: insertedRows, error: insertError } = await supabase
+          .from('recipe_inventory_items')
+          .insert(insertPayload)
+          .select('id')
+          .limit(1);
         if (insertError) throw insertError;
+
+        const insertedRow = insertedRows?.[0];
+        if (insertedRow?.id) {
+          setShoppingApplyStage('Registrando movimiento de compra...');
+          const { error: movementError } = await supabase.from('inventory_movements').insert({
+            tenant_id: tenantId,
+            user_id: userId,
+            inventory_item_id: insertedRow.id,
+            movement_type: 'purchase',
+            quantity: item.quantityToBuy,
+            unit: item.unit,
+            normalized_name: normalizedTarget,
+            source: 'shopping_list',
+            source_recipe: null,
+            source_meal_plan_id: mealPlanId,
+            notes: 'Aplicado desde lista inteligente de compras',
+          });
+          if (movementError) {
+            setShoppingApplyStage(
+              `Inventario actualizado. Movimiento no registrado: ${movementError.message}`
+            );
+          }
+        }
       } else {
-        const currentQuantityRaw = [targetRow.quantity ?? '', targetRow.unit ?? ''].join(' ').trim();
+        setShoppingApplyStage('Actualizando cantidad existente...');
+        const currentQuantityRaw =
+          schemaMode === 'normalized'
+            ? [targetRow.quantity ?? '', targetRow.unit ?? ''].join(' ').trim()
+            : (targetRow.quantity ?? '');
         const parsedCurrent = parseQuantity(currentQuantityRaw);
-        const rowUnit = normalizeUnit(targetRow.unit);
+        const rowUnit =
+          schemaMode === 'normalized' ? normalizeUnit(targetRow.unit ?? null) : parsedCurrent.unit;
 
         let nextQuantityValue = item.quantityToBuy;
         let nextUnitValue: string = item.unit;
@@ -1429,54 +1744,116 @@ export default function MealPlannerPage() {
           const incomingConverted = convertToUnit(item.quantityToBuy, unit, rowUnit);
           if (incomingConverted === null) {
             setError(
-              `No se pudo aplicar ${item.ingredientName}: unidades incompatibles (${item.unit} vs ${targetRow.unit ?? 'sin unidad'}).`,
+              `No se pudo aplicar ${item.ingredientName}: unidades incompatibles (${item.unit} vs ${targetRow.unit ?? 'sin unidad'}).`
             );
+            setShoppingApplyStage('Unidades incompatibles entre compra e inventario existente.');
             return;
           }
           nextQuantityValue = Number((parsedCurrent.value + incomingConverted).toFixed(3));
           nextUnitValue = targetRow.unit ?? item.unit;
         } else if ((targetRow.quantity ?? '').trim().length > 0 && rowUnit === 'unknown') {
           setError(
-            `No se pudo sumar ${item.ingredientName} automáticamente porque el inventario actual no tiene unidad comparable.`,
+            `No se pudo sumar ${item.ingredientName} automáticamente porque el inventario actual no tiene unidad comparable.`
           );
+          setShoppingApplyStage('No se pudo sumar automáticamente por unidad no comparable.');
           return;
+        }
+
+        const updatePayload: Database['public']['Tables']['recipe_inventory_items']['Update'] = {
+          ingredient_name: targetRow.ingredient_name || item.ingredientName,
+          quantity:
+            schemaMode === 'normalized'
+              ? formatInventoryQuantityValue(nextQuantityValue)
+              : `${formatInventoryQuantityValue(nextQuantityValue)} ${nextUnitValue}`,
+          updated_at: new Date().toISOString(),
+        };
+        if (schemaMode === 'normalized') {
+          updatePayload.unit = nextUnitValue;
+          updatePayload.category = targetRow.category ?? category;
         }
 
         const { error: updateError } = await supabase
           .from('recipe_inventory_items')
-          .update({
-            ingredient_name: targetRow.ingredient_name || item.ingredientName,
-            quantity: formatInventoryQuantityValue(nextQuantityValue),
-            unit: nextUnitValue,
-            category: targetRow.category ?? category,
-            updated_at: new Date().toISOString(),
-          })
+          .update(updatePayload)
           .eq('id', targetRow.id)
           .eq('tenant_id', tenantId)
           .eq('user_id', userId);
         if (updateError) throw updateError;
+
+        setShoppingApplyStage('Registrando movimiento de compra...');
+        const { error: movementError } = await supabase.from('inventory_movements').insert({
+          tenant_id: tenantId,
+          user_id: userId,
+          inventory_item_id: targetRow.id,
+          movement_type: 'purchase',
+          quantity: item.quantityToBuy,
+          unit: item.unit,
+          normalized_name: normalizedTarget,
+          source: 'shopping_list',
+          source_recipe: null,
+          source_meal_plan_id: mealPlanId,
+          notes: 'Aplicado desde lista inteligente de compras',
+        });
+        if (movementError) {
+          setShoppingApplyStage(
+            `Inventario actualizado. Movimiento no registrado: ${movementError.message}`
+          );
+        }
       }
 
+      setShoppingApplyStage('Refrescando inventario local...');
       const { data: inventoryRows, error: inventoryError } = await supabase
         .from('recipe_inventory_items')
-        .select('ingredient_name, quantity, unit, category, estimated_unit_price')
+        .select(
+          'id, ingredient_name, normalized_name, quantity, unit, category, estimated_unit_price'
+        )
         .eq('tenant_id', tenantId)
         .eq('user_id', userId)
         .order('updated_at', { ascending: false });
 
-      if (!inventoryError) {
-        const rows = (inventoryRows ?? []) as InventoryItemExtended[];
-        setInventoryItems(rows);
-        setInventory(rows.map((row) => `${row.ingredient_name} ${row.quantity ?? ''}`.trim()).filter(Boolean));
+      let refreshedRows = (inventoryRows ?? []) as ShoppingInventoryRow[];
+      if (inventoryError && isMissingDbColumnError(inventoryError)) {
+        const { data: legacyInventoryRows, error: legacyInventoryError } = await supabase
+          .from('recipe_inventory_items')
+          .select('id, ingredient_name, quantity')
+          .eq('tenant_id', tenantId)
+          .eq('user_id', userId)
+          .order('updated_at', { ascending: false });
+        if (legacyInventoryError) {
+          throw new Error(
+            `Compra aplicada pero falló refresco local: ${legacyInventoryError.message}`
+          );
+        }
+        refreshedRows = (legacyInventoryRows ?? []) as ShoppingInventoryRow[];
+      } else if (inventoryError) {
+        throw new Error(`Compra aplicada pero falló refresco local: ${inventoryError.message}`);
       }
 
+      const rows = toInventoryRows(refreshedRows);
+      setInventoryItems(rows);
+      setInventory(
+        rows.map((row) => `${row.ingredient_name} ${row.quantity ?? ''}`.trim()).filter(Boolean)
+      );
+
       setShoppingApplySummary(
-        `Compra aplicada: ${item.ingredientName} +${item.quantityToBuy} ${item.unit}. Inventario actualizado.`,
+        `Compra aplicada: ${item.ingredientName} +${item.quantityToBuy} ${item.unit}. Inventario actualizado.`
       );
+      setShoppingApplyStage('Compra aplicada correctamente.');
+
+      const { count: verifyCount, error: verifyError } = await supabase
+        .from('recipe_inventory_items')
+        .select('*', { count: 'exact', head: true })
+        .eq('tenant_id', tenantId)
+        .eq('user_id', userId);
+      if (!verifyError && typeof verifyCount === 'number') {
+        setShoppingApplyStage(
+          `Compra aplicada correctamente. Inventario activo: ${verifyCount} ingredientes.`
+        );
+      }
     } catch (caughtError) {
-      setError(
-        caughtError instanceof Error ? caughtError.message : 'No se pudo aplicar compra al inventario.',
-      );
+      setError(getErrorMessage(caughtError, 'No se pudo aplicar compra al inventario.'));
+      setShoppingApplySummary(null);
+      setShoppingApplyStage('Falló la aplicación de compra. Revisá el error.');
     } finally {
       setApplyingShoppingItemKey(null);
     }
@@ -1488,7 +1865,11 @@ export default function MealPlannerPage() {
     const structured = card.structured_ingredients ?? [];
     const items: ConsumptionPreviewItem[] = structured.map((ingredient) => {
       const requiredUnitNormalized = normalizeUnit(ingredient.unit);
-      if (!ingredient.structured || ingredient.quantity === null || requiredUnitNormalized === 'unknown') {
+      if (
+        !ingredient.structured ||
+        ingredient.quantity === null ||
+        requiredUnitNormalized === 'unknown'
+      ) {
         return {
           ingredientName: ingredient.name,
           normalizedName: ingredient.normalized_name,
@@ -1504,7 +1885,9 @@ export default function MealPlannerPage() {
       }
 
       const candidates = inventoryItems.filter(
-        (row) => (row.normalized_name ?? normalizeInventoryName(row.ingredient_name)) === ingredient.normalized_name,
+        (row) =>
+          (row.normalized_name ?? normalizeInventoryName(row.ingredient_name)) ===
+          ingredient.normalized_name
       );
       if (candidates.length === 0) {
         return {
@@ -1540,7 +1923,9 @@ export default function MealPlannerPage() {
         };
       }
 
-      const rowParsed = parseQuantity([targetRow.quantity ?? '', targetRow.unit ?? ''].join(' ').trim());
+      const rowParsed = parseQuantity(
+        [targetRow.quantity ?? '', targetRow.unit ?? ''].join(' ').trim()
+      );
       const rowUnit = normalizeUnit(targetRow.unit);
       if (!rowParsed.structured || rowParsed.value === null || rowUnit === 'unknown') {
         return {
@@ -1581,7 +1966,7 @@ export default function MealPlannerPage() {
       const status: ConsumptionStatus =
         availableInRequiredUnit >= ingredient.quantity ? 'sufficient' : 'insufficient';
       const remainingInRequiredUnit = Number(
-        Math.max(availableInRequiredUnit - ingredient.quantity, 0).toFixed(3),
+        Math.max(availableInRequiredUnit - ingredient.quantity, 0).toFixed(3)
       );
 
       return {
@@ -1633,16 +2018,24 @@ export default function MealPlannerPage() {
           .eq('tenant_id', tenantId)
           .eq('user_id', userId)
           .maybeSingle();
-        if (fetchError || !row) throw new Error('No se pudo validar inventario antes de aplicar consumo.');
+        if (fetchError || !row)
+          throw new Error('No se pudo validar inventario antes de aplicar consumo.');
 
         const rowParsed = parseQuantity([row.quantity ?? '', row.unit ?? ''].join(' ').trim());
         const rowUnit = normalizeUnit(row.unit);
         const reqUnit = normalizeUnit(item.requiredUnit);
-        if (!rowParsed.structured || rowParsed.value === null || rowUnit === 'unknown' || reqUnit === 'unknown') {
+        if (
+          !rowParsed.structured ||
+          rowParsed.value === null ||
+          rowUnit === 'unknown' ||
+          reqUnit === 'unknown'
+        ) {
           throw new Error(`No se pudo consumir ${item.ingredientName}: unidad no comparable.`);
         }
         const requiredInRowUnit =
-          reqUnit === rowUnit ? item.requiredQuantity : convertQuantity(item.requiredQuantity, reqUnit, rowUnit);
+          reqUnit === rowUnit
+            ? item.requiredQuantity
+            : convertQuantity(item.requiredQuantity, reqUnit, rowUnit);
         if (requiredInRowUnit === null) {
           throw new Error(`No se pudo convertir unidad para ${item.ingredientName}.`);
         }
@@ -1680,7 +2073,9 @@ export default function MealPlannerPage() {
 
       const { data: inventoryRows } = await supabase
         .from('recipe_inventory_items')
-        .select('id, ingredient_name, normalized_name, quantity, unit, category, estimated_unit_price')
+        .select(
+          'id, ingredient_name, normalized_name, quantity, unit, category, estimated_unit_price'
+        )
         .eq('tenant_id', tenantId)
         .eq('user_id', userId)
         .order('updated_at', { ascending: false });
@@ -1689,7 +2084,7 @@ export default function MealPlannerPage() {
       setInventory(
         normalizedRows
           .map((row) => `${row.ingredient_name} ${row.quantity ?? ''}`.trim())
-          .filter(Boolean),
+          .filter(Boolean)
       );
 
       const { data: movementRows } = await supabase
@@ -1702,10 +2097,12 @@ export default function MealPlannerPage() {
       setRecentMovements((movementRows ?? []) as InventoryMovementRow[]);
 
       setShoppingApplySummary(
-        `Consumo aplicado: ${mealDetail.card.name.replace(/\*\*/g, '').trim()} actualizado en inventario real.`,
+        `Consumo aplicado: ${mealDetail.card.name.replace(/\*\*/g, '').trim()} actualizado en inventario real.`
       );
     } catch (caughtError) {
-      setError(caughtError instanceof Error ? caughtError.message : 'No se pudo aplicar consumo real.');
+      setError(
+        caughtError instanceof Error ? caughtError.message : 'No se pudo aplicar consumo real.'
+      );
     } finally {
       setConsumingRecipe(false);
     }
@@ -1728,18 +2125,21 @@ export default function MealPlannerPage() {
     }
   };
 
-  const openMealDetail = async (day: string, mealType: MealType, card: PlannerMealCard) => {
+  const generateMealDetailFromAI = async (
+    day: string,
+    mealType: MealType,
+    card: PlannerMealCard
+  ) => {
     const cleanTitle = card.name.replace(/\*\*/g, '').trim();
-    setMealDetail({
+    setMealDetail((prev) => ({
+      ...prev,
       open: true,
       day,
       mealType,
       card,
-      content: '',
       loading: true,
       error: null,
-    });
-    setMealDetailTab('summary');
+    }));
 
     try {
       const ingredients = [cleanTitle, ...inventory.slice(0, 8)];
@@ -1747,7 +2147,11 @@ export default function MealPlannerPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          recipeName: cleanTitle,
+          mealType,
+          day,
           ingredients,
+          chunks: card.rag_context ?? [],
           culinaryProfile: {
             level: culinaryProfile.level,
             preferred: culinaryProfile.preferred,
@@ -1760,7 +2164,11 @@ export default function MealPlannerPage() {
 
       if (!response.ok) {
         const payload = await readErrorPayload(response, 'No se pudo cargar la preparación.');
-        setMealDetail((prev) => ({ ...prev, loading: false, error: payload.error ?? 'No se pudo cargar la preparación.' }));
+        setMealDetail((prev) => ({
+          ...prev,
+          loading: false,
+          error: payload.error ?? 'No se pudo cargar la preparación.',
+        }));
         return;
       }
 
@@ -1771,40 +2179,123 @@ export default function MealPlannerPage() {
       const content = payload.recipe?.trim();
 
       if (!content) {
-        setMealDetail((prev) => ({ ...prev, loading: false, error: 'No se encontró preparación para esta receta.' }));
+        setMealDetail((prev) => ({
+          ...prev,
+          loading: false,
+          error: 'No se encontró preparación para esta receta.',
+        }));
         return;
       }
 
       const structuredForMeal = sanitizeStructuredIngredients(payload.structuredIngredients);
-      if (structuredForMeal.length > 0) {
-        setSimulationCalendar((prev) =>
-          prev.map((dayEntry) =>
-            dayEntry.day !== day
-              ? dayEntry
-              : {
-                  ...dayEntry,
-                  meals: {
-                    ...dayEntry.meals,
-                    [mealType]: {
-                      ...dayEntry.meals[mealType],
-                      structured_ingredients: structuredForMeal,
-                      recipe_content: content,
-                    },
-                  },
-                },
-          ),
-        );
+      const nextCalendar = patchMealInCalendar(calendarData, day, mealType, {
+        structured_ingredients: structuredForMeal,
+        recipe_content: content,
+      });
+      const nextSimulation = patchMealInCalendar(simulationCalendar, day, mealType, {
+        structured_ingredients: structuredForMeal,
+        recipe_content: content,
+      });
+
+      setCalendarData(nextCalendar);
+      setSimulationCalendar(nextSimulation);
+
+      if (tenantId && userId) {
+        await persistMealPlan(nextCalendar, result, peopleCount);
       }
 
-      setMealDetail((prev) => ({ ...prev, loading: false, content, error: null }));
+      setMealDetail((prev) => ({
+        ...prev,
+        loading: false,
+        content,
+        card: prev.card
+          ? {
+              ...prev.card,
+              structured_ingredients: structuredForMeal,
+              recipe_content: content,
+            }
+          : prev.card,
+        error: null,
+      }));
+      setMealDetailTab('summary');
     } catch (caughtError) {
-      const message = caughtError instanceof Error ? caughtError.message : 'Error al cargar preparación.';
+      const message =
+        caughtError instanceof Error ? caughtError.message : 'Error al cargar preparación.';
       setMealDetail((prev) => ({ ...prev, loading: false, error: message }));
     }
   };
 
+  const openMealDetail = async (day: string, mealType: MealType, card: PlannerMealCard) => {
+    const cachedContent = typeof card.recipe_content === 'string' ? card.recipe_content.trim() : '';
+    if (cachedContent.length > 0) {
+      let nextCard = card;
+      const hasStructured = (card.structured_ingredients ?? []).length > 0;
+      if (!hasStructured) {
+        const parsedStructured = sanitizeStructuredIngredients(
+          extractStructuredIngredients(cachedContent)
+        );
+        if (parsedStructured.length > 0) {
+          nextCard = {
+            ...card,
+            structured_ingredients: parsedStructured,
+          };
+
+          const nextCalendar = patchMealInCalendar(calendarData, day, mealType, {
+            structured_ingredients: parsedStructured,
+          });
+          const nextSimulation = patchMealInCalendar(simulationCalendar, day, mealType, {
+            structured_ingredients: parsedStructured,
+          });
+          setCalendarData(nextCalendar);
+          setSimulationCalendar(nextSimulation);
+
+          if (tenantId && userId) {
+            const supabase = getSupabaseBrowserClient();
+            const { error: persistError } = await supabase
+              .from('user_meal_plans')
+              .update({
+                calendar_payload: nextCalendar,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('tenant_id', tenantId)
+              .eq('user_id', userId);
+            if (persistError) {
+              setError(`No se pudo persistir ingredientes estructurados: ${persistError.message}`);
+            }
+          }
+        }
+      }
+
+      setMealDetail({
+        open: true,
+        day,
+        mealType,
+        card: nextCard,
+        content: cachedContent,
+        loading: false,
+        error: null,
+      });
+      setMealDetailTab('summary');
+      return;
+    }
+
+    setMealDetail({
+      open: true,
+      day,
+      mealType,
+      card,
+      content: '',
+      loading: true,
+      error: null,
+    });
+    setMealDetailTab('summary');
+    void generateMealDetailFromAI(day, mealType, card);
+  };
+
   const toggleRestriction = (value: string) => {
-    setSelectedRestrictions((prev) => (prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]));
+    setSelectedRestrictions((prev) =>
+      prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]
+    );
   };
 
   const toggleFusionCuisine = (value: string) => {
@@ -1816,21 +2307,165 @@ export default function MealPlannerPage() {
   };
 
   const moveMealAcrossDay = (dayIndex: number, mealType: MealType, direction: -1 | 1) => {
-    setSimulationCalendar((prev) => moveMealAcrossDayState(prev, dayIndex, mealType, direction, lockedMeals));
+    setSimulationCalendar((prev) =>
+      moveMealAcrossDayState(prev, dayIndex, mealType, direction, lockedMeals)
+    );
+  };
+
+  const buildAlternativesForMeal = (mealType: MealType): RecipeAlternative[] => {
+    const hasInventory = inventoryItems.length > 0;
+    const goalLabel = goal.toLowerCase();
+    const fusionLabel = fusionCuisines.length > 0 ? fusionCuisines.join(' + ') : baseCuisine;
+    const baseSuggestions: Record<MealType, string[]> = {
+      Desayuno: [
+        'Arepa integral con huevos',
+        'Smoothie bowl tropical',
+        'Tostadas de aguacate y tomate',
+      ],
+      Almuerzo: [
+        'Pollo al horno con vegetales',
+        'Pasta cremosa de semana',
+        'Ensalada tibia con proteína',
+      ],
+      Cena: ['Sopa ligera de vegetales', 'Tacos de pollo rápidos', 'Bowl de arroz con verduras'],
+    };
+    return baseSuggestions[mealType].map((title, index) => ({
+      id: `${mealType}-${index}-${Date.now()}`,
+      title,
+      description: `Alternativa ${fusionLabel} adaptada al objetivo ${goalLabel}.`,
+      reasons: [
+        hasInventory ? 'Usa ingredientes que ya tenés.' : 'Reduce compras adicionales.',
+        index === 0
+          ? 'Bajo costo estimado.'
+          : index === 1
+            ? 'Se prepara más rápido.'
+            : 'Disminuye desperdicio.',
+        'Compatible con tu planificación actual.',
+      ],
+      time: index === 1 ? '25 min' : '35 min',
+      difficulty: index === 0 ? 'Media' : 'Fácil',
+    }));
+  };
+
+  const openReplacementModal = (day: string, mealType: MealType) => {
+    if (lockedMeals.includes(mealKey(day, mealType))) {
+      setError('Esa receta está bloqueada en personalización avanzada.');
+      return;
+    }
+    setReplacementTarget({ day, mealType });
+    setReplacementAlternatives(buildAlternativesForMeal(mealType));
+  };
+
+  const replaceMealWithAlternative = (alternativeId: string) => {
+    const target = replacementTarget;
+    if (!target) return;
+    const selectedAlternative = replacementAlternatives.find((item) => item.id === alternativeId);
+    if (!selectedAlternative) return;
+    const fusionLabel = buildFusionLabel(baseCuisine, fusionCuisines);
+    setSimulationCalendar((prev) =>
+      prev.map((dayEntry) =>
+        dayEntry.day !== target.day
+          ? dayEntry
+          : {
+              ...dayEntry,
+              meals: {
+                ...dayEntry.meals,
+                [target.mealType]: {
+                  ...dayEntry.meals[target.mealType],
+                  name: selectedAlternative.title,
+                  time: selectedAlternative.time,
+                  difficulty: selectedAlternative.difficulty,
+                  badge: 'Ajuste inteligente',
+                  fusionTag: `Fusión ${fusionLabel}`,
+                  aiScore: Math.max(84, dayEntry.meals[target.mealType].aiScore - 1),
+                },
+              },
+            }
+      )
+    );
+    setReplacementTarget(null);
+    setReplacementAlternatives([]);
+  };
+
+  const regenerateMealSlot = () => {
+    const target = replacementTarget;
+    if (!target) return;
+    const generated = buildAlternativesForMeal(target.mealType)[Math.floor(Math.random() * 3)];
+    if (!generated) return;
+    const fusionLabel = buildFusionLabel(baseCuisine, fusionCuisines);
+    setSimulationCalendar((prev) =>
+      prev.map((dayEntry) =>
+        dayEntry.day !== target.day
+          ? dayEntry
+          : {
+              ...dayEntry,
+              meals: {
+                ...dayEntry.meals,
+                [target.mealType]: {
+                  ...dayEntry.meals[target.mealType],
+                  name: generated.title,
+                  time: generated.time,
+                  difficulty: generated.difficulty,
+                  badge: 'Regenerada',
+                  fusionTag: `Fusión ${fusionLabel}`,
+                  aiScore: Math.max(80, dayEntry.meals[target.mealType].aiScore - 2),
+                },
+              },
+            }
+      )
+    );
+    setReplacementTarget(null);
+    setReplacementAlternatives([]);
+  };
+
+  const regenerateSingleMeal = (day: string, mealType: MealType) => {
+    if (lockedMeals.includes(mealKey(day, mealType))) {
+      setError('Esa receta está bloqueada en personalización avanzada.');
+      return;
+    }
+    setReplacementTarget({ day, mealType });
+    setReplacementAlternatives(buildAlternativesForMeal(mealType));
+  };
+
+  const regenerateDayMeals = (day: string) => {
+    setSimulationCalendar((prev) =>
+      prev.map((entry) => {
+        if (entry.day !== day) return entry;
+        const nextMeals: Record<MealType, PlannerMealCard> = { ...entry.meals };
+        MEALS.forEach((mealType) => {
+          if (lockedMeals.includes(mealKey(day, mealType))) return;
+          const nextSuggestion = buildAlternativesForMeal(mealType)[Math.floor(Math.random() * 3)];
+          if (!nextSuggestion) return;
+          nextMeals[mealType] = {
+            ...nextMeals[mealType],
+            name: nextSuggestion.title,
+            time: nextSuggestion.time,
+            difficulty: nextSuggestion.difficulty,
+            badge: 'Regenerada',
+            aiScore: Math.max(82, nextMeals[mealType].aiScore - 2),
+          };
+        });
+        return { ...entry, meals: nextMeals };
+      })
+    );
   };
 
   const moveMealAcrossSlot = (dayIndex: number, mealType: MealType, direction: -1 | 1) => {
-    setSimulationCalendar((prev) => moveMealAcrossSlotState(prev, dayIndex, mealType, direction, lockedMeals));
+    setSimulationCalendar((prev) =>
+      moveMealAcrossSlotState(prev, dayIndex, mealType, direction, lockedMeals)
+    );
   };
 
   const toggleLockedMeal = (day: string, mealType: MealType) => {
     const key = mealKey(day, mealType);
-    setLockedMeals((prev) => (prev.includes(key) ? prev.filter((value) => value !== key) : [...prev, key]));
+    setLockedMeals((prev) =>
+      prev.includes(key) ? prev.filter((value) => value !== key) : [...prev, key]
+    );
   };
 
   const toggleIngredientConstraint = (value: string) => {
     setIngredientConstraints((prev) =>
-      prev.includes(value) ? prev.filter((entry) => entry !== value) : [...prev, value],
+      prev.includes(value) ? prev.filter((entry) => entry !== value) : [...prev, value]
     );
   };
 
@@ -1859,7 +2494,7 @@ export default function MealPlannerPage() {
 
       const optimizedSimulation = buildMealPlanSimulation(
         toSimulationDays(optimizedCalendar),
-        constrainedProjectionItems,
+        constrainedProjectionItems
       );
       const optimizedScore = calculateMealPlanScore(inventoryProjection, optimizedSimulation, mode);
       const baseline = calculateMealPlanScore(inventoryProjection, baselineSimulation, mode);
@@ -1898,7 +2533,9 @@ export default function MealPlannerPage() {
       if (insertedSnapshot) {
         const [parsed] = parseSnapshot([insertedSnapshot as OptimizationSnapshotRow]);
         if (parsed) {
-          setOptimizationHistory((prev) => [parsed, ...prev.filter((entry) => entry.id !== parsed.id)].slice(0, 12));
+          setOptimizationHistory((prev) =>
+            [parsed, ...prev.filter((entry) => entry.id !== parsed.id)].slice(0, 12)
+          );
         }
       }
     })();
@@ -1963,7 +2600,9 @@ export default function MealPlannerPage() {
       baselineCalendar: snapshot.baselineCalendar,
       optimizedCalendar: snapshot.optimizedCalendar,
     };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: 'application/json;charset=utf-8',
+    });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
@@ -1990,11 +2629,20 @@ export default function MealPlannerPage() {
 
     const renderSingleDay = (day: PlannerDay) => (
       <section className="rounded-xl border border-[#E8DDD2] bg-white/80 p-3">
-        <div className="mb-2 flex items-center gap-1">
-          <CalendarDays size={14} className="text-[#C56A1A]" />
-          <p className="text-sm font-semibold">{day.day}</p>
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1">
+            <CalendarDays size={14} className="text-[#C56A1A]" />
+            <p className="text-sm font-semibold">{day.day}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => regenerateDayMeals(day.day)}
+            className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1 text-xs font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40"
+          >
+            Regenerar día
+          </button>
         </div>
-        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+        <div className="space-y-2">
           {MEALS.map((mealType) => (
             <MealCard
               key={`${day.day}-${mealType}`}
@@ -2002,6 +2650,8 @@ export default function MealPlannerPage() {
               mealType={mealType}
               card={day.meals[mealType]}
               onViewPreparation={openMealDetail}
+              onChangeRecipe={openReplacementModal}
+              onRegenerateMeal={regenerateSingleMeal}
               onSelectMeal={setSelectedMeal}
               selected={selectedMeal?.day === day.day && selectedMeal?.mealType === mealType}
               locked={lockedMeals.includes(mealKey(day.day, mealType))}
@@ -2056,7 +2706,9 @@ export default function MealPlannerPage() {
                     className={`rounded-xl border bg-white p-2 text-left ${active ? 'border-[#16110D] ring-1 ring-[#16110D]/20' : 'border-[#E8DDD2]'}`}
                   >
                     <p className="text-xs font-semibold text-[#6B5A50]">Día {idx + 1}</p>
-                    <p className="mt-1 text-xs text-[#241A14] line-clamp-2">{dayData.meals.Cena.name}</p>
+                    <p className="mt-1 text-xs text-[#241A14] line-clamp-2">
+                      {dayData.meals.Cena.name}
+                    </p>
                   </button>
                 );
               })}
@@ -2078,831 +2730,1261 @@ export default function MealPlannerPage() {
 
   return (
     <>
-    <main className="texture-paper min-h-screen bg-[#FAF6F1] px-2 py-4 text-[#241A14] sm:px-3 sm:py-5 md:px-6 md:py-7 xl:py-8">
-      <section className="mx-auto w-full max-w-[1400px]">
-        <motion.section
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="relative overflow-hidden rounded-3xl border border-[#E8DDD2] bg-white/85 p-3 premium-shadow sm:p-4 md:p-6 xl:p-7"
-        >
-          <div className="pointer-events-none absolute right-0 top-0 h-40 w-40 rounded-full bg-[#6D4AFF]/10 blur-3xl" />
-          <div className="pointer-events-none absolute left-0 top-0 h-40 w-40 rounded-full bg-[#C56A1A]/10 blur-3xl" />
+      <main className="texture-paper min-h-screen bg-[#FAF6F1] px-2 py-4 text-[#241A14] sm:px-3 sm:py-5 md:px-6 md:py-7 xl:py-8">
+        <section className="mx-auto w-full max-w-[1400px]">
+          <motion.section
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="relative overflow-hidden rounded-3xl border border-[#E8DDD2] bg-white/85 p-3 premium-shadow sm:p-4 md:p-6 xl:p-7"
+          >
+            <div className="pointer-events-none absolute right-0 top-0 h-40 w-40 rounded-full bg-[#6D4AFF]/10 blur-3xl" />
+            <div className="pointer-events-none absolute left-0 top-0 h-40 w-40 rounded-full bg-[#C56A1A]/10 blur-3xl" />
 
-          <div className="relative flex flex-col gap-5 md:gap-6">
-            <div className="mx-auto w-full xl:max-w-4xl">
-              <div className="flex w-full items-center justify-center rounded-xl border border-[#E8DDD2] bg-white px-3 py-2 md:w-auto">
-                <Image src="/logo.png" alt="CocinaCore" width={200} height={56} className="h-32 w-auto sm:h-64" />
+            <div className="relative flex flex-col gap-5 md:gap-6">
+              <div className="mx-auto w-full xl:max-w-4xl">
+                <div className="flex w-full items-center justify-center rounded-xl border border-[#E8DDD2] bg-white px-3 py-2 md:w-auto">
+                  <Image
+                    src="/logo.png"
+                    alt="CocinaCore"
+                    width={200}
+                    height={56}
+                    className="h-32 w-auto sm:h-64"
+                  />
+                </div>
+                <h1 className="mt-4 text-center text-2xl font-semibold leading-tight sm:text-3xl md:text-4xl lg:text-5xl">
+                  Planificador culinario inteligente
+                </h1>
+                <p className="mt-2 text-center text-base text-[#6B5A50] sm:text-lg md:mx-auto md:max-w-4xl">
+                  Organiza comidas semanales, quincenales o mensuales usando IA, inventario y
+                  preferencias culinarias.
+                </p>
               </div>
-              <h1 className="mt-4 text-center text-2xl font-semibold leading-tight sm:text-3xl md:text-4xl lg:text-5xl">
-                Planificador culinario inteligente
-              </h1>
-              <p className="mt-2 text-center text-base text-[#6B5A50] sm:text-lg md:mx-auto md:max-w-4xl">
-                Organiza comidas semanales, quincenales o mensuales usando IA, inventario y preferencias culinarias.
-              </p>
-            </div>
 
-            <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 lg:flex lg:flex-wrap lg:justify-center">
-              <button onClick={() => void regenerateWeek()} className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-2 text-sm font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40 lg:min-w-[190px]" type="button">
-                <RefreshCw size={14} className="mr-1 inline" /> Regenerar menú
-              </button>
-              <button onClick={exportPlan} className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-2 text-sm font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40 lg:min-w-[190px]" type="button">
-                <Download size={14} className="mr-1 inline" /> Exportar PDF
-              </button>
-              <button onClick={() => void sharePlan()} className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-2 text-sm font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40 lg:min-w-[190px]" type="button">
-                <Share2 size={14} className="mr-1 inline" /> Compartir menú
-              </button>
-            </div>
-          </div>
-        </motion.section>
-
-        <form onSubmit={onSubmit} className="mt-4 grid gap-4 lg:gap-5 xl:grid-cols-[minmax(0,1fr)_390px]">
-          <section className="space-y-4">
-            <div className="grid gap-3 rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
-              <ToolbarSegment
-                label="Periodo"
-                options={PERIOD_OPTIONS.map((option) => ({ value: option.key, label: option.label }))}
-                value={period}
-                onChange={(value) => setPeriod(value as PlannerPeriod)}
-              />
-              <ToolbarSegment
-                label="Modo"
-                options={MODE_OPTIONS.map((option) => ({ value: option.key, label: option.label }))}
-                value={mode}
-                onChange={(value) => setMode(value as PlannerMode)}
-              />
-              <ToolbarSegment
-                label="Intensidad de fusión"
-                options={[
-                  { value: 'sutil', label: 'Sutil' },
-                  { value: 'media', label: 'Media' },
-                  { value: 'alta', label: 'Alta' },
-                ]}
-                value={fusionIntensity}
-                onChange={(value) => {
-                  setIntensityAuto(false);
-                  setFusionIntensity(value as FusionIntensity);
-                }}
-              />
-              <div className="flex flex-col items-start gap-2 rounded-xl border border-[#E8DDD2] bg-white px-3 py-2 text-xs sm:flex-row sm:items-center sm:justify-between">
-                <span className="text-[#6B5A50]">
-                  Preset automático por objetivo: <span className="font-semibold text-[#241A14]">{goal}</span>
-                </span>
-                <button
+              <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 lg:flex lg:flex-wrap lg:justify-center">
+                <Link
+                  href="/app"
+                  className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-2 text-sm font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40 lg:min-w-[190px]"
                   type="button"
-                  onClick={() => {
-                    setIntensityAuto(true);
-                    setFusionIntensity(GOAL_TO_INTENSITY[goal] ?? 'media');
-                  }}
-                  className="rounded-lg border border-[#E8DDD2] px-2 py-1 font-semibold text-[#A55412] hover:border-[#C56A1A]/40"
                 >
-                  Auto
+                  ← Volver al dashboard
+                </Link>
+                <button
+                  onClick={() => void regenerateWeek()}
+                  className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-2 text-sm font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40 lg:min-w-[190px]"
+                  type="button"
+                >
+                  <RefreshCw size={14} className="mr-1 inline" /> Regenerar menú
+                </button>
+                <button
+                  onClick={exportPlan}
+                  className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-2 text-sm font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40 lg:min-w-[190px]"
+                  type="button"
+                >
+                  <Download size={14} className="mr-1 inline" /> Exportar PDF
+                </button>
+                <button
+                  onClick={() => void sharePlan()}
+                  className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-2 text-sm font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40 lg:min-w-[190px]"
+                  type="button"
+                >
+                  <Share2 size={14} className="mr-1 inline" /> Compartir menú
                 </button>
               </div>
             </div>
+          </motion.section>
 
-            <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
-              <div className="flex items-center gap-2">
-                <Sparkles size={16} className="text-[#6D4AFF]" />
-                <h2 className="text-lg font-semibold">Configuración inteligente</h2>
+          <form
+            onSubmit={onSubmit}
+            className="mt-4 grid gap-4 lg:gap-5 xl:grid-cols-[minmax(0,1fr)_390px]"
+          >
+            <section className="space-y-4">
+              <div className="grid gap-3 rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
+                <ToolbarSegment
+                  label="Periodo"
+                  options={PERIOD_OPTIONS.map((option) => ({
+                    value: option.key,
+                    label: option.label,
+                  }))}
+                  value={period}
+                  onChange={(value) => setPeriod(value as PlannerPeriod)}
+                />
+                <ToolbarSegment
+                  label="Modo"
+                  options={MODE_OPTIONS.map((option) => ({
+                    value: option.key,
+                    label: option.label,
+                  }))}
+                  value={mode}
+                  onChange={(value) => setMode(value as PlannerMode)}
+                />
+                <ToolbarSegment
+                  label="Intensidad de fusión"
+                  options={[
+                    { value: 'sutil', label: 'Sutil' },
+                    { value: 'media', label: 'Media' },
+                    { value: 'alta', label: 'Alta' },
+                  ]}
+                  value={fusionIntensity}
+                  onChange={(value) => {
+                    setIntensityAuto(false);
+                    setFusionIntensity(value as FusionIntensity);
+                  }}
+                />
+                <div className="flex flex-col items-start gap-2 rounded-xl border border-[#E8DDD2] bg-white px-3 py-2 text-xs sm:flex-row sm:items-center sm:justify-between">
+                  <span className="text-[#6B5A50]">
+                    Preset automático por objetivo:{' '}
+                    <span className="font-semibold text-[#241A14]">{goal}</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIntensityAuto(true);
+                      setFusionIntensity(GOAL_TO_INTENSITY[goal] ?? 'media');
+                    }}
+                    className="rounded-lg border border-[#E8DDD2] px-2 py-1 font-semibold text-[#A55412] hover:border-[#C56A1A]/40"
+                  >
+                    Auto
+                  </button>
+                </div>
               </div>
 
-              <div className="mt-4 grid gap-3 md:grid-cols-2">
-                <label className="grid gap-1 text-sm font-semibold text-[#6B5A50]">
-                  Cocina base
-                  <select value={baseCuisine} onChange={(e) => setBaseCuisine(e.target.value)} className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 text-sm outline-none">
-                    {CUISINES.map((value) => <option key={value} value={value}>{value}</option>)}
-                  </select>
-                </label>
+              <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
+                <div className="flex items-center gap-2">
+                  <Sparkles size={16} className="text-[#6D4AFF]" />
+                  <h2 className="text-lg font-semibold">Configuración inteligente</h2>
+                </div>
 
-                <div className="grid gap-1 text-sm font-semibold text-[#6B5A50]">
-                  <p>Fusión culinaria</p>
-                  <div className="flex flex-wrap gap-2 rounded-xl border border-[#E8DDD2] bg-white p-2">
-                    {CUISINES.filter((value) => value !== baseCuisine).map((value) => (
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <label className="grid gap-1 text-sm font-semibold text-[#6B5A50]">
+                    Cocina base
+                    <select
+                      value={baseCuisine}
+                      onChange={(e) => setBaseCuisine(e.target.value)}
+                      className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 text-sm outline-none"
+                    >
+                      {CUISINES.map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <div className="grid gap-1 text-sm font-semibold text-[#6B5A50]">
+                    <p>Fusión culinaria</p>
+                    <div className="flex flex-wrap gap-2 rounded-xl border border-[#E8DDD2] bg-white p-2">
+                      {CUISINES.filter((value) => value !== baseCuisine).map((value) => (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => toggleFusionCuisine(value)}
+                          className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${fusionCuisines.includes(value) ? 'border-[#6D4AFF]/45 bg-[#6D4AFF]/10 text-[#6D4AFF]' : 'border-[#E8DDD2] text-[#6B5A50]'}`}
+                        >
+                          {CUISINE_FLAGS[value] ?? '🍽️'} {value}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-xs font-normal text-[#8C7A6D]">
+                      Adapta recetas usando sabores, ingredientes y tradiciones de otra cultura
+                      culinaria.
+                    </p>
+                  </div>
+
+                  <label className="grid gap-1 text-sm font-semibold text-[#6B5A50]">
+                    Objetivo culinario
+                    <select
+                      value={goal}
+                      onChange={(e) => setGoal(e.target.value)}
+                      className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 text-sm outline-none"
+                    >
+                      {GOALS.map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="grid gap-1 text-sm font-semibold text-[#6B5A50]">
+                    Personas del menú
+                    <input
+                      value={peopleCount}
+                      onChange={(e) => {
+                        const parsed = Number(e.target.value);
+                        setPeopleCount(Number.isFinite(parsed) ? parsed : 4);
+                      }}
+                      type="number"
+                      min={1}
+                      max={50}
+                      className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 text-sm outline-none"
+                    />
+                    <span className="text-xs font-normal text-[#8C7A6D]">
+                      Si queda vacío o inválido, se usa 4 por defecto.
+                    </span>
+                  </label>
+
+                  <label className="grid gap-1 text-sm font-semibold text-[#6B5A50]">
+                    Nivel culinario
+                    <select
+                      value={culinaryProfile.level ?? ''}
+                      onChange={(e) =>
+                        setCulinaryProfile((prev) => ({ ...prev, level: e.target.value || null }))
+                      }
+                      className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 text-sm outline-none"
+                    >
+                      <option value="">Sin preferencia</option>
+                      <option value="Principiante">Principiante</option>
+                      <option value="Intermedio">Intermedio</option>
+                      <option value="Chef">Chef</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div className="mt-4">
+                  <p className="text-sm font-semibold text-[#6B5A50]">Restricciones</p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {RESTRICTIONS.map((restriction) => (
                       <button
-                        key={value}
+                        key={restriction}
                         type="button"
-                        onClick={() => toggleFusionCuisine(value)}
-                        className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${fusionCuisines.includes(value) ? 'border-[#6D4AFF]/45 bg-[#6D4AFF]/10 text-[#6D4AFF]' : 'border-[#E8DDD2] text-[#6B5A50]'}`}
+                        onClick={() => toggleRestriction(restriction)}
+                        className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${selectedRestrictions.includes(restriction) ? 'border-red-300 bg-red-50 text-red-700' : 'border-[#E8DDD2] bg-white text-[#6B5A50]'}`}
                       >
-                        {CUISINE_FLAGS[value] ?? '🍽️'} {value}
+                        {restriction}
                       </button>
                     ))}
                   </div>
-                  <p className="text-xs font-normal text-[#8C7A6D]">
-                    Adapta recetas usando sabores, ingredientes y tradiciones de otra cultura culinaria.
+                </div>
+
+                <div className="mt-4 rounded-xl border border-[#E8DDD2] bg-[#faf2e9] p-3">
+                  <p className="text-sm font-semibold">Perfil culinario aplicado</p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {filteredProfileBadges.length > 0 ? (
+                      filteredProfileBadges.map((item) => (
+                        <span
+                          key={item}
+                          className="rounded-full border border-[#E8DDD2] bg-white px-2.5 py-1 text-xs text-[#6B5A50]"
+                        >
+                          {item}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="text-xs text-[#6B5A50]">Sin perfil activo todavía.</span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-3 rounded-xl border border-[#E8DDD2] bg-white p-3">
+                  <p className="text-sm font-semibold text-[#241A14]">Fusión activa</p>
+                  <p className="mt-1 text-sm text-[#6B5A50]">
+                    {CUISINE_FLAGS[baseCuisine] ?? '🍽️'} {baseCuisine}
+                    {fusionCuisines.length > 0 ? (
+                      <>
+                        {' '}
+                        +{' '}
+                        {fusionCuisines
+                          .map((fusion) => `${CUISINE_FLAGS[fusion] ?? '🍽️'} ${fusion}`)
+                          .join(' + ')}
+                      </>
+                    ) : (
+                      ' (sin fusión)'
+                    )}
+                  </p>
+                  <p className="mt-1 text-xs text-[#8C7A6D]">
+                    Resultado: cocina {baseCuisine.toLowerCase()}
+                    {fusionCuisines.length > 0
+                      ? ` fusionada con ${fusionCuisines.join(' y ').toLowerCase()}`
+                      : ''}
+                    .
+                  </p>
+                  <p className="mt-1 text-xs text-[#8C7A6D]">
+                    Intensidad aplicada:{' '}
+                    <span className="font-semibold text-[#241A14]">{fusionIntensity}</span>
                   </p>
                 </div>
 
-                <label className="grid gap-1 text-sm font-semibold text-[#6B5A50]">
-                  Objetivo culinario
-                  <select value={goal} onChange={(e) => setGoal(e.target.value)} className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 text-sm outline-none">
-                    {GOALS.map((value) => <option key={value} value={value}>{value}</option>)}
-                  </select>
-                </label>
-
-                <label className="grid gap-1 text-sm font-semibold text-[#6B5A50]">
-                  Personas del menú
-                  <input
-                    value={peopleCount}
-                    onChange={(e) => {
-                      const parsed = Number(e.target.value);
-                      setPeopleCount(Number.isFinite(parsed) ? parsed : 4);
-                    }}
-                    type="number"
-                    min={1}
-                    max={50}
-                    className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 text-sm outline-none"
-                  />
-                  <span className="text-xs font-normal text-[#8C7A6D]">Si queda vacío o inválido, se usa 4 por defecto.</span>
-                </label>
-
-                <label className="grid gap-1 text-sm font-semibold text-[#6B5A50]">
-                  Nivel culinario
-                  <select value={culinaryProfile.level ?? ''} onChange={(e) => setCulinaryProfile((prev) => ({ ...prev, level: e.target.value || null }))} className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 text-sm outline-none">
-                    <option value="">Sin preferencia</option>
-                    <option value="Principiante">Principiante</option>
-                    <option value="Intermedio">Intermedio</option>
-                    <option value="Chef">Chef</option>
-                  </select>
-                </label>
-              </div>
-
-              <div className="mt-4">
-                <p className="text-sm font-semibold text-[#6B5A50]">Restricciones</p>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {RESTRICTIONS.map((restriction) => (
-                    <button
-                      key={restriction}
-                      type="button"
-                      onClick={() => toggleRestriction(restriction)}
-                      className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${selectedRestrictions.includes(restriction) ? 'border-red-300 bg-red-50 text-red-700' : 'border-[#E8DDD2] bg-white text-[#6B5A50]'}`}
-                    >
-                      {restriction}
-                    </button>
-                  ))}
+                <div className="mt-3 rounded-xl border border-[#E8DDD2] bg-white p-3">
+                  <label className="flex items-center gap-2 text-sm font-semibold text-[#241A14]">
+                    <input
+                      type="checkbox"
+                      checked={usePdfContext}
+                      onChange={(event) => setUsePdfContext(event.target.checked)}
+                      className="h-4 w-4 rounded border-[#E8DDD2]"
+                    />
+                    Usar contexto de biblioteca PDF
+                  </label>
+                  <p className="mt-1 text-xs text-[#8C7A6D]">
+                    Si está activo, el planificador busca primero contexto relevante en tus
+                    PDFs/globales y luego genera el menú con IA.
+                  </p>
                 </div>
-              </div>
 
-              <div className="mt-4 rounded-xl border border-[#E8DDD2] bg-[#faf2e9] p-3">
-                <p className="text-sm font-semibold">Perfil culinario aplicado</p>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {filteredProfileBadges.length > 0
-                    ? filteredProfileBadges.map((item) => (
-                        <span key={item} className="rounded-full border border-[#E8DDD2] bg-white px-2.5 py-1 text-xs text-[#6B5A50]">{item}</span>
-                      ))
-                    : <span className="text-xs text-[#6B5A50]">Sin perfil activo todavía.</span>}
-                </div>
-              </div>
+                <button
+                  type="submit"
+                  disabled={loading || loadingInventory}
+                  className="mt-4 h-12 w-full rounded-xl bg-[#C56A1A] px-4 text-base font-semibold text-white transition hover:bg-[#A55412] disabled:opacity-60"
+                >
+                  {loading ? 'Generando planificación...' : 'Generar planificación inteligente'}
+                </button>
+              </article>
 
-              <div className="mt-3 rounded-xl border border-[#E8DDD2] bg-white p-3">
-                <p className="text-sm font-semibold text-[#241A14]">Fusión activa</p>
-                <p className="mt-1 text-sm text-[#6B5A50]">
-                  {CUISINE_FLAGS[baseCuisine] ?? '🍽️'} {baseCuisine}
-                  {fusionCuisines.length > 0 ? (
-                    <> + {fusionCuisines.map((fusion) => `${CUISINE_FLAGS[fusion] ?? '🍽️'} ${fusion}`).join(' + ')}</>
-                  ) : ' (sin fusión)'}
-                </p>
-                <p className="mt-1 text-xs text-[#8C7A6D]">
-                  Resultado: cocina {baseCuisine.toLowerCase()}
-                  {fusionCuisines.length > 0 ? ` fusionada con ${fusionCuisines.join(' y ').toLowerCase()}` : ''}.
-                </p>
-                <p className="mt-1 text-xs text-[#8C7A6D]">
-                  Intensidad aplicada: <span className="font-semibold text-[#241A14]">{fusionIntensity}</span>
-                </p>
-              </div>
-
-              <div className="mt-3 rounded-xl border border-[#E8DDD2] bg-white p-3">
-                <label className="flex items-center gap-2 text-sm font-semibold text-[#241A14]">
-                  <input
-                    type="checkbox"
-                    checked={usePdfContext}
-                    onChange={(event) => setUsePdfContext(event.target.checked)}
-                    className="h-4 w-4 rounded border-[#E8DDD2]"
-                  />
-                  Usar contexto de biblioteca PDF
-                </label>
-                <p className="mt-1 text-xs text-[#8C7A6D]">
-                  Si está activo, el planificador busca primero contexto relevante en tus PDFs/globales y luego genera el menú con IA.
-                </p>
-              </div>
-
-              <button type="submit" disabled={loading || loadingInventory} className="mt-4 h-12 w-full rounded-xl bg-[#C56A1A] px-4 text-base font-semibold text-white transition hover:bg-[#A55412] disabled:opacity-60">
-                {loading ? 'Generando planificación...' : 'Generar planificación inteligente'}
-              </button>
-            </article>
-
-            <section className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
-              <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <h2 className="text-lg font-semibold">Calendario de menú</h2>
-                <div className="grid grid-cols-2 gap-2 text-xs sm:flex sm:flex-wrap">
-                  <button type="button" onClick={() => void regenerateWeek()} className="rounded-lg border border-[#E8DDD2] px-2 py-1 font-semibold text-[#6B5A50]">Regenerar semana</button>
-                  <button type="button" onClick={() => void savePlan()} className="rounded-lg border border-[#E8DDD2] px-2 py-1 font-semibold text-[#6B5A50]">Guardar menú</button>
-                  <button type="button" onClick={() => void generateInventorySuggestion()} className="rounded-lg border border-[#E8DDD2] px-2 py-1 font-semibold text-[#6B5A50]">Generar inventario</button>
-                  <button type="button" onClick={() => void deleteSavedPlan()} disabled={!hasSavedPlan} className="rounded-lg border border-[#E8DDD2] px-2 py-1 font-semibold text-[#6B5A50] disabled:opacity-50">Borrar guardado</button>
-                </div>
-              </div>
-              {renderPeriodView()}
-            </section>
-
-            <HomeIntelligenceDashboard
-              weeklyCoverage={mealSimulation.weeklyCoverage}
-              criticalCount={mealSimulation.criticalIngredients.length}
-              reusedCount={mealSimulation.reusedIngredients.length}
-              projectedCost={smartShoppingList.estimatedCostTotal}
-              criticalIngredients={mealSimulation.criticalIngredients}
-              reusedIngredients={mealSimulation.reusedIngredients}
-            />
-            <DailyKitchenCard
-              dayState={mealSimulation.dayStates[simulatedDayIndex] ?? null}
-              message={mealSimulation.dailyKitchenMessage}
-            />
-            <InventoryDepletionPreview items={inventoryProjection.items} />
-            <InventoryPlaybackCard
-              dayStates={mealSimulation.dayStates}
-              selectedDayIndex={simulatedDayIndex}
-            />
-            <EditableMealTimeline
-              days={simulationCalendar}
-              lockedMeals={lockedMeals}
-              onToggleLock={toggleLockedMeal}
-              onMoveDay={moveMealAcrossDay}
-              onMoveMealSlot={moveMealAcrossSlot}
-              selectedDayIndex={simulatedDayIndex}
-              onSimulateDay={setSimulatedDayIndex}
-            />
-            <SimulationControls
-              onReset={resetSimulation}
-              onApply={applySimulationToMenu}
-              hasChanges={hasSimulationChanges}
-            />
-            <IngredientConstraintCard
-              options={inventoryProjection.items.map((item) => item.ingredientName)}
-              selected={ingredientConstraints}
-              onToggle={toggleIngredientConstraint}
-            />
-            <SmartOptimizationPanel activeMode={activeOptimizationMode} onOptimize={applyOptimization} />
-            <OptimizationScoreCard score={optimizationScore} />
-            <BeforeAfterComparisonCard comparison={optimizationComparison} />
-            <AIOptimizationInsights notes={optimizationNotes} />
-            <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
-              <div className="flex items-center gap-2">
-                <History size={16} className="text-[#6D4AFF]" />
-                <h3 className="text-lg font-semibold">Historial de optimizaciones</h3>
-              </div>
-              <p className="mt-1 text-sm text-[#6B5A50]">
-                Últimos snapshots guardados para revisar mejoras y restaurar simulaciones temporales.
-              </p>
-              <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                <label className="text-xs font-semibold text-[#6B5A50]">
-                  Filtrar por modo
-                  <select
-                    value={historyModeFilter}
-                    onChange={(event) => setHistoryModeFilter(event.target.value as OptimizationMode | 'all')}
-                    className="mt-1 h-9 w-full rounded-lg border border-[#E8DDD2] bg-white px-2 text-xs text-[#241A14] outline-none"
-                  >
-                    <option value="all">Todos</option>
-                    <option value="optimize_cost">Optimizar costo</option>
-                    <option value="reduce_waste">Optimizar desperdicio</option>
-                    <option value="prioritize_fresh">Priorizar frescos</option>
-                    <option value="reduce_missing">Reducir faltantes</option>
-                    <option value="reuse_proteins">Reutilizar proteínas</option>
-                    <option value="balance_ingredients">Balancear ingredientes</option>
-                  </select>
-                </label>
-                <label className="text-xs font-semibold text-[#6B5A50]">
-                  Filtrar por fecha
-                  <select
-                    value={historyDateFilter}
-                    onChange={(event) => setHistoryDateFilter(event.target.value as 'all' | '7d' | '30d' | '90d')}
-                    className="mt-1 h-9 w-full rounded-lg border border-[#E8DDD2] bg-white px-2 text-xs text-[#241A14] outline-none"
-                  >
-                    <option value="all">Todo el historial</option>
-                    <option value="7d">Últimos 7 días</option>
-                    <option value="30d">Últimos 30 días</option>
-                    <option value="90d">Últimos 90 días</option>
-                  </select>
-                </label>
-              </div>
-              {filteredOptimizationHistory.length === 0 ? (
-                <div className="mt-3 rounded-xl border border-dashed border-[#E8DDD2] bg-[#FAF6F1] px-3 py-4 text-sm text-[#6B5A50]">
-                  No hay snapshots para el filtro seleccionado. Probá otro modo/fecha o ejecutá una optimización nueva.
-                </div>
-              ) : (
-                <div className="mt-3 space-y-2">
-                  {visibleOptimizationHistory.map((snapshot) => {
-                    const improvement = snapshot.optimizedScore.total - snapshot.baselineScore.total;
-                    const expanded = expandedSnapshotId === snapshot.id;
-                    return (
-                      <section key={snapshot.id} className="rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] p-3">
-                        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                          <div>
-                            <p className="text-sm font-semibold text-[#241A14]">{modeLabel(snapshot.mode)}</p>
-                            <p className="text-xs text-[#6B5A50]">
-                              {new Date(snapshot.createdAt).toLocaleString('es-AR')}
-                            </p>
-                          </div>
-                          <span
-                            className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${
-                              improvement >= 0
-                                ? 'border-[#567A3B]/40 bg-[#567A3B]/10 text-[#567A3B]'
-                                : 'border-[#B84D4D]/40 bg-[#B84D4D]/10 text-[#B84D4D]'
-                            }`}
-                          >
-                            Mejora total {improvement >= 0 ? '+' : ''}
-                            {improvement}
-                          </span>
-                        </div>
-
-                        <div className="mt-2 grid gap-2 sm:grid-cols-3">
-                          <div className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1.5 text-xs">
-                            <p className="text-[#6B5A50]">Score antes</p>
-                            <p className="font-semibold text-[#241A14]">{snapshot.baselineScore.total}</p>
-                          </div>
-                          <div className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1.5 text-xs">
-                            <p className="text-[#6B5A50]">Score después</p>
-                            <p className="font-semibold text-[#241A14]">{snapshot.optimizedScore.total}</p>
-                          </div>
-                          <div className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1.5 text-xs">
-                            <p className="text-[#6B5A50]">Resumen</p>
-                            <p className="line-clamp-2 font-semibold text-[#241A14]">{snapshot.notes[0] ?? 'Sin resumen disponible.'}</p>
-                          </div>
-                        </div>
-
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setExpandedSnapshotId((prev) => (prev === snapshot.id ? null : snapshot.id))}
-                            className="rounded-lg border border-[#E8DDD2] bg-white px-2.5 py-1 text-xs font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40"
-                          >
-                            <Eye size={12} className="mr-1 inline" />
-                            {expanded ? 'Ocultar detalle' : 'Ver detalle'}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => restoreSnapshotTemporarily(snapshot)}
-                            className="rounded-lg border border-[#E8DDD2] bg-white px-2.5 py-1 text-xs font-semibold text-[#6B5A50] hover:border-[#6D4AFF]/40"
-                          >
-                            <RotateCcw size={12} className="mr-1 inline" />
-                            Restaurar simulación
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void deleteOptimizationSnapshot(snapshot.id)}
-                            className="rounded-lg border border-[#E8DDD2] bg-white px-2.5 py-1 text-xs font-semibold text-[#B84D4D] hover:border-[#B84D4D]/40"
-                          >
-                            <Trash2 size={12} className="mr-1 inline" />
-                            Eliminar
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => exportOptimizationSnapshot(snapshot)}
-                            className="rounded-lg border border-[#E8DDD2] bg-white px-2.5 py-1 text-xs font-semibold text-[#6B5A50] hover:border-[#6D4AFF]/40"
-                          >
-                            <Download size={12} className="mr-1 inline" />
-                            Exportar
-                          </button>
-                        </div>
-
-                        {expanded ? (
-                          <div className="mt-2 rounded-lg border border-[#E8DDD2] bg-white px-3 py-2 text-xs text-[#6B5A50]">
-                            <p className="font-semibold text-[#241A14]">Explicación principal</p>
-                            <ul className="mt-1 list-disc space-y-1 pl-4">
-                              {snapshot.notes.slice(0, 3).map((note) => (
-                                <li key={note} className="break-words">{note}</li>
-                              ))}
-                            </ul>
-                          </div>
-                        ) : null}
-                      </section>
-                    );
-                  })}
-                  {hasMoreHistory ? (
+              <section className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
+                <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <h2 className="text-lg font-semibold">Calendario de menú</h2>
+                  <div className="grid grid-cols-2 gap-2 text-xs sm:flex sm:flex-wrap">
                     <button
                       type="button"
-                      onClick={() => setHistoryPage((prev) => prev + 1)}
-                      className="w-full rounded-lg border border-[#E8DDD2] bg-white px-3 py-2 text-xs font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40"
+                      onClick={() => void regenerateWeek()}
+                      disabled={!hasActiveMenu}
+                      className="rounded-lg border border-[#E8DDD2] px-2 py-1 font-semibold text-[#6B5A50] disabled:opacity-50"
                     >
-                      Ver más historial
+                      Regenerar semana
                     </button>
-                  ) : null}
-                </div>
-              )}
-            </article>
-            <ReorderSuggestionCard suggestions={reorderSuggestions} />
-            <SmartPredictionCard predictions={mealSimulation.predictions} />
-
-            {result ? (
-              <section className="rounded-2xl border border-[#E8DDD2] bg-white/80 p-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <h3 className="text-lg font-semibold">Plan culinario generado</h3>
-                    <p className="text-xs text-[#6B5A50]">
-                      Vista editorial del menú para {peopleCount || 4} personas.
-                    </p>
+                    <button
+                      type="button"
+                      onClick={() => void generateInventorySuggestion()}
+                      disabled={!hasActiveMenu}
+                      className="rounded-lg border border-[#E8DDD2] px-2 py-1 font-semibold text-[#6B5A50] disabled:opacity-50"
+                    >
+                      Generar inventario
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void deleteSavedPlan()}
+                      disabled={!hasSavedPlan}
+                      className="rounded-lg border border-[#E8DDD2] px-2 py-1 font-semibold text-[#6B5A50] disabled:opacity-50"
+                    >
+                      Borrar guardado
+                    </button>
                   </div>
-                  {usePdfContext ? (
-                    <span className="rounded-full border border-[#6D4AFF]/30 bg-[#6D4AFF]/10 px-2 py-0.5 text-[10px] font-semibold text-[#6D4AFF]">
-                      Contexto PDF: {pdfContextCount}
-                    </span>
-                  ) : null}
                 </div>
-
-                {narrativeSections.length > 0 ? (
-                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                    {narrativeSections.map((section) => (
-                      <article key={section.day} className="rounded-xl border border-[#E8DDD2] bg-white/85 p-3">
-                        <p className="text-sm font-semibold text-[#241A14]">{section.day}</p>
-                        <ul className="mt-2 space-y-2">
-                          {section.meals.map((meal) => (
-                            <li key={`${section.day}-${meal.meal}-${meal.text.slice(0, 16)}`} className="rounded-lg border border-[#E8DDD2] bg-[#FAF6F1] p-2">
-                              <p className="text-xs font-semibold text-[#6B5A50]">{meal.meal}</p>
-                              <p className="mt-1 text-sm text-[#241A14]">{meal.text}</p>
-                            </li>
-                          ))}
-                        </ul>
-                      </article>
-                    ))}
+                {hasActiveMenu ? (
+                  <div className="mb-3 rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] px-3 py-2">
+                    <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                      <p className="text-sm font-semibold text-[#241A14]">
+                        Recetas generadas: {recipeWarmupProgress.readySlots}/
+                        {recipeWarmupProgress.totalSlots}
+                      </p>
+                      <p className="text-xs text-[#6B5A50]">
+                        {recipeWarmupProgress.readySlots === 0
+                          ? 'On-demand activo · ninguna receta abierta todavía'
+                          : recipeWarmupProgress.isPartial
+                            ? `On-demand parcial · ${recipeWarmupProgress.percent}% disponibles`
+                            : 'Todas las recetas ya están disponibles'}
+                      </p>
+                    </div>
+                    <div className="mt-2 h-2 overflow-hidden rounded-full bg-white">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-[#C56A1A] to-[#6D4AFF] transition-all"
+                        style={{ width: `${recipeWarmupProgress.percent}%` }}
+                      />
+                    </div>
                   </div>
+                ) : null}
+                {hasActiveMenu ? (
+                  renderPeriodView()
                 ) : (
-                  <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap rounded-xl border border-[#E8DDD2] bg-white/85 p-3 text-sm text-[#3d312a]">
-                    {result}
-                  </pre>
+                  <div className="rounded-xl border border-dashed border-[#E8DDD2] bg-[#FAF6F1] p-4 text-sm text-[#6B5A50]">
+                    No hay un menú generado todavía. Completá la configuración y usá{' '}
+                    <span className="font-semibold text-[#241A14]">
+                      “Generar planificación inteligente”
+                    </span>
+                    .
+                  </div>
                 )}
               </section>
-            ) : null}
-          </section>
 
-          <aside className="space-y-4 xl:sticky xl:top-4 xl:self-start">
-            <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <ShoppingCart size={16} className="text-[#567A3B]" />
-                  <h3 className="text-lg font-semibold">Lista inteligente de compras</h3>
-                </div>
-                <div className="flex flex-wrap items-center justify-end gap-1.5">
-                  <div className="inline-flex rounded-lg border border-[#E8DDD2] bg-white p-0.5">
-                    <button
-                      type="button"
-                      onClick={() => setShoppingShareFormat('short')}
-                      className={`rounded-md px-2 py-1 text-[11px] font-semibold ${
-                        shoppingShareFormat === 'short' ? 'bg-[#16110D] text-white' : 'text-[#6B5A50]'
-                      }`}
-                    >
-                      Corto
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setShoppingShareFormat('detailed')}
-                      className={`rounded-md px-2 py-1 text-[11px] font-semibold ${
-                        shoppingShareFormat === 'detailed' ? 'bg-[#16110D] text-white' : 'text-[#6B5A50]'
-                      }`}
-                    >
-                      Detallado
-                    </button>
+              {hasActiveMenu && ENABLE_HOME_INTELLIGENCE_DASHBOARD ? (
+                <HomeIntelligenceDashboard
+                  weeklyCoverage={mealSimulation.weeklyCoverage}
+                  criticalCount={mealSimulation.criticalIngredients.length}
+                  reusedCount={mealSimulation.reusedIngredients.length}
+                  projectedCost={smartShoppingList.estimatedCostTotal}
+                  criticalIngredients={mealSimulation.criticalIngredients}
+                  reusedIngredients={mealSimulation.reusedIngredients}
+                />
+              ) : hasActiveMenu ? (
+                <div className="relative">
+                  <div className="pointer-events-none opacity-45 grayscale">
+                    <HomeIntelligenceDashboard
+                      weeklyCoverage={mealSimulation.weeklyCoverage}
+                      criticalCount={mealSimulation.criticalIngredients.length}
+                      reusedCount={mealSimulation.reusedIngredients.length}
+                      projectedCost={smartShoppingList.estimatedCostTotal}
+                      criticalIngredients={mealSimulation.criticalIngredients}
+                      reusedIngredients={mealSimulation.reusedIngredients}
+                    />
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => void copyShoppingList()}
-                    className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1 text-xs font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40"
-                  >
-                    <span className="inline-flex items-center gap-1"><ClipboardCopy size={14} /> Copiar</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={shareShoppingToWhatsapp}
-                    className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1 text-xs font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40"
-                  >
-                    <span className="inline-flex items-center gap-1"><MessageCircle size={14} /> WhatsApp</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShoppingCollapsed((prev) => !prev)}
-                    className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1 text-xs font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40"
-                  >
-                    {shoppingCollapsed ? (
-                      <span className="inline-flex items-center gap-1"><ChevronDown size={14} /> Expandir</span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1"><ChevronUp size={14} /> Colapsar</span>
-                    )}
-                  </button>
+                  <div className="pointer-events-none absolute inset-0 rounded-2xl border border-dashed border-[#C56A1A]/40 bg-[#FAF6F1]/40" />
+                  <div className="pointer-events-none absolute right-3 top-3 rounded-full border border-[#C56A1A]/30 bg-[#C56A1A]/10 px-2 py-0.5 text-[10px] font-semibold text-[#A55412]">
+                    Pausado temporalmente
+                  </div>
                 </div>
-              </div>
-              {!shoppingCollapsed ? (
-                <div className="mt-3 space-y-2">
-                  <SmartShoppingSection
-                    shopping={smartShoppingList}
-                    onApplyShoppingItem={applyShoppingItemToInventory}
-                    applyingItemKey={applyingShoppingItemKey}
+              ) : null}
+              {hasActiveMenu ? (
+                <DailyKitchenCard
+                  dayState={mealSimulation.dayStates[simulatedDayIndex] ?? null}
+                  message={mealSimulation.dailyKitchenMessage}
+                />
+              ) : null}
+              {!isRestaurantMode ? (
+                <>
+                  <MenuHealthCard
+                    coveredMessage={menuHealthSummary.coveredMessage}
+                    lowIngredientsCount={menuHealthSummary.lowIngredientsCount}
+                    shoppingItemsCount={menuHealthSummary.shoppingItemsCount}
+                    estimatedCost={menuHealthSummary.estimatedCost}
+                    onViewDetails={() => setShowSimulationDetails((prev) => !prev)}
                   />
-                  {shoppingApplySummary ? (
-                    <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
-                      {shoppingApplySummary}
-                    </p>
+                  {showSimulationDetails ? (
+                    <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
+                      <div className="mb-3 flex items-center justify-between gap-2">
+                        <h3 className="text-lg font-semibold text-[#241A14]">
+                          Detalle de simulación operativa
+                        </h3>
+                        <button
+                          type="button"
+                          onClick={() => setShowSimulationDetails(false)}
+                          className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1 text-xs font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40"
+                        >
+                          Cerrar
+                        </button>
+                      </div>
+                      <div className="space-y-4">
+                        <InventoryDepletionPreview items={inventoryProjection.items} />
+                        <InventoryPlaybackCard
+                          dayStates={mealSimulation.dayStates}
+                          selectedDayIndex={simulatedDayIndex}
+                        />
+                        <SmartPredictionCard predictions={mealSimulation.predictions} />
+                      </div>
+                    </article>
                   ) : null}
-                  {shoppingShareFeedback ? (
-                    <p className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-2 text-xs text-[#6B5A50]">
-                      {shoppingShareFeedback}
-                    </p>
-                  ) : null}
-                </div>
+                </>
+              ) : (
+                <>
+                  <InventoryDepletionPreview items={inventoryProjection.items} />
+                  <InventoryPlaybackCard
+                    dayStates={mealSimulation.dayStates}
+                    selectedDayIndex={simulatedDayIndex}
+                  />
+                  <SmartPredictionCard predictions={mealSimulation.predictions} />
+                </>
+              )}
+              {isRestaurantMode ? (
+                <AdvancedTimelineSection
+                  open={showAdvancedTimeline}
+                  onToggle={() => setShowAdvancedTimeline((prev) => !prev)}
+                >
+                  <EditableMealTimeline
+                    days={simulationCalendar}
+                    lockedMeals={lockedMeals}
+                    onToggleLock={toggleLockedMeal}
+                    onMoveDay={moveMealAcrossDay}
+                    onMoveMealSlot={moveMealAcrossSlot}
+                    selectedDayIndex={simulatedDayIndex}
+                    onSimulateDay={setSimulatedDayIndex}
+                  />
+                </AdvancedTimelineSection>
               ) : null}
-            </article>
-
-            <SupermarketModeCard
-              estimatedCost={supermarketMetrics.estimatedCost}
-              missingCount={supermarketMetrics.missingCount}
-              reusedCount={supermarketMetrics.reusedCount}
-              reviewCount={supermarketMetrics.reviewCount}
-            />
-
-            <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
-              <h3 className="text-lg font-semibold">Resumen de inventario proyectado</h3>
-              <p className="mt-1 text-sm text-[#6B5A50]">Proyección de consumo para este menú (sin descontar stock real).</p>
-              <div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:text-sm">
-                <SummaryBadge label="Suficientes" value={inventoryProjection.summary.sufficient} tone="success" />
-                <SummaryBadge label="Faltantes" value={inventoryProjection.summary.missing} tone="danger" />
-                <SummaryBadge label="Parciales" value={inventoryProjection.summary.partial} tone="warning" />
-                <SummaryBadge label="A revisar" value={inventoryProjection.summary.unknown} tone="neutral" />
-              </div>
-              <p className="mt-3 rounded-xl border border-[#E8DDD2] bg-white/80 px-3 py-2 text-xs text-[#6B5A50]">
-                Costo estimado: <span className="font-semibold text-[#241A14]">~${inventoryProjection.summary.estimatedCost.toFixed(2)}</span>
-              </p>
-            </article>
-
-            <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
-              <div className="flex items-center justify-between gap-2">
-                <h3 className="text-lg font-semibold">Inventario sugerido del menú</h3>
-                <span className="rounded-full border border-[#6D4AFF]/30 bg-[#6D4AFF]/10 px-2 py-0.5 text-[10px] font-semibold text-[#6D4AFF]">
-                  {peopleCount || 4} personas
-                </span>
-              </div>
-              <p className="mt-1 text-sm text-[#6B5A50]">Lista separada del inventario real, consolidada por equivalencias.</p>
-              {inventorySuggestionUpdatedAt ? (
-                <p className="mt-1 text-[11px] text-[#8C7A6D]">Actualizado: {new Date(inventorySuggestionUpdatedAt).toLocaleString()}</p>
+              {isRestaurantMode ? (
+                <SimulationControls
+                  onReset={resetSimulation}
+                  onApply={applySimulationToMenu}
+                  hasChanges={hasSimulationChanges}
+                />
               ) : null}
-              <ul className="mt-3 space-y-2.5">
-                {inventorySuggestion.map((item) => (
-                  <li key={item.canonical_name} className="rounded-xl border border-[#E8DDD2] bg-white/75 p-2 text-sm">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="font-semibold text-[#241A14]">{item.canonical_name}</p>
+              {isRestaurantMode ? (
+                <>
+                  <IngredientConstraintCard
+                    options={inventoryProjection.items.map((item) => item.ingredientName)}
+                    selected={ingredientConstraints}
+                    onToggle={toggleIngredientConstraint}
+                  />
+                  <SmartOptimizationPanel
+                    activeMode={activeOptimizationMode}
+                    onOptimize={applyOptimization}
+                  />
+                  <OptimizationScoreCard score={optimizationScore} />
+                  <BeforeAfterComparisonCard comparison={optimizationComparison} />
+                  <AIOptimizationInsights notes={optimizationNotes} />
+                </>
+              ) : null}
+              {isRestaurantMode ? (
+                <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
+                  <div className="flex items-center gap-2">
+                    <History size={16} className="text-[#6D4AFF]" />
+                    <h3 className="text-lg font-semibold">Historial de optimizaciones</h3>
+                  </div>
+                  <p className="mt-1 text-sm text-[#6B5A50]">
+                    Últimos snapshots guardados para revisar mejoras y restaurar simulaciones
+                    temporales.
+                  </p>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    <label className="text-xs font-semibold text-[#6B5A50]">
+                      Filtrar por modo
+                      <select
+                        value={historyModeFilter}
+                        onChange={(event) =>
+                          setHistoryModeFilter(event.target.value as OptimizationMode | 'all')
+                        }
+                        className="mt-1 h-9 w-full rounded-lg border border-[#E8DDD2] bg-white px-2 text-xs text-[#241A14] outline-none"
+                      >
+                        <option value="all">Todos</option>
+                        <option value="optimize_cost">Optimizar costo</option>
+                        <option value="reduce_waste">Optimizar desperdicio</option>
+                        <option value="prioritize_fresh">Priorizar frescos</option>
+                        <option value="reduce_missing">Reducir faltantes</option>
+                        <option value="reuse_proteins">Reutilizar proteínas</option>
+                        <option value="balance_ingredients">Balancear ingredientes</option>
+                      </select>
+                    </label>
+                    <label className="text-xs font-semibold text-[#6B5A50]">
+                      Filtrar por fecha
+                      <select
+                        value={historyDateFilter}
+                        onChange={(event) =>
+                          setHistoryDateFilter(event.target.value as 'all' | '7d' | '30d' | '90d')
+                        }
+                        className="mt-1 h-9 w-full rounded-lg border border-[#E8DDD2] bg-white px-2 text-xs text-[#241A14] outline-none"
+                      >
+                        <option value="all">Todo el historial</option>
+                        <option value="7d">Últimos 7 días</option>
+                        <option value="30d">Últimos 30 días</option>
+                        <option value="90d">Últimos 90 días</option>
+                      </select>
+                    </label>
+                  </div>
+                  {filteredOptimizationHistory.length === 0 ? (
+                    <div className="mt-3 rounded-xl border border-dashed border-[#E8DDD2] bg-[#FAF6F1] px-3 py-4 text-sm text-[#6B5A50]">
+                      No hay snapshots para el filtro seleccionado. Probá otro modo/fecha o ejecutá
+                      una optimización nueva.
+                    </div>
+                  ) : (
+                    <div className="mt-3 space-y-2">
+                      {visibleOptimizationHistory.map((snapshot) => {
+                        const improvement =
+                          snapshot.optimizedScore.total - snapshot.baselineScore.total;
+                        const expanded = expandedSnapshotId === snapshot.id;
+                        return (
+                          <section
+                            key={snapshot.id}
+                            className="rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] p-3"
+                          >
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                              <div>
+                                <p className="text-sm font-semibold text-[#241A14]">
+                                  {modeLabel(snapshot.mode)}
+                                </p>
+                                <p className="text-xs text-[#6B5A50]">
+                                  {new Date(snapshot.createdAt).toLocaleString('es-AR')}
+                                </p>
+                              </div>
+                              <span
+                                className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${
+                                  improvement >= 0
+                                    ? 'border-[#567A3B]/40 bg-[#567A3B]/10 text-[#567A3B]'
+                                    : 'border-[#B84D4D]/40 bg-[#B84D4D]/10 text-[#B84D4D]'
+                                }`}
+                              >
+                                Mejora total {improvement >= 0 ? '+' : ''}
+                                {improvement}
+                              </span>
+                            </div>
+
+                            <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                              <div className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1.5 text-xs">
+                                <p className="text-[#6B5A50]">Score antes</p>
+                                <p className="font-semibold text-[#241A14]">
+                                  {snapshot.baselineScore.total}
+                                </p>
+                              </div>
+                              <div className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1.5 text-xs">
+                                <p className="text-[#6B5A50]">Score después</p>
+                                <p className="font-semibold text-[#241A14]">
+                                  {snapshot.optimizedScore.total}
+                                </p>
+                              </div>
+                              <div className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1.5 text-xs">
+                                <p className="text-[#6B5A50]">Resumen</p>
+                                <p className="line-clamp-2 font-semibold text-[#241A14]">
+                                  {snapshot.notes[0] ?? 'Sin resumen disponible.'}
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setExpandedSnapshotId((prev) =>
+                                    prev === snapshot.id ? null : snapshot.id
+                                  )
+                                }
+                                className="rounded-lg border border-[#E8DDD2] bg-white px-2.5 py-1 text-xs font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40"
+                              >
+                                <Eye size={12} className="mr-1 inline" />
+                                {expanded ? 'Ocultar detalle' : 'Ver detalle'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => restoreSnapshotTemporarily(snapshot)}
+                                className="rounded-lg border border-[#E8DDD2] bg-white px-2.5 py-1 text-xs font-semibold text-[#6B5A50] hover:border-[#6D4AFF]/40"
+                              >
+                                <RotateCcw size={12} className="mr-1 inline" />
+                                Restaurar simulación
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void deleteOptimizationSnapshot(snapshot.id)}
+                                className="rounded-lg border border-[#E8DDD2] bg-white px-2.5 py-1 text-xs font-semibold text-[#B84D4D] hover:border-[#B84D4D]/40"
+                              >
+                                <Trash2 size={12} className="mr-1 inline" />
+                                Eliminar
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => exportOptimizationSnapshot(snapshot)}
+                                className="rounded-lg border border-[#E8DDD2] bg-white px-2.5 py-1 text-xs font-semibold text-[#6B5A50] hover:border-[#6D4AFF]/40"
+                              >
+                                <Download size={12} className="mr-1 inline" />
+                                Exportar
+                              </button>
+                            </div>
+
+                            {expanded ? (
+                              <div className="mt-2 rounded-lg border border-[#E8DDD2] bg-white px-3 py-2 text-xs text-[#6B5A50]">
+                                <p className="font-semibold text-[#241A14]">
+                                  Explicación principal
+                                </p>
+                                <ul className="mt-1 list-disc space-y-1 pl-4">
+                                  {snapshot.notes.slice(0, 3).map((note) => (
+                                    <li key={note} className="break-words">
+                                      {note}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            ) : null}
+                          </section>
+                        );
+                      })}
+                      {hasMoreHistory ? (
+                        <button
+                          type="button"
+                          onClick={() => setHistoryPage((prev) => prev + 1)}
+                          className="w-full rounded-lg border border-[#E8DDD2] bg-white px-3 py-2 text-xs font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40"
+                        >
+                          Ver más historial
+                        </button>
+                      ) : null}
+                    </div>
+                  )}
+                </article>
+              ) : null}
+              {isRestaurantMode ? <ReorderSuggestionCard suggestions={reorderSuggestions} /> : null}
+
+              {result ? (
+                <section className="rounded-2xl border border-[#E8DDD2] bg-white/80 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-lg font-semibold">Plan culinario generado</h3>
                       <p className="text-xs text-[#6B5A50]">
-                        {item.quantity === null ? 'Cantidad estimada sin número' : `${item.quantity} ${item.unit}`}
+                        Vista editorial del menú para {peopleCount || 4} personas.
                       </p>
                     </div>
-                    <p className="text-[11px] text-[#6B5A50]">
-                      Nombre receta: {item.display_name}
-                      {item.display_name.toLowerCase() !== item.canonical_name.toLowerCase() ? ` · Equivalencia aplicada a "${item.canonical_name}"` : ''}
-                    </p>
-                    <div className="mt-1 flex flex-wrap gap-1">
-                      {item.estimated ? (
-                        <span className="rounded-full border border-[#C56A1A]/35 bg-[#C56A1A]/10 px-2 py-0.5 text-[10px] font-semibold text-[#A55412]">
-                          Estimado IA ({Math.round(item.confidence * 100)}%)
-                        </span>
-                      ) : (
-                        <span className="rounded-full border border-[#567A3B]/35 bg-[#567A3B]/10 px-2 py-0.5 text-[10px] font-semibold text-[#567A3B]">
-                          Cantidad definida
-                        </span>
-                      )}
-                    </div>
-                  </li>
-                ))}
-                {inventorySuggestion.length === 0 ? (
-                  <li className="rounded-xl border border-[#E8DDD2] bg-white/75 p-2 text-sm text-[#6B5A50]">
-                    Todavía no generaste inventario sugerido para este menú.
-                  </li>
-                ) : null}
-              </ul>
-            </article>
+                    {usePdfContext ? (
+                      <span className="rounded-full border border-[#6D4AFF]/30 bg-[#6D4AFF]/10 px-2 py-0.5 text-[10px] font-semibold text-[#6D4AFF]">
+                        Contexto PDF: {pdfContextCount}
+                      </span>
+                    ) : null}
+                  </div>
 
-            <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
-              <h3 className="text-lg font-semibold">Comparación con inventario</h3>
-              <p className="mt-1 text-sm text-[#6B5A50]">Estado operativo para ingredientes requeridos por el menú.</p>
-              <ul className="mt-3 space-y-2">
-                {inventoryProjection.items.slice(0, 12).map((item) => (
-                  <li key={item.normalizedName} className="rounded-xl border border-[#E8DDD2] bg-white/80 p-2 text-sm">
+                  {narrativeSections.length > 0 ? (
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                      {narrativeSections.map((section) => (
+                        <article
+                          key={section.day}
+                          className="rounded-xl border border-[#E8DDD2] bg-white/85 p-3"
+                        >
+                          <p className="text-sm font-semibold text-[#241A14]">{section.day}</p>
+                          <ul className="mt-2 space-y-2">
+                            {section.meals.map((meal) => (
+                              <li
+                                key={`${section.day}-${meal.meal}-${meal.text.slice(0, 16)}`}
+                                className="rounded-lg border border-[#E8DDD2] bg-[#FAF6F1] p-2"
+                              >
+                                <p className="text-xs font-semibold text-[#6B5A50]">{meal.meal}</p>
+                                <p className="mt-1 text-sm text-[#241A14]">{meal.text}</p>
+                              </li>
+                            ))}
+                          </ul>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap rounded-xl border border-[#E8DDD2] bg-white/85 p-3 text-sm text-[#3d312a]">
+                      {result}
+                    </pre>
+                  )}
+                </section>
+              ) : null}
+            </section>
+
+            <aside className="space-y-4 xl:sticky xl:top-4 xl:self-start">
+              {!hasActiveMenu ? (
+                <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-4 xl:p-5">
+                  <h3 className="text-lg font-semibold text-[#241A14]">Tu cocina está lista</h3>
+                  <p className="mt-2 text-sm text-[#6B5A50]">
+                    Cuando generes un menú, acá vas a ver la lista de compras, inventario proyectado
+                    y acciones rápidas.
+                  </p>
+                  <Link
+                    href="/app"
+                    className="mt-4 inline-flex rounded-xl border border-[#E8DDD2] px-3 py-2 text-sm font-semibold text-[#6B5A50]"
+                  >
+                    Volver al dashboard
+                  </Link>
+                </article>
+              ) : (
+                <>
+                  <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
                     <div className="flex items-center justify-between gap-2">
-                      <p className="font-semibold text-[#241A14]">{item.ingredientName}</p>
-                      <span
-                        className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
-                          item.status === 'sufficient'
-                            ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
-                            : item.status === 'partial'
-                              ? 'border-amber-300 bg-amber-50 text-amber-700'
-                              : item.status === 'missing'
-                                ? 'border-red-300 bg-red-50 text-red-700'
-                                : 'border-[#6B5A50]/30 bg-[#6B5A50]/10 text-[#6B5A50]'
-                        }`}
-                      >
-                        {item.status === 'sufficient'
-                          ? 'Disponible'
-                          : item.status === 'partial'
-                            ? 'Parcial'
-                            : item.status === 'missing'
-                              ? 'Falta comprar'
-                              : 'No comparable'}
+                      <div className="flex items-center gap-2">
+                        <ShoppingCart size={16} className="text-[#567A3B]" />
+                        <h3 className="text-lg font-semibold">Lista inteligente de compras</h3>
+                      </div>
+                      <div className="flex flex-wrap items-center justify-end gap-1.5">
+                        <div className="inline-flex rounded-lg border border-[#E8DDD2] bg-white p-0.5">
+                          <button
+                            type="button"
+                            onClick={() => setShoppingShareFormat('short')}
+                            className={`rounded-md px-2 py-1 text-[11px] font-semibold ${
+                              shoppingShareFormat === 'short'
+                                ? 'bg-[#16110D] text-white'
+                                : 'text-[#6B5A50]'
+                            }`}
+                          >
+                            Corto
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setShoppingShareFormat('detailed')}
+                            className={`rounded-md px-2 py-1 text-[11px] font-semibold ${
+                              shoppingShareFormat === 'detailed'
+                                ? 'bg-[#16110D] text-white'
+                                : 'text-[#6B5A50]'
+                            }`}
+                          >
+                            Detallado
+                          </button>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void copyShoppingList()}
+                          className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1 text-xs font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40"
+                        >
+                          <span className="inline-flex items-center gap-1">
+                            <ClipboardCopy size={14} /> Copiar
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={shareShoppingToWhatsapp}
+                          className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1 text-xs font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40"
+                        >
+                          <span className="inline-flex items-center gap-1">
+                            <MessageCircle size={14} /> WhatsApp
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShoppingCollapsed((prev) => !prev)}
+                          className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1 text-xs font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40"
+                        >
+                          {shoppingCollapsed ? (
+                            <span className="inline-flex items-center gap-1">
+                              <ChevronDown size={14} /> Expandir
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1">
+                              <ChevronUp size={14} /> Colapsar
+                            </span>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                    {!shoppingCollapsed ? (
+                      <div className="mt-3 space-y-2">
+                        <SmartShoppingSection
+                          shopping={smartShoppingList}
+                          onApplyShoppingItem={applyShoppingItemToInventory}
+                          applyingItemKey={applyingShoppingItemKey}
+                        />
+                        {shoppingApplySummary ? (
+                          <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+                            {shoppingApplySummary}
+                          </p>
+                        ) : null}
+                        {shoppingApplyStage ? (
+                          <p className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-2 text-xs text-[#6B5A50]">
+                            Estado: {shoppingApplyStage}
+                          </p>
+                        ) : null}
+                        {shoppingShareFeedback ? (
+                          <p className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-2 text-xs text-[#6B5A50]">
+                            {shoppingShareFeedback}
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </article>
+
+                  <SupermarketModeCard
+                    estimatedCost={supermarketMetrics.estimatedCost}
+                    missingCount={supermarketMetrics.missingCount}
+                    reusedCount={supermarketMetrics.reusedCount}
+                    reviewCount={supermarketMetrics.reviewCount}
+                  />
+
+                  <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
+                    <h3 className="text-lg font-semibold">Resumen de inventario proyectado</h3>
+                    <p className="mt-1 text-sm text-[#6B5A50]">
+                      Proyección de consumo para este menú (sin descontar stock real).
+                    </p>
+                    <div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:text-sm">
+                      <SummaryBadge
+                        label="Suficientes"
+                        value={inventoryProjection.summary.sufficient}
+                        tone="success"
+                      />
+                      <SummaryBadge
+                        label="Faltantes"
+                        value={inventoryProjection.summary.missing}
+                        tone="danger"
+                      />
+                      <SummaryBadge
+                        label="Parciales"
+                        value={inventoryProjection.summary.partial}
+                        tone="warning"
+                      />
+                      <SummaryBadge
+                        label="A revisar"
+                        value={inventoryProjection.summary.unknown}
+                        tone="neutral"
+                      />
+                    </div>
+                    <p className="mt-3 rounded-xl border border-[#E8DDD2] bg-white/80 px-3 py-2 text-xs text-[#6B5A50]">
+                      Costo estimado:{' '}
+                      <span className="font-semibold text-[#241A14]">
+                        ~${inventoryProjection.summary.estimatedCost.toFixed(2)}
+                      </span>
+                    </p>
+                  </article>
+
+                  <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className="text-lg font-semibold">Inventario sugerido del menú</h3>
+                      <span className="rounded-full border border-[#6D4AFF]/30 bg-[#6D4AFF]/10 px-2 py-0.5 text-[10px] font-semibold text-[#6D4AFF]">
+                        {peopleCount || 4} personas
                       </span>
                     </div>
-                    <p className="mt-1 text-xs text-[#6B5A50]">
-                      Requerido: {item.requiredTotalQuantity ?? '—'} {item.requiredUnit} · Disponible: {item.availableQuantity ?? '—'} {item.availableUnit}
+                    <p className="mt-1 text-sm text-[#6B5A50]">
+                      Lista separada del inventario real, consolidada por equivalencias.
                     </p>
-                    <p className="mt-1 text-[11px] text-[#8C7A6D]">
-                      Uso proyectado: {item.projectedUsedQuantity ?? '—'} {item.requiredUnit} · Restante: {item.projectedRemainingQuantity ?? '—'} {item.requiredUnit}
+                    {inventorySuggestionUpdatedAt ? (
+                      <p className="mt-1 text-[11px] text-[#8C7A6D]">
+                        Actualizado: {new Date(inventorySuggestionUpdatedAt).toLocaleString()}
+                      </p>
+                    ) : null}
+                    <ul className="mt-3 space-y-2.5">
+                      {inventorySuggestion.map((item) => (
+                        <li
+                          key={item.canonical_name}
+                          className="rounded-xl border border-[#E8DDD2] bg-white/75 p-2 text-sm"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="font-semibold text-[#241A14]">{item.canonical_name}</p>
+                            <p className="text-xs text-[#6B5A50]">
+                              {item.quantity === null
+                                ? 'Cantidad estimada sin número'
+                                : `${item.quantity} ${item.unit}`}
+                            </p>
+                          </div>
+                          <p className="text-[11px] text-[#6B5A50]">
+                            Nombre receta: {item.display_name}
+                            {item.display_name.toLowerCase() !== item.canonical_name.toLowerCase()
+                              ? ` · Equivalencia aplicada a "${item.canonical_name}"`
+                              : ''}
+                          </p>
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {item.estimated ? (
+                              <span className="rounded-full border border-[#C56A1A]/35 bg-[#C56A1A]/10 px-2 py-0.5 text-[10px] font-semibold text-[#A55412]">
+                                Estimado IA ({Math.round(item.confidence * 100)}%)
+                              </span>
+                            ) : (
+                              <span className="rounded-full border border-[#567A3B]/35 bg-[#567A3B]/10 px-2 py-0.5 text-[10px] font-semibold text-[#567A3B]">
+                                Cantidad definida
+                              </span>
+                            )}
+                          </div>
+                        </li>
+                      ))}
+                      {inventorySuggestion.length === 0 ? (
+                        <li className="rounded-xl border border-[#E8DDD2] bg-white/75 p-2 text-sm text-[#6B5A50]">
+                          Todavía no generaste inventario sugerido para este menú.
+                        </li>
+                      ) : null}
+                    </ul>
+                  </article>
+
+                  <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
+                    <h3 className="text-lg font-semibold">Comparación con inventario</h3>
+                    <p className="mt-1 text-sm text-[#6B5A50]">
+                      Estado operativo para ingredientes requeridos por el menú.
                     </p>
-                  </li>
-                ))}
-                {inventoryProjection.items.length === 0 ? (
-                  <li className="rounded-xl border border-[#E8DDD2] bg-white/80 p-2 text-sm text-[#6B5A50]">
-                    Generá inventario sugerido para ver la comparación con tu stock real.
-                  </li>
-                ) : null}
-              </ul>
-            </article>
+                    <ul className="mt-3 space-y-2">
+                      {inventoryProjection.items.slice(0, 12).map((item) => (
+                        <li
+                          key={item.normalizedName}
+                          className="rounded-xl border border-[#E8DDD2] bg-white/80 p-2 text-sm"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="font-semibold text-[#241A14]">{item.ingredientName}</p>
+                            <span
+                              className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                                item.status === 'sufficient'
+                                  ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                                  : item.status === 'partial'
+                                    ? 'border-amber-300 bg-amber-50 text-amber-700'
+                                    : item.status === 'missing'
+                                      ? 'border-red-300 bg-red-50 text-red-700'
+                                      : 'border-[#6B5A50]/30 bg-[#6B5A50]/10 text-[#6B5A50]'
+                              }`}
+                            >
+                              {item.status === 'sufficient'
+                                ? 'Disponible'
+                                : item.status === 'partial'
+                                  ? 'Parcial'
+                                  : item.status === 'missing'
+                                    ? 'Falta comprar'
+                                    : 'No comparable'}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-xs text-[#6B5A50]">
+                            Requerido: {item.requiredTotalQuantity ?? '—'} {item.requiredUnit} ·
+                            Disponible: {item.availableQuantity ?? '—'} {item.availableUnit}
+                          </p>
+                          <p className="mt-1 text-[11px] text-[#8C7A6D]">
+                            Uso proyectado: {item.projectedUsedQuantity ?? '—'} {item.requiredUnit}{' '}
+                            · Restante: {item.projectedRemainingQuantity ?? '—'} {item.requiredUnit}
+                          </p>
+                        </li>
+                      ))}
+                      {inventoryProjection.items.length === 0 ? (
+                        <li className="rounded-xl border border-[#E8DDD2] bg-white/80 p-2 text-sm text-[#6B5A50]">
+                          Generá inventario sugerido para ver la comparación con tu stock real.
+                        </li>
+                      ) : null}
+                    </ul>
+                  </article>
 
-            <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
-              <h3 className="text-lg font-semibold">Insights CocinaCore AI</h3>
-              <ul className="mt-3 space-y-2 text-sm">
-                {inventoryInsights.map((insight) => (
-                  <li key={insight} className="rounded-xl border border-[#E8DDD2] bg-white/80 px-3 py-2 text-[#6B5A50]">
-                    {insight}
-                  </li>
-                ))}
-                {inventoryInsights.length === 0 ? (
-                  <li className="rounded-xl border border-[#E8DDD2] bg-white/80 px-3 py-2 text-[#6B5A50]">
-                    Generá inventario sugerido para ver recomendaciones de optimización del menú.
-                  </li>
-                ) : null}
-              </ul>
-            </article>
+                  <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
+                    <h3 className="text-lg font-semibold">Insights CocinaCore AI</h3>
+                    <ul className="mt-3 space-y-2 text-sm">
+                      {inventoryInsights.map((insight) => (
+                        <li
+                          key={insight}
+                          className="rounded-xl border border-[#E8DDD2] bg-white/80 px-3 py-2 text-[#6B5A50]"
+                        >
+                          {insight}
+                        </li>
+                      ))}
+                      {inventoryInsights.length === 0 ? (
+                        <li className="rounded-xl border border-[#E8DDD2] bg-white/80 px-3 py-2 text-[#6B5A50]">
+                          Generá inventario sugerido para ver recomendaciones de optimización del
+                          menú.
+                        </li>
+                      ) : null}
+                    </ul>
+                  </article>
 
-            <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
-              <div className="flex items-center gap-2">
-                <Wand2 size={16} className="text-[#6D4AFF]" />
-                <h3 className="text-lg font-semibold">IA contextual activa</h3>
-              </div>
-              <p className="mt-2 text-sm text-[#6B5A50]">Este menú fue generado usando tus ingredientes disponibles y preferencias culinarias.</p>
-              <ul className="mt-3 space-y-2 text-sm">
-                {profileFlags.map((flag) => (
-                  <li key={flag.label} className="flex items-center justify-between rounded-lg border border-[#E8DDD2] bg-white/70 px-2 py-1.5">
-                    <span>{flag.label}</span>
-                    <span className={flag.active ? 'text-[#567A3B] font-semibold' : 'text-[#A55412] font-semibold'}>
-                      {flag.active ? '✓ activo' : 'pendiente'}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </article>
+                  <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
+                    <div className="flex items-center gap-2">
+                      <Wand2 size={16} className="text-[#6D4AFF]" />
+                      <h3 className="text-lg font-semibold">IA contextual activa</h3>
+                    </div>
+                    <p className="mt-2 text-sm text-[#6B5A50]">
+                      Este menú fue generado usando tus ingredientes disponibles y preferencias
+                      culinarias.
+                    </p>
+                    <ul className="mt-3 space-y-2 text-sm">
+                      {profileFlags.map((flag) => (
+                        <li
+                          key={flag.label}
+                          className="flex items-center justify-between rounded-lg border border-[#E8DDD2] bg-white/70 px-2 py-1.5"
+                        >
+                          <span>{flag.label}</span>
+                          <span
+                            className={
+                              flag.active
+                                ? 'text-[#567A3B] font-semibold'
+                                : 'text-[#A55412] font-semibold'
+                            }
+                          >
+                            {flag.active ? '✓ activo' : 'pendiente'}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </article>
 
-            <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
-              <h3 className="text-lg font-semibold">Acciones rápidas</h3>
-              <p className="mt-2 rounded-xl border border-[#E8DDD2] bg-white/70 px-3 py-2 text-xs text-[#6B5A50]">
-                {selectedMeal
-                  ? `Comida seleccionada: ${selectedMeal.day} · ${selectedMeal.mealType}`
-                  : 'Seleccioná una comida del calendario para aplicar acciones.'}
-              </p>
-              <div className="mt-3 grid gap-2">
-                <button type="button" onClick={() => void regenerateDay()} className="rounded-xl border border-[#E8DDD2] px-3 py-2 text-sm font-semibold text-[#6B5A50]">Regenerar un día</button>
-                <button type="button" onClick={() => void changeSelectedRecipe()} className="rounded-xl border border-[#E8DDD2] px-3 py-2 text-sm font-semibold text-[#6B5A50]">Cambiar receta</button>
-                <button type="button" onClick={toggleLockSelectedRecipe} className="rounded-xl border border-[#E8DDD2] px-3 py-2 text-sm font-semibold text-[#6B5A50]"><Lock size={14} className="mr-1 inline" /> Bloquear receta</button>
-                <Link href="/app" className="rounded-xl border border-[#E8DDD2] px-3 py-2 text-center text-sm font-semibold text-[#6B5A50]">Volver al dashboard</Link>
-              </div>
-            </article>
-
-            <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
-              <h3 className="text-lg font-semibold">Últimos consumos</h3>
-              <p className="mt-1 text-xs text-[#6B5A50]">Trazabilidad de movimientos reales de inventario.</p>
-              {recentMovements.length === 0 ? (
-                <p className="mt-3 rounded-xl border border-[#E8DDD2] bg-white/70 px-3 py-2 text-xs text-[#6B5A50]">
-                  Todavía no hay consumos confirmados.
-                </p>
-              ) : (
-                <ul className="mt-3 space-y-2">
-                  {recentMovements.map((movement) => (
-                    <li key={movement.id} className="rounded-xl border border-[#E8DDD2] bg-white/75 px-3 py-2">
-                      <p className="text-xs font-semibold text-[#241A14]">
-                        {movement.normalized_name} · {movement.quantity} {movement.unit}
-                      </p>
-                      <p className="mt-1 text-[11px] text-[#6B5A50]">
-                        {movement.movement_type} · {movement.source_recipe ?? movement.source}
-                      </p>
-                      <p className="text-[11px] text-[#8C7A6D]">{new Date(movement.created_at).toLocaleString()}</p>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </article>
-          </aside>
-        </form>
-
-        {error ? <p className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
-      </section>
-    </main>
-    {mealDetail.open ? (
-      <div className="fixed inset-0 z-50 flex items-end bg-black/35 md:items-center md:justify-center">
-        <div className="max-h-[88vh] w-full overflow-hidden rounded-t-3xl border border-[#E8DDD2] bg-[#FAF6F1] shadow-2xl md:max-h-[80vh] md:max-w-2xl md:rounded-3xl">
-          <div className="flex items-start justify-between border-b border-[#E8DDD2] px-4 py-3 md:px-6">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#6B5A50]">{mealDetail.day} · {mealDetail.mealType}</p>
-              <h3 className="text-lg font-semibold text-[#241A14]">{mealDetail.card?.name.replace(/\*\*/g, '').trim() ?? 'Preparación'}</h3>
-            </div>
-            <button
-              type="button"
-              onClick={() => setMealDetail((prev) => ({ ...prev, open: false }))}
-              className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-2 text-[#6B5A50] hover:border-[#C56A1A]/40"
-              aria-label="Cerrar detalle"
-            >
-              <X size={16} />
-            </button>
-          </div>
-          <div className="overflow-y-auto px-4 py-4 md:px-6 md:py-5">
-            {mealDetail.loading ? <p className="text-sm text-[#6B5A50]">Generando modo de preparación...</p> : null}
-            {mealDetail.error ? <p className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{mealDetail.error}</p> : null}
-            {!mealDetail.loading && !mealDetail.error && mealDetail.content ? (
-              <div>
-                <div className="mb-3 inline-flex rounded-xl border border-[#E8DDD2] bg-white p-1">
-                  {[
-                    { key: 'summary', label: 'Resumen' },
-                    { key: 'ingredients', label: 'Ingredientes' },
-                    { key: 'preparation', label: 'Preparación' },
-                  ].map((tab) => (
-                    <button
-                      key={tab.key}
-                      type="button"
-                      onClick={() => setMealDetailTab(tab.key as MealDetailTab)}
-                      className={`rounded-lg px-3 py-1 text-xs font-semibold transition ${
-                        mealDetailTab === tab.key
-                          ? 'bg-[#16110D] text-[#F5ECE2]'
-                          : 'text-[#6B5A50] hover:bg-[#FAF6F1]'
-                      }`}
-                    >
-                      {tab.label}
-                    </button>
-                  ))}
-                </div>
-
-                {mealDetailTab === 'summary' ? (
-                  <div className="space-y-2 text-sm text-[#241A14]">
-                    <p><strong>Receta:</strong> {mealDetail.card?.name.replace(/\*\*/g, '').trim()}</p>
-                    <p><strong>Tiempo:</strong> {mealDetail.card?.time}</p>
-                    <p><strong>Dificultad:</strong> {mealDetail.card?.difficulty}</p>
-                    <p><strong>Fusión:</strong> {mealDetail.card?.fusionTag}</p>
-                    <p className="text-[#6B5A50]">Tip: cambiá a “Preparación” para ver el paso a paso completo.</p>
-                    <section className="mt-3 rounded-xl border border-[#E8DDD2] bg-white/80 p-3">
-                      <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[#6B5A50]">Impacto en inventario</p>
-                      <ul className="mt-2 space-y-2">
-                        {mealConsumptionPreview.items.length === 0 ? (
-                          <li className="text-xs text-[#6B5A50]">Sin ingredientes estructurados para consumo real.</li>
-                        ) : (
-                          mealConsumptionPreview.items.map((item) => (
-                            <li key={`${item.normalizedName}-${item.ingredientName}`} className="rounded-lg border border-[#E8DDD2] bg-[#FAF6F1] p-2">
-                              <div className="flex items-center justify-between gap-2">
-                                <p className="text-xs font-semibold text-[#241A14]">{item.ingredientName}</p>
-                                <span
-                                  className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
-                                    item.status === 'sufficient'
-                                      ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
-                                      : item.status === 'insufficient'
-                                        ? 'border-amber-300 bg-amber-50 text-amber-700'
-                                        : 'border-[#6B5A50]/30 bg-[#6B5A50]/10 text-[#6B5A50]'
-                                  }`}
-                                >
-                                  {item.status === 'sufficient' ? 'Listo' : item.status === 'insufficient' ? 'No alcanza' : 'Revisar'}
-                                </span>
-                              </div>
-                              <p className="mt-1 text-[11px] text-[#6B5A50]">
-                                Requerido: {item.requiredQuantity ?? '—'} {item.requiredUnit ?? ''}
-                                {' · '}Disponible: {item.availableQuantity ?? '—'} {item.availableUnit ?? ''}
-                                {' · '}Después: {item.afterQuantity ?? '—'} {item.afterUnit ?? ''}
-                              </p>
-                              {item.reason ? <p className="mt-1 text-[11px] text-[#A55412]">{item.reason}</p> : null}
-                            </li>
-                          ))
-                        )}
-                      </ul>
-                      <button
-                        type="button"
-                        onClick={() => void applyRecipeConsumption()}
-                        disabled={consumingRecipe || !mealConsumptionPreview.canApply}
-                        className="mt-3 rounded-lg border border-[#E8DDD2] bg-white px-3 py-1.5 text-xs font-semibold text-[#241A14] hover:border-[#C56A1A]/40 disabled:cursor-not-allowed disabled:opacity-60"
+                  <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
+                    <h3 className="text-lg font-semibold">Atajos del plan</h3>
+                    <p className="mt-2 rounded-xl border border-[#E8DDD2] bg-white/70 px-3 py-2 text-xs text-[#6B5A50]">
+                      {selectedMeal
+                        ? `Comida seleccionada: ${selectedMeal.day} · ${selectedMeal.mealType}`
+                        : 'Seleccioná una comida del calendario para ver su receta o cambiarla.'}
+                    </p>
+                    <div className="mt-3 grid gap-2">
+                      {isRestaurantMode ? (
+                        <button
+                          type="button"
+                          onClick={() => setShowAdvancedTimeline((prev) => !prev)}
+                          className="rounded-xl border border-[#E8DDD2] px-3 py-2 text-sm font-semibold text-[#6B5A50]"
+                        >
+                          ⚙️{' '}
+                          {showAdvancedTimeline
+                            ? 'Ocultar personalización avanzada'
+                            : 'Abrir personalización avanzada'}
+                        </button>
+                      ) : null}
+                      <Link
+                        href="/app"
+                        className="rounded-xl border border-[#E8DDD2] px-3 py-2 text-center text-sm font-semibold text-[#6B5A50]"
                       >
-                        {consumingRecipe ? 'Aplicando consumo...' : 'Cocinar receta (aplicar consumo)'}
-                      </button>
-                    </section>
-                  </div>
-                ) : null}
+                        Volver al dashboard
+                      </Link>
+                    </div>
+                  </article>
 
-                {mealDetailTab === 'ingredients' ? (
-                  <IngredientsSection content={mealDetail.content} />
-                ) : null}
+                  <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
+                    <h3 className="text-lg font-semibold">Últimos consumos</h3>
+                    <p className="mt-1 text-xs text-[#6B5A50]">
+                      Trazabilidad de movimientos reales de inventario.
+                    </p>
+                    {recentMovements.length === 0 ? (
+                      <p className="mt-3 rounded-xl border border-[#E8DDD2] bg-white/70 px-3 py-2 text-xs text-[#6B5A50]">
+                        Todavía no hay consumos confirmados.
+                      </p>
+                    ) : (
+                      <ul className="mt-3 space-y-2">
+                        {recentMovements.map((movement) => (
+                          <li
+                            key={movement.id}
+                            className="rounded-xl border border-[#E8DDD2] bg-white/75 px-3 py-2"
+                          >
+                            <p className="text-xs font-semibold text-[#241A14]">
+                              {movement.normalized_name} · {movement.quantity} {movement.unit}
+                            </p>
+                            <p className="mt-1 text-[11px] text-[#6B5A50]">
+                              {movement.movement_type} · {movement.source_recipe ?? movement.source}
+                            </p>
+                            <p className="text-[11px] text-[#8C7A6D]">
+                              {new Date(movement.created_at).toLocaleString()}
+                            </p>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </article>
+                </>
+              )}
+            </aside>
+          </form>
 
-                {mealDetailTab === 'preparation' ? (
-                  <PreparationSection content={mealDetail.content} />
-                ) : null}
+          {error ? (
+            <p className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {error}
+            </p>
+          ) : null}
+        </section>
+      </main>
+      <RecipeReplacementModal
+        open={Boolean(replacementTarget)}
+        day={replacementTarget?.day ?? ''}
+        mealType={replacementTarget?.mealType ?? ''}
+        alternatives={replacementAlternatives}
+        onClose={() => {
+          setReplacementTarget(null);
+          setReplacementAlternatives([]);
+        }}
+        onSelectAlternative={replaceMealWithAlternative}
+        onRegenerateMeal={regenerateMealSlot}
+      />
+      {mealDetail.open ? (
+        <div className="fixed inset-0 z-50 flex items-end bg-black/35 md:items-center md:justify-center">
+          <div className="flex max-h-[88vh] w-full flex-col overflow-hidden rounded-t-3xl border border-[#E8DDD2] bg-[#FAF6F1] shadow-2xl md:max-h-[80vh] md:max-w-2xl md:rounded-3xl">
+            <div className="flex items-start justify-between border-b border-[#E8DDD2] px-4 py-3 md:px-6">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#6B5A50]">
+                  {mealDetail.day} · {mealDetail.mealType}
+                </p>
+                <h3 className="text-lg font-semibold text-[#241A14]">
+                  {mealDetail.card?.name.replace(/\*\*/g, '').trim() ?? 'Preparación'}
+                </h3>
               </div>
-            ) : null}
+              <button
+                type="button"
+                onClick={() => setMealDetail((prev) => ({ ...prev, open: false }))}
+                className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-2 text-[#6B5A50] hover:border-[#C56A1A]/40"
+                aria-label="Cerrar detalle"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-6 md:py-5">
+              {mealDetail.loading ? (
+                <p className="text-sm text-[#6B5A50]">Generando modo de preparación...</p>
+              ) : null}
+              {mealDetail.error ? (
+                <div className="space-y-2">
+                  <p className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                    {mealDetail.error}
+                  </p>
+                  {mealDetail.card && mealDetail.error.includes('no tiene preparación guardada') ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void generateMealDetailFromAI(
+                          mealDetail.day,
+                          mealDetail.mealType,
+                          mealDetail.card as PlannerMealCard
+                        )
+                      }
+                      className="rounded-lg border border-[#E8DDD2] bg-white px-3 py-1.5 text-xs font-semibold text-[#241A14] hover:border-[#C56A1A]/40"
+                    >
+                      Generar preparación ahora
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+              {!mealDetail.loading && !mealDetail.error && mealDetail.content ? (
+                <div>
+                  <div className="mb-3 inline-flex rounded-xl border border-[#E8DDD2] bg-white p-1">
+                    {[
+                      { key: 'summary', label: 'Resumen' },
+                      { key: 'ingredients', label: 'Ingredientes' },
+                      { key: 'preparation', label: 'Preparación' },
+                    ].map((tab) => (
+                      <button
+                        key={tab.key}
+                        type="button"
+                        onClick={() => setMealDetailTab(tab.key as MealDetailTab)}
+                        className={`rounded-lg px-3 py-1 text-xs font-semibold transition ${
+                          mealDetailTab === tab.key
+                            ? 'bg-[#16110D] text-[#F5ECE2]'
+                            : 'text-[#6B5A50] hover:bg-[#FAF6F1]'
+                        }`}
+                      >
+                        {tab.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {mealDetailTab === 'summary' ? (
+                    <div className="space-y-2 text-sm text-[#241A14]">
+                      <p>
+                        <strong>Receta:</strong> {mealDetail.card?.name.replace(/\*\*/g, '').trim()}
+                      </p>
+                      <p>
+                        <strong>Tiempo:</strong> {mealDetail.card?.time}
+                      </p>
+                      <p>
+                        <strong>Dificultad:</strong> {mealDetail.card?.difficulty}
+                      </p>
+                      <p>
+                        <strong>Fusión:</strong> {mealDetail.card?.fusionTag}
+                      </p>
+                      <p className="text-[#6B5A50]">
+                        Tip: cambiá a “Preparación” para ver el paso a paso completo.
+                      </p>
+                      <section className="mt-3 rounded-xl border border-[#E8DDD2] bg-white/80 p-3">
+                        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[#6B5A50]">
+                          Impacto en inventario
+                        </p>
+                        <ul className="mt-2 space-y-2">
+                          {mealConsumptionPreview.items.length === 0 ? (
+                            <li className="text-xs text-[#6B5A50]">
+                              Sin ingredientes estructurados para consumo real.
+                            </li>
+                          ) : (
+                            mealConsumptionPreview.items.map((item) => (
+                              <li
+                                key={`${item.normalizedName}-${item.ingredientName}`}
+                                className="rounded-lg border border-[#E8DDD2] bg-[#FAF6F1] p-2"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <p className="text-xs font-semibold text-[#241A14]">
+                                    {item.ingredientName}
+                                  </p>
+                                  <span
+                                    className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                                      item.status === 'sufficient'
+                                        ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                                        : item.status === 'insufficient'
+                                          ? 'border-amber-300 bg-amber-50 text-amber-700'
+                                          : 'border-[#6B5A50]/30 bg-[#6B5A50]/10 text-[#6B5A50]'
+                                    }`}
+                                  >
+                                    {item.status === 'sufficient'
+                                      ? 'Listo'
+                                      : item.status === 'insufficient'
+                                        ? 'No alcanza'
+                                        : 'Revisar'}
+                                  </span>
+                                </div>
+                                <p className="mt-1 text-[11px] text-[#6B5A50]">
+                                  Requerido: {item.requiredQuantity ?? '—'}{' '}
+                                  {item.requiredUnit ?? ''}
+                                  {' · '}Disponible: {item.availableQuantity ?? '—'}{' '}
+                                  {item.availableUnit ?? ''}
+                                  {' · '}Después: {item.afterQuantity ?? '—'} {item.afterUnit ?? ''}
+                                </p>
+                                {item.reason ? (
+                                  <p className="mt-1 text-[11px] text-[#A55412]">{item.reason}</p>
+                                ) : null}
+                              </li>
+                            ))
+                          )}
+                        </ul>
+                        <button
+                          type="button"
+                          onClick={() => void applyRecipeConsumption()}
+                          disabled={consumingRecipe || !mealConsumptionPreview.canApply}
+                          className="mt-3 rounded-lg border border-[#E8DDD2] bg-white px-3 py-1.5 text-xs font-semibold text-[#241A14] hover:border-[#C56A1A]/40 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {consumingRecipe
+                            ? 'Aplicando consumo...'
+                            : 'Cocinar receta (aplicar consumo)'}
+                        </button>
+                      </section>
+                    </div>
+                  ) : null}
+
+                  {mealDetailTab === 'ingredients' ? (
+                    <IngredientsSection content={mealDetail.content} />
+                  ) : null}
+
+                  {mealDetailTab === 'preparation' ? (
+                    <PreparationSection content={mealDetail.content} />
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
           </div>
         </div>
-      </div>
-    ) : null}
+      ) : null}
     </>
   );
 }
@@ -2910,12 +3992,14 @@ export default function MealPlannerPage() {
 function extractSection(content: string, heading: string, fallbackHeading?: string): string {
   const normalized = content.replace(/\r/g, '');
   const headings = [heading, ...(fallbackHeading ? [fallbackHeading] : [])];
+  const normalizeHeadingLine = (value: string) =>
+    value.replace(/\*\*/g, '').replace(/__/g, '').trim().toLowerCase().replace(/:$/, '');
   const lines = normalized.split('\n');
   let start = -1;
 
   for (let i = 0; i < lines.length; i += 1) {
-    const clean = lines[i].trim().toLowerCase();
-    if (headings.some((h) => clean === h.toLowerCase() || clean.startsWith(`${h.toLowerCase()}:`))) {
+    const clean = normalizeHeadingLine(lines[i]);
+    if (headings.some((h) => clean === h.toLowerCase() || clean.startsWith(h.toLowerCase()))) {
       start = i + 1;
       break;
     }
@@ -2925,8 +4009,8 @@ function extractSection(content: string, heading: string, fallbackHeading?: stri
 
   const nextHeadingIndex = lines.findIndex((line, idx) => {
     if (idx <= start) return false;
-    const clean = line.trim().toLowerCase();
-    return ['fuente', 'preparación', 'preparacion', 'tips', 'ingredientes'].includes(clean.replace(':', ''));
+    const clean = normalizeHeadingLine(line);
+    return ['fuente', 'preparación', 'preparacion', 'tips', 'ingredientes'].includes(clean);
   });
 
   const end = nextHeadingIndex > start ? nextHeadingIndex : lines.length;
@@ -2935,13 +4019,17 @@ function extractSection(content: string, heading: string, fallbackHeading?: stri
 
 function IngredientsSection(props: { content: string }) {
   const section = extractSection(props.content, 'INGREDIENTES');
-  if (!section) return <p className="text-sm text-[#6B5A50]">No se detectaron ingredientes estructurados.</p>;
+  if (!section)
+    return <p className="text-sm text-[#6B5A50]">No se detectaron ingredientes estructurados.</p>;
   return <pre className="whitespace-pre-wrap text-sm leading-6 text-[#241A14]">{section}</pre>;
 }
 
 function PreparationSection(props: { content: string }) {
   const section = extractSection(props.content, 'PREPARACIÓN', 'PREPARACION');
-  if (!section) return <pre className="whitespace-pre-wrap text-sm leading-6 text-[#241A14]">{props.content}</pre>;
+  if (!section)
+    return (
+      <pre className="whitespace-pre-wrap text-sm leading-6 text-[#241A14]">{props.content}</pre>
+    );
   return <pre className="whitespace-pre-wrap text-sm leading-6 text-[#241A14]">{section}</pre>;
 }
 
@@ -2975,7 +4063,11 @@ function ToolbarSegment(props: {
   );
 }
 
-function SummaryBadge(props: { label: string; value: number; tone: 'success' | 'warning' | 'danger' | 'neutral' }) {
+function SummaryBadge(props: {
+  label: string;
+  value: number;
+  tone: 'success' | 'warning' | 'danger' | 'neutral';
+}) {
   const toneClass =
     props.tone === 'success'
       ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
@@ -2998,11 +4090,23 @@ function MealCard(props: {
   mealType: MealType;
   card: PlannerMealCard;
   onViewPreparation: (day: string, mealType: MealType, card: PlannerMealCard) => void;
+  onChangeRecipe: (day: string, mealType: MealType) => void;
+  onRegenerateMeal: (day: string, mealType: MealType) => void;
   onSelectMeal: (slot: SelectedMealState) => void;
   selected: boolean;
   locked: boolean;
 }) {
-  const { day, mealType, card, onViewPreparation, onSelectMeal, selected, locked } = props;
+  const {
+    day,
+    mealType,
+    card,
+    onViewPreparation,
+    onChangeRecipe,
+    onRegenerateMeal,
+    onSelectMeal,
+    selected,
+    locked,
+  } = props;
   const emoji = mealType === 'Desayuno' ? '🍳' : mealType === 'Almuerzo' ? '🍝' : '🥗';
 
   return (
@@ -3017,23 +4121,51 @@ function MealCard(props: {
         if (event.key === 'Enter' || event.key === ' ') onSelectMeal({ day, mealType });
       }}
     >
-      <p className="text-xs font-semibold text-[#6B5A50]">{emoji} {mealType}</p>
+      <p className="text-xs font-semibold text-[#6B5A50]">
+        {emoji} {mealType}
+      </p>
       <p className="mt-1 line-clamp-2 text-sm font-semibold text-[#241A14]">{card.name}</p>
       <div className="mt-2 flex flex-wrap gap-1 text-[11px] text-[#6B5A50]">
         <span className="rounded-full border border-[#E8DDD2] px-2 py-0.5">{card.time}</span>
         <span className="rounded-full border border-[#E8DDD2] px-2 py-0.5">{card.difficulty}</span>
-        <span className="rounded-full border border-[#6D4AFF]/30 bg-[#6D4AFF]/10 px-2 py-0.5 text-[#6D4AFF]">{card.badge}</span>
-        <span className="rounded-full border border-[#C56A1A]/30 bg-[#C56A1A]/10 px-2 py-0.5 text-[#A55412]">{card.fusionTag}</span>
-        {locked ? <span className="rounded-full border border-[#16110D]/20 bg-[#16110D]/10 px-2 py-0.5 text-[#16110D]">Bloqueada</span> : null}
+        <span className="rounded-full border border-[#6D4AFF]/30 bg-[#6D4AFF]/10 px-2 py-0.5 text-[#6D4AFF]">
+          {card.badge}
+        </span>
+        <span className="rounded-full border border-[#C56A1A]/30 bg-[#C56A1A]/10 px-2 py-0.5 text-[#A55412]">
+          {card.fusionTag}
+        </span>
+        {locked ? (
+          <span className="rounded-full border border-[#16110D]/20 bg-[#16110D]/10 px-2 py-0.5 text-[#16110D]">
+            Bloqueada
+          </span>
+        ) : null}
       </div>
-      <p className="mt-2 text-[11px] text-[#6B5A50]">Faltantes: {card.missing} · Score IA: {card.aiScore}%</p>
-      <button
-        type="button"
-        onClick={() => onViewPreparation(day, mealType, card)}
-        className="mt-2 inline-flex items-center gap-1 rounded-lg border border-[#E8DDD2] bg-white px-2 py-1 text-[11px] font-semibold text-[#241A14] hover:border-[#C56A1A]/40"
-      >
-        <Eye size={12} /> Ver preparación
-      </button>
+      <p className="mt-2 text-[11px] text-[#6B5A50]">
+        Faltantes: {card.missing} · Score IA: {card.aiScore}%
+      </p>
+      <div className="mt-2 grid gap-1 sm:grid-cols-3">
+        <button
+          type="button"
+          onClick={() => onViewPreparation(day, mealType, card)}
+          className="inline-flex items-center justify-center gap-1 rounded-lg border border-[#E8DDD2] bg-white px-2 py-1 text-[11px] font-semibold text-[#241A14] hover:border-[#C56A1A]/40"
+        >
+          <Eye size={12} /> Ver receta
+        </button>
+        <button
+          type="button"
+          onClick={() => onChangeRecipe(day, mealType)}
+          className="inline-flex items-center justify-center gap-1 rounded-lg border border-[#E8DDD2] bg-white px-2 py-1 text-[11px] font-semibold text-[#241A14] hover:border-[#6D4AFF]/40"
+        >
+          <Wand2 size={12} /> Cambiar receta
+        </button>
+        <button
+          type="button"
+          onClick={() => onRegenerateMeal(day, mealType)}
+          className="inline-flex items-center justify-center gap-1 rounded-lg border border-[#E8DDD2] bg-white px-2 py-1 text-[11px] font-semibold text-[#241A14] hover:border-[#C56A1A]/40"
+        >
+          <RefreshCw size={12} /> Regenerar comida
+        </button>
+      </div>
     </article>
   );
 }

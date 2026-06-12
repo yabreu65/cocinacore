@@ -12,6 +12,7 @@ import {
   TenantContext,
   TrialState,
 } from './types';
+import { serverLogger } from '@/lib/serverLogger';
 
 export interface RagEngineConfig {
   chunker: PdfChunkerService;
@@ -19,8 +20,6 @@ export interface RagEngineConfig {
   generator: RecipeGenerationService;
   dbAdapter: SemanticSearchService;
 }
-
-
 
 export class TrialSoftBlockError extends Error {
   constructor(action: 'generate recipes' | 'upload PDFs') {
@@ -46,9 +45,7 @@ function normalizeArray(values?: string[]): string[] {
     return [];
   }
 
-  return values
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0);
+  return values.map((value) => value.trim()).filter((value) => value.length > 0);
 }
 
 function resolveRestrictions(
@@ -188,35 +185,42 @@ export class RagEngine {
       throw new Error('No cookbook text provided for ingestion.');
     }
 
-    console.log(`[RAG Engine] Starting ingestion for book: ${metadata.book_title || metadata.book_id}`);
+    serverLogger.info('rag_engine.ingestion.start', {
+      bookId: metadata.book_id,
+      bookTitle: metadata.book_title,
+    });
 
     // 1. Chunk the PDF text
     const chunks = this.chunker.chunkPdfText(text, metadata, options);
     if (chunks.length === 0) {
-      console.log('[RAG Engine] No viable chunks extracted from the text.');
+      serverLogger.info('rag_engine.ingestion.no_chunks', { bookId: metadata.book_id });
       return 0;
     }
 
-    console.log(`[RAG Engine] Extracted ${chunks.length} chunks. Generating embeddings...`);
+    serverLogger.info('rag_engine.ingestion.embeddings_generating', { chunkCount: chunks.length });
 
     // 2. Extract contents for batch embedding request
-    const contents = chunks.map(c => c.content);
-    
+    const contents = chunks.map((c) => c.content);
+
     // Batch embeddings to prevent multiple roundtrips and respect rate limits
     const embeddings = await this.embedder.generateEmbeddings(contents);
-    
+
     // 3. Attach embeddings back to chunk records
     const fullyConfiguredChunks = chunks.map((chunk, idx) => ({
       ...chunk,
-      embedding: embeddings[idx]
+      embedding: embeddings[idx],
     }));
 
-    console.log('[RAG Engine] Embeddings successfully generated. Uploading to database...');
+    serverLogger.info('rag_engine.ingestion.uploading', {
+      chunkCount: fullyConfiguredChunks.length,
+    });
 
     // 4. Save to Database
     await this.dbAdapter.saveChunks(fullyConfiguredChunks);
 
-    console.log(`[RAG Engine] Ingestion completed. ${fullyConfiguredChunks.length} chunks stored safely.`);
+    serverLogger.info('rag_engine.ingestion.complete', {
+      chunkCount: fullyConfiguredChunks.length,
+    });
     return fullyConfiguredChunks.length;
   }
 
@@ -251,23 +255,21 @@ export class RagEngine {
     // A clean conceptual query helps text-embedding-004 align closer with recipes and preparations
     const searchQuery = buildRecipeSearchQuery(ingredients, restrictions);
 
-    console.log(
-      `[RAG Engine] Generating query embedding for ingredients: "${ingredients.join(', ') || 'none'}"...`
-    );
+    serverLogger.info('rag_engine.query_embedding', { ingredientCount: ingredients.length });
     const queryEmbedding = await this.embedder.generateEmbedding(searchQuery);
 
-    console.log('[RAG Engine] Querying Supabase match_chunks...');
+    serverLogger.info('rag_engine.querying_match_chunks');
     // 2. Fetch matched chunks from cookbooks
     const matchedChunks = await this.dbAdapter.searchChunks(queryEmbedding, {
       matchThreshold: options.matchThreshold ?? 0.35, // Relaxed threshold for ingredient overlaps
       matchCount: options.matchCount ?? 6, // High chunk context to capture multiple ingredients/steps
-      bookIds: options.bookIds
+      bookIds: options.bookIds,
     });
 
-    console.log(`[RAG Engine] Found ${matchedChunks.length} matching cookbook context chunks.`);
+    serverLogger.info('rag_engine.match_chunks_found', { matchCount: matchedChunks.length });
 
     // 3. Generate recipe grounded strictly in the matched context
-    console.log('[RAG Engine] Orchestrating recipe generation with Gemini 1.5 Flash...');
+    serverLogger.info('rag_engine.recipe_generation_start');
     const promptInput: RecipeGenerationPromptInput = {
       ingredients,
       restrictions,
@@ -275,7 +277,7 @@ export class RagEngine {
 
     const recipe = await this.generator.generateRecipe(promptInput, matchedChunks, {
       temperature: options.temperature,
-      maxOutputTokens: options.maxOutputTokens
+      maxOutputTokens: options.maxOutputTokens,
     });
 
     const citations = matchedChunks.map(toCitation);
