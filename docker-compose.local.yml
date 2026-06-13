@@ -1,12 +1,11 @@
-# Local development stack for CocinaCore (PostgreSQL direct + Redis)
+# Local production-parity stack for CocinaCore (PostgreSQL direct + Redis + app)
 #
 # Usage:
 #   docker compose -f docker-compose.local.yml up -d
-#   cd frontend
-#   npm install
-#   npm run db:migrate
-#   npm run db:seed
-#   npm run dev
+#   docker compose -f docker-compose.local.yml exec app npm run db:migrate
+#   docker compose -f docker-compose.local.yml exec app node scripts/bootstrap-owner.js \
+#     owner@cocinacore.local "Owner Local" "ChangeMe123!"
+#   open http://localhost:3000
 #
 # To stop:
 #   docker compose -f docker-compose.local.yml down
@@ -26,6 +25,11 @@ services:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - cocinacore
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U cocinacore_user -d cocinacore_local_db"]
       interval: 5s
@@ -42,15 +46,54 @@ services:
       - redis_data:/data
     networks:
       - cocinacore
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 10
 
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cocinacore_app_local
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      # These override .env.local values because the app must talk to services
+      # by their Docker network hostnames, not localhost.
+      DATABASE_URL: postgresql://cocinacore_user:cocinacore_password@postgres:5432/cocinacore_local_db
+      REDIS_URL: redis://redis:6379
+      LOCAL_UPLOAD_DIR: /app/uploads
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: 1
+    env_file:
+      - ./frontend/.env.local
+    volumes:
+      - uploads_data:/app/uploads
+    networks:
+      - cocinacore
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   redis_data:
+  uploads_data:
 
 networks:
   cocinacore:

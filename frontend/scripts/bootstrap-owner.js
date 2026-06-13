@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* eslint-disable no-console */
+/* eslint-disable @typescript-eslint/no-require-imports */
 /**
  * Bootstraps the first tenant and owner user.
  *
@@ -7,8 +7,15 @@
  *   node scripts/bootstrap-owner.js owner@example.com "Owner Name" "SecurePassword123!"
  */
 
+const path = require('path');
 const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
+
+try {
+  require('dotenv').config({ path: path.resolve(__dirname, '../.env.local') });
+} catch {
+  // dotenv is a devDependency; in Docker/env-injected environments it is not needed.
+}
 
 function getDatabaseUrl() {
   const url = process.env.DATABASE_URL;
@@ -36,6 +43,15 @@ async function main() {
 
   try {
     await client.query('begin');
+
+    const existingPlatformOwners = await client.query(
+      'select count(*)::int as count from public.platform_owners'
+    );
+    if ((existingPlatformOwners.rows[0]?.count ?? 0) > 0) {
+      throw new Error(
+        'Platform owner already exists. Use the application-managed flow for additional access changes.'
+      );
+    }
 
     const tenantResult = await client.query(
       `insert into public.tenants (name, tenant_type, trial_started_at, trial_ends_at)

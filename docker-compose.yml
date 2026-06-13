@@ -10,6 +10,11 @@ services:
       - redis_data:/data
     networks:
       - cocinacore
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   redis_data:

@@ -48,6 +48,9 @@ Use it as the allow/deny proof for same-tenant access and denied cross-tenant ac
 The current Compose file is intentionally small: it starts auxiliary services only.
 Run the Next.js app directly from `frontend/` during local development.
 
+Docker container logs are configured with `json-file` rotation in Compose to avoid
+unbounded growth inside `Docker.raw`.
+
 ```bash
 docker compose up -d
 cd frontend

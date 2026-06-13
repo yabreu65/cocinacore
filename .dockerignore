@@ -1,10 +1,16 @@
 node_modules
+**/node_modules
 npm-debug.log
 .next
+**/.next
 out
+coverage
+**/coverage
+*.tsbuildinfo
+playwright-report
+test-results
 .env.local
 .env.*.local
-coverage
 *.log
 .DS_Store
 .git
