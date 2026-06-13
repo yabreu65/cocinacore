@@ -1,7 +1,3 @@
-'use client';
-
-import Link from 'next/link';
-import { ReactNode, useEffect, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -12,49 +8,17 @@ import {
   Sparkles,
   Users,
 } from 'lucide-react';
-import { getSupabaseBrowserClient } from '@/lib/supabaseClient';
+import Link from 'next/link';
+import { redirect } from 'next/navigation';
+import { getCurrentUser } from '@/lib/auth/server';
+import { query } from '@/lib/db';
+import { isPlatformOwner } from '@/lib/db/repositories/platformOwnerRepository';
 
-type OwnerOverview = {
-  tenants_total: number;
-  users_total: number;
-  global_books_total: number;
-  global_pdfs_total: number;
-  global_chunks_total: number;
-  premium_reports_pending: number;
-  trials_active: number;
-  trials_expired: number;
-};
+export const dynamic = 'force-dynamic';
 
-const quickSections = [
-  {
-    href: '/owner/global-books',
-    title: 'Global Books',
-    description: 'Catálogo global compartido.',
-  },
-  {
-    href: '/owner/global-pdfs',
-    title: 'Global PDFs',
-    description: 'Documentos globales del sistema.',
-  },
-  {
-    href: '/owner/indexing',
-    title: 'Indexación',
-    description: 'Estado y cobertura de chunks/embeddings.',
-  },
-  {
-    href: '/owner/premium-moderation',
-    title: 'Moderación Premium',
-    description: 'Reportes pendientes y señal comunitaria.',
-  },
-  { href: '/owner/tenants', title: 'Tenants', description: 'Visión general multi-tenant.' },
-  {
-    href: '/owner/system-health',
-    title: 'System Health',
-    description: 'Estado operativo de módulos clave.',
-  },
-];
+type CountRow = { count: string };
 
-function metricCard(label: string, value: number, icon: ReactNode) {
+function metricCard(label: string, value: number, icon: React.ReactNode) {
   return (
     <article className="rounded-2xl border border-[#E8DDD2] bg-white/75 p-4 premium-shadow">
       <p className="flex items-center gap-2 text-sm text-[#6B5A50]">
@@ -68,51 +32,27 @@ function metricCard(label: string, value: number, icon: ReactNode) {
   );
 }
 
-export default function OwnerOverviewPage() {
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [metrics, setMetrics] = useState<OwnerOverview>({
-    tenants_total: 0,
-    users_total: 0,
-    global_books_total: 0,
-    global_pdfs_total: 0,
-    global_chunks_total: 0,
-    premium_reports_pending: 0,
-    trials_active: 0,
-    trials_expired: 0,
-  });
+export default async function OwnerOverviewPage() {
+  const user = await getCurrentUser();
+  if (!user) {
+    redirect('/login');
+  }
 
-  useEffect(() => {
-    const load = async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const supabase = getSupabaseBrowserClient();
-        const { data, error: rpcError } = await supabase.rpc('get_owner_overview_metrics');
-        if (rpcError) throw rpcError;
+  if (!(await isPlatformOwner(user.id))) {
+    redirect('/app');
+  }
 
-        const payload = data as Partial<OwnerOverview> | null;
-        setMetrics({
-          tenants_total: payload?.tenants_total ?? 0,
-          users_total: payload?.users_total ?? 0,
-          global_books_total: payload?.global_books_total ?? 0,
-          global_pdfs_total: payload?.global_pdfs_total ?? 0,
-          global_chunks_total: payload?.global_chunks_total ?? 0,
-          premium_reports_pending: payload?.premium_reports_pending ?? 0,
-          trials_active: payload?.trials_active ?? 0,
-          trials_expired: payload?.trials_expired ?? 0,
-        });
-      } catch (caughtError) {
-        setError(
-          caughtError instanceof Error ? caughtError.message : 'No se pudo cargar owner overview.'
-        );
-      } finally {
-        setLoading(false);
-      }
-    };
+  const [tenants, users, books, pdfs, chunks, reports, owners] = await Promise.all([
+    query<CountRow>('select count(*)::text as count from public.tenants'),
+    query<CountRow>('select count(*)::text as count from public.users'),
+    query<CountRow>('select count(*)::text as count from public.global_books'),
+    query<CountRow>('select count(*)::text as count from public.global_pdf_library'),
+    query<CountRow>('select count(*)::text as count from public.book_chunks where global_book_id is not null'),
+    query<CountRow>('select count(*)::text as count from public.premium_review_reports'),
+    query<CountRow>('select count(*)::text as count from public.platform_owners'),
+  ]);
 
-    void load();
-  }, []);
+  const toNumber = (value: string | undefined): number => Number(value ?? '0');
 
   return (
     <section className="space-y-4">
@@ -122,39 +62,34 @@ export default function OwnerOverviewPage() {
         </p>
         <h2 className="mt-3 text-2xl font-semibold text-[#241A14]">Owner Console Overview</h2>
         <p className="mt-1 text-sm text-[#6B5A50]">
-          Supervisá catálogos globales, moderación premium, tenants y salud general sin mezclar
-          permisos de tenant.
+          Resumen mínimo ya desacoplado de Supabase para continuar la migración.
         </p>
       </article>
 
-      {error ? (
-        <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-          {error}
-        </p>
-      ) : null}
-
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {metricCard('Tenants totales', metrics.tenants_total, <Building2 size={14} />)}
-        {metricCard('Usuarios totales', metrics.users_total, <Users size={14} />)}
-        {metricCard('Global books', metrics.global_books_total, <Library size={14} />)}
-        {metricCard('Global PDFs', metrics.global_pdfs_total, <FileText size={14} />)}
-        {metricCard('Chunks globales', metrics.global_chunks_total, <Database size={14} />)}
-        {metricCard(
-          'Reports premium pendientes',
-          metrics.premium_reports_pending,
-          <AlertTriangle size={14} />
-        )}
-        {metricCard('Trials activos', metrics.trials_active, <Activity size={14} />)}
-        {metricCard('Trials vencidos', metrics.trials_expired, <Activity size={14} />)}
+        {metricCard('Tenants totales', toNumber(tenants.rows[0]?.count), <Building2 size={14} />)}
+        {metricCard('Usuarios totales', toNumber(users.rows[0]?.count), <Users size={14} />)}
+        {metricCard('Global books', toNumber(books.rows[0]?.count), <Library size={14} />)}
+        {metricCard('Global PDFs', toNumber(pdfs.rows[0]?.count), <FileText size={14} />)}
+        {metricCard('Chunks globales', toNumber(chunks.rows[0]?.count), <Database size={14} />)}
+        {metricCard('Reports premium', toNumber(reports.rows[0]?.count), <AlertTriangle size={14} />)}
+        {metricCard('Owners registrados', toNumber(owners.rows[0]?.count), <Activity size={14} />)}
       </div>
 
       <article className="rounded-2xl border border-[#E8DDD2] bg-white/80 p-4 premium-shadow">
         <h2 className="text-lg font-semibold">Secciones rápidas</h2>
         <p className="mt-1 text-sm text-[#6B5A50]">
-          Navegación owner en modo solo lectura para esta fase.
+          Varias acciones siguen en reconstrucción, pero las vistas ya compilan sin Supabase.
         </p>
         <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {quickSections.map((section) => (
+          {[
+            { href: '/owner/global-books', title: 'Global Books', description: 'Catálogo global compartido.' },
+            { href: '/owner/global-pdfs', title: 'Global PDFs', description: 'Documentos globales del sistema.' },
+            { href: '/owner/indexing', title: 'Indexación', description: 'Estado y cobertura de chunks.' },
+            { href: '/owner/premium-moderation', title: 'Moderación Premium', description: 'Revisión de reportes.' },
+            { href: '/owner/tenants', title: 'Tenants', description: 'Visión general multi-tenant.' },
+            { href: '/owner/system-health', title: 'System Health', description: 'Salud operativa.' },
+          ].map((section) => (
             <Link
               key={section.href}
               href={section.href}
@@ -166,8 +101,6 @@ export default function OwnerOverviewPage() {
           ))}
         </div>
       </article>
-
-      {loading ? <p className="text-sm text-[#6B5A50]">Cargando métricas owner...</p> : null}
     </section>
   );
 }

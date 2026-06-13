@@ -2,14 +2,15 @@ import { NextRequest, NextResponse } from 'next/server';
 import { serverLogger } from '@/lib/serverLogger';
 import { validateRequest, MealPlanSchema, type MealPlanBody } from '@/lib/validation';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { getGeminiApiKey, getGeminiModel } from '@/lib/ai/gemini-config';
 
 const AI_REQUEST_TIMEOUT_MS = 60_000;
 
 export async function POST(request: NextRequest) {
   const startedAt = Date.now();
   const requestId = crypto.randomUUID();
-  const apiKey = process.env.GEMINI_API_KEY;
-  const model = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash';
+  const apiKey = getGeminiApiKey();
+  const model = getGeminiModel();
   const openRouterApiKey = process.env.AI_API_KEY ?? process.env.OPENROUTER_API_KEY;
   const prefersOpenRouter =
     process.env.AI_PROVIDER?.toLowerCase() === 'openrouter' ||
@@ -43,13 +44,13 @@ export async function POST(request: NextRequest) {
   }
 
   if (!apiKey && !openRouterApiKey) {
-    serverLogger.error('meal_plan.misconfigured', { requestId });
+    serverLogger.warn('meal_plan.misconfigured', { requestId });
     return NextResponse.json(
       {
         error:
           'No hay proveedor IA configurado. Definí GEMINI_API_KEY o AI_API_KEY (u OPENROUTER_API_KEY).',
       },
-      { status: 500 }
+      { status: 503 }
     );
   }
 
@@ -320,5 +321,5 @@ Reglas:
     durationMs: Date.now() - startedAt,
     contentLength: content.length,
   });
-  return NextResponse.json({ content });
+  return NextResponse.json({ content, plan: content });
 }

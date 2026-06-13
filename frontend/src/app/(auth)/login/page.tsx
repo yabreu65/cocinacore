@@ -1,10 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { FormEvent, useEffect, useState } from 'react';
+import { type FormEvent, useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useRouter } from 'next/navigation';
-import { getSupabaseBrowserClient } from '@/lib/supabaseClient';
 import { humanCopy } from '@/lib/copy';
 import { mapAuthError } from '@/lib/auth/errors';
 import { getSafeRedirectPath } from '@/lib/auth/safeRedirect';
@@ -40,7 +39,9 @@ export default function LoginPage() {
 
   useEffect(() => {
     const error = new URLSearchParams(window.location.search).get('error');
-    if (error) setErrorMessage(error);
+    if (error) {
+      setErrorMessage(error);
+    }
   }, []);
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -59,10 +60,11 @@ export default function LoginPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
       });
-      const body = (await response.json().catch(() => ({}))) as { error?: string };
+
+      const body = (await response.json().catch(() => null)) as { error?: string } | null;
 
       if (!response.ok) {
-        setErrorMessage(body.error ?? mapAuthError(null, 'login'));
+        setErrorMessage(body?.error ?? mapAuthError(null, 'login'));
         return;
       }
 
@@ -83,33 +85,14 @@ export default function LoginPage() {
     setOauthLoading(provider);
 
     if (!oauthTermsAccepted) {
-      setErrorMessage('Aceptá términos y privacidad para continuar con OAuth.');
+      setErrorMessage('Aceptá términos y privacidad para continuar.');
       setOauthLoading(null);
       return;
     }
 
-    try {
-      document.cookie = `cc_terms_accepted_at=${encodeURIComponent(
-        new Date().toISOString()
-      )}; path=/; max-age=600; samesite=lax`;
-      const supabase = getSupabaseBrowserClient();
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider,
-        options: {
-          redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(
-            getSafeRedirectPath(new URLSearchParams(window.location.search).get('next'))
-          )}`,
-        },
-      });
-
-      if (error) {
-        setErrorMessage(mapAuthError(error, 'oauth'));
-      }
-    } catch (error) {
-      setErrorMessage(mapAuthError(error, 'oauth'));
-    } finally {
-      setOauthLoading(null);
-    }
+    await Promise.resolve();
+    setErrorMessage('Funcionalidad en reconstrucción. Usá email y contraseña por ahora.');
+    setOauthLoading(null);
   };
 
   return (
@@ -250,16 +233,16 @@ export default function LoginPage() {
                 </Link>
               </div>
 
-              {errorMessage && (
+              {errorMessage ? (
                 <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">
                   {errorMessage}
                 </p>
-              )}
-              {successMessage && (
+              ) : null}
+              {successMessage ? (
                 <p className="rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
                   {successMessage}
                 </p>
-              )}
+              ) : null}
 
               <button
                 type="submit"
@@ -291,7 +274,7 @@ export default function LoginPage() {
             <div className="grid gap-3 sm:grid-cols-2">
               <button
                 type="button"
-                onClick={() => handleOAuth('google')}
+                onClick={() => void handleOAuth('google')}
                 disabled={oauthLoading !== null}
                 className="h-11 rounded-xl border border-[#E8DDD2] bg-white font-semibold text-[#3C2E24] transition hover:border-[#C56A1A] disabled:opacity-70"
               >
@@ -299,20 +282,13 @@ export default function LoginPage() {
               </button>
               <button
                 type="button"
-                onClick={() => handleOAuth('github')}
+                onClick={() => void handleOAuth('github')}
                 disabled={oauthLoading !== null}
-                className="h-11 rounded-xl border border-[#E8DDD2] bg-white font-semibold text-[#3C2E24] transition hover:border-[#6D4AFF] disabled:opacity-70"
+                className="h-11 rounded-xl border border-[#E8DDD2] bg-white font-semibold text-[#3C2E24] transition hover:border-[#C56A1A] disabled:opacity-70"
               >
                 {oauthLoading === 'github' ? 'Conectando...' : 'GitHub'}
               </button>
             </div>
-
-            <p className="mt-6 text-center text-sm text-[#6B5A50]">
-              ¿No tienes cuenta?{' '}
-              <Link href="/signup" className="font-semibold text-[#A55412] hover:text-[#C56A1A]">
-                Crear cuenta
-              </Link>
-            </p>
           </motion.div>
         </section>
       </div>

@@ -1,10 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { FormEvent, useMemo, useState } from 'react';
+import { type FormEvent, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { getSupabaseBrowserClient } from '@/lib/supabaseClient';
 import { humanCopy } from '@/lib/copy';
 import { mapAuthError } from '@/lib/auth/errors';
 
@@ -51,7 +50,7 @@ export default function SignupPage() {
     const email = String(formData.get('email') ?? '').trim();
     const password = String(formData.get('password') ?? '');
     const confirmPassword = String(formData.get('confirmPassword') ?? '');
-    const termsAccepted = formData.get('termsAccepted') === 'on';
+    const acceptedTerms = formData.get('termsAccepted') === 'on';
 
     if (fullName.length < 3) {
       setErrorMessage('Ingresá tu nombre completo.');
@@ -66,40 +65,37 @@ export default function SignupPage() {
     }
 
     try {
-      const signUpPromise = fetch('/api/auth/signup', {
+      const response = await fetch('/api/auth/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fullName, email, password, confirmPassword, termsAccepted }),
+        body: JSON.stringify({
+          fullName,
+          email,
+          password,
+          confirmPassword,
+          termsAccepted: acceptedTerms,
+        }),
       });
 
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        window.setTimeout(
-          () =>
-            reject(
-              new Error('Timeout creando la cuenta. Verificá que Supabase local esté activo.')
-            ),
-          15000
-        );
-      });
-
-      const response = await Promise.race([signUpPromise, timeoutPromise]);
-      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      const body = (await response.json().catch(() => null)) as { error?: string } | null;
 
       if (!response.ok) {
-        setErrorMessage(body.error ?? mapAuthError(null, 'signup'));
+        setErrorMessage(body?.error ?? mapAuthError(null, 'signup'));
         return;
       }
 
       if (response.headers.get('X-Auth-Has-Session') === 'true') {
         setSuccessMessage('Cuenta creada. Redirigiendo al dashboard...');
         event.currentTarget.reset();
+        setTermsAccepted(false);
         router.push('/app');
         router.refresh();
         return;
       }
 
-      setSuccessMessage('Cuenta creada. Revisá tu correo para confirmar el registro.');
+      setSuccessMessage('Cuenta creada correctamente. Ya podés iniciar sesión.');
       event.currentTarget.reset();
+      setTermsAccepted(false);
     } catch (error) {
       setErrorMessage(mapAuthError(error, 'signup'));
     } finally {
@@ -118,26 +114,9 @@ export default function SignupPage() {
       return;
     }
 
-    try {
-      document.cookie = `cc_terms_accepted_at=${encodeURIComponent(
-        new Date().toISOString()
-      )}; path=/; max-age=600; samesite=lax`;
-      const supabase = getSupabaseBrowserClient();
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider,
-        options: {
-          redirectTo: `${window.location.origin}/auth/callback?next=/app`,
-        },
-      });
-
-      if (error) {
-        setErrorMessage(mapAuthError(error, 'oauth'));
-      }
-    } catch (error) {
-      setErrorMessage(mapAuthError(error, 'oauth'));
-    } finally {
-      setOauthLoading(null);
-    }
+    await Promise.resolve();
+    setErrorMessage('Funcionalidad en reconstrucción. Creá la cuenta con email por ahora.');
+    setOauthLoading(null);
   };
 
   return (
@@ -278,16 +257,16 @@ export default function SignupPage() {
                 Acepto términos y privacidad
               </label>
 
-              {errorMessage && (
+              {errorMessage ? (
                 <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">
                   {errorMessage}
                 </p>
-              )}
-              {successMessage && (
+              ) : null}
+              {successMessage ? (
                 <p className="rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
                   {successMessage}
                 </p>
-              )}
+              ) : null}
 
               <button
                 type="submit"
@@ -309,7 +288,7 @@ export default function SignupPage() {
             <div className="grid gap-3 sm:grid-cols-2">
               <button
                 type="button"
-                onClick={() => handleOAuth('google')}
+                onClick={() => void handleOAuth('google')}
                 disabled={oauthLoading !== null}
                 className="h-11 rounded-xl border border-[#E8DDD2] bg-white font-semibold text-[#3C2E24] transition hover:border-[#C56A1A] disabled:opacity-70"
               >
@@ -317,15 +296,15 @@ export default function SignupPage() {
               </button>
               <button
                 type="button"
-                onClick={() => handleOAuth('github')}
+                onClick={() => void handleOAuth('github')}
                 disabled={oauthLoading !== null}
-                className="h-11 rounded-xl border border-[#E8DDD2] bg-white font-semibold text-[#3C2E24] transition hover:border-[#6D4AFF] disabled:opacity-70"
+                className="h-11 rounded-xl border border-[#E8DDD2] bg-white font-semibold text-[#3C2E24] transition hover:border-[#C56A1A] disabled:opacity-70"
               >
                 {oauthLoading === 'github' ? 'Conectando...' : 'GitHub'}
               </button>
             </div>
 
-            <p className="mt-6 text-center text-sm text-[#6B5A50]">
+            <p className="mt-5 text-center text-sm text-[#6B5A50]">
               ¿Ya tienes cuenta?{' '}
               <Link href="/login" className="font-semibold text-[#A55412] hover:text-[#C56A1A]">
                 Iniciar sesión

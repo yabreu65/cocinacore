@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { serverLogger } from '@/lib/serverLogger';
+import { getGeminiApiKey, getGeminiModel } from '@/lib/ai/gemini-config';
 import { generateRecipeWithOpenRouter } from '@/lib/ai/openrouter';
 import {
   buildRecipeCacheKey,
@@ -41,8 +42,8 @@ function inferTitleFromRecipe(recipe: string): string {
 export async function POST(request: NextRequest) {
   const startedAt = Date.now();
   const requestId = crypto.randomUUID();
-  const apiKey = process.env.GEMINI_API_KEY;
-  const model = process.env.GEMINI_MODEL?.trim() || 'gemini-2.5-flash';
+  const apiKey = getGeminiApiKey();
+  const model = getGeminiModel();
 
   // 1. Zod validation
   const validation = await validateRequest(request, RecipeGenerateSchema);

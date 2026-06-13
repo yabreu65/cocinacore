@@ -1,13 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { FormEvent, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { type FormEvent, useState } from 'react';
 import { ResetPasswordSchema } from '@/lib/auth/schemas';
-import { getSupabaseBrowserClient } from '@/lib/supabaseClient';
 
 export default function ResetPasswordPage() {
-  const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -23,41 +20,18 @@ export default function ResetPasswordPage() {
       password: formData.get('password'),
       confirmPassword: formData.get('confirmPassword'),
     });
+
     if (!parsed.success) {
       setErrorMessage(parsed.error.issues[0]?.message ?? 'Revisá los datos ingresados.');
       setLoading(false);
       return;
     }
 
-    try {
-      const supabase = getSupabaseBrowserClient();
-      const { data } = await supabase.auth.getSession();
-      const token = data.session?.access_token;
-      if (!token) {
-        setErrorMessage('El enlace no es válido o expiró. Pedí uno nuevo.');
-        return;
-      }
-
-      const response = await fetch('/api/auth/password-reset/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify(parsed.data),
-      });
-      const body = (await response.json().catch(() => ({}))) as { error?: string };
-
-      if (!response.ok) {
-        setErrorMessage(body.error ?? 'No pudimos actualizar la contraseña.');
-        return;
-      }
-
-      setSuccessMessage('Contraseña actualizada. Redirigiendo al login...');
-      await supabase.auth.signOut();
-      window.setTimeout(() => router.push('/login'), 900);
-    } catch {
-      setErrorMessage('No pudimos conectar con autenticación. Intentá nuevamente.');
-    } finally {
-      setLoading(false);
-    }
+    await Promise.resolve();
+    setSuccessMessage(
+      'Funcionalidad en reconstrucción. Pedí soporte o usa el login cuando terminemos este flujo.'
+    );
+    setLoading(false);
   };
 
   return (
@@ -66,7 +40,7 @@ export default function ResetPasswordPage() {
         <p className="text-xs font-bold tracking-[0.15em] text-[#C56A1A]">COCINACORE</p>
         <h1 className="mt-3 text-3xl font-semibold text-[#241A14]">Nueva contraseña</h1>
         <p className="mt-2 text-sm text-[#6B5A50]">
-          Elegí una contraseña segura para volver a ingresar a tu cuenta.
+          Este flujo se está migrando a autenticación directa con PostgreSQL.
         </p>
 
         <form onSubmit={onSubmit} className="mt-6 grid gap-4" noValidate>
@@ -91,26 +65,28 @@ export default function ResetPasswordPage() {
             />
           </label>
 
-          {errorMessage && <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{errorMessage}</p>}
-          {successMessage && (
+          {errorMessage ? (
+            <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{errorMessage}</p>
+          ) : null}
+          {successMessage ? (
             <p className="rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
               {successMessage}
             </p>
-          )}
+          ) : null}
 
           <button
             type="submit"
             disabled={loading}
             className="h-11 rounded-xl bg-[#C56A1A] font-semibold text-white transition hover:bg-[#A55412] disabled:opacity-70"
           >
-            {loading ? 'Actualizando...' : 'Actualizar contraseña'}
+            {loading ? 'Procesando...' : 'Guardar contraseña'}
           </button>
         </form>
 
         <p className="mt-6 text-center text-sm text-[#6B5A50]">
-          ¿El enlace expiró?{' '}
-          <Link href="/forgot-password" className="font-semibold text-[#A55412] hover:text-[#C56A1A]">
-            Pedí uno nuevo
+          ¿Necesitas volver?{' '}
+          <Link href="/login" className="font-semibold text-[#A55412] hover:text-[#C56A1A]">
+            Ir al login
           </Link>
         </p>
       </section>

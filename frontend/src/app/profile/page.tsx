@@ -2,7 +2,19 @@
 
 import Link from 'next/link';
 import { FormEvent, useEffect, useState } from 'react';
-import { getSupabaseBrowserClient } from '@/lib/supabaseClient';
+import { safeFetch } from '@/lib/api';
+
+interface ProfileData {
+  user: {
+    id: string;
+    email: string;
+    fullName: string | null;
+    tenant: { tenantId: string; role: string } | null;
+  };
+  profile: {
+    level: string | null;
+  } | null;
+}
 
 export default function ProfilePage() {
   const [loading, setLoading] = useState(true);
@@ -12,39 +24,18 @@ export default function ProfilePage() {
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [level, setLevel] = useState('');
-  const [tags, setTags] = useState<string[]>([]);
 
   useEffect(() => {
     const load = async () => {
       setLoading(true);
       setError(null);
       try {
-        const supabase = getSupabaseBrowserClient();
-        const { data: authData, error: authError } = await supabase.auth.getUser();
-        if (authError || !authData.user) throw new Error('No hay sesión activa.');
+        const result = await safeFetch<ProfileData>('/api/profile', { credentials: 'same-origin' });
+        if (!result.ok) throw new Error(result.error);
 
-        setEmail(authData.user.email ?? '');
-
-        const [
-          { data: userRow },
-          { data: profileRow },
-          { data: profileTerms },
-          { data: termsRows },
-        ] = await Promise.all([
-          supabase.from('users').select('full_name').eq('id', authData.user.id).maybeSingle(),
-          supabase.from('user_culinary_profiles').select('level').maybeSingle(),
-          supabase.from('user_culinary_profile_terms').select('term_id,preference_type'),
-          supabase.from('culinary_terms').select('id,label').limit(300),
-        ]);
-
-        setFullName(userRow?.full_name ?? '');
-        setLevel(profileRow?.level ?? '');
-
-        const termById = new Map((termsRows ?? []).map((row) => [row.id, row.label]));
-        const labels = (profileTerms ?? [])
-          .map((row) => termById.get(row.term_id))
-          .filter((value): value is string => Boolean(value));
-        setTags(labels);
+        setEmail(result.data.user.email ?? '');
+        setFullName(result.data.user.fullName ?? '');
+        setLevel(result.data.profile?.level ?? '');
       } catch (caughtError) {
         setError(caughtError instanceof Error ? caughtError.message : 'No se pudo cargar perfil.');
       } finally {
@@ -62,34 +53,16 @@ export default function ProfilePage() {
     setMessage(null);
 
     try {
-      const supabase = getSupabaseBrowserClient();
-      const { data: authData, error: authError } = await supabase.auth.getUser();
-      if (authError || !authData.user) throw new Error('No hay sesión activa.');
+      const result = await safeFetch<{ user: { fullName: string | null } }>('/api/profile', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ fullName: fullName.trim(), level: level.trim() }),
+      });
 
-      const { error: userError } = await supabase
-        .from('users')
-        .update({ full_name: fullName.trim() || null })
-        .eq('id', authData.user.id);
-      if (userError) throw userError;
-
-      const { data: userTenantRow, error: tenantError } = await supabase
-        .from('users')
-        .select('tenant_id')
-        .eq('id', authData.user.id)
-        .maybeSingle();
-      if (tenantError || !userTenantRow?.tenant_id)
-        throw new Error('No se encontró tenant del usuario.');
-
-      const { error: profileError } = await supabase.from('user_culinary_profiles').upsert(
-        {
-          user_id: authData.user.id,
-          tenant_id: userTenantRow.tenant_id,
-          level: level.trim() || null,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: 'user_id' }
-      );
-      if (profileError) throw profileError;
+      if (!result.ok) {
+        throw new Error(result.error ?? 'No se pudo guardar perfil.');
+      }
 
       setMessage('Perfil actualizado correctamente.');
     } catch (caughtError) {
@@ -157,24 +130,6 @@ export default function ProfilePage() {
               <option value="Chef">Chef</option>
             </select>
           </label>
-
-          <div>
-            <p className="text-sm font-semibold text-[#6B5A50]">Preferencias detectadas</p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {tags.length > 0 ? (
-                tags.map((tag) => (
-                  <span
-                    key={tag}
-                    className="rounded-full border border-[#E8DDD2] bg-white px-2.5 py-1 text-xs text-[#6B5A50]"
-                  >
-                    {tag}
-                  </span>
-                ))
-              ) : (
-                <span className="text-xs text-[#6B5A50]">Sin etiquetas todavía.</span>
-              )}
-            </div>
-          </div>
 
           <div className="flex flex-wrap gap-2">
             <button

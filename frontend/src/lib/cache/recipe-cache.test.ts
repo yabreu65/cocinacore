@@ -108,13 +108,11 @@ describe('recipe-cache (Redis integration)', () => {
   beforeEach(() => {
     vi.stubEnv('REDIS_URL', 'redis://localhost:6379');
     vi.doMock('ioredis', () => ({
-      // Arrow-function factories can't be used as constructors with `new`.
-      // We define MockRedis as a plain constructor-function so `new Redis(url, opts)` succeeds.
-      default: function MockRedis() {
-        this.get = mockGet;
-        this.set = mockSet;
-        this.del = mockDel;
-        this.connect = vi.fn().mockResolvedValue(undefined);
+      default: class MockRedis {
+        get = mockGet;
+        set = mockSet;
+        del = mockDel;
+        connect = vi.fn().mockResolvedValue(undefined);
       },
     }));
   });

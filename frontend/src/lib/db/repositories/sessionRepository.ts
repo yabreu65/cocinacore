@@ -1,9 +1,20 @@
-import crypto from 'crypto';
 import { query, mapSingleRow } from '@/lib/db';
 import { SessionRow } from '@/lib/db/types';
 
-export function hashSessionToken(token: string): string {
-  return crypto.createHash('sha256').update(token).digest('hex');
+export async function hashSessionToken(token: string): Promise<string> {
+  // Use Web Crypto API for Edge compatibility.
+  if (typeof crypto !== 'undefined' && 'subtle' in crypto) {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(token);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    return Array.from(new Uint8Array(hashBuffer))
+      .map((byte) => byte.toString(16).padStart(2, '0'))
+      .join('');
+  }
+
+  // Fallback for Node.js script contexts (bootstrap, migrations) where Web Crypto is not available.
+  const cryptoModule = await import('crypto');
+  return cryptoModule.createHash('sha256').update(token).digest('hex');
 }
 
 export async function createSession(

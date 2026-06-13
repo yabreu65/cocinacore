@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { requiresPasswordMfa } from '@/lib/auth/guards';
 import type { AuthState, AuthUser, MfaState, TenantContext } from '@/lib/auth/types';
+import { safeFetch } from '@/lib/api';
 
 const initialState: AuthState = {
   user: null,
@@ -25,18 +26,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     async function loadAuthState() {
       try {
-        const response = await fetch('/api/auth/session', {
+        const result = await safeFetch<{ user: AuthUser | null }>('/api/auth/session', {
           credentials: 'same-origin',
         });
-        const data: { user: AuthUser | null } = await response.json();
-        const user = data.user ?? null;
+        const user = result.ok ? result.data.user ?? null : null;
         const tenant: TenantContext | null = user?.tenant ?? null;
 
         let mfa: MfaState = { assuranceLevel: null, required: false, verified: false };
         if (user && tenant?.role) {
           mfa = {
             assuranceLevel: toMfaAssuranceLevel(null),
-            required: requiresPasswordMfa(tenant.role),
+            required: requiresPasswordMfa(),
             verified: false,
           };
         }
@@ -55,6 +55,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     void loadAuthState();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   return <AuthContext.Provider value={state}>{children}</AuthContext.Provider>;

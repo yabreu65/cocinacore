@@ -1,5 +1,5 @@
 import { PoolClient } from 'pg';
-import { query, mapSingleRow, transaction } from '@/lib/db';
+import { query, mapSingleRow } from '@/lib/db';
 import { UserRow, TenantRole } from '@/lib/db/types';
 
 interface CreateUserInput {
@@ -13,7 +13,7 @@ interface CreateUserInput {
 }
 
 interface UpdateUserInput {
-  fullName?: string;
+  fullName?: string | null;
   onboardingCompleted?: boolean;
   termsAcceptedAt?: string;
   termsVersion?: string;

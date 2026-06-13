@@ -1,7 +1,7 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { buildLoginRedirect, isPrivilegedRole } from '@/lib/auth/guards';
 import type { TenantRole } from '@/lib/auth/types';
-import { getSessionFromRequest } from '@/lib/auth/session';
+import { getSessionCookieName, verifySessionToken } from '@/lib/auth/session-edge';
 
 interface UserProfileForGuard {
   role: TenantRole;
@@ -83,8 +83,9 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  const session = await getSessionFromRequest(request);
-  const user = session?.user ?? null;
+  const token = request.cookies.get(getSessionCookieName())?.value;
+  const session = token ? await verifySessionToken(token) : null;
+  const user = session ?? null;
 
   // No authenticated user → deny access
   if (!user) {
@@ -95,18 +96,13 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(buildLoginRedirect(request.url, pathname, search));
   }
 
-  if (isOwnerRoute(pathname) || isTenantPrivilegedRoute(pathname)) {
+  if (isTenantPrivilegedRoute(pathname)) {
     const profile = toUserProfileForGuard({
-      role: user.tenant?.role ?? 'member',
-      tenantId: user.tenant?.tenantId ?? null,
+      role: user.role ?? 'member',
+      tenantId: user.tenantId ?? null,
     });
 
-    let authorized = false;
-    if (isOwnerRoute(pathname)) {
-      authorized = user.tenant?.role === 'owner' || false;
-    } else {
-      authorized = Boolean(profile?.tenantId && isPrivilegedRole(profile.role));
-    }
+    const authorized = Boolean(profile?.tenantId && isPrivilegedRole(profile.role));
 
     if (!authorized) {
       if (isApiRoute(pathname)) {

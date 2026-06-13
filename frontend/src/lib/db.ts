@@ -1,4 +1,4 @@
-import { Pool, PoolClient, QueryResult, types } from 'pg';
+import { Pool, PoolClient, QueryResult, QueryResultRow, types } from 'pg';
 import { serverLogger } from './serverLogger';
 
 // Parse PostgreSQL timestamps as ISO strings to match the existing contracts.
@@ -33,7 +33,7 @@ export function getPool(): Pool {
   return pool;
 }
 
-export async function query<T = unknown>(
+export async function query<T extends QueryResultRow = QueryResultRow>(
   sql: string,
   params?: unknown[]
 ): Promise<QueryResult<T>> {
@@ -52,7 +52,7 @@ export async function query<T = unknown>(
 }
 
 export async function transaction<T>(
-  callback: (client: PoolClient) => Promise<T>
+  callback: (client: PoolClient) => T | Promise<T>
 ): Promise<T> {
   const client = await getPool().connect();
   await client.query('begin');
@@ -68,6 +68,6 @@ export async function transaction<T>(
   }
 }
 
-export function mapSingleRow<T>(result: QueryResult<T>): T | null {
+export function mapSingleRow<T extends QueryResultRow>(result: QueryResult<T>): T | null {
   return result.rows[0] ?? null;
 }

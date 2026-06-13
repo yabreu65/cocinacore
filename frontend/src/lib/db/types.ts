@@ -64,6 +64,60 @@ export interface TenantMembershipRow {
   updated_at: string;
 }
 
+export interface PlatformOwnerRow {
+  user_id: string;
+  created_at: string;
+  requires_manual_review: boolean;
+}
+
+export interface GlobalBookRow {
+  id: string;
+  title: string;
+  author: string | null;
+  description: string | null;
+  cuisine_region: string;
+  cuisine_country: string | null;
+  cuisine_style: string | null;
+  tags: string[];
+  created_at: string;
+}
+
+export interface GlobalPdfLibraryRow {
+  id: string;
+  global_book_id: string;
+  storage_path: string;
+  file_size_bytes: number;
+  page_count: number;
+  checksum_sha256: string;
+  uploaded_by: string;
+  created_at: string;
+}
+
+export interface TenantPdfLibraryRow {
+  id: string;
+  tenant_id: string;
+  tenant_book_id: string | null;
+  storage_path: string;
+  file_size_bytes: number | null;
+  page_count: number | null;
+  checksum_sha256: string | null;
+  created_at: string;
+  ocr_used: boolean;
+  processing_status: PdfProcessingStatus;
+  processed_chunks_count: number | null;
+  processing_error: string | null;
+  uploaded_by: string | null;
+}
+
+export interface TenantBookRow {
+  id: string;
+  tenant_id: string;
+  title: string;
+  author: string | null;
+  description: string | null;
+  created_at: string;
+}
+
 export interface CulinaryDimensionRow {
   id: string;
   key: string;

@@ -1,20 +1,19 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
-import { ReactNode, useEffect, useMemo, useState } from 'react';
+import { usePathname } from 'next/navigation';
+import { type ReactNode, useMemo } from 'react';
 import {
-  Shield,
-  Library,
-  FileText,
-  Database,
-  Flag,
-  Building2,
   Activity,
-  LayoutGrid,
+  Building2,
   ChevronRight,
+  Database,
+  FileText,
+  Flag,
+  LayoutGrid,
+  Library,
+  Shield,
 } from 'lucide-react';
-import { getSupabaseBrowserClient } from '@/lib/supabaseClient';
 
 type OwnerShellProps = {
   children: ReactNode;
@@ -39,80 +38,12 @@ const navItems: OwnerNavItem[] = [
 
 export default function OwnerShell({ children }: OwnerShellProps) {
   const pathname = usePathname();
-  const router = useRouter();
-  const [checkingAccess, setCheckingAccess] = useState(true);
-  const [accessError, setAccessError] = useState<string | null>(null);
-  const [userLabel, setUserLabel] = useState('Owner');
-
-  useEffect(() => {
-    const check = async () => {
-      setCheckingAccess(true);
-      setAccessError(null);
-      try {
-        const supabase = getSupabaseBrowserClient();
-        const { data: authData, error: authError } = await supabase.auth.getUser();
-        if (authError || !authData.user) {
-          router.push('/login');
-          return;
-        }
-
-        const { data: profileRow } = await supabase
-          .from('users')
-          .select('full_name,email')
-          .eq('id', authData.user.id)
-          .maybeSingle();
-
-        setUserLabel(profileRow?.full_name ?? profileRow?.email ?? 'Owner');
-
-        const { data: isOwner, error: ownerError } = await supabase.rpc('is_platform_owner');
-        if (ownerError) throw ownerError;
-        if (!isOwner) {
-          setAccessError('No tienes permisos de platform owner para esta consola.');
-          return;
-        }
-      } catch (caughtError) {
-        setAccessError(
-          caughtError instanceof Error ? caughtError.message : 'No se pudo validar acceso owner.'
-        );
-      } finally {
-        setCheckingAccess(false);
-      }
-    };
-
-    void check();
-  }, [router]);
+  const userLabel = 'Platform owner';
 
   const currentTitle = useMemo(() => {
     const current = navItems.find((item) => pathname === item.href);
     return current?.label ?? 'Consola Owner';
   }, [pathname]);
-
-  if (checkingAccess) {
-    return (
-      <main className="texture-paper flex min-h-screen items-center justify-center bg-[#FAF6F1] text-[#241A14]">
-        <p className="rounded-xl border border-[#E8DDD2] bg-white/80 px-4 py-3 text-sm">
-          Validando acceso owner...
-        </p>
-      </main>
-    );
-  }
-
-  if (accessError) {
-    return (
-      <main className="texture-paper flex min-h-screen items-center justify-center bg-[#FAF6F1] px-4 text-[#241A14]">
-        <section className="w-full max-w-lg rounded-2xl border border-red-200 bg-white/85 p-5">
-          <h1 className="text-xl font-semibold">Acceso denegado</h1>
-          <p className="mt-2 text-sm text-[#6B5A50]">{accessError}</p>
-          <Link
-            href="/app"
-            className="mt-4 inline-flex rounded-xl bg-[#C56A1A] px-3 py-2 text-sm font-semibold text-white"
-          >
-            Volver al dashboard
-          </Link>
-        </section>
-      </main>
-    );
-  }
 
   return (
     <main className="texture-paper min-h-screen bg-[#FAF6F1] text-[#241A14]">

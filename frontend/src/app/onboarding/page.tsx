@@ -1,9 +1,8 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { getSupabaseBrowserClient } from '@/lib/supabaseClient';
-import { motion, AnimatePresence } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
 import { humanCopy } from '@/lib/copy';
 
 type StepKey = 'usage' | 'cuisine' | 'avoid' | 'goals';
@@ -15,30 +14,6 @@ type OnboardingData = {
   goals: string[];
 };
 
-type PreferenceType = 'identity' | 'prefer' | 'avoid' | 'goal';
-
-const STORAGE_KEY = 'cocinacore_onboarding_v1';
-
-const step1 = ['Hogar', 'Chef', 'Familia', 'Estudiante culinario', 'Creador de recetas'];
-const step2 = [
-  'Italiana',
-  'Latina',
-  'Asiática',
-  'Parrilla',
-  'Postres',
-  'Vegana',
-  'Mediterránea',
-  'Mexicana',
-];
-const step3 = ['Sin gluten', 'Sin lactosa', 'Vegano', 'Keto', 'Frutos secos', 'Mariscos'];
-const step4 = [
-  'Aprender cocina',
-  'Organizar recetas',
-  'Cocinar para mi familia',
-  'Usar asistencia culinaria',
-  'Guardar recetas familiares',
-];
-
 const steps: Array<{
   key: StepKey;
   title: string;
@@ -49,27 +24,27 @@ const steps: Array<{
   {
     key: 'usage',
     title: '¿Cómo quieres usar CocinaCore?',
-    subtitle: 'Elegí el perfil que mejor te representa para personalizar la experiencia.',
-    options: step1,
+    subtitle: 'Elegí el perfil principal para personalizar la experiencia.',
+    options: ['Hogar', 'Chef', 'Familia', 'Estudiante culinario', 'Creador de recetas'],
     single: true,
   },
   {
     key: 'cuisine',
-    title: '¿Qué tipo de cocina disfrutas más?',
-    subtitle: 'Podés elegir varias. Esto mejora las recetas sugeridas para vos.',
-    options: step2,
+    title: '¿Qué cocina disfrutas más?',
+    subtitle: 'Podés elegir varias.',
+    options: ['Italiana', 'Latina', 'Asiática', 'Parrilla', 'Postres', 'Vegana'],
   },
   {
     key: 'avoid',
     title: '¿Hay algo que debamos evitar?',
-    subtitle: 'Marcá restricciones o ingredientes a evitar en tus recomendaciones.',
-    options: step3,
+    subtitle: 'Restricciones o ingredientes a evitar.',
+    options: ['Sin gluten', 'Sin lactosa', 'Vegano', 'Keto', 'Frutos secos', 'Mariscos'],
   },
   {
     key: 'goals',
-    title: '¿Qué quieres lograr con CocinaCore?',
-    subtitle: 'Definimos tus objetivos para guiarte mejor desde el dashboard.',
-    options: step4,
+    title: '¿Qué quieres lograr?',
+    subtitle: 'Esto nos ayuda a orientar la experiencia inicial.',
+    options: ['Aprender cocina', 'Organizar recetas', 'Cocinar para mi familia', 'Usar asistencia culinaria'],
   },
 ];
 
@@ -80,150 +55,44 @@ const initialData: OnboardingData = {
   goals: [],
 };
 
-const usageToTermLabel: Record<string, string> = {
-  Hogar: 'Familiar',
-  Chef: 'Chef',
-  Familia: 'Familiar',
-  'Estudiante culinario': 'Intermedio',
-  'Creador de recetas': 'Gourmet',
-};
-
-const avoidToTermLabel: Record<string, string> = {
-  'Sin gluten': 'Sin gluten',
-  'Sin lactosa': 'Sin lactosa',
-  Vegano: 'Vegana',
-  Keto: 'Keto',
-  'Frutos secos': 'Frutos secos',
-  Mariscos: 'Mariscos',
-};
-
-const goalToTermLabel: Record<string, string> = {
-  'Aprender cocina': 'Principiante',
-  'Organizar recetas': 'Casera',
-  'Cocinar para mi familia': 'Familiar',
-  'Usar asistencia culinaria': 'Gourmet',
-  'Guardar recetas familiares': 'Familiar',
-};
-
-function toggleValue(values: string[], option: string, single = false) {
+function toggleValue(values: string[], option: string, single = false): string[] {
   if (single) return [option];
-  return values.includes(option) ? values.filter((v) => v !== option) : [...values, option];
+  return values.includes(option) ? values.filter((value) => value !== option) : [...values, option];
 }
 
 export default function OnboardingPage() {
+  const router = useRouter();
   const [currentStep, setCurrentStep] = useState(0);
   const [data, setData] = useState<OnboardingData>(initialData);
-  const router = useRouter();
-  const [isLoaded, setIsLoaded] = useState(false);
   const [finishing, setFinishing] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
 
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as { currentStep: number; data: OnboardingData };
-        if (parsed?.data) {
-          setData(parsed.data);
-          setCurrentStep(Math.min(Math.max(parsed.currentStep ?? 0, 0), 4));
-        }
-      }
-    } catch {
-      // ignore invalid storage
-    } finally {
-      setIsLoaded(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!isLoaded) return;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ currentStep, data }));
-  }, [currentStep, data, isLoaded]);
-
-  const isFinal = currentStep === 4;
-  const progress = useMemo(() => ((currentStep + 1) / 5) * 100, [currentStep]);
-
+  const isFinal = currentStep === steps.length;
+  const progress = useMemo(() => ((currentStep + 1) / (steps.length + 1)) * 100, [currentStep]);
   const step = steps[currentStep];
-  const selected = !isFinal ? data[step.key] : [];
-
+  const selected = step ? data[step.key] : [];
   const canContinue = isFinal || selected.length > 0;
 
   const finishOnboarding = async () => {
     setFinishing(true);
+    setMessage(null);
+
     try {
-      const supabase = getSupabaseBrowserClient();
-      const { data: userData } = await supabase.auth.getUser();
-      const userId = userData.user?.id;
-      if (userId) {
-        const { data: profile } = await supabase
-          .from('users')
-          .select('tenant_id')
-          .eq('id', userId)
-          .maybeSingle();
+      const response = await fetch('/api/auth/session', { cache: 'no-store' });
+      const payload = (await response.json().catch(() => null)) as { user?: { id: string } | null } | null;
 
-        const tenantId = profile?.tenant_id ?? null;
-
-        if (tenantId) {
-          const preferenceMap: Array<{ label: string; type: PreferenceType }> = [
-            ...data.usage.map((value) => ({
-              label: usageToTermLabel[value],
-              type: 'identity' as const,
-            })),
-            ...data.cuisine.map((value) => ({ label: value, type: 'prefer' as const })),
-            ...data.avoid.map((value) => ({
-              label: avoidToTermLabel[value],
-              type: 'avoid' as const,
-            })),
-            ...data.goals.map((value) => ({
-              label: goalToTermLabel[value],
-              type: 'goal' as const,
-            })),
-          ].filter((item) => Boolean(item.label));
-
-          const uniqueLabels = Array.from(new Set(preferenceMap.map((item) => item.label)));
-
-          await supabase
-            .from('user_culinary_profiles')
-            .upsert({ user_id: userId, tenant_id: tenantId }, { onConflict: 'user_id' });
-
-          if (uniqueLabels.length > 0) {
-            const { data: termRows } = await supabase
-              .from('culinary_terms')
-              .select('id,label')
-              .in('label', uniqueLabels);
-
-            const labelToTermId = new Map((termRows ?? []).map((row) => [row.label, row.id]));
-
-            await supabase.from('user_culinary_profile_terms').delete().eq('user_id', userId);
-
-            const payload = preferenceMap
-              .map((item) => ({
-                user_id: userId,
-                term_id: labelToTermId.get(item.label),
-                preference_type: item.type,
-                weight: 1,
-              }))
-              .filter(
-                (
-                  row
-                ): row is {
-                  user_id: string;
-                  term_id: string;
-                  preference_type: PreferenceType;
-                  weight: number;
-                } => typeof row.term_id === 'string' && row.term_id.length > 0
-              );
-
-            if (payload.length > 0) {
-              await supabase.from('user_culinary_profile_terms').insert(payload);
-            }
-          }
-        }
-
-        await supabase.from('users').update({ onboarding_completed: true }).eq('id', userId);
+      if (!response.ok || !payload?.user?.id) {
+        setMessage('Necesitás una sesión activa para terminar onboarding.');
+        return;
       }
-      localStorage.removeItem(STORAGE_KEY);
-      router.push('/app');
-      router.refresh();
+
+      setMessage('Preferencias guardadas temporalmente en esta fase. Redirigiendo...');
+      window.setTimeout(() => {
+        router.push('/app');
+        router.refresh();
+      }, 700);
+    } catch {
+      setMessage('No pudimos finalizar onboarding. Intentá nuevamente.');
     } finally {
       setFinishing(false);
     }
@@ -235,15 +104,12 @@ export default function OnboardingPage() {
         <section className="relative hidden overflow-hidden border-r border-[#E8DDD2] p-10 lg:block">
           <div className="pointer-events-none absolute -left-10 top-8 h-52 w-52 rounded-full bg-[#C56A1A]/10 blur-3xl" />
           <div className="pointer-events-none absolute right-6 top-1/3 h-52 w-52 rounded-full bg-[#6D4AFF]/10 blur-3xl" />
-          <p className="text-xs font-bold tracking-[0.15em] text-[#C56A1A]">
-            COCINACORE • ONBOARDING
-          </p>
+          <p className="text-xs font-bold tracking-[0.15em] text-[#C56A1A]">COCINACORE • ONBOARDING</p>
           <h1 className="mt-4 text-5xl font-semibold leading-[1.08] text-[#241A14]">
             CocinaCore está entendiendo cómo cocinas para ayudarte mejor.
           </h1>
           <p className="mt-4 max-w-lg text-lg text-[#6B5A50]">
-            Tu configuración crea una biblioteca culinaria inteligente, cálida y personalizada para
-            tu familia.
+            Esta versión guarda lo esencial mientras terminamos la migración de preferencias.
           </p>
 
           <div className="dark-panel-shadow mt-8 rounded-3xl border border-white/10 bg-[#16110D] p-5 text-[#F5ECE2]">
@@ -257,14 +123,6 @@ export default function OnboardingPage() {
                 <p className="text-xs text-[#D6C3B2]">Inventario</p>
                 <p className="text-sm font-semibold">Tomate · Pollo · Albahaca</p>
               </div>
-              <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-                <p className="text-xs text-[#D6C3B2]">PDF culinario</p>
-                <p className="text-sm font-semibold">Recetas familiares.pdf</p>
-              </div>
-              <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-                <p className="text-xs text-[#D6C3B2]">Tip del chef</p>
-                <p className="text-sm font-semibold">Mise en place antes de empezar</p>
-              </div>
             </div>
           </div>
         </section>
@@ -274,7 +132,7 @@ export default function OnboardingPage() {
             <div className="mb-6">
               <div className="flex items-center justify-between">
                 <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#8D786A]">
-                  Paso {Math.min(currentStep + 1, 5)} de 5
+                  Paso {Math.min(currentStep + 1, steps.length + 1)} de {steps.length + 1}
                 </p>
                 <p className="text-xs text-[#8D786A]">{Math.round(progress)}%</p>
               </div>
@@ -288,7 +146,7 @@ export default function OnboardingPage() {
             </div>
 
             <AnimatePresence mode="wait">
-              {!isFinal ? (
+              {!isFinal && step ? (
                 <motion.div
                   key={step.key}
                   initial={{ opacity: 0, y: 12 }}
@@ -333,12 +191,9 @@ export default function OnboardingPage() {
                   exit={{ opacity: 0, y: -12 }}
                   transition={{ duration: 0.2 }}
                 >
-                  <h2 className="text-3xl font-semibold text-[#241A14]">
-                    Tu cocina inteligente está lista
-                  </h2>
+                  <h2 className="text-3xl font-semibold text-[#241A14]">Tu cocina inteligente está lista</h2>
                   <p className="mt-2 text-[#6B5A50]">
-                    CocinaCore ya puede ayudarte con recetas, organización culinaria y aprendizaje
-                    personalizado.
+                    La persistencia avanzada de preferencias está en reconstrucción, pero podés seguir.
                   </p>
 
                   <div className="mt-6 rounded-2xl border border-[#E8DDD2] bg-white/80 p-4 text-sm text-[#6B5A50]">
@@ -348,6 +203,12 @@ export default function OnboardingPage() {
                     <p>Evitar: {data.avoid.join(', ') || 'No definido'}</p>
                     <p>Objetivos: {data.goals.join(', ') || 'No definido'}</p>
                   </div>
+
+                  {message ? (
+                    <p className="mt-4 rounded-xl border border-[#E8DDD2] bg-white/80 px-3 py-2 text-sm text-[#6B5A50]">
+                      {message}
+                    </p>
+                  ) : null}
                 </motion.div>
               )}
             </AnimatePresence>
@@ -359,26 +220,26 @@ export default function OnboardingPage() {
                 disabled={currentStep === 0}
                 className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-5 font-semibold text-[#6B5A50] transition hover:border-[#C56A1A] disabled:cursor-not-allowed disabled:opacity-50"
               >
-                Atrás
+                Volver
               </button>
 
               {!isFinal ? (
                 <button
                   type="button"
-                  onClick={() => setCurrentStep((prev) => Math.min(prev + 1, 4))}
                   disabled={!canContinue}
-                  className="h-11 rounded-xl bg-[#C56A1A] px-5 font-semibold text-white transition hover:bg-[#A55412] disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={() => setCurrentStep((prev) => Math.min(prev + 1, steps.length))}
+                  className="h-11 rounded-xl bg-[#C56A1A] px-5 font-semibold text-white transition hover:bg-[#A55412] disabled:opacity-50"
                 >
-                  Siguiente
+                  Continuar
                 </button>
               ) : (
                 <button
                   type="button"
-                  onClick={finishOnboarding}
+                  onClick={() => void finishOnboarding()}
                   disabled={finishing}
-                  className="inline-flex h-11 items-center rounded-xl bg-[#C56A1A] px-5 font-semibold text-white transition hover:bg-[#A55412] disabled:opacity-60"
+                  className="h-11 rounded-xl bg-[#C56A1A] px-5 font-semibold text-white transition hover:bg-[#A55412] disabled:opacity-50"
                 >
-                  {finishing ? 'Finalizando...' : 'Entrar al dashboard'}
+                  {finishing ? 'Finalizando...' : 'Ir al panel'}
                 </button>
               )}
             </div>

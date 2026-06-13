@@ -2,12 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { serverLogger } from '@/lib/serverLogger';
 import { validateRequest, EmbeddingsSchema, type EmbeddingsBody } from '@/lib/validation';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { getGeminiApiKey, getGeminiEmbeddingModel } from '@/lib/ai/gemini-config';
 
 type GeminiBatchEmbedResponse = {
   embeddings?: Array<{ values?: number[]; embedding?: { values?: number[] } }>;
 };
 
-const ENV_MODEL = process.env.GEMINI_EMBEDDING_MODEL;
+const ENV_MODEL = getGeminiEmbeddingModel();
 const TARGET_EMBEDDING_DIM = Number(process.env.EMBEDDING_DIMENSIONS ?? '1536');
 const FALLBACK_MODELS = ['gemini-embedding-001', 'gemini-embedding-2-preview'];
 
@@ -68,13 +69,16 @@ async function requestEmbeddings(apiKey: string, model: string, texts: string[])
 export async function POST(request: NextRequest) {
   const startedAt = Date.now();
   const requestId = crypto.randomUUID();
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = getGeminiApiKey();
 
   if (!apiKey) {
-    serverLogger.error('embeddings.misconfigured', { requestId });
+    serverLogger.warn('embeddings.misconfigured', { requestId });
     return NextResponse.json(
-      { error: 'GEMINI_API_KEY no está configurada en el servidor.' },
-      { status: 500 }
+      {
+        error:
+          'GEMINI_API_KEY no está configurada en el servidor. Configurala para usar embeddings.',
+      },
+      { status: 503 }
     );
   }
 

@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { getSupabaseBrowserClient } from '@/lib/supabaseClient';
 import { humanCopy } from '@/lib/copy';
+import { safeFetch } from '@/lib/api';
 
 type HistoryRow = {
   id: string;
@@ -68,15 +68,11 @@ export default function RecipeHistoryPage() {
       setLoading(true);
       setError(null);
       try {
-        const supabase = getSupabaseBrowserClient();
-        const { data, error: queryErr } = await supabase
-          .from('recipe_ai_history')
-          .select('id,recipe_title,recipe_payload,user_feedback,created_at')
-          .order('created_at', { ascending: false })
-          .limit(30);
-
-        if (queryErr) throw queryErr;
-        setRows((data ?? []) as HistoryRow[]);
+        const result = await safeFetch<{ items: HistoryRow[] }>('/api/recipe-history', {
+          credentials: 'same-origin',
+        });
+        if (!result.ok) throw new Error(result.error);
+        setRows(result.data.items);
       } catch (e) {
         setError(e instanceof Error ? e.message : 'No se pudo cargar historial.');
       } finally {
@@ -91,9 +87,14 @@ export default function RecipeHistoryPage() {
     setDeletingId(id);
     setError(null);
     try {
-      const supabase = getSupabaseBrowserClient();
-      const { error: deleteErr } = await supabase.from('recipe_ai_history').delete().eq('id', id);
-      if (deleteErr) throw deleteErr;
+      const result = await safeFetch<{ ok: true }>(
+        `/api/recipe-history?id=${encodeURIComponent(id)}`,
+        {
+          method: 'DELETE',
+          credentials: 'same-origin',
+        }
+      );
+      if (!result.ok) throw new Error(result.error);
       setRows((prev) => prev.filter((row) => row.id !== id));
       if (openId === id) setOpenId(null);
     } catch (e) {
@@ -107,12 +108,14 @@ export default function RecipeHistoryPage() {
     setFeedbackWorkingId(id);
     setError(null);
     try {
-      const supabase = getSupabaseBrowserClient();
-      const { error: updateErr } = await supabase
-        .from('recipe_ai_history')
-        .update({ user_feedback: value, user_feedback_at: new Date().toISOString() })
-        .eq('id', id);
-      if (updateErr) throw updateErr;
+      const result = await safeFetch<{ item: HistoryRow }>(
+        `/api/recipe-history?id=${encodeURIComponent(id)}&feedback=${value}`,
+        {
+          method: 'PATCH',
+          credentials: 'same-origin',
+        }
+      );
+      if (!result.ok) throw new Error(result.error);
       setRows((prev) =>
         prev.map((row) => (row.id === id ? { ...row, user_feedback: value } : row))
       );

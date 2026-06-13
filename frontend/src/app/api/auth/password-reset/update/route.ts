@@ -1,8 +1,11 @@
-import { createClient } from '@supabase/supabase-js';
 import { type NextRequest, NextResponse } from 'next/server';
+import { requireUser } from '@/lib/auth/server';
+import { hashPassword } from '@/lib/auth/password';
 import { ResetPasswordSchema } from '@/lib/auth/schemas';
-import { mapAuthError } from '@/lib/auth/errors';
+import { updatePassword } from '@/lib/db/repositories/userRepository';
 import { checkRateLimit } from '@/lib/rate-limit';
+
+export const runtime = 'nodejs';
 
 function getIp(request: NextRequest): string {
   return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
@@ -24,23 +27,29 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const token = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '').trim();
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const emailServiceConfigured = Boolean(
+    process.env.RESEND_API_KEY?.trim() ||
+      process.env.SMTP_HOST?.trim() ||
+      process.env.EMAIL_FROM?.trim()
+  );
 
-  if (!token || !supabaseUrl || !supabaseAnonKey) {
-    return NextResponse.json({ error: 'El enlace no es válido o expiró. Pedí uno nuevo.' }, { status: 401 });
+  if (!emailServiceConfigured) {
+    return NextResponse.json(
+      { error: 'Password reset service is not configured yet for direct PostgreSQL mode.' },
+      { status: 503 }
+    );
   }
 
-  const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-    global: { headers: { Authorization: `Bearer ${token}` } },
-    auth: { autoRefreshToken: false, persistSession: false },
-  });
-  const { error } = await supabase.auth.updateUser({ password: parsed.data.password });
+  try {
+    const user = await requireUser(request, 'El enlace no es válido o expiró. Pedí uno nuevo.');
+    const passwordHash = await hashPassword(parsed.data.password);
+    await updatePassword(user.id, passwordHash);
 
-  if (error) {
-    return NextResponse.json({ error: mapAuthError(error, 'password-reset') }, { status: 400 });
+    return NextResponse.json({ ok: true });
+  } catch {
+    return NextResponse.json(
+      { error: 'El enlace no es válido o expiró. Pedí uno nuevo.' },
+      { status: 401 }
+    );
   }
-
-  return NextResponse.json({ ok: true });
 }

@@ -6,12 +6,13 @@ import {
   type InventorySuggestionBody,
 } from '@/lib/validation';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { getGeminiApiKey, getGeminiModel } from '@/lib/ai/gemini-config';
 
 export async function POST(request: NextRequest) {
   const startedAt = Date.now();
   const requestId = crypto.randomUUID();
-  const apiKey = process.env.GEMINI_API_KEY;
-  const model = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash';
+  const apiKey = getGeminiApiKey();
+  const model = getGeminiModel();
 
   // 1. Zod validation (passthrough allows legacy inventory/restrictions/profile fields)
   const validation = await validateRequest(request, InventorySuggestionSchema.passthrough());
@@ -48,8 +49,14 @@ export async function POST(request: NextRequest) {
   }
 
   if (!apiKey) {
-    serverLogger.error('inventory_suggestion.misconfigured', { requestId });
-    return NextResponse.json({ error: 'GEMINI_API_KEY no está configurada.' }, { status: 500 });
+    serverLogger.warn('inventory_suggestion.misconfigured', { requestId });
+    return NextResponse.json(
+      {
+        error:
+          'GEMINI_API_KEY no está configurada. Configurala para calcular sugerencias de inventario.',
+      },
+      { status: 503 }
+    );
   }
 
   const menuContent = body.menuContent?.trim() ?? '';

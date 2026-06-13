@@ -1,10 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { FormEvent, useState } from 'react';
+import { type FormEvent, useState } from 'react';
 import { AuthEmailSchema } from '@/lib/auth/schemas';
-import { mapAuthError } from '@/lib/auth/errors';
-import { getSupabaseBrowserClient } from '@/lib/supabaseClient';
 
 export default function ForgotPasswordPage() {
   const [loading, setLoading] = useState(false);
@@ -31,25 +29,15 @@ export default function ForgotPasswordPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(parsed.data),
       });
-      const body = (await response.json().catch(() => ({}))) as { error?: string };
 
+      const body = (await response.json().catch(() => null)) as { error?: string } | null;
       if (!response.ok) {
-        setErrorMessage(body.error ?? 'No pudimos enviar el correo de recuperación.');
-        return;
-      }
-
-      const supabase = getSupabaseBrowserClient();
-      const { error } = await supabase.auth.resetPasswordForEmail(parsed.data.email, {
-        redirectTo: `${window.location.origin}/auth/callback?next=/reset-password`,
-      });
-
-      if (error) {
-        setErrorMessage(mapAuthError(error, 'password-reset'));
+        setErrorMessage(body?.error ?? 'No pudimos procesar la solicitud.');
         return;
       }
 
       setSuccessMessage(
-        'Si el correo existe en CocinaCore, te enviamos un enlace para restablecer la contraseña.'
+        'Si el correo existe en CocinaCore, te enviaremos instrucciones cuando el flujo esté listo.'
       );
       event.currentTarget.reset();
     } catch {
@@ -65,7 +53,8 @@ export default function ForgotPasswordPage() {
         <p className="text-xs font-bold tracking-[0.15em] text-[#C56A1A]">COCINACORE</p>
         <h1 className="mt-3 text-3xl font-semibold text-[#241A14]">Recuperar contraseña</h1>
         <p className="mt-2 text-sm text-[#6B5A50]">
-          Escribí tu correo y te enviaremos un enlace seguro si la cuenta existe.
+          Estamos reconstruyendo este flujo sobre PostgreSQL directo. Igual podés registrar tu
+          solicitud.
         </p>
 
         <form onSubmit={onSubmit} className="mt-6 grid gap-4" noValidate>
@@ -79,19 +68,21 @@ export default function ForgotPasswordPage() {
             />
           </label>
 
-          {errorMessage && <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{errorMessage}</p>}
-          {successMessage && (
+          {errorMessage ? (
+            <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{errorMessage}</p>
+          ) : null}
+          {successMessage ? (
             <p className="rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
               {successMessage}
             </p>
-          )}
+          ) : null}
 
           <button
             type="submit"
             disabled={loading}
             className="h-11 rounded-xl bg-[#C56A1A] font-semibold text-white transition hover:bg-[#A55412] disabled:opacity-70"
           >
-            {loading ? 'Enviando...' : 'Enviar enlace'}
+            {loading ? 'Enviando...' : 'Solicitar recuperación'}
           </button>
         </form>
 

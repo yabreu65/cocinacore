@@ -1,13 +1,18 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
 import Redis from 'ioredis';
+import { requireUser } from '@/lib/auth/server';
+import { query } from '@/lib/db';
+import { isPlatformOwner } from '@/lib/db/repositories/platformOwnerRepository';
 import { serverLogger } from '@/lib/serverLogger';
+import { getGeminiApiKey } from '@/lib/ai/gemini-config';
+
+export const runtime = 'nodejs';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-type CheckStatus = 'ok' | 'fail' | 'timeout';
+type CheckStatus = 'ok' | 'fail' | 'timeout' | 'not_configured';
 
 interface SingleCheck {
   status: CheckStatus;
@@ -19,10 +24,9 @@ interface HealthResponse {
   timestamp: string;
   version: string;
   checks: {
-    supabase: SingleCheck;
+    postgresql: SingleCheck;
     redis: SingleCheck;
     gemini: SingleCheck;
-    openrouter: SingleCheck;
   };
 }
 
@@ -49,52 +53,33 @@ function measureLatency(start: number): number {
 }
 
 // ---------------------------------------------------------------------------
-// Supabase check: lightweight auth.getSession() validates the API + DB
+// PostgreSQL check: lightweight select 1 validates the DB connection
 // ---------------------------------------------------------------------------
 
-async function checkSupabase(): Promise<SingleCheck> {
+async function checkPostgreSQL(): Promise<SingleCheck> {
   const start = Date.now();
   let status: CheckStatus = 'fail';
   let latency = 0;
 
   try {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-    if (!supabaseUrl || !serviceRoleKey) {
-      serverLogger.warn('health.supabase.missing_config', {});
+    if (!process.env.DATABASE_URL?.trim()) {
+      serverLogger.warn('health.postgresql.missing_config', {});
       return { status: 'fail', latency: 0 };
     }
 
-    const supabase = createClient(supabaseUrl, serviceRoleKey, {
-      auth: { autoRefreshToken: false, persistSession: false },
-    });
-
-    const result = await withTimeout(
-      supabase.auth.getSession(),
-      HEALTH_CHECK_TIMEOUT_MS,
-      'health_supabase'
-    );
+    await withTimeout(query('select 1'), HEALTH_CHECK_TIMEOUT_MS, 'health_postgresql');
 
     latency = measureLatency(start);
-
-    if (result.error) {
-      serverLogger.warn('health.supabase.query_failed', {
-        error: result.error.message,
-      });
-      status = 'fail';
-    } else {
-      status = 'ok';
-    }
+    status = 'ok';
   } catch (err) {
     latency = measureLatency(start);
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes('timeout')) {
       status = 'timeout';
-      serverLogger.warn('health.supabase.timeout', { latency });
+      serverLogger.warn('health.postgresql.timeout', { latency });
     } else {
       status = 'fail';
-      serverLogger.warn('health.supabase.failed', { error: msg, latency });
+      serverLogger.warn('health.postgresql.failed', { error: msg, latency });
     }
   }
 
@@ -167,10 +152,10 @@ async function checkGemini(): Promise<SingleCheck> {
   let status: CheckStatus = 'fail';
   let latency = 0;
 
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = getGeminiApiKey();
   if (!apiKey) {
     serverLogger.info('health.gemini.not_configured', {});
-    return { status: 'fail', latency: 0 };
+    return { status: 'not_configured', latency: 0 };
   }
 
   try {
@@ -208,88 +193,51 @@ async function checkGemini(): Promise<SingleCheck> {
 }
 
 // ---------------------------------------------------------------------------
-// OpenRouter check: GET models list (no token consumption)
-// ---------------------------------------------------------------------------
-
-async function checkOpenRouter(): Promise<SingleCheck> {
-  const start = Date.now();
-  let status: CheckStatus = 'fail';
-  let latency = 0;
-
-  // OpenRouter can be called without an API key for the models endpoint
-  try {
-    const response = await withTimeout(
-      fetch('https://openrouter.ai/api/v1/models', {
-        method: 'GET',
-      }),
-      HEALTH_CHECK_TIMEOUT_MS,
-      'health_openrouter'
-    );
-
-    latency = measureLatency(start);
-
-    if (response.ok) {
-      status = 'ok';
-    } else {
-      serverLogger.warn('health.openrouter.non_ok_response', {
-        status: response.status,
-      });
-      status = 'fail';
-    }
-  } catch (err) {
-    latency = measureLatency(start);
-    const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes('timeout')) {
-      status = 'timeout';
-      serverLogger.warn('health.openrouter.timeout', { latency });
-    } else {
-      status = 'fail';
-      serverLogger.warn('health.openrouter.failed', { error: msg, latency });
-    }
-  }
-
-  return { status, latency };
-}
-
-// ---------------------------------------------------------------------------
 // GET /api/health
 // ---------------------------------------------------------------------------
 
 export async function GET() {
+  try {
+    const user = await requireUser(undefined, 'Unauthorized');
+    const owner = await isPlatformOwner(user.id);
+    if (!owner) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+  } catch {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   const startedAt = Date.now();
   const requestId = crypto.randomUUID();
 
   serverLogger.info('health.check_started', { requestId });
 
   // Run all checks in parallel
-  const [supabase, redis, gemini, openrouter] = await Promise.all([
-    checkSupabase(),
+  const [postgresql, redis, gemini] = await Promise.all([
+    checkPostgreSQL(),
     checkRedis(),
     checkGemini(),
-    checkOpenRouter(),
   ]);
 
   const allOk =
-    supabase.status === 'ok' &&
+    postgresql.status === 'ok' &&
     redis.status === 'ok' &&
-    gemini.status === 'ok' &&
-    openrouter.status === 'ok';
+    (gemini.status === 'ok' || gemini.status === 'not_configured');
 
   const body: HealthResponse = {
     status: allOk ? 'ok' : 'degraded',
     timestamp: new Date().toISOString(),
     version: APP_VERSION,
-    checks: { supabase, redis, gemini, openrouter },
+    checks: { postgresql, redis, gemini },
   };
 
   serverLogger.info('health.check_completed', {
     requestId,
     durationMs: Date.now() - startedAt,
     overall: body.status,
-    supabase: supabase.status,
+    postgresql: postgresql.status,
     redis: redis.status,
     gemini: gemini.status,
-    openrouter: openrouter.status,
   });
 
   // Always return 200 so load balancers don't mark the instance as down

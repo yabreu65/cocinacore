@@ -11,21 +11,24 @@ interface SentryBreadcrumbClient {
   }): void;
 }
 
-/**
- * Fields that must never appear in breadcrumbs or external logs.
- * Stripped before any output beyond local stdout.
- */
-const SECRET_FIELD_PATTERNS = [
-  /api[_-]?key/i,
-  /secret/i,
-  /password/i,
-  /token/i,
-  /authorization/i,
-  /credential/i,
-  /key$/i,
-];
+function isEdgeRuntime(): boolean {
+  return (
+    typeof (globalThis as { EdgeRuntime?: string }).EdgeRuntime !== 'undefined' ||
+    typeof process === 'undefined'
+  );
+}
 
 function sanitizePayload(payload: LogPayload): LogPayload {
+  const SECRET_FIELD_PATTERNS = [
+    /api[_-]?key/i,
+    /secret/i,
+    /password/i,
+    /token/i,
+    /authorization/i,
+    /credential/i,
+    /key$/i,
+  ];
+
   const sanitized: LogPayload = {};
   for (const [key, value] of Object.entries(payload)) {
     if (SECRET_FIELD_PATTERNS.some((pattern) => pattern.test(key))) {
@@ -64,17 +67,24 @@ function emit(level: LogLevel, event: string, payload: LogPayload): void {
     ts: new Date().toISOString(),
     level,
     event,
-    ...payload,
+    ...sanitizePayload(payload),
   });
 
-  // Always output structured JSON to stdout for local/dev observability
+  if (isEdgeRuntime()) {
+    if (level === 'error') {
+      console.error(line);
+    } else {
+      console.log(line);
+    }
+    return;
+  }
+
   if (level === 'error') {
     process.stderr.write(line + '\n');
   } else {
     process.stdout.write(line + '\n');
   }
 
-  // In production, send breadcrumb to Sentry for error context
   if (process.env.NODE_ENV === 'production') {
     const sentryClient = loadSentryClient();
     if (sentryClient) {

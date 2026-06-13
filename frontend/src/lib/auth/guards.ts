@@ -7,7 +7,7 @@ export function isPrivilegedRole(role: TenantRole | null | undefined): boolean {
   return role ? PRIVILEGED_ROLES.includes(role) : false;
 }
 
-export function requiresPasswordMfa(role: TenantRole | null | undefined): boolean {
+export function requiresPasswordMfa(): boolean {
   // MFA is intentionally disabled in this migration phase.
   return false;
 }

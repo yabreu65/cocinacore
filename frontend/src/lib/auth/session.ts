@@ -1,7 +1,6 @@
-import { SignJWT, jwtVerify, type JWTPayload } from 'jose';
+import { SignJWT, jwtVerify } from 'jose';
 import { cookies } from 'next/headers';
 import { type NextRequest, type NextResponse } from 'next/server';
-import crypto from 'crypto';
 import {
   createSession as createSessionRow,
   findSessionByTokenHash,
@@ -54,24 +53,88 @@ function buildCookieOptions(): SessionCookieOptions {
   };
 }
 
+export interface VerifiedTokenPayload {
+  userId: string;
+  email: string;
+  fullName: string | null;
+  tenantId: string | null;
+  role: 'owner' | 'admin' | 'member';
+  tenantType: 'home' | 'professional';
+  onboardingCompleted: boolean;
+  expiresAt: Date;
+}
+
+function isTenantRole(value: unknown): value is 'owner' | 'admin' | 'member' {
+  return value === 'owner' || value === 'admin' || value === 'member';
+}
+
+function isTenantType(value: unknown): value is 'home' | 'professional' {
+  return value === 'home' || value === 'professional';
+}
+
+export async function verifySessionToken(token: string): Promise<VerifiedTokenPayload | null> {
+  try {
+    const secret = getSecret();
+    const { payload } = await jwtVerify(token, secret, {
+      algorithms: ['HS256'],
+    });
+
+    const userId = payload.sub;
+    const exp = payload.exp;
+    const email = payload.email;
+    if (!userId || !exp || typeof email !== 'string') return null;
+
+    const role = payload.role;
+    const tenantType = payload.tenantType;
+    if (!isTenantRole(role) || !isTenantType(tenantType)) return null;
+
+    return {
+      userId,
+      email,
+      fullName: typeof payload.fullName === 'string' ? payload.fullName : null,
+      tenantId: typeof payload.tenantId === 'string' ? payload.tenantId : null,
+      role,
+      tenantType,
+      onboardingCompleted: payload.onboardingCompleted === true,
+      expiresAt: new Date(exp * 1000),
+    };
+  } catch (error) {
+    serverLogger.warn('auth.session.verify_failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
 export async function createSession(userId: string): Promise<AuthSession> {
   const secret = getSecret();
   const ttlSeconds = getSessionTtlSeconds();
   const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
 
-  const token = await new SignJWT({ sub: userId })
+  const user = await findUserById(userId);
+  if (!user) {
+    throw new Error('User not found during session creation');
+  }
+
+  const tenantRow = user.tenant_id ? await findTenantById(user.tenant_id) : null;
+  const tenantType = tenantRow?.tenant_type ?? 'home';
+
+  const token = await new SignJWT({
+    sub: userId,
+    email: user.email,
+    fullName: user.full_name,
+    tenantId: user.tenant_id,
+    role: user.role,
+    tenantType,
+    onboardingCompleted: user.onboarding_completed,
+  })
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
     .setExpirationTime(expiresAt)
     .sign(secret);
 
-  const tokenHash = hashSessionToken(token);
+  const tokenHash = await hashSessionToken(token);
   await createSessionRow(userId, tokenHash, expiresAt);
-
-  const user = await findUserById(userId);
-  if (!user) {
-    throw new Error('User not found after session creation');
-  }
 
   return {
     token,
@@ -81,12 +144,8 @@ export async function createSession(userId: string): Promise<AuthSession> {
 }
 
 export async function buildAuthUser(
-  user: Awaited<ReturnType<typeof findUserById>> & {}
+  user: NonNullable<Awaited<ReturnType<typeof findUserById>>>
 ): Promise<AuthUser> {
-  if (!user) {
-    throw new Error('User is required to build AuthUser');
-  }
-
   let tenant: TenantContext | null = null;
   if (user.tenant_id) {
     const tenantRow = await findTenantById(user.tenant_id);
@@ -112,35 +171,23 @@ export async function buildAuthUser(
 }
 
 export async function resolveSessionToken(token: string): Promise<AuthSession | null> {
-  try {
-    const secret = getSecret();
-    const { payload } = await jwtVerify(token, secret, {
-      algorithms: ['HS256'],
-    });
+  const verified = await verifySessionToken(token);
+  if (!verified) return null;
 
-    const userId = payload.sub;
-    if (!userId) return null;
+  const tokenHash = await hashSessionToken(token);
+  const sessionRow = await findSessionByTokenHash(tokenHash);
+  if (!sessionRow) return null;
 
-    const tokenHash = hashSessionToken(token);
-    const sessionRow = await findSessionByTokenHash(tokenHash);
-    if (!sessionRow) return null;
+  const user = await findUserById(verified.userId);
+  if (!user) return null;
 
-    const user = await findUserById(userId);
-    if (!user) return null;
+  await touchSessionLastSeen(tokenHash);
 
-    await touchSessionLastSeen(tokenHash);
-
-    return {
-      token,
-      expiresAt: new Date(sessionRow.expires_at),
-      user: await buildAuthUser(user),
-    };
-  } catch (error) {
-    serverLogger.warn('auth.session.resolve_failed', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return null;
-  }
+  return {
+    token,
+    expiresAt: verified.expiresAt,
+    user: await buildAuthUser(user),
+  };
 }
 
 export async function getSessionFromRequest(request: NextRequest): Promise<AuthSession | null> {
@@ -173,12 +220,12 @@ export async function clearSessionCookie(response: NextResponse): Promise<void> 
 export async function revokeSession(request: NextRequest, response: NextResponse): Promise<void> {
   const token = request.cookies.get(getCookieName())?.value;
   if (token) {
-    await deleteSessionByTokenHash(hashSessionToken(token));
+    await deleteSessionByTokenHash(await hashSessionToken(token));
   }
   await clearSessionCookie(response);
 }
 
 export function generateSessionTokenForTesting(userId: string): string {
   // Not exported from barrel; only for tests if needed.
-  return crypto.randomUUID() + userId;
+  return `${userId}-${Date.now()}`;
 }
