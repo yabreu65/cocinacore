@@ -6,13 +6,12 @@ SaaS multitenant de recetas asistido por IA.
 - **Framework:** Next.js (App Router) en `frontend/`
 - **Database:** PostgreSQL directo vía `pg` + `pgvector`
 - **Cache / queues:** Redis
-- **AI:** Gemini como proveedor principal; algunas rutas todavía conservan fallback opcional OpenRouter-compatible
+- **AI:** Gemini como proveedor principal
 - **Storage:** driver local hoy, con camino futuro a S3 / Object Storage
 
 ## Repository structure
 - `frontend/` — aplicación Next.js
 - `db/migrations/` — migraciones PostgreSQL directas usadas por el runtime actual
-- `supabase/` — artefactos legacy preservados solo para referencia/auditoría durante la migración
 
 ## Engineering gates
 Antes de considerar un cambio merge-ready, corré desde la raíz del repo:
@@ -73,7 +72,7 @@ La referencia activa es:
 frontend/.env.example
 ```
 
-El archivo `frontend/.env.example.legacy` queda solo como referencia histórica de la migración. No reintroduzcas variables obligatorias de Supabase al runtime.
+El archivo `frontend/.env.example.legacy` queda solo como referencia histórica de la migración. No reintroduzcas variables obsoletas de esa etapa al runtime.
 
 ## Deployment
 El workflow `.github/workflows/deploy.yml` hoy solo valida builds de staging/production. El deploy real sigue intencionalmente desacoplado hasta cerrar la infraestructura objetivo.
@@ -126,4 +125,3 @@ docker run -p 3000:3000 --env-file frontend/.env.local cocinacore
 - Auth y autorización resueltas en la aplicación con sesiones, guards y repositorios
 - Scope Platform Owner separado de roles tenant
 - Roles tenant: `owner | admin | member`
-- `supabase/tests/` queda solo como evidencia histórica de la etapa anterior, no como control runtime activo

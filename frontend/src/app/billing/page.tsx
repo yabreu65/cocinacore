@@ -92,7 +92,7 @@ export default async function BillingPage() {
         <article className="mt-4 rounded-2xl border border-[#E8DDD2] bg-white/70 p-4">
           <p className="text-sm text-[#6B5A50]">Estado comercial actual</p>
           <p className="mt-1 text-sm text-[#241A14]">
-            Invitaciones pendientes: {pendingInvitations}. Esta pantalla ya no depende de Supabase.
+            Invitaciones pendientes: {pendingInvitations}. Esta pantalla ya no depende del backend anterior.
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <Link

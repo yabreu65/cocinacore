@@ -5,7 +5,7 @@ import Redis from 'ioredis';
 export type CachedRecipe = {
   recipe: string;
   title: string;
-  provider: 'gemini' | 'openrouter';
+  provider: 'gemini';
   model?: string;
   mode: 'free' | 'rag';
   structuredIngredients: StructuredRecipeIngredient[];

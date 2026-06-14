@@ -29,8 +29,8 @@ export default async function PremiumBoardIntelligentPage() {
             <p className="text-xs font-bold tracking-[0.15em] text-[#C56A1A]">COCINACORE • PREMIUM</p>
             <h1 className="mt-2 text-3xl font-semibold">Premium Board</h1>
             <p className="mt-2 max-w-2xl text-sm text-[#6B5A50]">
-              Funcionalidad en reconstrucción durante la migración fuera de Supabase. La página ya
-              renderiza estable y con TypeScript estricto.
+              Funcionalidad en reconstrucción durante la migración. La página ya renderiza estable
+              y con TypeScript estricto.
             </p>
           </div>
           <Link href="/app" className="rounded-xl bg-[#C56A1A] px-4 py-2 text-sm font-semibold text-white">

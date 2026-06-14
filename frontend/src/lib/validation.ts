@@ -9,7 +9,7 @@ export const RecipeGenerateSchema = z.object({
   ingredients: z.array(z.string().min(1).max(100)).max(30).optional().default([]),
   chunks: z.array(z.string().max(2000)).max(14).optional().default([]),
   mode: z.enum(['free', 'rag']).optional().default('free'),
-  provider: z.enum(['auto', 'gemini', 'openrouter']).optional().default('auto'),
+  provider: z.enum(['auto', 'gemini']).optional().default('auto'),
   recipeName: z.string().max(200).optional(),
   mealType: z.string().max(100).optional(),
   day: z.string().max(100).optional(),

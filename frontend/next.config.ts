@@ -27,7 +27,7 @@ const nextConfig: NextConfig = {
       },
     ];
 
-    // CSP only in production; too restrictive for local dev with Supabase
+    // CSP only in production; too restrictive for local dev
     if (!isDev) {
       headers.push({
         key: 'Strict-Transport-Security',
@@ -36,7 +36,7 @@ const nextConfig: NextConfig = {
       headers.push({
         key: 'Content-Security-Policy',
         value:
-          "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' https://generativelanguage.googleapis.com https://openrouter.ai; frame-ancestors 'none';",
+          "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' https://generativelanguage.googleapis.com; frame-ancestors 'none';",
       });
     }
 

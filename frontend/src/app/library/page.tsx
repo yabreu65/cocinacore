@@ -83,8 +83,8 @@ export default async function LibraryPage() {
         </div>
 
         <div className="mb-4 rounded-2xl border border-[#E8DDD2] bg-white/70 p-4 text-sm text-[#6B5A50]">
-          Eliminación y edición quedan en reconstrucción. La página renderiza con datos reales sin
-          depender de Supabase.
+          Eliminación y edición quedan en reconstrucción. La página renderiza con datos reales
+          sobre PostgreSQL directo.
         </div>
 
         <div className="grid gap-4 md:grid-cols-2">

@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { serverLogger } from '@/lib/serverLogger';
 import { getGeminiApiKey, getGeminiModel } from '@/lib/ai/gemini-config';
-import { generateRecipeWithOpenRouter } from '@/lib/ai/openrouter';
 import {
   buildRecipeCacheKey,
   getCachedRecipe,
@@ -45,15 +44,14 @@ export async function POST(request: NextRequest) {
   const apiKey = getGeminiApiKey();
   const model = getGeminiModel();
 
-  // 1. Zod validation
   const validation = await validateRequest(request, RecipeGenerateSchema);
   if (!validation.success) {
     return Response.json(validation.error.body, { status: validation.error.status });
   }
 
   const body: RecipeGenerateBody = validation.data;
+  const providerPreference = body.provider ?? 'auto';
 
-  // 2. Rate limit
   const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
   const rateLimit = await checkRateLimit('recipe-generate', ip);
   if (!rateLimit.success) {
@@ -71,14 +69,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // 3. Continue with existing logic
   const mode = body.mode === 'rag' ? 'rag' : 'free';
-  const providerFromEnv = process.env.AI_PROVIDER?.toLowerCase();
-  const envPrefersOpenRouter =
-    providerFromEnv === 'openrouter' ||
-    providerFromEnv === 'opencode-go' ||
-    Boolean(process.env.AI_MODEL);
-  const providerPreference = body.provider ?? (envPrefersOpenRouter ? 'openrouter' : 'auto');
   const requestedRecipeName = body.recipeName?.trim() ?? '';
   const requestedMealType = body.mealType?.trim() ?? '';
   const requestedDay = body.day?.trim() ?? '';
@@ -241,55 +232,7 @@ Reglas:
     }
   };
 
-  const runOpenRouterFallback = async (geminiErrorMessage: string) => {
-    const openRouter = await generateRecipeWithOpenRouter({
-      ingredients,
-      baseCuisine: identity[0] ?? preferred[0] ?? 'Latinoamericana',
-      fusionCuisine: identity.slice(1),
-      restrictions: avoid,
-      culinaryLevel: level,
-      peopleCount,
-    });
-    const title = inferTitleFromRecipe(openRouter.result);
-    const structuredIngredients = extractStructuredIngredients(openRouter.result);
-    const safeStructuredIngredients: StructuredRecipeIngredient[] = validateStructuredIngredients(
-      structuredIngredients
-    )
-      ? structuredIngredients
-      : [];
-    await setCachedRecipe(recipeCacheKey, {
-      recipe: openRouter.result,
-      title,
-      provider: 'openrouter',
-      model: openRouter.model,
-      mode,
-      structuredIngredients: safeStructuredIngredients,
-      createdAt: Date.now(),
-    });
-    serverLogger.info('recipe_generate.success', {
-      requestId,
-      durationMs: Date.now() - startedAt,
-      provider: 'openrouter',
-      model: openRouter.model,
-      mode,
-      titleLength: title.length,
-      fallbackFrom: geminiErrorMessage,
-    });
-    return NextResponse.json({
-      recipe: openRouter.result,
-      title,
-      provider: 'openrouter',
-      model: openRouter.model,
-      mode,
-      structuredIngredients: safeStructuredIngredients,
-    });
-  };
-
   try {
-    if (providerPreference === 'openrouter') {
-      return await runOpenRouterFallback('forced_openrouter');
-    }
-
     if (!apiKey) {
       throw new Error('GEMINI_API_KEY no está configurada.');
     }
@@ -350,77 +293,17 @@ Reglas:
       mode,
       structuredIngredients: safeStructuredIngredients,
     });
-  } catch (geminiError) {
-    if (providerPreference === 'gemini') {
-      serverLogger.error('recipe_generate.gemini_forced_failed', {
-        requestId,
-        durationMs: Date.now() - startedAt,
-        error: geminiError instanceof Error ? geminiError.message : 'Gemini error desconocido',
-      });
-      return NextResponse.json(
-        {
-          error: `Falló Gemini (forzado): ${
-            geminiError instanceof Error ? geminiError.message : 'error desconocido'
-          }`,
-        },
-        { status: 502 }
-      );
-    }
-
-    serverLogger.warn('recipe_generate.gemini_failed_fallback_openrouter', {
+  } catch (error) {
+    serverLogger.error('recipe_generate.failed', {
       requestId,
       durationMs: Date.now() - startedAt,
-      error: geminiError instanceof Error ? geminiError.message : 'Gemini error desconocido',
+      error: error instanceof Error ? error.message : 'Gemini error desconocido',
     });
-
-    try {
-      const fallbackResponse = await runOpenRouterFallback(
-        geminiError instanceof Error ? geminiError.message : 'gemini_unknown_error'
-      );
-      try {
-        const cloned = fallbackResponse.clone();
-        const payload = (await cloned.json()) as {
-          recipe?: string;
-          title?: string;
-          provider?: 'openrouter';
-          mode?: 'free' | 'rag';
-          structuredIngredients?: StructuredRecipeIngredient[];
-          model?: string;
-        };
-        if (payload.recipe && payload.title && payload.mode && payload.provider) {
-          await setCachedRecipe(recipeCacheKey, {
-            recipe: payload.recipe,
-            title: payload.title,
-            provider: payload.provider,
-            mode: payload.mode,
-            structuredIngredients: payload.structuredIngredients ?? [],
-            model: payload.model,
-            createdAt: Date.now(),
-          });
-        }
-      } catch {
-        // ignore cache population failure
-      }
-      return fallbackResponse;
-    } catch (openRouterError) {
-      serverLogger.error('recipe_generate.fallback_failed', {
-        requestId,
-        durationMs: Date.now() - startedAt,
-        geminiError:
-          geminiError instanceof Error ? geminiError.message : 'Gemini error desconocido',
-        openRouterError:
-          openRouterError instanceof Error
-            ? openRouterError.message
-            : 'OpenRouter error desconocido',
-      });
-      return NextResponse.json(
-        {
-          error: `Falló Gemini y OpenRouter. Gemini: ${
-            geminiError instanceof Error ? geminiError.message : 'error desconocido'
-          } | OpenRouter: ${openRouterError instanceof Error ? openRouterError.message : 'error desconocido'}`,
-        },
-        { status: 502 }
-      );
-    }
+    return NextResponse.json(
+      {
+        error: `Falló Gemini: ${error instanceof Error ? error.message : 'error desconocido'}`,
+      },
+      { status: 502 }
+    );
   }
 }

@@ -246,7 +246,7 @@ describe('recipe-cache (Redis integration)', () => {
     const data = {
       recipe: 'Memory fallback recipe',
       title: 'Fallback',
-      provider: 'openrouter' as const,
+      provider: 'gemini' as const,
       mode: 'rag' as const,
       structuredIngredients: [],
       createdAt: Date.now(),

@@ -11,7 +11,7 @@ export default function MfaPage() {
         </p>
         <h1 className="mt-3 text-3xl font-semibold">Verificación en dos pasos</h1>
         <p className="mt-2 text-sm text-[#6B5A50]">
-          Funcionalidad en reconstrucción durante la migración fuera de Supabase.
+          Funcionalidad en reconstrucción durante la migración.
         </p>
 
         <div className="mt-5 rounded-2xl border border-[#E8DDD2] bg-white/80 p-4 text-sm text-[#6B5A50]">

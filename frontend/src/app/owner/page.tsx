@@ -62,7 +62,7 @@ export default async function OwnerOverviewPage() {
         </p>
         <h2 className="mt-3 text-2xl font-semibold text-[#241A14]">Owner Console Overview</h2>
         <p className="mt-1 text-sm text-[#6B5A50]">
-          Resumen mínimo ya desacoplado de Supabase para continuar la migración.
+          Resumen mínimo ya desacoplado del backend anterior para continuar la migración.
         </p>
       </article>
 
@@ -79,7 +79,7 @@ export default async function OwnerOverviewPage() {
       <article className="rounded-2xl border border-[#E8DDD2] bg-white/80 p-4 premium-shadow">
         <h2 className="text-lg font-semibold">Secciones rápidas</h2>
         <p className="mt-1 text-sm text-[#6B5A50]">
-          Varias acciones siguen en reconstrucción, pero las vistas ya compilan sin Supabase.
+          Varias acciones siguen en reconstrucción, pero las vistas ya compilan sobre PostgreSQL directo.
         </p>
         <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {[

@@ -10,6 +10,10 @@
   --text-main: #241a14;
   --text-muted: #6b5a50;
   --border: #e8ddd2;
+  --font-inter: ui-sans-serif, system-ui, sans-serif;
+  --font-manrope: ui-sans-serif, system-ui, sans-serif;
+  --font-playfair: ui-serif, Georgia, serif;
+  --font-outfit: ui-sans-serif, system-ui, sans-serif;
 }
 
 * {
