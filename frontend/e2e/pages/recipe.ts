@@ -11,7 +11,7 @@ export class RecipePage {
     this.page = page;
     this.title = page.locator('h1:has-text("Recetas"), h1:has-text("Buscar")').first();
     this.generateButton = page.locator('button:has-text("Generar"), button:has-text("Crear receta")').first();
-    this.ingredientsInput = page.locator('input[placeholder*="ingrediente"], textarea[placeholder*="ingrediente"]').first();
+    this.ingredientsInput = page.getByLabel(/Ingredientes/i).first();
     this.recipeResult = page.locator('[data-testid="recipe-result"], :has-text("Pollo al horno")').first();
   }
 

@@ -30,7 +30,7 @@ const PROTECTED_PREFIXES = [
 const PUBLIC_PATHS = new Set(['/', '/login', '/signup', '/invite', '/mfa']);
 
 /** Public path prefixes — any path starting with one of these is allowed. */
-const PUBLIC_PREFIXES = ['/api/health', '/_next', '/favicon', '/api/auth'];
+const PUBLIC_PREFIXES = ['/api/health', '/_next', '/favicon', '/api/auth/'];
 
 function isProtectedRoute(pathname: string): boolean {
   return PROTECTED_PREFIXES.some((prefix) => pathname.startsWith(prefix));
@@ -94,6 +94,22 @@ export async function middleware(request: NextRequest) {
     }
 
     return NextResponse.redirect(buildLoginRedirect(request.url, pathname, search));
+  }
+
+  if (isOwnerRoute(pathname)) {
+    const profile = toUserProfileForGuard({
+      role: user.role ?? 'member',
+      tenantId: user.tenantId ?? null,
+    });
+
+    const authorized = Boolean(profile?.tenantId && profile.role === 'owner');
+
+    if (!authorized) {
+      if (isApiRoute(pathname)) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      }
+      return NextResponse.redirect(new URL('/app', request.url));
+    }
   }
 
   if (isTenantPrivilegedRoute(pathname)) {

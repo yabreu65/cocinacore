@@ -36,32 +36,45 @@ jobs:
       - name: Build
         run: npm run build
 
-  rls-tests:
-    name: RLS Tests
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - uses: supabase/setup-cli@v1
-        with:
-          version: latest
-
-      - name: Start Supabase
-        run: supabase start
-
-      - name: Run RLS tests
-        run: supabase db test
-
-      - name: Stop Supabase
-        if: always()
-        run: supabase stop
-
   e2e-tests:
     name: E2E Tests
     runs-on: ubuntu-latest
     needs: frontend-quality
+    defaults:
+      run:
+        working-directory: frontend
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: cocinacore
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d cocinacore"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/cocinacore
+      REDIS_URL: redis://localhost:6379
+      AUTH_SECRET: ci-auth-secret-change-me
+      GEMINI_API_KEY: CHANGE_ME
+      STORAGE_DRIVER: local
+      LOCAL_UPLOAD_DIR: ./uploads
+      E2E_USER_EMAIL: test@cocinacore.local
+      E2E_USER_PASSWORD: TestPassword123!
 
     steps:
       - name: Checkout
@@ -74,32 +87,20 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - uses: supabase/setup-cli@v1
-        with:
-          version: latest
-
-      - name: Start Supabase
-        run: supabase start
-
       - name: Install frontend deps
-        run: |
-          cd frontend
-          npm ci
+        run: npm ci
+
+      - name: Run database migrations
+        run: npm run db:migrate
+
+      - name: Seed E2E owner user
+        run: npm run db:bootstrap -- "$E2E_USER_EMAIL" "CI Owner" "$E2E_USER_PASSWORD"
 
       - name: Install Playwright browsers
-        run: |
-          cd frontend
-          npx playwright install chromium
-
-      - name: Build Next.js
-        run: |
-          cd frontend
-          npm run build
+        run: npx playwright install --with-deps chromium
 
       - name: Run E2E tests
-        run: |
-          cd frontend
-          npm run test:e2e
+        run: npm run test:e2e
 
       - name: Upload Playwright report
         if: always()
@@ -108,8 +109,3 @@ jobs:
           name: playwright-report
           path: frontend/playwright-report/
           retention-days: 7
-
-      - name: Stop Supabase
-        if: always()
-        run: supabase stop
-

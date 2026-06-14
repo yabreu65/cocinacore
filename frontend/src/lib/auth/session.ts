@@ -129,6 +129,7 @@ export async function createSession(userId: string): Promise<AuthSession> {
     onboardingCompleted: user.onboarding_completed,
   })
     .setProtectedHeader({ alg: 'HS256' })
+    .setJti(crypto.randomUUID())
     .setIssuedAt()
     .setExpirationTime(expiresAt)
     .sign(secret);

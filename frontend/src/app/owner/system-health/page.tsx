@@ -1,13 +1,13 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Database, Globe, RefreshCw, Server, Sparkles } from 'lucide-react';
+import { Database, RefreshCw, Server, Sparkles } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
 // Types (mirrors the /api/health response shape)
 // ---------------------------------------------------------------------------
 
-type CheckStatus = 'ok' | 'fail' | 'timeout';
+type CheckStatus = 'ok' | 'fail' | 'timeout' | 'not_configured';
 
 interface SingleCheck {
   status: CheckStatus;
@@ -19,10 +19,9 @@ interface HealthData {
   timestamp: string;
   version: string;
   checks: {
-    supabase: SingleCheck;
+    postgresql: SingleCheck;
     redis: SingleCheck;
     gemini: SingleCheck;
-    openrouter: SingleCheck;
   };
 }
 
@@ -37,10 +36,9 @@ interface SubsystemDef {
 }
 
 const SUBSYSTEMS: SubsystemDef[] = [
-  { key: 'supabase', label: 'Supabase', icon: <Database size={18} /> },
+  { key: 'postgresql', label: 'PostgreSQL', icon: <Database size={18} /> },
   { key: 'redis', label: 'Redis', icon: <Server size={18} /> },
   { key: 'gemini', label: 'Gemini', icon: <Sparkles size={18} /> },
-  { key: 'openrouter', label: 'OpenRouter', icon: <Globe size={18} /> },
 ];
 
 // ---------------------------------------------------------------------------
@@ -64,6 +62,13 @@ const STATUS_CONFIG: Record<
     text: 'text-[#C56A1A]',
     dot: 'bg-[#C56A1A]',
     label: 'Timeout',
+  },
+  not_configured: {
+    bg: 'bg-[#6B5A50]/10',
+    border: 'border-[#6B5A50]/20',
+    text: 'text-[#6B5A50]',
+    dot: 'bg-[#6B5A50]',
+    label: 'Not configured',
   },
   fail: {
     bg: 'bg-red-50',
@@ -141,6 +146,7 @@ export default function OwnerSystemHealthPage() {
     return (
       <article
         key={sub.key}
+        data-testid="status-card"
         className={`rounded-2xl border p-4 premium-shadow transition ${config.border} ${config.bg}`}
       >
         <header className="flex items-center justify-between gap-2">
@@ -216,7 +222,7 @@ export default function OwnerSystemHealthPage() {
         <p className="inline-flex items-center gap-2 rounded-full border border-[#6D4AFF]/25 bg-[#6D4AFF]/10 px-3 py-1 text-xs font-semibold text-[#5A3EE6]">
           <ActivityIcon size={14} /> Monitoreo en tiempo real
         </p>
-        <h2 className="mt-3 text-2xl font-semibold text-[#241A14]">System Health</h2>
+        <h1 className="mt-3 text-2xl font-semibold text-[#241A14]">System Health</h1>
         <p className="mt-1 text-sm text-[#6B5A50]">
           Estado operativo de todos los subsistemas. Se actualiza automáticamente cada 30 segundos.
         </p>

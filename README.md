@@ -3,16 +3,19 @@
 SaaS multitenant de recetas asistido por IA.
 
 ## Stack
-- **Framework:** Next.js (App Router) in `frontend/`
-- **Database:** PostgreSQL (Supabase) with RLS (Row Level Security) and `pgvector`
-- **AI:** Gemini / OpenAI for RAG over cookbook PDFs and personalized recipes
+- **Framework:** Next.js (App Router) en `frontend/`
+- **Database:** PostgreSQL directo vía `pg` + `pgvector`
+- **Cache / queues:** Redis
+- **AI:** Gemini como proveedor principal; algunas rutas todavía conservan fallback opcional OpenRouter-compatible
+- **Storage:** driver local hoy, con camino futuro a S3 / Object Storage
 
 ## Repository structure
-- `frontend/` — Next.js app
-- `supabase/` — migrations, schemas, RLS policies, and security tests
+- `frontend/` — aplicación Next.js
+- `db/migrations/` — migraciones PostgreSQL directas usadas por el runtime actual
+- `supabase/` — artefactos legacy preservados solo para referencia/auditoría durante la migración
 
 ## Engineering gates
-Before a change is merge-ready, run these commands from the repository root:
+Antes de considerar un cambio merge-ready, corré desde la raíz del repo:
 
 ```bash
 cd frontend && npm run lint
@@ -21,122 +24,106 @@ cd frontend && npm test
 cd frontend && npm run build
 ```
 
-If any gate fails, the change is not ready to merge.
+Si falla cualquiera, el cambio NO está listo.
 
 ## Type safety standard
-Do not use `any` for application code or trust boundaries. Prefer:
+No uses `any` en código de aplicación ni en trust boundaries. Preferí:
 
-- `unknown` for external data until it is narrowed
-- runtime guards or schemas for untrusted API/database responses
-- DTOs for domain and API contracts
-- typed clients/generated types for Supabase and external services
+- `unknown` para datos externos hasta validarlos
+- guards o schemas para entrada no confiable
+- DTOs explícitos para contratos API/domain
+- repositorios y tipos de filas DB explícitos
 
 ## Secret handling
-Server secrets must stay server-only. Do not expose Gemini keys, Supabase service-role keys, or similar secrets through `NEXT_PUBLIC_*` variables or client bundles.
+Los secretos deben quedarse server-side. No expongas `DATABASE_URL`, `AUTH_SECRET`, `GEMINI_API_KEY` ni credenciales similares por `NEXT_PUBLIC_*` ni en bundles cliente.
 
-## RLS proof
-Multi-tenant reads and writes must prove tenant isolation. The current RLS fixture lives at:
+## Local development
+### Opción recomendada: app local + servicios en Docker
+
+```bash
+docker compose -f docker-compose.local.yml up -d
+cd frontend && npm ci
+cd frontend && npm run db:migrate
+cd frontend && npm run dev
+```
+
+Esto deja:
+- PostgreSQL en `localhost:5433`
+- Redis en `localhost:6379`
+- App en [http://localhost:3000](http://localhost:3000)
+
+### Bootstrap del primer owner
+
+```bash
+cd frontend && npm run db:bootstrap -- "owner@cocinacore.local" "Owner Local" "ChangeMe123!"
+```
+
+El script está diseñado como one-shot: si ya existe platform owner, aborta.
+
+### Opción full Docker
+
+```bash
+docker compose -f docker-compose.local.yml up -d --build
+```
+
+## Environment variables
+La referencia activa es:
 
 ```text
-supabase/tests/rls_tenant_isolation.sql
+frontend/.env.example
 ```
 
-Use it as the allow/deny proof for same-tenant access and denied cross-tenant access when changing Supabase policies or tenant-scoped data paths.
-
-## Local Development with Docker
-
-The current Compose file is intentionally small: it starts auxiliary services only.
-Run the Next.js app directly from `frontend/` during local development.
-
-Docker container logs are configured with `json-file` rotation in Compose to avoid
-unbounded growth inside `Docker.raw`.
-
-```bash
-docker compose up -d
-cd frontend
-npm install
-npm run dev
-```
-
-This will start:
-- Redis on port `6379` through Docker Compose.
-- Next.js on http://localhost:3000 through `npm run dev`.
-
-Supabase local development is managed by the Supabase CLI, not by `docker-compose.yml`.
-
-## Supabase Local Development
-
-Initialize and start Supabase locally:
-
-```bash
-supabase start
-```
-
-This uses the configuration in `supabase/config.toml` and applies migrations from `supabase/migrations/`.
+El archivo `frontend/.env.example.legacy` queda solo como referencia histórica de la migración. No reintroduzcas variables obligatorias de Supabase al runtime.
 
 ## Deployment
+El workflow `.github/workflows/deploy.yml` hoy solo valida builds de staging/production. El deploy real sigue intencionalmente desacoplado hasta cerrar la infraestructura objetivo.
 
-The project includes a deploy workflow (`.github/workflows/deploy.yml`) that currently
-validates staging and production builds. Real deployment is intentionally not wired yet;
-connect it after the target host is selected.
-
-### Required secrets
-- `STAGING_SUPABASE_URL` / `STAGING_SUPABASE_ANON_KEY`
-- `PROD_SUPABASE_URL` / `PROD_SUPABASE_ANON_KEY`
-- `SENTRY_DSN`
+### Secrets esperados
+- `DATABASE_URL`
+- `REDIS_URL`
+- `AUTH_SECRET`
+- `GEMINI_API_KEY` (o dejar Gemini deshabilitado donde la ruta lo soporte)
+- `NEXT_PUBLIC_SENTRY_DSN` / `SENTRY_DSN` según el flujo que termines usando
 
 ### Hosting options
-
-**Vercel (recommended for Next.js):**
-1. Connect GitHub repo to Vercel
-2. Configure environment variables in Vercel dashboard
-3. Deploys happen automatically on push to main
+**Vercel:**
+1. Conectar repo a Vercel
+2. Configurar variables de entorno
+3. Deploy automático en push a main
 
 **Docker / Self-hosted:**
 ```bash
 docker build -t cocinacore .
-docker run -p 3000:3000 --env-file .env.local cocinacore
+docker run -p 3000:3000 --env-file frontend/.env.local cocinacore
 ```
 
-### Future VPS checklist
-
-Use this path when the production VPS is ready:
-
-1. Point DNS to the VPS and configure TLS with a reverse proxy such as Caddy, Traefik, or Nginx.
-2. Store production secrets on the server or provider secret store; never bake them into the Docker image.
-3. Build and run the app container with `NODE_ENV=production`, Supabase public env vars, server-only AI keys, Sentry env vars, and `REDIS_URL`.
-4. Use a managed Supabase project for production unless you intentionally choose to operate Postgres/Supabase yourself.
-5. Add a health check against `/api/health` for dashboards, and add a stricter readiness check before using it for load balancer removal decisions.
-6. Enable automated backups/snapshots and define a rollback process before the first real customer.
-7. Wire `.github/workflows/deploy.yml` to the chosen VPS deployment mechanism only after SSH host, user, key, registry, and rollback strategy are known.
-
-### Platform owner bootstrap
-
-Security hardening quarantines all existing `platform_owners` rows until a database administrator reviews them. After confirming the correct owner user id in Supabase, approve it from a privileged database session:
-
-```sql
-select public.approve_platform_owner('<user-id>'::uuid);
-```
-
-Do not expose this as an application action. It is intentionally not granted to `authenticated` or `anon` roles.
+### VPS checklist
+1. Configurar DNS + TLS con Caddy, Traefik o Nginx
+2. Guardar secretos fuera de la imagen
+3. Ejecutar contenedor con `DATABASE_URL`, `REDIS_URL`, `AUTH_SECRET`, configuración AI y storage
+4. Usar tu infraestructura PostgreSQL/Redis gestionada (`pawtech-postgres`, `pawtech-redis`, etc.)
+5. Exponer `/api/health` para health checks básicos
+6. Definir backups y rollback antes del primer deploy serio
+7. Recién ahí conectar `deploy.yml` al mecanismo real de publicación
 
 ## Architecture
 
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────────┐
-│   Client    │────▶│  Next.js    │────▶│   Supabase      │
-│  (Browser)  │     │  (Vercel)   │     │  (PostgreSQL)  │
-└─────────────┘     └──────┬──────┘     └─────────────────┘
+```text
+┌─────────────┐     ┌─────────────┐     ┌──────────────────┐
+│   Client    │────▶│  Next.js    │────▶│   PostgreSQL      │
+│  (Browser)  │     │   App       │     │  (direct via pg) │
+└─────────────┘     └──────┬──────┘     └──────────────────┘
                            │
                     ┌──────┴──────┐
                     │    Redis     │
-                    │   (Upstash)  │
+                    │ rate-limit   │
+                    │ + queues     │
                     └──────────────┘
 ```
 
 ## Tenant security guarantees
-- Shared database model with strict RLS and required `tenant_id` scoping on tenant-owned data.
-- Deny-by-default posture: RLS-enabled tables allow access only through explicit policies.
-- Platform Owner/global scope is separated from tenant roles and tenant memberships.
-- Tenant role model is `owner | admin | member`, enforced with typed tenant context contracts.
-- Runtime RLS evidence must be maintained in `supabase/tests/rls_tenant_isolation.sql` with explicit same-tenant allow and cross-tenant deny expectations.
+- Modelo shared-db con `tenant_id` obligatorio en datos tenant-owned
+- Auth y autorización resueltas en la aplicación con sesiones, guards y repositorios
+- Scope Platform Owner separado de roles tenant
+- Roles tenant: `owner | admin | member`
+- `supabase/tests/` queda solo como evidencia histórica de la etapa anterior, no como control runtime activo
