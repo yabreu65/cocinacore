@@ -30,14 +30,14 @@ export default function ForgotPasswordPage() {
         body: JSON.stringify(parsed.data),
       });
 
-      const body = (await response.json().catch(() => null)) as { error?: string } | null;
+      const body = (await response.json().catch(() => null)) as { error?: string; message?: string } | null;
       if (!response.ok) {
         setErrorMessage(body?.error ?? 'No pudimos procesar la solicitud.');
         return;
       }
 
       setSuccessMessage(
-        'Si el correo existe en CocinaCore, te enviaremos instrucciones cuando el flujo esté listo.'
+        body?.message ?? 'Si el correo existe en CocinaCore, te enviaremos instrucciones.'
       );
       event.currentTarget.reset();
     } catch {
@@ -53,8 +53,7 @@ export default function ForgotPasswordPage() {
         <p className="text-xs font-bold tracking-[0.15em] text-[#C56A1A]">COCINACORE</p>
         <h1 className="mt-3 text-3xl font-semibold text-[#241A14]">Recuperar contraseña</h1>
         <p className="mt-2 text-sm text-[#6B5A50]">
-          Estamos reconstruyendo este flujo sobre PostgreSQL directo. Igual podés registrar tu
-          solicitud.
+          Ingresá tu correo y te enviaremos un enlace seguro para crear una nueva contraseña.
         </p>
 
         <form onSubmit={onSubmit} className="mt-6 grid gap-4" noValidate>

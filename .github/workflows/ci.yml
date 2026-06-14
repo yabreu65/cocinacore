@@ -30,8 +30,11 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Test
-        run: npm run test
+      - name: Test with coverage
+        run: npm run test:coverage
+
+      - name: Typecheck
+        run: npx tsc --noEmit
 
       - name: Build
         run: npm run build
@@ -45,7 +48,7 @@ jobs:
         working-directory: frontend
     services:
       postgres:
-        image: postgres:16
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_DB: cocinacore
           POSTGRES_USER: postgres
@@ -75,6 +78,8 @@ jobs:
       LOCAL_UPLOAD_DIR: ./uploads
       E2E_USER_EMAIL: test@cocinacore.local
       E2E_USER_PASSWORD: TestPassword123!
+      E2E_OWNER_EMAIL: test@cocinacore.local
+      E2E_OWNER_PASSWORD: TestPassword123!
 
     steps:
       - name: Checkout

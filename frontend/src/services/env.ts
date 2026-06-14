@@ -2,9 +2,19 @@ export type ServerSecretKey =
   | 'GEMINI_API_KEY'
   | 'DATABASE_URL'
   | 'REDIS_URL'
-  | 'AUTH_SECRET';
+  | 'AUTH_SECRET'
+  | 'RESEND_API_KEY'
+  | 'EMAIL_FROM'
+  | 'APP_PUBLIC_URL'
+  | 'S3_ENDPOINT'
+  | 'S3_REGION'
+  | 'S3_BUCKET'
+  | 'S3_ACCESS_KEY_ID'
+  | 'S3_SECRET_ACCESS_KEY';
 
-export type ServerEnvSecrets = Readonly<Record<ServerSecretKey, string>>;
+export type RequiredServerSecretKey = 'GEMINI_API_KEY' | 'DATABASE_URL' | 'REDIS_URL' | 'AUTH_SECRET';
+
+export type ServerEnvSecrets = Readonly<Record<RequiredServerSecretKey, string>>;
 
 function assertServerRuntime(): void {
   if (typeof window !== 'undefined') {

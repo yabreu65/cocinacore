@@ -1,35 +1,13 @@
 import { mkdir, unlink, writeFile } from 'fs/promises';
 import path from 'path';
-
-export interface LocalStoredFile {
-  storagePath: string;
-  absolutePath: string;
-}
-
-interface SaveFileInput {
-  namespace: string;
-  fileName: string;
-  bytes: ArrayBuffer;
-}
+import type { SaveFileInput, StorageAdapter, StoredFile } from './types';
 
 function sanitizeSegment(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9._/-]/g, '-');
 }
 
-function getStorageDriver(): 'local' {
-  const driver = process.env.STORAGE_DRIVER?.trim().toLowerCase() ?? 'local';
-  if (driver && driver !== 'local') {
-    throw new Error(`Unsupported storage driver: ${driver}. Only 'local' is implemented.`);
-  }
-  return 'local';
-}
-
 function getStorageRoot(): string {
-  getStorageDriver();
-
-  const configuredRoot =
-    process.env.LOCAL_UPLOAD_DIR?.trim() ||
-    process.env.LOCAL_STORAGE_ROOT?.trim();
+  const configuredRoot = process.env.LOCAL_UPLOAD_DIR?.trim() || process.env.LOCAL_STORAGE_ROOT?.trim();
 
   return configuredRoot && configuredRoot.length > 0
     ? configuredRoot
@@ -39,16 +17,17 @@ function getStorageRoot(): string {
 function resolveStoragePath(storagePath: string): string {
   const root = path.resolve(getStorageRoot());
   const absolutePath = path.resolve(root, storagePath);
+  const relativePath = path.relative(root, absolutePath);
 
-  if (!absolutePath.startsWith(root)) {
+  if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
     throw new Error('Invalid storage path');
   }
 
   return absolutePath;
 }
 
-export const localStorageAdapter = {
-  async saveFile(input: SaveFileInput): Promise<LocalStoredFile> {
+export const localStorageAdapter: StorageAdapter & { publicRoot: string } = {
+  async saveFile(input: SaveFileInput): Promise<StoredFile> {
     const sanitizedNamespace = sanitizeSegment(input.namespace).replace(/^\/+|\/+$/g, '');
     const sanitizedName = sanitizeSegment(input.fileName).split('/').pop() || 'file.bin';
     const storagePath = path.posix.join(

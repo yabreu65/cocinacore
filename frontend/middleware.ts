@@ -45,10 +45,6 @@ function isApiRoute(pathname: string): boolean {
   return pathname.startsWith('/api/');
 }
 
-function isOwnerRoute(pathname: string): boolean {
-  return pathname === '/owner' || pathname.startsWith('/owner/') || pathname.startsWith('/api/owner/');
-}
-
 function isTenantPrivilegedRoute(pathname: string): boolean {
   return pathname === '/members' || pathname.startsWith('/members/');
 }
@@ -94,22 +90,6 @@ export async function middleware(request: NextRequest) {
     }
 
     return NextResponse.redirect(buildLoginRedirect(request.url, pathname, search));
-  }
-
-  if (isOwnerRoute(pathname)) {
-    const profile = toUserProfileForGuard({
-      role: user.role ?? 'member',
-      tenantId: user.tenantId ?? null,
-    });
-
-    const authorized = Boolean(profile?.tenantId && profile.role === 'owner');
-
-    if (!authorized) {
-      if (isApiRoute(pathname)) {
-        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-      }
-      return NextResponse.redirect(new URL('/app', request.url));
-    }
   }
 
   if (isTenantPrivilegedRoute(pathname)) {

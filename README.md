@@ -7,7 +7,7 @@ SaaS multitenant de recetas asistido por IA.
 - **Database:** PostgreSQL directo vía `pg` + `pgvector`
 - **Cache / queues:** Redis
 - **AI:** Gemini como proveedor principal
-- **Storage:** driver local hoy, con camino futuro a S3 / Object Storage
+- **Storage:** local en desarrollo; S3-compatible en producción
 
 ## Repository structure
 - `frontend/` — aplicación Next.js
@@ -82,6 +82,9 @@ El workflow `.github/workflows/deploy.yml` hoy solo valida builds de staging/pro
 - `REDIS_URL`
 - `AUTH_SECRET`
 - `GEMINI_API_KEY` (o dejar Gemini deshabilitado donde la ruta lo soporte)
+- `APP_PUBLIC_URL`
+- `RESEND_API_KEY` / `EMAIL_FROM` para password reset
+- `STORAGE_DRIVER=s3` + variables `S3_*` para uploads/PDFs
 - `NEXT_PUBLIC_SENTRY_DSN` / `SENTRY_DSN` según el flujo que termines usando
 
 ### Hosting options
@@ -99,11 +102,11 @@ docker run -p 3000:3000 --env-file frontend/.env.local cocinacore
 ### VPS checklist
 1. Configurar DNS + TLS con Caddy, Traefik o Nginx
 2. Guardar secretos fuera de la imagen
-3. Ejecutar contenedor con `DATABASE_URL`, `REDIS_URL`, `AUTH_SECRET`, configuración AI y storage
-4. Usar tu infraestructura PostgreSQL/Redis gestionada (`pawtech-postgres`, `pawtech-redis`, etc.)
-5. Exponer `/api/health` para health checks básicos
-6. Definir backups y rollback antes del primer deploy serio
-7. Recién ahí conectar `deploy.yml` al mecanismo real de publicación
+3. Ejecutar contenedor con `DATABASE_URL`, `REDIS_URL`, `AUTH_SECRET`, configuración AI, Resend y S3
+4. Usar `docker-compose.prod.yml` para app + PostgreSQL + Redis en VPS
+5. Exponer `/api/health` para health checks básicos detrás de HTTPS
+6. Definir backups y rollback antes del primer deploy serio; ver `docs/production/runbook.md`
+7. Usar `.github/workflows/deploy.yml` para deploy por SSH al VPS
 
 ## Architecture
 

@@ -22,6 +22,7 @@ export const SignupSchema = AuthEmailSchema.extend({
 
 export const ResetPasswordSchema = z
   .object({
+    token: z.string().trim().min(32, 'El enlace no es válido o expiró. Pedí uno nuevo.'),
     password: z.string().min(8, 'La contraseña debe tener al menos 8 caracteres.'),
     confirmPassword: z.string().min(8, 'Confirmá la contraseña.'),
   })

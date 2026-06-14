@@ -6,7 +6,7 @@ import {
   insertBookChunks,
 } from '@/lib/db/repositories/pdfRepository';
 import { isPlatformOwner } from '@/lib/db/repositories/platformOwnerRepository';
-import { localStorageAdapter } from '@/lib/storage/localStorageAdapter';
+import { getStorageAdapter } from '@/lib/storage';
 
 export const runtime = 'nodejs';
 
@@ -57,6 +57,7 @@ function parseChunks(value: FormDataEntryValue | null): ChunkPayload[] {
 
 export async function POST(request: NextRequest) {
   let storedFilePath: string | null = null;
+  const storage = getStorageAdapter();
 
   try {
     const user = await requireUser(request, 'Unauthorized');
@@ -89,10 +90,11 @@ export async function POST(request: NextRequest) {
 
     const checksum = await sha256Hex(file);
     const safeName = sanitizeFileName(file.name);
-    const storedFile = await localStorageAdapter.saveFile({
+    const storedFile = await storage.saveFile({
       namespace: 'global-pdfs',
       fileName: safeName,
       bytes: await file.arrayBuffer(),
+      contentType: file.type,
     });
     storedFilePath = storedFile.storagePath;
 
@@ -138,7 +140,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true, bookId: bookRow.id, chunkCount: chunks.length });
   } catch (error) {
     if (storedFilePath) {
-      await localStorageAdapter.deleteFile(storedFilePath).catch(() => undefined);
+      await storage.deleteFile(storedFilePath).catch(() => undefined);
     }
 
     const message = error instanceof Error ? error.message : 'Could not upload global PDF.';

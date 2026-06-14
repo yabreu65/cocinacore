@@ -1,9 +1,10 @@
 import { type NextRequest, NextResponse } from 'next/server';
-import { requireUser } from '@/lib/auth/server';
 import { hashPassword } from '@/lib/auth/password';
+import { hashPasswordResetToken } from '@/lib/auth/password-reset';
 import { ResetPasswordSchema } from '@/lib/auth/schemas';
-import { updatePassword } from '@/lib/db/repositories/userRepository';
+import { consumePasswordResetToken } from '@/lib/db/repositories/passwordResetRepository';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { serverLogger } from '@/lib/serverLogger';
 
 export const runtime = 'nodejs';
 
@@ -27,29 +28,36 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const emailServiceConfigured = Boolean(
-    process.env.RESEND_API_KEY?.trim() ||
-      process.env.SMTP_HOST?.trim() ||
-      process.env.EMAIL_FROM?.trim()
-  );
-
-  if (!emailServiceConfigured) {
-    return NextResponse.json(
-      { error: 'Password reset service is not configured yet for direct PostgreSQL mode.' },
-      { status: 503 }
-    );
-  }
+  const passwordHash = await hashPassword(parsed.data.password);
 
   try {
-    const user = await requireUser(request, 'El enlace no es válido o expiró. Pedí uno nuevo.');
-    const passwordHash = await hashPassword(parsed.data.password);
-    await updatePassword(user.id, passwordHash);
+    const consumed = await consumePasswordResetToken(
+      hashPasswordResetToken(parsed.data.token),
+      async (client, token) => {
+        await client.query(
+          'update public.users set password_hash = $1, updated_at = now() where id = $2',
+          [passwordHash, token.user_id]
+        );
+        await client.query('delete from public.sessions where user_id = $1', [token.user_id]);
+        return true;
+      }
+    );
+
+    if (!consumed) {
+      return NextResponse.json(
+        { error: 'El enlace no es válido o expiró. Pedí uno nuevo.' },
+        { status: 401 }
+      );
+    }
 
     return NextResponse.json({ ok: true });
-  } catch {
+  } catch (error) {
+    serverLogger.error('auth.password_reset.update_failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
     return NextResponse.json(
-      { error: 'El enlace no es válido o expiró. Pedí uno nuevo.' },
-      { status: 401 }
+      { error: 'No pudimos actualizar la contraseña.' },
+      { status: 500 }
     );
   }
 }

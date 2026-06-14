@@ -230,6 +230,56 @@ describe('checkRateLimit', () => {
   // Sliding window: only counts requests within the window
   // -----------------------------------------------------------------------
 
+  // -----------------------------------------------------------------------
+  // Auth endpoint rate limiting (longer windows)
+  // -----------------------------------------------------------------------
+
+  it('enforces auth/password-reset limits (3/15min)', async () => {
+    const ip = '20.20.20.20';
+
+    for (let i = 0; i < 3; i++) {
+      expect((await checkRateLimit('auth/password-reset', ip)).success).toBe(true);
+    }
+
+    expect((await checkRateLimit('auth/password-reset', ip)).success).toBe(false);
+  });
+
+  it('enforces auth/login limits (8/15min)', async () => {
+    const ip = '21.21.21.21';
+
+    for (let i = 0; i < 8; i++) {
+      expect((await checkRateLimit('auth/login', ip)).success).toBe(true);
+    }
+
+    expect((await checkRateLimit('auth/login', ip)).success).toBe(false);
+  });
+
+  it('enforces auth/signup limits (5/15min)', async () => {
+    const ip = '22.22.22.22';
+
+    for (let i = 0; i < 5; i++) {
+      expect((await checkRateLimit('auth/signup', ip)).success).toBe(true);
+    }
+
+    expect((await checkRateLimit('auth/signup', ip)).success).toBe(false);
+  });
+
+  it('resets auth limits after the 15-minute window passes', async () => {
+    const ip = '23.23.23.23';
+
+    // Exhaust password-reset: 3 req / 15 min
+    for (let i = 0; i < 3; i++) {
+      await checkRateLimit('auth/password-reset', ip);
+    }
+    expect((await checkRateLimit('auth/password-reset', ip)).success).toBe(false);
+
+    // Advance 16 minutes
+    advanceSeconds(960);
+
+    // Should be reset now
+    expect((await checkRateLimit('auth/password-reset', ip)).success).toBe(true);
+  });
+
   it('slides the window so old requests expire and new ones are allowed', async () => {
     const ip = '13.13.13.13';
 

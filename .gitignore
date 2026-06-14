@@ -33,6 +33,6 @@ frontend/.env.*
 npm-debug.log*
 .DS_Store
 
-# Supabase legacy local CLI state (not part of the direct-PostgreSQL runtime)
-supabase/.branches/
-supabase/.temp/
+# Production local-only secrets and data
+.env.production
+backups/

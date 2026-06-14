@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { getServerEnvSecrets, getServerSecret } from '../env';
+import { getOptionalServerSecret, getServerEnvSecrets, getServerSecret } from '../env';
 
 const ORIGINAL_ENV = process.env;
 
@@ -49,5 +49,39 @@ describe('server environment validation', () => {
       REDIS_URL: 'redis://localhost:6379',
       AUTH_SECRET: 'auth-secret-value',
     });
+  });
+});
+
+describe('getOptionalServerSecret', () => {
+  it('returns the value when set to a real value', () => {
+    process.env = { ...ORIGINAL_ENV, GEMINI_API_KEY: 'real-key' };
+
+    expect(getOptionalServerSecret('GEMINI_API_KEY')).toBe('real-key');
+  });
+
+  it('returns undefined when the key is not set', () => {
+    delete process.env.GEMINI_API_KEY;
+
+    expect(getOptionalServerSecret('GEMINI_API_KEY')).toBeUndefined();
+  });
+
+  it('returns undefined when the value is blank', () => {
+    process.env = { ...ORIGINAL_ENV, GEMINI_API_KEY: '   ' };
+
+    expect(getOptionalServerSecret('GEMINI_API_KEY')).toBeUndefined();
+  });
+
+  it('returns undefined when the value is CHANGE_ME', () => {
+    process.env = { ...ORIGINAL_ENV, GEMINI_API_KEY: 'CHANGE_ME' };
+
+    expect(getOptionalServerSecret('GEMINI_API_KEY')).toBeUndefined();
+  });
+
+  it('rejects reads from a browser runtime', () => {
+    vi.stubGlobal('window', { document: {} });
+
+    expect(() => getOptionalServerSecret('GEMINI_API_KEY')).toThrow(
+      'Server environment secrets cannot be read from a browser runtime.'
+    );
   });
 });

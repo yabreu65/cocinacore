@@ -6,7 +6,7 @@ import {
   deleteTenantPdfById,
   findTenantPdfById,
 } from '@/lib/db/repositories/pdfRepository';
-import { localStorageAdapter } from '@/lib/storage/localStorageAdapter';
+import { getStorageAdapter } from '@/lib/storage';
 
 export const runtime = 'nodejs';
 
@@ -43,7 +43,7 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
       }
     }
 
-    await localStorageAdapter.deleteFile(pdfRow.storage_path).catch(() => undefined);
+    await getStorageAdapter().deleteFile(pdfRow.storage_path).catch(() => undefined);
 
     return NextResponse.json({ ok: true });
   } catch (error) {

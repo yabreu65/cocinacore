@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { type NextRequest, NextResponse } from 'next/server';
 import Redis from 'ioredis';
 import { requireUser } from '@/lib/auth/server';
 import { query } from '@/lib/db';
@@ -196,9 +196,9 @@ async function checkGemini(): Promise<SingleCheck> {
 // GET /api/health
 // ---------------------------------------------------------------------------
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const user = await requireUser(undefined, 'Unauthorized');
+    const user = await requireUser(request, 'Unauthorized');
     const owner = await isPlatformOwner(user.id);
     if (!owner) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
