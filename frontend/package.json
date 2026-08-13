@@ -14,8 +14,11 @@
     "analyze": "ANALYZE=true next build --webpack",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "db:migrate": "node scripts/run-migrations.js",
-    "db:migrate:dry": "node scripts/run-migrations.js --dry-run",
+    "db:provision": "node scripts/provision-database.js",
+    "db:migrate": "node scripts/run-migrations.js --lane migration",
+    "db:migrate:bootstrap": "node scripts/run-migrations.js --lane bootstrap",
+    "db:migrate:verify": "node scripts/run-migrations.js --lane migration --verify-complete",
+    "db:migrate:dry": "node scripts/run-migrations.js --lane migration --dry-run",
     "db:bootstrap": "node scripts/bootstrap-owner.js"
   },
   "dependencies": {
