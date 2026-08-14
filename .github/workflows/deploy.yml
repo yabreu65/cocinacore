@@ -1,24 +1,71 @@
 name: Deploy
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      sha:
+        description: Full 40-character commit SHA already integrated into main
+        required: true
+        type: string
 
 concurrency:
-  group: deploy-${{ github.ref }}
-  cancel-in-progress: true
+  group: deploy-production
+  cancel-in-progress: false
 
 jobs:
+  validate-deploy:
+    name: Validate production deploy SHA
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    outputs:
+      deploy_sha: ${{ steps.validate.outputs.deploy_sha }}
+
+    steps:
+      - name: Checkout workflow ref
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate requested SHA is in main history
+        id: validate
+        shell: bash
+        env:
+          DEPLOY_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$DEPLOY_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "Deploy SHA must be exactly 40 hexadecimal characters." >&2
+            exit 1
+          fi
+
+          git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+
+          if ! git cat-file -e "${DEPLOY_SHA}^{commit}"; then
+            echo "Requested SHA is not a commit available from origin." >&2
+            exit 1
+          fi
+
+          if ! git merge-base --is-ancestor "$DEPLOY_SHA" origin/main; then
+            echo "Requested SHA is not integrated into origin/main." >&2
+            exit 1
+          fi
+
+          echo "deploy_sha=${DEPLOY_SHA,,}" >> "$GITHUB_OUTPUT"
+
   deploy-production:
     name: Deploy to Production VPS
     runs-on: ubuntu-latest
+    needs: validate-deploy
     environment: production
     if: github.ref == 'refs/heads/main'
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-deploy.outputs.deploy_sha }}
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -67,21 +114,71 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_APP_DIR: ${{ secrets.VPS_APP_DIR }}
-          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_SHA: ${{ needs.validate-deploy.outputs.deploy_sha }}
         run: |
           ssh -i ~/.ssh/cocinacore_deploy_key "$VPS_USER@$VPS_HOST" \
-            "cd '$VPS_APP_DIR' && \
-             git fetch --all --prune && \
-             git checkout '$RELEASE_SHA' && \
-             docker compose -f docker-compose.prod.yml --env-file .env.production build app && \
-             docker compose -f docker-compose.prod.yml --env-file .env.production up -d postgres redis && \
-             DB_LANES=\$(sed -n 's/^COCINACORE_SEPARATED_DB_LANES_ENABLED=//p' .env.production | tail -n 1 | tr '[:upper:]' '[:lower:]' | tr -d '\r') && \
-             case \"\$DB_LANES\" in \
-               ''|false|0|no|off) docker compose -f docker-compose.prod.yml --env-file .env.production run --rm app npm run db:migrate ;; \
-               true|1|yes|on) docker compose -f docker-compose.prod.yml --env-file .env.production --env-file .env.migration --profile operations run --rm migrator npm run db:migrate && docker compose -f docker-compose.prod.yml --env-file .env.production --env-file .env.migration --profile operations run --rm migrator npm run db:migrate:verify ;; \
-               *) printf '%s\n' 'Invalid COCINACORE_SEPARATED_DB_LANES_ENABLED' >&2; exit 1 ;; \
-             esac && \
-             docker compose -f docker-compose.prod.yml --env-file .env.production up -d app"
+            "bash -s -- '$VPS_APP_DIR' '$RELEASE_SHA'" <<'REMOTE_SCRIPT'
+          set -euo pipefail
+
+          VPS_APP_DIR=$1
+          RELEASE_SHA=$2
+          RELEASE_DIR=""
+          RELEASE_TAR=""
+
+          cleanup() {
+            rm -rf "$RELEASE_DIR" "$RELEASE_TAR"
+          }
+          trap cleanup EXIT
+
+          cd "$VPS_APP_DIR"
+          git fetch --all --prune
+          git cat-file -e "${RELEASE_SHA}^{commit}"
+          git merge-base --is-ancestor "$RELEASE_SHA" origin/main
+
+          if ! git diff --quiet || ! git diff --cached --quiet; then
+            echo "Tracked deploy repository changes must be resolved before deployment." >&2
+            exit 1
+          fi
+
+          git checkout --detach "$RELEASE_SHA"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+
+          RELEASE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/cocinacore-release.XXXXXXXX")
+          RELEASE_TAR=$(mktemp "${TMPDIR:-/tmp}/cocinacore-release.XXXXXXXX.tar")
+          git archive --format=tar "$RELEASE_SHA" > "$RELEASE_TAR"
+          tar -xf "$RELEASE_TAR" -C "$RELEASE_DIR"
+          test -f "$RELEASE_DIR/Dockerfile"
+          test -f "$RELEASE_DIR/docker-compose.prod.yml"
+
+          docker build \
+            -f "$RELEASE_DIR/Dockerfile" \
+            -t "cocinacore:deploy-${RELEASE_SHA}" \
+            "$RELEASE_DIR"
+
+          APP_VERSION="deploy-${RELEASE_SHA}" \
+            docker compose -f docker-compose.prod.yml --env-file .env.production up -d postgres redis
+
+          DB_LANES=$(sed -n 's/^COCINACORE_SEPARATED_DB_LANES_ENABLED=//p' .env.production | tail -n 1 | tr '[:upper:]' '[:lower:]' | tr -d '\r')
+          case "$DB_LANES" in
+            ''|false|0|no|off)
+              APP_VERSION="deploy-${RELEASE_SHA}" \
+                docker compose -f docker-compose.prod.yml --env-file .env.production run --rm app npm run db:migrate
+              ;;
+            true|1|yes|on)
+              APP_VERSION="deploy-${RELEASE_SHA}" \
+                docker compose -f docker-compose.prod.yml --env-file .env.production --env-file .env.migration --profile operations run --rm migrator npm run db:migrate
+              APP_VERSION="deploy-${RELEASE_SHA}" \
+                docker compose -f docker-compose.prod.yml --env-file .env.production --env-file .env.migration --profile operations run --rm migrator npm run db:migrate:verify
+              ;;
+            *)
+              printf '%s\n' 'Invalid COCINACORE_SEPARATED_DB_LANES_ENABLED' >&2
+              exit 1
+              ;;
+          esac
+
+          APP_VERSION="deploy-${RELEASE_SHA}" \
+            docker compose -f docker-compose.prod.yml --env-file .env.production up -d app
+          REMOTE_SCRIPT
 
       - name: Production smoke check
         run: curl -fsS "${{ secrets.PRODUCTION_URL }}/api/health"
