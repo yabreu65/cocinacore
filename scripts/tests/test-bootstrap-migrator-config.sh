@@ -21,11 +21,13 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const [manifestPath, directory, base] = process.argv.slice(2);
+const HISTORICAL_BASELINE_COUNT = 10;
+const CURRENT_MIGRATION_COUNT = 11;
 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 if (manifest.manifestVersion !== 1 || manifest.trustedBaseCommit !== base) process.exit(1);
 if (manifest.migrationLaneVersion !== 1) process.exit(1);
 if (manifest.lockContract?.namespacePrefix !== 'cocinacore:database-change:v1:') process.exit(1);
-if (manifest.migrations?.length !== 10) process.exit(1);
+if (manifest.migrations?.length !== CURRENT_MIGRATION_COUNT) process.exit(1);
 if (manifest.baselineObjects?.transferable?.length !== 38) process.exit(1);
 const kinds = manifest.baselineObjects.transferable.reduce((counts, object) => {
   counts[object.kind] = (counts[object.kind] || 0) + 1;
@@ -42,7 +44,16 @@ manifest.migrations.forEach((entry, index) => {
   const digest = crypto.createHash('sha256').update(bytes).digest('hex');
   if (entry.byteLength !== bytes.length || entry.sha256 !== digest) process.exit(1);
   if (entry.transactional !== 'required') process.exit(1);
+  if (entry.legacyChecksumBackfillAllowed !== (index < HISTORICAL_BASELINE_COUNT)) process.exit(1);
+  if (index < HISTORICAL_BASELINE_COUNT && entry.catalogAdditions !== undefined) process.exit(1);
 });
+const canonical = manifest.migrations[HISTORICAL_BASELINE_COUNT];
+if (canonical.id !== '011' || canonical.filename !== '011_canonical_email_invariant.sql') process.exit(1);
+if (canonical.lane !== 'migration' || canonical.transactional !== 'required') process.exit(1);
+if (canonical.legacyChecksumBackfillAllowed !== false) process.exit(1);
+if (JSON.stringify(canonical.catalogAdditions) !== JSON.stringify([{
+  kind: 'constraint', schema: 'public', identity: 'users.users_email_canonical_check'
+}])) process.exit(1);
 const sql = fs.readdirSync(directory).filter((name) => name.endsWith('.sql')).sort();
 if (sql.length !== names.size || sql.some((name) => !names.has(name))) process.exit(1);
 const extensions = new Map(manifest.extensions.map((entry) => [entry.name, entry]));
@@ -70,6 +81,10 @@ grep -q 'VECTOR_NOT_AVAILABLE' "$PROVISIONER" || fail 'vector availability error
 grep -q 'create extension vector with schema public' "$PROVISIONER" || fail 'vector bootstrap install missing'
 grep -q 'pg_available_extension_versions' "$PROVISIONER" || fail 'server extension availability check missing'
 grep -q 'legacyChecksumBackfillAllowed' "$PROVISIONER" || fail 'trusted legacy backfill missing'
+grep -q 'HISTORICAL_BASELINE_COUNT = 10' "$PROVISIONER" || fail 'provisioner historical/forward boundary missing'
+grep -q 'catalogAdditions' "$PROVISIONER" || fail 'provisioner forward catalog support missing'
+grep -q 'HISTORICAL_BASELINE_COUNT = 10' "$RUNNER" || fail 'runner historical/forward boundary missing'
+grep -q 'catalogAdditions' "$RUNNER" || fail 'runner forward catalog validation missing'
 grep -q 'tokenizeTopLevelStatements' "$RUNNER" || fail 'SQL lexer missing'
 grep -q 'contains prohibited top-level transaction control' "$RUNNER" || fail 'transaction-control rejection missing'
 grep -q 'unsupported nontransactional operation' "$RUNNER" || fail 'nontransactional rejection missing'

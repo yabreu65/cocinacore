@@ -99,7 +99,7 @@ manifest_path, migration_path, filename = map(pathlib.Path, sys.argv[1:])
 manifest=json.loads(manifest_path.read_text())
 data=migration_path.read_bytes()
 manifest['migrations'].append({
-  'id':'011','filename':str(filename),'lane':'migration','sha256':hashlib.sha256(data).hexdigest(),
+  'id':'012','filename':str(filename),'lane':'migration','sha256':hashlib.sha256(data).hexdigest(),
   'byteLength':len(data),'transactional':'required','legacyChecksumBackfillAllowed':False
 })
 manifest_path.write_text(json.dumps(manifest,indent=2)+'\n')
@@ -150,12 +150,26 @@ admin_sql "$DB" 'drop database vector_denied'
 
 # Explicit bootstrap preinstall makes unchanged 001 safe; pgcrypto remains migration-owned.
 migrate >"$LOG" 2>&1
-grep -q 'DONE 010_password_reset_tokens.sql' "$LOG" || fail 'fresh 001-010 did not complete'
+grep -q 'DONE 011_canonical_email_invariant.sql' "$LOG" || fail 'fresh 001-011 did not complete'
 migrate --verify-complete >"$LOG" 2>&1
 grep -q 'Migration ledger is complete' "$LOG" || fail 'fresh completeness verification failed'
-[ "$(admin_sql "$DB" "select count(*) from public.schema_migrations")" = 10 ] || fail 'fresh ledger count is not 10'
+[ "$(admin_sql "$DB" "select count(*) from public.schema_migrations")" = 11 ] || fail 'fresh ledger count is not 11'
+[ "$(admin_sql "$DB" "select count(*) from pg_constraint where conrelid='public.users'::regclass and conname='users_email_canonical_check'")" = 1 ] || fail 'forward canonical constraint is missing'
 [ "$(admin_sql "$DB" "select pg_get_userbyid(extowner) from pg_extension where extname='pgcrypto'")" = cocinacore_schema_owner ] || fail 'pgcrypto was not created by schema owner'
 [ "$(admin_sql "$DB" "select pg_get_userbyid(relowner) from pg_class where oid='public.tenants'::regclass")" = cocinacore_schema_owner ] || fail 'fresh objects are not schema-owner owned'
+
+# Established ledgers accept only a checksummed continuous manifest prefix.
+CHECKSUM_010=$(admin_sql "$DB" "select checksum from schema_migrations where filename='010_password_reset_tokens.sql'")
+CHECKSUM_011=$(admin_sql "$DB" "select checksum from schema_migrations where filename='011_canonical_email_invariant.sql'")
+admin_sql "$DB" "delete from schema_migrations where filename='010_password_reset_tokens.sql'"
+expect_provision_failure 'Established ledger migration prefix'
+admin_sql "$DB" "insert into schema_migrations(filename,checksum) values ('010_password_reset_tokens.sql','$CHECKSUM_010')"
+admin_sql "$DB" "update schema_migrations set checksum=repeat('0',64) where filename='011_canonical_email_invariant.sql'"
+expect_provision_failure MIGRATION_CHECKSUM_MISMATCH
+admin_sql "$DB" "update schema_migrations set checksum='$CHECKSUM_011' where filename='011_canonical_email_invariant.sql'"
+admin_sql "$DB" "insert into schema_migrations(filename,checksum) values ('999_unknown.sql',repeat('0',64))"
+expect_provision_failure 'Established ledger migration prefix'
+admin_sql "$DB" "delete from schema_migrations where filename='999_unknown.sql'"
 
 # Malformed extension membership is detected, while extension members remain outside app adoption.
 VECTOR_OPERATOR=$(admin_sql "$DB" "select d.objid from pg_extension e join pg_depend d on d.refclassid='pg_extension'::regclass and d.refobjid=e.oid and d.deptype='e' where e.extname='vector' and d.classid='pg_operator'::regclass order by d.objid limit 1")
@@ -223,7 +237,7 @@ migrate --verify-complete >"$LOG" 2>&1
 admin_sql "$DB" 'create database legacy_disabled'
 DISABLED_URL="postgresql://cocinacore:$ADMIN_PASSWORD@127.0.0.1:$PORT/legacy_disabled"
 DATABASE_URL="$DISABLED_URL" node "$ROOT/frontend/scripts/run-migrations.js" --lane migration >"$LOG" 2>&1
-grep -q 'DONE 010_password_reset_tokens.sql' "$LOG" || fail 'missing-gate legacy mode failed'
+grep -q 'DONE 011_canonical_email_invariant.sql' "$LOG" || fail 'missing-gate legacy mode failed'
 COCINACORE_SEPARATED_DB_LANES_ENABLED=false DATABASE_URL="$DISABLED_URL" \
 node "$ROOT/frontend/scripts/run-migrations.js" --lane migration --verify-complete >"$LOG" 2>&1
 grep -q 'Migration ledger is complete' "$LOG" || fail 'false-gate legacy mode failed'
@@ -276,7 +290,7 @@ for spec in 'begin:BEGIN:prohibited top-level' 'commit:COMMIT:prohibited top-lev
             'release:RELEASE:prohibited top-level' 'cr_comment:CR_COMMENT:prohibited top-level' \
             'backslash:BACKSLASH:prohibited top-level'; do
   name=${spec%%:*}; rest=${spec#*:}; label=${rest%%:*}; expected=${rest#*:}
-  dir="$TMP_ROOT/fixture-$name"; make_fixture "$dir" "011_${name}_fixture.sql" "$TMP_ROOT/$name.sql"
+  dir="$TMP_ROOT/fixture-$name"; make_fixture "$dir" "012_${name}_fixture.sql" "$TMP_ROOT/$name.sql"
   if MIGRATIONS_DIR="$dir" node "$ROOT/frontend/scripts/run-migrations.js" --lane migration --dry-run >"$LOG" 2>&1; then
     fail "$label fixture was accepted"
   fi
@@ -292,9 +306,9 @@ end
 $$;
 SQL
 FALSE_DIR="$TMP_ROOT/fixture-false-positive"
-make_fixture "$FALSE_DIR" 011_false_positive_fixture.sql "$TMP_ROOT/false-positive.sql"
+make_fixture "$FALSE_DIR" 012_false_positive_fixture.sql "$TMP_ROOT/false-positive.sql"
 MIGRATIONS_DIR="$FALSE_DIR" node "$ROOT/frontend/scripts/run-migrations.js" --lane migration --dry-run >"$LOG" 2>&1
-grep -q '011_false_positive_fixture.sql' "$LOG" || fail 'lexer false-positive fixture was rejected'
+grep -q '012_false_positive_fixture.sql' "$LOG" || fail 'lexer false-positive fixture was rejected'
 
 # A changed historical file can never certify itself.
 MUTATED_DIR="$TMP_ROOT/mutated-history"
@@ -311,13 +325,13 @@ create table public.cp21_must_roll_back(id integer primary key);
 select public.cp21_missing_function();
 SQL
 FAILURE_DIR="$TMP_ROOT/fixture-failure"
-make_fixture "$FAILURE_DIR" 011_atomic_failure.sql "$TMP_ROOT/failure.sql"
+make_fixture "$FAILURE_DIR" 012_atomic_failure.sql "$TMP_ROOT/failure.sql"
 if COCINACORE_SEPARATED_DB_LANES_ENABLED=true MIGRATION_DATABASE_URL="$MIGRATION_URL" \
    MIGRATIONS_DIR="$FAILURE_DIR" node "$ROOT/frontend/scripts/run-migrations.js" --lane migration >"$LOG" 2>&1; then
   fail 'failed migration succeeded'
 fi
 [ "$(admin_sql "$DB" "select to_regclass('public.cp21_must_roll_back') is null")" = t ] || fail 'failed migration left an object'
-[ "$(admin_sql "$DB" "select count(*) from schema_migrations where filename='011_atomic_failure.sql'")" = 0 ] || fail 'failed migration left a ledger row'
+[ "$(admin_sql "$DB" "select count(*) from schema_migrations where filename='012_atomic_failure.sql'")" = 0 ] || fail 'failed migration left a ledger row'
 
 # Shared advisory-lock matrix. A real first actor holds the exact key while the second executable times out.
 wait_for_lock() {
@@ -368,15 +382,17 @@ stop_container
 ADMIN_PASSWORD=$(openssl rand -hex 18)
 MIGRATION_PASSWORD=$(openssl rand -hex 18)
 start_container legacy cocinacore_legacy
-for migration in "$ROOT"/db/migrations/*.sql; do
+LEGACY_MIGRATIONS=$(node -e "const m=require(process.argv[1]); console.log(m.migrations.filter(x=>x.legacyChecksumBackfillAllowed).map(x=>x.filename).join('\\n'))" "$ROOT/db/migrations/manifest.json")
+for filename in $LEGACY_MIGRATIONS; do
+  migration="$ROOT/db/migrations/$filename"
   docker exec -i "$CONTAINER" psql -X -v ON_ERROR_STOP=1 -U cocinacore -d "$DB" >/dev/null <"$migration"
 done
 admin_sql "$DB" "create schema internal;
   create table public.schema_migrations(filename text primary key, applied_at timestamptz not null default now());
   alter table public.schema_migrations enable row level security;
   revoke all on public.schema_migrations from public;"
-for migration in "$ROOT"/db/migrations/*.sql; do
-  filename=$(basename "$migration"); admin_sql "$DB" "insert into public.schema_migrations(filename) values ('$filename')"
+for filename in $LEGACY_MIGRATIONS; do
+  admin_sql "$DB" "insert into public.schema_migrations(filename) values ('$filename')"
 done
 LEGACY_TENANT=$(admin_sql "$DB" "insert into public.tenants(name) values ('legacy-before') returning id")
 admin_sql "$DB" 'create role legacy_reader nologin; grant usage on schema public to legacy_reader; grant select on public.tenants to legacy_reader'
@@ -409,9 +425,14 @@ ACL_BEFORE=$(admin_sql "$DB" "select has_schema_privilege('legacy_reader','publi
 
 provision >"$LOG" 2>&1
 [ "$(admin_sql "$DB" "select count(*) from schema_migrations where checksum is not null")" = 10 ] || fail 'trusted legacy checksum backfill did not cover 10 rows'
-EXPECTED_LEDGER=$(node -e "const m=require(process.argv[1]); console.log(m.migrations.map(x=>x.filename+'='+x.sha256).sort().join(','))" "$ROOT/db/migrations/manifest.json")
+EXPECTED_LEDGER=$(node -e "const m=require(process.argv[1]); console.log(m.migrations.filter(x=>x.legacyChecksumBackfillAllowed).map(x=>x.filename+'='+x.sha256).sort().join(','))" "$ROOT/db/migrations/manifest.json")
 ACTUAL_LEDGER=$(admin_sql "$DB" "select string_agg(filename||'='||checksum,',' order by filename) from schema_migrations")
 [ "$EXPECTED_LEDGER" = "$ACTUAL_LEDGER" ] || fail 'legacy backfill does not equal trusted manifest'
+
+migrate >"$LOG" 2>&1
+grep -q 'DONE 011_canonical_email_invariant.sql' "$LOG" || fail 'legacy upgrade did not apply forward migration 011'
+[ "$(admin_sql "$DB" "select count(*) from schema_migrations")" = 11 ] || fail 'legacy upgrade ledger count is not 11'
+[ "$(admin_sql "$DB" "select count(*) from pg_constraint where conrelid='public.users'::regclass and conname='users_email_canonical_check'")" = 1 ] || fail 'legacy upgrade canonical constraint is missing'
 TRANSFERRED=$(admin_sql "$DB" "select
   (select count(*) from pg_namespace where nspname in ('public','internal') and pg_get_userbyid(nspowner)='cocinacore_schema_owner') +
   (select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname in ('public','internal') and c.relkind in ('r','p') and pg_get_userbyid(c.relowner)='cocinacore_schema_owner') +
