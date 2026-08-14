@@ -66,11 +66,12 @@ async function main() {
     const userResult = await client.query(
       `insert into public.users
        (email, password_hash, email_confirmed, full_name, tenant_id, role, terms_accepted_at, terms_version, onboarding_completed)
-       values ($1, $2, true, $3, $4, 'owner', now(), 'v1', true)
-       returning id`,
-      [email.toLowerCase().trim(), passwordHash, fullName.trim(), tenantId]
+       values (pg_catalog.lower(pg_catalog.btrim($1)), $2, true, $3, $4, 'owner', now(), 'v1', true)
+       returning id, email`,
+      [email, passwordHash, fullName.trim(), tenantId]
     );
     const userId = userResult.rows[0].id;
+    const canonicalEmail = userResult.rows[0].email;
 
     await client.query(
       `insert into public.tenant_memberships (tenant_id, user_id, role)
@@ -91,7 +92,7 @@ async function main() {
     console.log('✅ Owner bootstrapped successfully');
     console.log(`   User ID: ${userId}`);
     console.log(`   Tenant ID: ${tenantId}`);
-    console.log(`   Email: ${email.toLowerCase().trim()}`);
+    console.log(`   Email: ${canonicalEmail}`);
   } catch (error) {
     await client.query('rollback');
     console.error('Bootstrap failed:', error instanceof Error ? error.message : String(error));
