@@ -15,7 +15,11 @@ services:
     networks:
       - cocinacore
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cocinacore} -d ${POSTGRES_DB:-cocinacore}"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-cocinacore} -d ${POSTGRES_DB:-cocinacore}",
+        ]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -50,15 +54,35 @@ services:
       dockerfile: Dockerfile
     image: cocinacore:${APP_VERSION:-latest}
     restart: unless-stopped
-    env_file:
-      - path: ./.env.production
-        required: false
     environment:
       NODE_ENV: production
       NEXT_TELEMETRY_DISABLED: "1"
+      COCINACORE_SEPARATED_DB_LANES_ENABLED: ${COCINACORE_SEPARATED_DB_LANES_ENABLED:-false}
       DATABASE_URL: postgresql://${POSTGRES_USER:-cocinacore}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-cocinacore}
       REDIS_URL: redis://redis:6379
       STORAGE_DRIVER: s3
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:?APP_PUBLIC_URL is required}
+      AUTH_SECRET: ${AUTH_SECRET:?AUTH_SECRET is required}
+      AUTH_COOKIE_NAME: ${AUTH_COOKIE_NAME:-cocinacore_session}
+      AUTH_SESSION_TTL_SECONDS: ${AUTH_SESSION_TTL_SECONDS:-604800}
+      PASSWORD_RESET_TTL_MINUTES: ${PASSWORD_RESET_TTL_MINUTES:-30}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:?GEMINI_API_KEY is required}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      GEMINI_EMBEDDING_MODEL: ${GEMINI_EMBEDDING_MODEL:-gemini-embedding-001}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1536}
+      RESEND_API_KEY: ${RESEND_API_KEY:?RESEND_API_KEY is required}
+      EMAIL_FROM: ${EMAIL_FROM:?EMAIL_FROM is required}
+      S3_ENDPOINT: ${S3_ENDPOINT:?S3_ENDPOINT is required}
+      S3_REGION: ${S3_REGION:-auto}
+      S3_BUCKET: ${S3_BUCKET:?S3_BUCKET is required}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?S3_ACCESS_KEY_ID is required}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?S3_SECRET_ACCESS_KEY is required}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
+      NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
+      NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-https://cocinacore.com}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.1}
+      NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE: ${NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE:-0.1}
     ports:
       - "127.0.0.1:${APP_PORT:-3000}:3000"
     depends_on:
@@ -73,6 +97,35 @@ services:
       options:
         max-size: "10m"
         max-file: "5"
+
+  # One-shot bootstrap identity. Only bootstrap inputs are projected into it.
+  provisioner:
+    image: cocinacore:${APP_VERSION:-latest}
+    profiles: ["operations"]
+    restart: "no"
+    environment:
+      COCINACORE_SEPARATED_DB_LANES_ENABLED: ${COCINACORE_SEPARATED_DB_LANES_ENABLED:-false}
+      BOOTSTRAP_DATABASE_URL: ${BOOTSTRAP_DATABASE_URL:-}
+      MIGRATION_ADMIN_PASSWORD: ${MIGRATION_ADMIN_PASSWORD:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - cocinacore
+
+  # One-shot migration identity. The bootstrap credential is not projected here.
+  migrator:
+    image: cocinacore:${APP_VERSION:-latest}
+    profiles: ["operations"]
+    restart: "no"
+    environment:
+      COCINACORE_SEPARATED_DB_LANES_ENABLED: ${COCINACORE_SEPARATED_DB_LANES_ENABLED:-false}
+      MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - cocinacore
 
 volumes:
   postgres_data:

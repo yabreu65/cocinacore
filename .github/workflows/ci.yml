@@ -16,6 +16,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -26,6 +28,12 @@ jobs:
 
       - name: Install deps
         run: npm ci
+
+      - name: Validate bootstrap and migrator configuration
+        run: sh ../scripts/tests/test-bootstrap-migrator-config.sh
+
+      - name: Test bootstrap and migrator PostgreSQL boundary
+        run: sh ../scripts/test-bootstrap-migrator-integration.sh
 
       - name: Lint
         run: npm run lint
@@ -70,7 +78,11 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     env:
+      COCINACORE_SEPARATED_DB_LANES_ENABLED: "true"
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/cocinacore
+      BOOTSTRAP_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/cocinacore
+      MIGRATION_DATABASE_URL: postgresql://migration_admin:ci-migration-admin-password-2026@localhost:5432/cocinacore
+      MIGRATION_ADMIN_PASSWORD: ci-migration-admin-password-2026
       REDIS_URL: redis://localhost:6379
       AUTH_SECRET: ci-auth-secret-change-me
       GEMINI_API_KEY: CHANGE_ME
@@ -95,8 +107,14 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
+      - name: Provision database migration roles
+        run: npm run db:provision
+
       - name: Run database migrations
         run: npm run db:migrate
+
+      - name: Verify migration ledger completeness
+        run: npm run db:migrate:verify
 
       - name: Seed E2E owner user
         run: npm run db:bootstrap -- "$E2E_USER_EMAIL" "CI Owner" "$E2E_USER_PASSWORD"

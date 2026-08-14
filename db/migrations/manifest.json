@@ -1,0 +1,1877 @@
+{
+  "manifestVersion": 1,
+  "trustedBaseCommit": "2069fc1f5a1ffc8407bd99cd91f9fadfbd04c6c4",
+  "migrationLaneVersion": 1,
+  "lockContract": {
+    "version": 1,
+    "namespacePrefix": "cocinacore:database-change:v1:",
+    "derivation": "pg_catalog.hashtextextended(namespacePrefix || current_database(), 0)",
+    "scope": "session"
+  },
+  "managedSchemas": ["internal", "public"],
+  "extensions": [
+    {
+      "name": "vector",
+      "required": true,
+      "bootstrapManaged": true,
+      "preinstalled": false,
+      "expectedSchema": "public",
+      "versionPolicy": "compatible-capabilities",
+      "ownerPolicy": "administrative-superuser",
+      "installMigration": "001_extensions_and_core.sql",
+      "capabilities": [
+        "type:public.vector",
+        "operator:public.<=>(public.vector,public.vector)",
+        "accessMethod:hnsw",
+        "operatorClass:public.vector_cosine_ops"
+      ],
+      "expectedMemberCount": 234,
+      "expectedMemberIdentitySha256": "84fcc529f90b67b00f154d70e720208fc3fc0a3453cb2e8ce5abbfef43cccf73",
+      "extensionManaged": true
+    },
+    {
+      "name": "pgcrypto",
+      "required": true,
+      "bootstrapManaged": false,
+      "preinstalled": false,
+      "expectedSchema": "public",
+      "versionPolicy": "presence-only",
+      "ownerPolicy": "schema-owner-or-administrative-superuser",
+      "installMigration": "001_extensions_and_core.sql",
+      "capabilities": [],
+      "expectedMemberCount": 36,
+      "expectedMemberIdentitySha256": "f42d9ef587eb7e0e2f33ad1067469d2a9ff463bdc77ce6dcc5a429252054e71a",
+      "extensionManaged": true
+    },
+    {
+      "name": "plpgsql",
+      "required": true,
+      "bootstrapManaged": false,
+      "preinstalled": true,
+      "expectedSchema": "pg_catalog",
+      "versionPolicy": "presence-only",
+      "ownerPolicy": "administrative-superuser",
+      "installMigration": null,
+      "capabilities": [],
+      "expectedMemberCount": 4,
+      "expectedMemberIdentitySha256": "a15a7c369e8ebe32443513838d8547e0dd52e6bdf7158b0e04c00267468b39b7",
+      "extensionManaged": true
+    }
+  ],
+  "roles": {
+    "migrationAdmin": {
+      "name": "migration_admin",
+      "login": true,
+      "inherit": false,
+      "superuser": false,
+      "createDb": false,
+      "createRole": false,
+      "bypassRls": false,
+      "replication": false,
+      "connectionLimit": -1,
+      "validUntil": null,
+      "memberOf": [
+        {
+          "role": "cocinacore_schema_owner",
+          "adminOption": false,
+          "inheritOption": false,
+          "setOption": true
+        }
+      ],
+      "databasePrivileges": ["CONNECT"],
+      "roleSettings": [],
+      "allowedOwnedObjects": []
+    },
+    "schemaOwner": {
+      "name": "cocinacore_schema_owner",
+      "login": false,
+      "inherit": false,
+      "superuser": false,
+      "createDb": false,
+      "createRole": false,
+      "bypassRls": false,
+      "replication": false,
+      "connectionLimit": -1,
+      "validUntil": null,
+      "memberOf": [],
+      "databasePrivileges": ["CREATE"],
+      "roleSettings": [],
+      "allowedOwnedObjects": "baselineObjects.transferable"
+    }
+  },
+  "publicSchemaAcl": {
+    "publicUsage": true,
+    "publicCreate": false
+  },
+  "bootstrapPolicy": {
+    "durableOrdinaryObjectsAllowed": 0,
+    "reservedRoles": ["cocinacore_schema_owner", "migration_admin"],
+    "autoRunOnDeploy": false
+  },
+  "migrations": [
+    {
+      "id": "001",
+      "filename": "001_extensions_and_core.sql",
+      "lane": "migration",
+      "sha256": "22f56f15610d16a5c7412775496df5a0908680f22eb76152e2482aadff154803",
+      "byteLength": 3450,
+      "transactional": "required",
+      "legacyChecksumBackfillAllowed": true
+    },
+    {
+      "id": "002",
+      "filename": "002_books_and_rag.sql",
+      "lane": "migration",
+      "sha256": "5485d2feb5b351cde7212153ea426b3b5b01145f33348e2cca50784425102382",
+      "byteLength": 3846,
+      "transactional": "required",
+      "legacyChecksumBackfillAllowed": true
+    },
+    {
+      "id": "003",
+      "filename": "003_recipes_and_inventory.sql",
+      "lane": "migration",
+      "sha256": "7f94e83006bf4687c786f3fb220d695ffaf91ee66e567cfcdc0894aaf6334052",
+      "byteLength": 3566,
+      "transactional": "required",
+      "legacyChecksumBackfillAllowed": true
+    },
+    {
+      "id": "004",
+      "filename": "004_meal_plans.sql",
+      "lane": "migration",
+      "sha256": "898eb26cb1d8d1d903324808ffbad1c713ffe5de28b6c368b43469853aec840f",
+      "byteLength": 3359,
+      "transactional": "required",
+      "legacyChecksumBackfillAllowed": true
+    },
+    {
+      "id": "005",
+      "filename": "005_premium_and_shopping.sql",
+      "lane": "migration",
+      "sha256": "812f93d1c5460539143d8d9c014260cc67d2859d28baf4c68a0566f12a291d11",
+      "byteLength": 4975,
+      "transactional": "required",
+      "legacyChecksumBackfillAllowed": true
+    },
+    {
+      "id": "006",
+      "filename": "006_culinary_profiles.sql",
+      "lane": "migration",
+      "sha256": "b8df80adc040c68d56b17ab059f27f15fb81cc66d286165114621a49171f6b25",
+      "byteLength": 2207,
+      "transactional": "required",
+      "legacyChecksumBackfillAllowed": true
+    },
+    {
+      "id": "007",
+      "filename": "007_functions.sql",
+      "lane": "migration",
+      "sha256": "b1ae050e48c4563503f0a1cb468857461dce8d06068787d9de00d8022c9191a8",
+      "byteLength": 7331,
+      "transactional": "required",
+      "legacyChecksumBackfillAllowed": true
+    },
+    {
+      "id": "008",
+      "filename": "008_indexes.sql",
+      "lane": "migration",
+      "sha256": "85a29801fab66ce9ab3a03c9e776e39d1094b18182daee19ce94e39437f8a1f0",
+      "byteLength": 5176,
+      "transactional": "required",
+      "legacyChecksumBackfillAllowed": true
+    },
+    {
+      "id": "009",
+      "filename": "009_seed_culinary_base.sql",
+      "lane": "migration",
+      "sha256": "b69cea987c70e7507980073b98d67b2bf59a6e185cf33a6f06f5112d58fd1d19",
+      "byteLength": 3462,
+      "transactional": "required",
+      "legacyChecksumBackfillAllowed": true
+    },
+    {
+      "id": "010",
+      "filename": "010_password_reset_tokens.sql",
+      "lane": "migration",
+      "sha256": "825a350895af1fabc8680bd3c400031007c9214f660d575f78804fa357e09053",
+      "byteLength": 685,
+      "transactional": "required",
+      "legacyChecksumBackfillAllowed": true
+    }
+  ],
+  "baselineObjects": {
+    "legacyDatabaseOwner": "cocinacore",
+    "transferable": [
+      {
+        "kind": "function",
+        "schema": "public",
+        "name": "accept_tenant_invitation",
+        "arguments": "p_user_id uuid, p_invitation_token text",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "function",
+        "schema": "public",
+        "name": "approve_platform_owner",
+        "arguments": "p_user_id uuid",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "function",
+        "schema": "public",
+        "name": "get_owner_overview_metrics",
+        "arguments": "",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "function",
+        "schema": "public",
+        "name": "is_platform_owner",
+        "arguments": "p_user_id uuid",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "function",
+        "schema": "public",
+        "name": "match_chunks",
+        "arguments": "p_query_embedding vector, p_match_threshold double precision, p_match_count integer, p_filter_tenant_id uuid",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "function",
+        "schema": "public",
+        "name": "remove_tenant_member",
+        "arguments": "p_actor_user_id uuid, p_member_id uuid",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "function",
+        "schema": "public",
+        "name": "update_tenant_member_role",
+        "arguments": "p_actor_user_id uuid, p_member_id uuid, p_role text",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "schema",
+        "schema": "internal",
+        "name": "internal",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "MIGRATION_LEDGER_OBJECT"
+      },
+      {
+        "kind": "schema",
+        "schema": "public",
+        "name": "public",
+        "expectedLegacyOwner": "pg_database_owner",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "table",
+        "schema": "public",
+        "name": "book_chunks",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "table",
+        "schema": "public",
+        "name": "culinary_dimensions",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "table",
+        "schema": "public",
+        "name": "culinary_terms",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "table",
+        "schema": "public",
+        "name": "global_books",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "table",
+        "schema": "public",
+        "name": "global_pdf_library",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "table",
+        "schema": "public",
+        "name": "inventory_movements",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "table",
+        "schema": "public",
+        "name": "password_reset_tokens",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "table",
+        "schema": "public",
+        "name": "platform_owners",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "table",
+        "schema": "public",
+        "name": "premium_recipe_reviews",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "table",
+        "schema": "public",
+        "name": "premium_recipes",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "table",
+        "schema": "public",
+        "name": "premium_review_reports",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "table",
+        "schema": "public",
+        "name": "recipe_ai_history",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "table",
+        "schema": "public",
+        "name": "recipe_ai_ratings",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "table",
+        "schema": "public",
+        "name": "recipe_inventory_items",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "table",
+        "schema": "public",
+        "name": "saved_premium_recipes",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "table",
+        "schema": "public",
+        "name": "schema_migrations",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "MIGRATION_LEDGER_OBJECT"
+      },
+      {
+        "kind": "table",
+        "schema": "public",
+        "name": "sessions",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "table",
+        "schema": "public",
+        "name": "shopping_list_items",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "table",
+        "schema": "public",
+        "name": "tenant_books",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "table",
+        "schema": "public",
+        "name": "tenant_invitations",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "table",
+        "schema": "public",
+        "name": "tenant_memberships",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "table",
+        "schema": "public",
+        "name": "tenant_pdf_library",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "table",
+        "schema": "public",
+        "name": "tenants",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "table",
+        "schema": "public",
+        "name": "user_culinary_profile_terms",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "table",
+        "schema": "public",
+        "name": "user_culinary_profiles",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "table",
+        "schema": "public",
+        "name": "user_meal_plan_inventory_suggestions",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "table",
+        "schema": "public",
+        "name": "user_meal_plan_optimization_snapshots",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "table",
+        "schema": "public",
+        "name": "user_meal_plans",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      },
+      {
+        "kind": "table",
+        "schema": "public",
+        "name": "users",
+        "expectedLegacyOwner": "cocinacore",
+        "targetOwner": "cocinacore_schema_owner",
+        "classification": "APPLICATION_OBJECT"
+      }
+    ],
+    "dependent": {
+      "indexes": [
+        {
+          "schema": "public",
+          "identity": "book_chunks.book_chunks_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "book_chunks.idx_book_chunks_embedding_hnsw",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "book_chunks.idx_book_chunks_global_book_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "book_chunks.idx_book_chunks_source_type",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "book_chunks.idx_book_chunks_tenant_book_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "book_chunks.idx_book_chunks_tenant_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "culinary_dimensions.culinary_dimensions_key_key",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "culinary_dimensions.culinary_dimensions_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "culinary_terms.culinary_terms_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "culinary_terms.idx_culinary_terms_dimension_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "global_books.global_books_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "global_books.idx_global_books_created_at",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "global_pdf_library.global_pdf_library_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "global_pdf_library.idx_global_pdf_library_global_book_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "inventory_movements.idx_inventory_movements_inventory_item_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "inventory_movements.idx_inventory_movements_tenant_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "inventory_movements.idx_inventory_movements_user_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "inventory_movements.inventory_movements_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "password_reset_tokens.idx_password_reset_tokens_active",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "password_reset_tokens.idx_password_reset_tokens_user_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "password_reset_tokens.password_reset_tokens_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "password_reset_tokens.password_reset_tokens_token_hash_key",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "platform_owners.platform_owners_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "premium_recipe_reviews.idx_premium_recipe_reviews_premium_recipe_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "premium_recipe_reviews.idx_premium_recipe_reviews_user_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "premium_recipe_reviews.premium_recipe_reviews_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "premium_recipes.idx_premium_recipes_creator_user_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "premium_recipes.idx_premium_recipes_source_tenant_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "premium_recipes.idx_premium_recipes_status",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "premium_recipes.premium_recipes_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "premium_review_reports.idx_premium_review_reports_premium_recipe_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "premium_review_reports.premium_review_reports_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "recipe_ai_history.idx_recipe_ai_history_created_at",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "recipe_ai_history.idx_recipe_ai_history_expires_at",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "recipe_ai_history.idx_recipe_ai_history_is_saved",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "recipe_ai_history.idx_recipe_ai_history_tenant_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "recipe_ai_history.idx_recipe_ai_history_user_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "recipe_ai_history.recipe_ai_history_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "recipe_ai_ratings.recipe_ai_ratings_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "recipe_inventory_items.idx_recipe_inventory_items_created_at",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "recipe_inventory_items.idx_recipe_inventory_items_normalized_name",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "recipe_inventory_items.idx_recipe_inventory_items_tenant_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "recipe_inventory_items.idx_recipe_inventory_items_user_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "recipe_inventory_items.recipe_inventory_items_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "saved_premium_recipes.idx_saved_premium_recipes_tenant_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "saved_premium_recipes.idx_saved_premium_recipes_user_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "saved_premium_recipes.saved_premium_recipes_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "saved_premium_recipes.saved_premium_recipes_tenant_id_user_id_premium_recipe_id_key",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "schema_migrations.schema_migrations_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "sessions.idx_sessions_expires_at",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "sessions.idx_sessions_token_hash",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "sessions.idx_sessions_user_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "sessions.sessions_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "sessions.sessions_token_hash_key",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "shopping_list_items.idx_shopping_list_items_status",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "shopping_list_items.idx_shopping_list_items_tenant_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "shopping_list_items.idx_shopping_list_items_user_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "shopping_list_items.shopping_list_items_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_books.idx_tenant_books_created_at",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_books.idx_tenant_books_tenant_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_books.tenant_books_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_invitations.idx_tenant_invitations_status",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_invitations.idx_tenant_invitations_tenant_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_invitations.idx_tenant_invitations_token",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_invitations.tenant_invitations_invitation_token_key",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_invitations.tenant_invitations_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_memberships.idx_tenant_memberships_tenant_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_memberships.idx_tenant_memberships_user_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_memberships.tenant_memberships_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_memberships.tenant_memberships_tenant_id_user_id_key",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_pdf_library.idx_tenant_pdf_library_processing_status",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_pdf_library.idx_tenant_pdf_library_tenant_book_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_pdf_library.idx_tenant_pdf_library_tenant_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_pdf_library.tenant_pdf_library_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenants.idx_tenants_created_at",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenants.tenants_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_culinary_profile_terms.idx_user_culinary_profile_terms_user_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_culinary_profile_terms.user_culinary_profile_terms_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_culinary_profiles.user_culinary_profiles_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_meal_plan_inventory_suggestions.idx_meal_plan_suggestions_meal_plan_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_meal_plan_inventory_suggestions.idx_meal_plan_suggestions_tenant_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_meal_plan_inventory_suggestions.user_meal_plan_inventory_suggestions_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_meal_plan_optimization_snapshots.idx_meal_plan_snapshots_meal_plan_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_meal_plan_optimization_snapshots.idx_meal_plan_snapshots_tenant_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_meal_plan_optimization_snapshots.user_meal_plan_optimization_snapshots_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_meal_plans.idx_user_meal_plans_created_at",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_meal_plans.idx_user_meal_plans_tenant_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_meal_plans.idx_user_meal_plans_user_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_meal_plans.user_meal_plans_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "users.idx_users_created_at",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "users.idx_users_email",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "users.idx_users_tenant_id",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "users.users_email_key",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "users.users_pkey",
+          "classification": "TABLE_DEPENDENT"
+        }
+      ],
+      "constraints": [
+        {
+          "schema": "public",
+          "identity": "book_chunks.book_chunks_global_book_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "book_chunks.book_chunks_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "book_chunks.book_chunks_source_type_check",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "book_chunks.book_chunks_tenant_book_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "book_chunks.book_chunks_tenant_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "book_chunks.chunk_book_relationship",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "culinary_dimensions.culinary_dimensions_key_key",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "culinary_dimensions.culinary_dimensions_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "culinary_terms.culinary_terms_dimension_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "culinary_terms.culinary_terms_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "global_books.global_books_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "global_pdf_library.global_pdf_library_global_book_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "global_pdf_library.global_pdf_library_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "global_pdf_library.global_pdf_library_uploaded_by_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "inventory_movements.inventory_movements_inventory_item_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "inventory_movements.inventory_movements_movement_type_check",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "inventory_movements.inventory_movements_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "inventory_movements.inventory_movements_tenant_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "inventory_movements.inventory_movements_user_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "password_reset_tokens.password_reset_tokens_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "password_reset_tokens.password_reset_tokens_token_hash_key",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "password_reset_tokens.password_reset_tokens_user_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "platform_owners.platform_owners_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "platform_owners.platform_owners_user_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "premium_recipe_reviews.premium_recipe_reviews_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "premium_recipe_reviews.premium_recipe_reviews_premium_recipe_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "premium_recipe_reviews.premium_recipe_reviews_stars_check",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "premium_recipe_reviews.premium_recipe_reviews_user_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "premium_recipes.premium_recipes_creator_user_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "premium_recipes.premium_recipes_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "premium_recipes.premium_recipes_source_recipe_history_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "premium_recipes.premium_recipes_source_tenant_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "premium_recipes.premium_recipes_status_check",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "premium_review_reports.premium_review_reports_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "premium_review_reports.premium_review_reports_premium_recipe_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "premium_review_reports.premium_review_reports_reporter_user_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "premium_review_reports.premium_review_reports_review_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "premium_review_reports.premium_review_reports_status_check",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "recipe_ai_history.recipe_ai_history_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "recipe_ai_history.recipe_ai_history_tenant_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "recipe_ai_history.recipe_ai_history_user_feedback_check",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "recipe_ai_history.recipe_ai_history_user_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "recipe_ai_ratings.recipe_ai_ratings_generation_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "recipe_ai_ratings.recipe_ai_ratings_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "recipe_ai_ratings.recipe_ai_ratings_rating_check",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "recipe_ai_ratings.recipe_ai_ratings_tenant_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "recipe_ai_ratings.recipe_ai_ratings_user_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "recipe_inventory_items.recipe_inventory_items_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "recipe_inventory_items.recipe_inventory_items_tenant_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "recipe_inventory_items.recipe_inventory_items_user_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "saved_premium_recipes.saved_premium_recipes_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "saved_premium_recipes.saved_premium_recipes_premium_recipe_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "saved_premium_recipes.saved_premium_recipes_tenant_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "saved_premium_recipes.saved_premium_recipes_tenant_id_user_id_premium_recipe_id_key",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "saved_premium_recipes.saved_premium_recipes_user_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "schema_migrations.schema_migrations_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "sessions.sessions_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "sessions.sessions_token_hash_key",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "sessions.sessions_user_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "shopping_list_items.shopping_list_items_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "shopping_list_items.shopping_list_items_premium_recipe_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "shopping_list_items.shopping_list_items_status_check",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "shopping_list_items.shopping_list_items_tenant_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "shopping_list_items.shopping_list_items_user_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_books.tenant_books_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_books.tenant_books_tenant_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_invitations.tenant_invitations_accepted_by_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_invitations.tenant_invitations_invitation_token_key",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_invitations.tenant_invitations_invited_by_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_invitations.tenant_invitations_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_invitations.tenant_invitations_role_check",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_invitations.tenant_invitations_status_check",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_invitations.tenant_invitations_tenant_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_memberships.tenant_memberships_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_memberships.tenant_memberships_role_check",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_memberships.tenant_memberships_tenant_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_memberships.tenant_memberships_tenant_id_user_id_key",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_memberships.tenant_memberships_user_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_pdf_library.tenant_pdf_library_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_pdf_library.tenant_pdf_library_processing_status_check",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_pdf_library.tenant_pdf_library_tenant_book_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_pdf_library.tenant_pdf_library_tenant_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenant_pdf_library.tenant_pdf_library_uploaded_by_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenants.tenants_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "tenants.tenants_tenant_type_check",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_culinary_profile_terms.user_culinary_profile_terms_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_culinary_profile_terms.user_culinary_profile_terms_preference_type_check",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_culinary_profile_terms.user_culinary_profile_terms_term_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_culinary_profile_terms.user_culinary_profile_terms_user_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_culinary_profiles.user_culinary_profiles_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_culinary_profiles.user_culinary_profiles_tenant_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_culinary_profiles.user_culinary_profiles_user_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_meal_plan_inventory_suggestions.user_meal_plan_inventory_suggestions_meal_plan_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_meal_plan_inventory_suggestions.user_meal_plan_inventory_suggestions_period_check",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_meal_plan_inventory_suggestions.user_meal_plan_inventory_suggestions_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_meal_plan_inventory_suggestions.user_meal_plan_inventory_suggestions_tenant_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_meal_plan_inventory_suggestions.user_meal_plan_inventory_suggestions_user_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_meal_plan_optimization_snapshots.user_meal_plan_optimization_snapshots_meal_plan_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_meal_plan_optimization_snapshots.user_meal_plan_optimization_snapshots_optimization_mode_check",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_meal_plan_optimization_snapshots.user_meal_plan_optimization_snapshots_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_meal_plan_optimization_snapshots.user_meal_plan_optimization_snapshots_tenant_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_meal_plan_optimization_snapshots.user_meal_plan_optimization_snapshots_user_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_meal_plans.user_meal_plans_fusion_intensity_check",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_meal_plans.user_meal_plans_mode_check",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_meal_plans.user_meal_plans_period_check",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_meal_plans.user_meal_plans_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_meal_plans.user_meal_plans_tenant_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "user_meal_plans.user_meal_plans_user_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "users.users_email_key",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "users.users_pkey",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "users.users_role_check",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "identity": "users.users_tenant_id_fkey",
+          "classification": "TABLE_DEPENDENT"
+        }
+      ],
+      "types": [
+        {
+          "schema": "public",
+          "name": "_book_chunks",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_culinary_dimensions",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_culinary_terms",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_global_books",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_global_pdf_library",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_halfvec",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_inventory_movements",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_password_reset_tokens",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_platform_owners",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_premium_recipe_reviews",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_premium_recipes",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_premium_review_reports",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_recipe_ai_history",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_recipe_ai_ratings",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_recipe_inventory_items",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_saved_premium_recipes",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_schema_migrations",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_sessions",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_shopping_list_items",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_sparsevec",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_tenant_books",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_tenant_invitations",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_tenant_memberships",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_tenant_pdf_library",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_tenants",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_user_culinary_profile_terms",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_user_culinary_profiles",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_user_meal_plan_inventory_suggestions",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_user_meal_plan_optimization_snapshots",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_user_meal_plans",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_users",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "_vector",
+          "classification": "ARRAY_OR_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "book_chunks",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "culinary_dimensions",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "culinary_terms",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "global_books",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "global_pdf_library",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "inventory_movements",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "password_reset_tokens",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "platform_owners",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "premium_recipe_reviews",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "premium_recipes",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "premium_review_reports",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "recipe_ai_history",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "recipe_ai_ratings",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "recipe_inventory_items",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "saved_premium_recipes",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "schema_migrations",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "sessions",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "shopping_list_items",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "tenant_books",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "tenant_invitations",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "tenant_memberships",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "tenant_pdf_library",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "tenants",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "user_culinary_profile_terms",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "user_culinary_profiles",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "user_meal_plan_inventory_suggestions",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "user_meal_plan_optimization_snapshots",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "user_meal_plans",
+          "classification": "TABLE_DEPENDENT"
+        },
+        {
+          "schema": "public",
+          "name": "users",
+          "classification": "TABLE_DEPENDENT"
+        }
+      ]
+    },
+    "expectedCounts": {
+      "transferable": 38,
+      "applicationTables": 28,
+      "ledgerTables": 1,
+      "applicationFunctions": 7,
+      "standaloneSequences": 0,
+      "applicationTypes": 0,
+      "indexes": 94,
+      "constraints": 112,
+      "dependentTypes": 61,
+      "triggers": 0,
+      "views": 0,
+      "materializedViews": 0,
+      "procedures": 0
+    }
+  }
+}
