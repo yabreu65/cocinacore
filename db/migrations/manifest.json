@@ -198,6 +198,22 @@
       "byteLength": 685,
       "transactional": "required",
       "legacyChecksumBackfillAllowed": true
+    },
+    {
+      "id": "011",
+      "filename": "011_canonical_email_invariant.sql",
+      "lane": "migration",
+      "sha256": "5117deadee2d72b8e8b5a7bc27559223c2fe4a3a71238787451c075a9bb6c9e0",
+      "byteLength": 2640,
+      "transactional": "required",
+      "legacyChecksumBackfillAllowed": false,
+      "catalogAdditions": [
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "users.users_email_canonical_check"
+        }
+      ]
     }
   ],
   "baselineObjects": {

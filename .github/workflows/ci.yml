@@ -35,6 +35,9 @@ jobs:
       - name: Test bootstrap and migrator PostgreSQL boundary
         run: sh ../scripts/test-bootstrap-migrator-integration.sh
 
+      - name: Test canonical email PostgreSQL invariant
+        run: sh ../scripts/test-canonical-email-integration.sh
+
       - name: Lint
         run: npm run lint
 

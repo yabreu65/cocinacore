@@ -24,7 +24,7 @@ interface UpdateUserInput {
 
 export async function findUserByEmail(email: string): Promise<UserRow | null> {
   const result = await query<UserRow>(
-    'select * from public.users where email = lower($1)',
+    'select * from public.users where email = pg_catalog.lower(pg_catalog.btrim($1))',
     [email]
   );
   return mapSingleRow(result);
@@ -39,7 +39,7 @@ export async function createUser(input: CreateUserInput): Promise<UserRow> {
   const result = await query<UserRow>(
     `insert into public.users
      (email, password_hash, full_name, tenant_id, role, terms_accepted_at, terms_version, email_confirmed)
-     values (lower($1), $2, $3, $4, $5, $6, $7, true)
+     values (pg_catalog.lower(pg_catalog.btrim($1)), $2, $3, $4, $5, $6, $7, true)
      returning *`,
     [
       input.email,
