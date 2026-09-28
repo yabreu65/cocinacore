@@ -3,6 +3,10 @@ import { serverLogger } from '@/lib/serverLogger';
 import { validateRequest, MealPlanSchema, type MealPlanBody } from '@/lib/validation';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { getGeminiApiKey, getGeminiModel } from '@/lib/ai/gemini-config';
+import { requireTenant } from '@/lib/auth/server';
+import type { TenantContext } from '@/lib/auth/types';
+import { listInventoryItemsByTenant } from '@/lib/db/repositories/inventoryRepository';
+import { buildMealPlanInventoryContext } from '@/lib/meal-planner/inventory-context';
 import {
   buildMealPlanFormatInstructions,
   getMealPlanPeriodLabel,
@@ -13,6 +17,15 @@ const AI_REQUEST_TIMEOUT_MS = 60_000;
 export async function POST(request: NextRequest) {
   const startedAt = Date.now();
   const requestId = crypto.randomUUID();
+
+  let tenant: TenantContext;
+  try {
+    tenant = await requireTenant(request);
+  } catch {
+    serverLogger.warn('meal_plan.unauthorized', { requestId });
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   const apiKey = getGeminiApiKey();
   const model = getGeminiModel();
 
@@ -58,10 +71,10 @@ export async function POST(request: NextRequest) {
     .filter(Boolean)
     .slice(0, 2);
   const fusionIntensity = body.fusionIntensity ?? 'media';
-  const inventory = (body.inventory ?? [])
-    .map((v) => v.trim())
-    .filter(Boolean)
-    .slice(0, 120);
+  const inventoryItems = await listInventoryItemsByTenant(tenant.tenantId);
+  const inventoryLines = buildMealPlanInventoryContext(inventoryItems, tenant.tenantId);
+  const inventoryContext =
+    inventoryLines.join('\n') || 'Sin inventario persistido para este hogar.';
   const peopleCount =
     typeof body.peopleCount === 'number' &&
     Number.isFinite(body.peopleCount) &&
@@ -98,7 +111,7 @@ export async function POST(request: NextRequest) {
     mode,
     period,
     peopleCount,
-    inventoryCount: inventory.length,
+    inventoryCount: inventoryLines.length,
     fusionCount: fusionCuisines.length,
   });
 
@@ -106,7 +119,9 @@ export async function POST(request: NextRequest) {
 
   const prompt =
     mode === 'inventory_to_menu'
-      ? `Genera un menú de ${periodLabel} basado ÚNICAMENTE en este inventario: ${inventory.join(', ') || 'sin inventario'}.
+      ? `Genera un menú de ${periodLabel} basado ÚNICAMENTE en el inventario real disponible del hogar.
+Inventario real disponible del hogar (base de datos, tenant autenticado):
+${inventoryContext}
 Cocina objetivo: ${cuisineLabel}.
 Intensidad de fusión: ${fusionIntensity}.
 Perfil del usuario:
@@ -119,7 +134,8 @@ Contexto PDF:
 ${chunks.length > 0 ? chunks.join('\n---\n') : 'Sin contexto PDF.'}
 
 Reglas:
-- No inventes ingredientes fuera del inventario.
+- Usa solo ingredientes disponibles en el inventario real.
+- No inventes cantidades de inventario; cuando diga "cantidad no especificada", no la supongas.
 - Si falta algo crítico, marcar como "pendiente de compra".
 - Respeta estrictamente "Evitar".
 - Integra técnicas/sabores de fusión si se especifican culturas de fusión.
@@ -131,6 +147,8 @@ Reglas:
 - Español.
 - Máximo 900 palabras.`
       : `Genera un menú de ${periodLabel} de cocina ${cuisineLabel} y luego una lista de compras.
+Inventario real disponible del hogar (base de datos, tenant autenticado):
+${inventoryContext}
 Intensidad de fusión: ${fusionIntensity}.
 Perfil del usuario:
 - Personas: ${peopleCount}
@@ -143,6 +161,7 @@ ${chunks.length > 0 ? chunks.join('\n---\n') : 'Sin contexto PDF.'}
 
 Reglas:
 - ${formatInstructions}
+- Usa primero el inventario real antes de proponer compras y no supongas cantidades no especificadas.
 - Incluir sección "LISTA DE COMPRAS" agrupada por categoría.
 - Respeta estrictamente "Evitar".
 - Integra técnicas/sabores de fusión si se especifican culturas de fusión.
