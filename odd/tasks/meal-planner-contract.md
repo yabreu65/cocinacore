@@ -44,3 +44,29 @@
 - Prompt behavior: both `inventory_to_menu` and non-inventory modes receive a labeled authenticated household inventory section; empty inventory renders `Sin inventario persistido para este hogar.`
 - Verification: focused 7/7 tests and full 246/246 tests pass; typecheck, lint, build, and diff check pass. Expected Redis/health degradation warnings remain in tests because local Redis is not configured.
 - Commit: local work-unit commit created with `feat(meal-planner): use household inventory context`.
+
+## META 1 / M1.2.3 — Persisted Culinary Profile Context
+
+- **Status:** complete
+- **Base SHA:** `d12311f273f866859f448a2b369726a95fc2de23`
+- **Objective:** Load the authenticated user's persisted culinary profile server-side for meal-plan generation without inventing new profile persistence.
+- **Profile storage truth:** `user_culinary_profiles.level` stores the user's level; `user_culinary_profile_terms` stores user-scoped terms with `preference_type` values `identity`, `prefer`, `avoid`, and `goal`, linked to `culinary_terms.label`. `/api/profile` currently reads/writes only `level`; term repository helpers exist but are not wired to that UI.
+- **Profile scope:** USER, with `tenant_id` on the profile row verified against the authenticated user's tenant. Terms are keyed by `user_id`.
+- **Non-goals:** RAG/library wiring, meal-plan persistence, shopping persistence, recipe history, inventory mutation, cooking/consumption, Home OS, voice, deployment, Contabo, and broad profile redesign.
+
+### Tasks
+
+1. **Audit persisted profile contract** — completed. Confirmed level and profile terms storage/scoping, and that `/api/profile` currently persists only level.
+2. **Implement server-side profile context** — completed. `/api/meal-plan` uses `requireUser(request)`, loads the user profile and labeled terms, verifies user/tenant scope, ignores browser profile fields, and formats only persisted values.
+3. **Add focused tests** — completed in source. Tests cover authenticated loading, overrides, user isolation, missing profile, all persisted fields, level, and distinct inventory/profile sections.
+4. **Run verification** — completed. Focused profile tests pass: `npm test -- src/lib/meal-planner/profile-context.test.ts src/app/api/meal-plan/route.test.ts` (9 tests). Full suite passes: `npm test` (252 tests). `npx tsc --noEmit`, `npm run lint`, `npm run build`, and `git diff --check` pass.
+5. **Create work-unit commit** — completed. Commit contains only this slice and the updated ODD feature document.
+
+### M1.2.3 Evidence
+
+- Profile source and scoping: `user_culinary_profiles.level` plus labeled `user_culinary_profile_terms` joined to `culinary_terms`; profile row requires exact authenticated `user_id` and `tenant_id`, terms require exact authenticated `user_id`.
+- Browser override policy: request-body `culinaryProfile` is accepted only for compatibility and is not read by prompt construction.
+- Missing profile behavior: `Sin perfil culinario configurado.` while generation continues normally.
+- Deterministic bounds: level 50 characters; each term label 100 characters; maximum 12 unique values per supported field, preserving DB order.
+- Verification: focused 9/9 tests and full 252/252 tests pass; typecheck, lint, build, and diff check pass. Expected Redis/health degradation warnings remain in tests because local Redis is not configured.
+- Commit: local work-unit commit created with `feat(meal-planner): use persisted culinary profile`.

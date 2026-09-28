@@ -1,18 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NextRequest } from 'next/server';
-import type { RecipeInventoryItemRow } from '@/lib/db/types';
+import type { RecipeInventoryItemRow, UserCulinaryProfileRow } from '@/lib/db/types';
+import type { UserCulinaryProfileTermWithLabel } from '@/lib/db/repositories/culinaryProfileRepository';
 
-const requireTenantMock = vi.fn();
+const requireUserMock = vi.fn();
 const listInventoryItemsByTenantMock = vi.fn();
+const findCulinaryProfileByUserIdMock = vi.fn();
+const findCulinaryProfileTermsByUserIdMock = vi.fn();
 const checkRateLimitMock = vi.fn();
 const fetchMock = vi.fn();
 
 vi.mock('@/lib/auth/server', () => ({
-  requireTenant: requireTenantMock,
+  requireUser: requireUserMock,
 }));
 
 vi.mock('@/lib/db/repositories/inventoryRepository', () => ({
   listInventoryItemsByTenant: listInventoryItemsByTenantMock,
+}));
+
+vi.mock('@/lib/db/repositories/culinaryProfileRepository', () => ({
+  findCulinaryProfileByUserId: findCulinaryProfileByUserIdMock,
+  findCulinaryProfileTermsByUserId: findCulinaryProfileTermsByUserIdMock,
 }));
 
 vi.mock('@/lib/rate-limit', () => ({
@@ -54,6 +62,33 @@ function inventoryItem(overrides: Partial<RecipeInventoryItemRow> = {}): RecipeI
   };
 }
 
+function profile(overrides: Partial<UserCulinaryProfileRow> = {}): UserCulinaryProfileRow {
+  return {
+    user_id: 'user-1',
+    tenant_id: 'tenant-1',
+    level: 'Intermedio',
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function profileTerm(
+  preference_type: UserCulinaryProfileTermWithLabel['preference_type'],
+  term_label: string,
+  overrides: Partial<UserCulinaryProfileTermWithLabel> = {}
+): UserCulinaryProfileTermWithLabel {
+  return {
+    user_id: 'user-1',
+    term_id: `${preference_type}-${term_label}`,
+    preference_type,
+    term_label,
+    weight: 1,
+    created_at: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
 function request(body: unknown): Request {
   return new Request('https://app.example.test/api/meal-plan', {
     method: 'POST',
@@ -72,18 +107,30 @@ function geminiPrompt(): string {
 
 describe('POST /api/meal-plan', () => {
   beforeEach(() => {
-    requireTenantMock.mockReset();
+    requireUserMock.mockReset();
     listInventoryItemsByTenantMock.mockReset();
+    findCulinaryProfileByUserIdMock.mockReset();
+    findCulinaryProfileTermsByUserIdMock.mockReset();
     checkRateLimitMock.mockReset();
     fetchMock.mockReset();
 
-    requireTenantMock.mockResolvedValue({
-      tenantId: 'tenant-1',
-      role: 'owner',
-      tenantType: 'home',
+    requireUserMock.mockResolvedValue({
+      id: 'user-1',
+      email: 'user@example.test',
+      fullName: null,
+      tenant: {
+        tenantId: 'tenant-1',
+        role: 'owner',
+        tenantType: 'home',
+        onboardingCompleted: true,
+      },
+      termsAcceptedAt: null,
+      termsVersion: null,
       onboardingCompleted: true,
     });
     listInventoryItemsByTenantMock.mockResolvedValue([inventoryItem()]);
+    findCulinaryProfileByUserIdMock.mockResolvedValue(null);
+    findCulinaryProfileTermsByUserIdMock.mockResolvedValue([]);
     checkRateLimitMock.mockResolvedValue({ success: true, limit: 10, remaining: 9, resetAt: 1 });
     fetchMock.mockResolvedValue(
       new Response(
@@ -94,31 +141,73 @@ describe('POST /api/meal-plan', () => {
     vi.stubGlobal('fetch', fetchMock);
   });
 
-  it('loads authenticated tenant inventory and ignores browser inventory before calling Gemini', async () => {
+  it('loads authenticated inventory and persisted profile, ignoring browser-controlled values', async () => {
+    findCulinaryProfileByUserIdMock.mockResolvedValue(profile());
+    findCulinaryProfileTermsByUserIdMock.mockResolvedValue([
+      profileTerm('identity', 'Cocina andina'),
+      profileTerm('prefer', 'Legumbres'),
+      profileTerm('avoid', 'Maní'),
+      profileTerm('goal', 'Comidas rápidas'),
+    ]);
+
     const response = await POST(
       request({
         mode: 'inventory_to_menu',
         inventory: ['ingrediente-controlado-por-el-navegador'],
+        culinaryProfile: {
+          preferred: ['perfil-controlado-por-el-navegador'],
+          avoid: ['dato-no-confiable'],
+          goals: ['meta-no-confiable'],
+          level: 'Nivel no confiable',
+        },
       }) as unknown as NextRequest
     );
 
     expect(response.status).toBe(200);
-    expect(requireTenantMock).toHaveBeenCalledTimes(1);
+    expect(requireUserMock).toHaveBeenCalledTimes(1);
     expect(listInventoryItemsByTenantMock).toHaveBeenCalledWith('tenant-1');
+    expect(findCulinaryProfileByUserIdMock).toHaveBeenCalledWith('user-1');
+    expect(findCulinaryProfileTermsByUserIdMock).toHaveBeenCalledWith('user-1');
     expect(geminiPrompt()).toContain(
       'Inventario real disponible del hogar (base de datos, tenant autenticado):\n- arroz real: 2 kg'
     );
-    expect(geminiPrompt()).not.toContain('ingrediente-controlado-por-el-navegador');
+    expect(geminiPrompt()).toContain(
+      'Perfil culinario persistido del usuario autenticado:\n' +
+        'Identidad/contexto: Cocina andina\n' +
+        'Preferencias: Legumbres\n' +
+        'Evitar: Maní\n' +
+        'Objetivos: Comidas rápidas\n' +
+        'Nivel: Intermedio'
+    );
+    expect(geminiPrompt()).not.toContain('controlado-por-el-navegador');
+    expect(geminiPrompt()).not.toContain('dato-no-confiable');
+    expect(geminiPrompt()).not.toContain('meta-no-confiable');
+    expect(geminiPrompt()).not.toContain('Nivel no confiable');
+    expect(geminiPrompt().indexOf('Inventario real disponible')).toBeLessThan(
+      geminiPrompt().indexOf('Perfil culinario persistido')
+    );
+  });
+
+  it('excludes another user profile and terms while allowing a missing profile to generate normally', async () => {
+    findCulinaryProfileByUserIdMock.mockResolvedValue(profile({ user_id: 'user-2' }));
+    findCulinaryProfileTermsByUserIdMock.mockResolvedValue([
+      profileTerm('avoid', 'Término de otro usuario', { user_id: 'user-2' }),
+    ]);
+
+    const response = await POST(request({ mode: 'balanced_ai' }) as unknown as NextRequest);
+
+    expect(response.status).toBe(200);
+    expect(geminiPrompt()).toContain(
+      'Perfil culinario persistido del usuario autenticado:\nSin perfil culinario configurado.'
+    );
+    expect(geminiPrompt()).not.toContain('Término de otro usuario');
   });
 
   it('adds the empty persisted inventory marker to non-inventory modes before proposing purchases', async () => {
     listInventoryItemsByTenantMock.mockResolvedValue([]);
 
     const response = await POST(
-      request({
-        mode: 'balanced_ai',
-        inventory: ['ingrediente-controlado-por-el-navegador'],
-      }) as unknown as NextRequest
+      request({ mode: 'balanced_ai', inventory: ['ingrediente-controlado-por-el-navegador'] }) as unknown as NextRequest
     );
 
     expect(response.status).toBe(200);
@@ -126,11 +215,25 @@ describe('POST /api/meal-plan', () => {
     expect(geminiPrompt()).toContain(
       'Inventario real disponible del hogar (base de datos, tenant autenticado):\nSin inventario persistido para este hogar.'
     );
+    expect(geminiPrompt()).toContain('Sin perfil culinario configurado.');
     expect(geminiPrompt()).not.toContain('ingrediente-controlado-por-el-navegador');
   });
 
-  it('returns a safe unauthorized response without loading inventory or calling Gemini', async () => {
-    requireTenantMock.mockRejectedValue(new Error('Tenant context required'));
+  it('returns a safe unauthorized response without loading persisted context or calling Gemini', async () => {
+    requireUserMock.mockRejectedValue(new Error('Unauthorized'));
+
+    const response = await POST(request({ mode: 'inventory_to_menu' }) as unknown as NextRequest);
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: 'Unauthorized' });
+    expect(listInventoryItemsByTenantMock).not.toHaveBeenCalled();
+    expect(findCulinaryProfileByUserIdMock).not.toHaveBeenCalled();
+    expect(findCulinaryProfileTermsByUserIdMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('returns a safe unauthorized response when the authenticated user lacks tenant context', async () => {
+    requireUserMock.mockResolvedValue({ id: 'user-1', tenant: null });
 
     const response = await POST(request({ mode: 'inventory_to_menu' }) as unknown as NextRequest);
 

@@ -3,10 +3,18 @@ import { serverLogger } from '@/lib/serverLogger';
 import { validateRequest, MealPlanSchema, type MealPlanBody } from '@/lib/validation';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { getGeminiApiKey, getGeminiModel } from '@/lib/ai/gemini-config';
-import { requireTenant } from '@/lib/auth/server';
-import type { TenantContext } from '@/lib/auth/types';
+import { requireUser } from '@/lib/auth/server';
+import type { AuthUser } from '@/lib/auth/types';
 import { listInventoryItemsByTenant } from '@/lib/db/repositories/inventoryRepository';
+import {
+  findCulinaryProfileByUserId,
+  findCulinaryProfileTermsByUserId,
+} from '@/lib/db/repositories/culinaryProfileRepository';
 import { buildMealPlanInventoryContext } from '@/lib/meal-planner/inventory-context';
+import {
+  buildPersistedMealPlanProfileContext,
+  formatPersistedMealPlanProfileContext,
+} from '@/lib/meal-planner/profile-context';
 import {
   buildMealPlanFormatInstructions,
   getMealPlanPeriodLabel,
@@ -18,13 +26,20 @@ export async function POST(request: NextRequest) {
   const startedAt = Date.now();
   const requestId = crypto.randomUUID();
 
-  let tenant: TenantContext;
+  let user: AuthUser;
   try {
-    tenant = await requireTenant(request);
+    user = await requireUser(request);
   } catch {
     serverLogger.warn('meal_plan.unauthorized', { requestId });
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+
+  if (!user.tenant) {
+    serverLogger.warn('meal_plan.unauthorized', { requestId });
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const tenantId = user.tenant.tenantId;
 
   const apiKey = getGeminiApiKey();
   const model = getGeminiModel();
@@ -71,29 +86,23 @@ export async function POST(request: NextRequest) {
     .filter(Boolean)
     .slice(0, 2);
   const fusionIntensity = body.fusionIntensity ?? 'media';
-  const inventoryItems = await listInventoryItemsByTenant(tenant.tenantId);
-  const inventoryLines = buildMealPlanInventoryContext(inventoryItems, tenant.tenantId);
+  const [inventoryItems, persistedProfile, persistedProfileTerms] = await Promise.all([
+    listInventoryItemsByTenant(tenantId),
+    findCulinaryProfileByUserId(user.id),
+    findCulinaryProfileTermsByUserId(user.id),
+  ]);
+  const inventoryLines = buildMealPlanInventoryContext(inventoryItems, tenantId);
   const inventoryContext =
     inventoryLines.join('\n') || 'Sin inventario persistido para este hogar.';
+  const persistedProfileContext = formatPersistedMealPlanProfileContext(
+    buildPersistedMealPlanProfileContext(persistedProfile, persistedProfileTerms, user.id, tenantId)
+  );
   const peopleCount =
     typeof body.peopleCount === 'number' &&
     Number.isFinite(body.peopleCount) &&
     body.peopleCount > 0
       ? Math.floor(body.peopleCount)
       : 4;
-  const profilePreferred = (body.culinaryProfile?.preferred ?? [])
-    .map((v) => v.trim())
-    .filter(Boolean)
-    .slice(0, 12);
-  const profileAvoid = (body.culinaryProfile?.avoid ?? [])
-    .map((v) => v.trim())
-    .filter(Boolean)
-    .slice(0, 12);
-  const profileGoals = (body.culinaryProfile?.goals ?? [])
-    .map((v) => v.trim())
-    .filter(Boolean)
-    .slice(0, 12);
-  const profileLevel = body.culinaryProfile?.level?.trim() || 'No especificado';
   const chunks = (body.chunks ?? [])
     .map((value) => value.trim())
     .filter(Boolean)
@@ -126,10 +135,8 @@ Cocina objetivo: ${cuisineLabel}.
 Intensidad de fusión: ${fusionIntensity}.
 Perfil del usuario:
 - Personas: ${peopleCount}
-- Preferencias: ${profilePreferred.join(', ') || 'No especificado'}
-- Evitar: ${profileAvoid.join(', ') || 'No especificado'}
-- Objetivos: ${profileGoals.join(', ') || 'No especificado'}
-- Nivel: ${profileLevel}
+Perfil culinario persistido del usuario autenticado:
+${persistedProfileContext}
 Contexto PDF:
 ${chunks.length > 0 ? chunks.join('\n---\n') : 'Sin contexto PDF.'}
 
@@ -152,10 +159,8 @@ ${inventoryContext}
 Intensidad de fusión: ${fusionIntensity}.
 Perfil del usuario:
 - Personas: ${peopleCount}
-- Preferencias: ${profilePreferred.join(', ') || 'No especificado'}
-- Evitar: ${profileAvoid.join(', ') || 'No especificado'}
-- Objetivos: ${profileGoals.join(', ') || 'No especificado'}
-- Nivel: ${profileLevel}
+Perfil culinario persistido del usuario autenticado:
+${persistedProfileContext}
 Contexto PDF:
 ${chunks.length > 0 ? chunks.join('\n---\n') : 'Sin contexto PDF.'}
 
