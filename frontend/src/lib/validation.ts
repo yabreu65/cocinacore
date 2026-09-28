@@ -29,7 +29,10 @@ export type RecipeGenerateBody = z.infer<typeof RecipeGenerateSchema>;
 
 /** Schema for POST /api/meal-plan */
 export const MealPlanSchema = z.object({
-  mode: z.enum(['inventory_to_menu', 'menu_to_shopping']).optional().default('inventory_to_menu'),
+  mode: z
+    .enum(['inventory_to_menu', 'menu_to_shopping', 'balanced_ai'])
+    .optional()
+    .default('inventory_to_menu'),
   period: z.enum(['week', 'fortnight', 'month']).optional().default('week'),
   baseCuisine: z.string().max(100).optional(),
   fusionCuisines: z.array(z.string().max(100)).max(2).optional(),

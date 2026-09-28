@@ -54,7 +54,7 @@ export default function MealPlannerPage() {
         <div className="mb-4 flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-semibold">Planificador de menú</h1>
-            <p className="text-[#6B5A50]">Generá un menú semanal con IA.</p>
+            <p className="text-[#6B5A50]">Generá un menú para el período elegido con IA.</p>
           </div>
           <Link href="/app" className="text-sm font-semibold text-[#A55412]">
             Volver

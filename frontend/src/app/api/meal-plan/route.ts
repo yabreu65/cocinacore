@@ -3,6 +3,10 @@ import { serverLogger } from '@/lib/serverLogger';
 import { validateRequest, MealPlanSchema, type MealPlanBody } from '@/lib/validation';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { getGeminiApiKey, getGeminiModel } from '@/lib/ai/gemini-config';
+import {
+  buildMealPlanFormatInstructions,
+  getMealPlanPeriodLabel,
+} from '@/lib/meal-planner/prompt';
 
 const AI_REQUEST_TIMEOUT_MS = 60_000;
 
@@ -82,7 +86,7 @@ export async function POST(request: NextRequest) {
     .filter(Boolean)
     .slice(0, 10);
 
-  const periodLabel = period === 'month' ? '30 días' : period === 'fortnight' ? '14 días' : '7 días';
+  const periodLabel = getMealPlanPeriodLabel(period);
   const cuisineLabel =
     fusionCuisines.length > 0
       ? `${baseCuisine} fusionada con ${fusionCuisines.join(' y ')}`
@@ -98,41 +102,7 @@ export async function POST(request: NextRequest) {
     fusionCount: fusionCuisines.length,
   });
 
-  const strictWeekFormat = `Formato OBLIGATORIO:
-Lunes
-Desayuno: ...
-Almuerzo: ...
-Cena: ...
-
-Martes
-Desayuno: ...
-Almuerzo: ...
-Cena: ...
-
-Miércoles
-Desayuno: ...
-Almuerzo: ...
-Cena: ...
-
-Jueves
-Desayuno: ...
-Almuerzo: ...
-Cena: ...
-
-Viernes
-Desayuno: ...
-Almuerzo: ...
-Cena: ...
-
-Sábado
-Desayuno: ...
-Almuerzo: ...
-Cena: ...
-
-Domingo
-Desayuno: ...
-Almuerzo: ...
-Cena: ...`;
+  const formatInstructions = buildMealPlanFormatInstructions(period);
 
   const prompt =
     mode === 'inventory_to_menu'
@@ -156,10 +126,8 @@ Reglas:
 - Si intensidad es sutil: prioriza cocina base y toques menores de fusión.
 - Si intensidad es media: balancea cocina base y fusión.
 - Si intensidad es alta: fusión protagonista manteniendo coherencia culinaria.
-- Debes devolver SIEMPRE los 7 días completos (Lunes a Domingo), con desayuno, almuerzo y cena para cada día.
-- No saltees días.
 - No uses texto narrativo largo.
-- ${strictWeekFormat}
+- ${formatInstructions}
 - Español.
 - Máximo 900 palabras.`
       : `Genera un menú de ${periodLabel} de cocina ${cuisineLabel} y luego una lista de compras.
@@ -174,9 +142,7 @@ Contexto PDF:
 ${chunks.length > 0 ? chunks.join('\n---\n') : 'Sin contexto PDF.'}
 
 Reglas:
-- Debes devolver SIEMPRE los 7 días completos (Lunes a Domingo), con desayuno, almuerzo y cena para cada día.
-- No saltees días.
-- ${strictWeekFormat}
+- ${formatInstructions}
 - Incluir sección "LISTA DE COMPRAS" agrupada por categoría.
 - Respeta estrictamente "Evitar".
 - Integra técnicas/sabores de fusión si se especifican culturas de fusión.

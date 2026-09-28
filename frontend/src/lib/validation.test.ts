@@ -125,6 +125,11 @@ describe('MealPlanSchema', () => {
     expect(result.success).toBe(true);
   });
 
+  it('accepts balanced_ai mode', () => {
+    const result = MealPlanSchema.safeParse({ mode: 'balanced_ai' });
+    expect(result.success).toBe(true);
+  });
+
   it('rejects invalid mode', () => {
     const result = MealPlanSchema.safeParse({ mode: 'free' });
     expect(result.success).toBe(false);
