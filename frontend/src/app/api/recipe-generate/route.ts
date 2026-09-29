@@ -19,6 +19,7 @@ import { requireUser } from '@/lib/auth/server';
 import type { AuthUser } from '@/lib/auth/types';
 import { loadPersistedRecipeContext } from '@/lib/recipes/persisted-context';
 import { retrieveServerRagContext } from '@/lib/recipes/server-rag-context';
+import { createRecipeHistory } from '@/lib/db/repositories/recipeRepository';
 import type { Citation } from '@/services/types';
 
 const AI_REQUEST_TIMEOUT_MS = 60_000;
@@ -80,6 +81,64 @@ function formatRequestProfile(profile: RecipeProfileFields): string {
     `- Restricciones/evitar: ${profile.avoid.join(', ') || 'No especificado'}`,
     `- Nivel culinario: ${profile.level}`,
   ].join('\n');
+}
+
+interface CanonicalRecipeResult {
+  recipe: string;
+  title: string;
+  provider: 'gemini';
+  model?: string;
+  mode: 'free' | 'rag';
+  structuredIngredients: StructuredRecipeIngredient[];
+}
+
+async function persistAuthenticatedRecipeHistory({
+  user,
+  result,
+  requestedIngredients,
+  peopleCount,
+  persistedContext,
+  ragContext,
+}: {
+  user: AuthUser | null;
+  result: CanonicalRecipeResult;
+  requestedIngredients: string[];
+  peopleCount: number;
+  persistedContext: Awaited<ReturnType<typeof loadPersistedRecipeContext>> | null;
+  ragContext: { citations: Citation[]; ragContextUsed: boolean };
+}): Promise<void> {
+  if (!user?.tenant) return;
+
+  await createRecipeHistory({
+    tenantId: user.tenant.tenantId,
+    userId: user.id,
+    source: result.provider,
+    recipeTitle: result.title,
+    recipePayload: {
+      full_recipe: result.recipe,
+      title: result.title,
+      provider: result.provider,
+      model: result.model,
+      mode: result.mode,
+      structuredIngredients: result.structuredIngredients,
+      requestedIngredients,
+      peopleCount,
+      ragContextUsed: ragContext.ragContextUsed,
+      sources: ragContext.citations,
+    },
+    restrictionsSnapshot: {
+      identity: persistedContext?.profile?.identity ?? [],
+      preferred: persistedContext?.profile?.preferred ?? [],
+      avoid: persistedContext?.profile?.avoid ?? [],
+      goals: persistedContext?.profile?.goals ?? [],
+      level: persistedContext?.profile?.level ?? 'No especificado',
+    },
+    inventorySnapshot: {
+      inventoryLines: persistedContext?.inventoryLines ?? [],
+      inventoryContext:
+        persistedContext?.inventoryContext ?? 'Sin inventario persistido para este hogar.',
+    },
+  });
 }
 
 export async function POST(request: NextRequest) {
@@ -340,6 +399,26 @@ Reglas:
 
   const cached = await getCachedRecipe(recipeCacheKey);
   if (cached) {
+    try {
+      await persistAuthenticatedRecipeHistory({
+        user,
+        result: cached,
+        requestedIngredients,
+        peopleCount,
+        persistedContext,
+        ragContext,
+      });
+    } catch (error) {
+      serverLogger.error('recipe_generate.history_persist_failed', {
+        requestId,
+        error: error instanceof Error ? error.message : 'Recipe history error',
+      });
+      return NextResponse.json(
+        { error: 'No se pudo guardar la receta en el historial.' },
+        { status: 500 }
+      );
+    }
+
     return NextResponse.json({
       recipe: cached.recipe,
       title: cached.title,
@@ -402,6 +481,35 @@ Reglas:
     )
       ? structuredIngredients
       : [];
+    const result: CanonicalRecipeResult = {
+      recipe,
+      title,
+      provider: 'gemini',
+      model,
+      mode,
+      structuredIngredients: safeStructuredIngredients,
+    };
+
+    try {
+      await persistAuthenticatedRecipeHistory({
+        user,
+        result,
+        requestedIngredients,
+        peopleCount,
+        persistedContext,
+        ragContext,
+      });
+    } catch (error) {
+      serverLogger.error('recipe_generate.history_persist_failed', {
+        requestId,
+        error: error instanceof Error ? error.message : 'Recipe history error',
+      });
+      return NextResponse.json(
+        { error: 'No se pudo guardar la receta en el historial.' },
+        { status: 500 }
+      );
+    }
+
     serverLogger.info('recipe_generate.success', {
       requestId,
       durationMs: Date.now() - startedAt,
@@ -410,11 +518,7 @@ Reglas:
       titleLength: title.length,
     });
     await setCachedRecipe(recipeCacheKey, {
-      recipe,
-      title,
-      provider: 'gemini',
-      mode,
-      structuredIngredients: safeStructuredIngredients,
+      ...result,
       createdAt: Date.now(),
     });
     return NextResponse.json({

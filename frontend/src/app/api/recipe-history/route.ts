@@ -14,18 +14,18 @@ export async function GET() {
 }
 
 export async function DELETE(request: NextRequest) {
-  const tenant = await requireTenant();
+  const [tenant, user] = await Promise.all([requireTenant(), requireUser()]);
   const id = request.nextUrl.searchParams.get('id');
   if (!id) {
     return NextResponse.json({ error: 'ID is required' }, { status: 400 });
   }
 
-  await deleteRecipeHistory(id, tenant.tenantId);
+  await deleteRecipeHistory(id, tenant.tenantId, user.id);
   return NextResponse.json({ ok: true });
 }
 
 export async function PATCH(request: NextRequest) {
-  const tenant = await requireTenant();
+  const [tenant, user] = await Promise.all([requireTenant(), requireUser()]);
   const id = request.nextUrl.searchParams.get('id');
   const feedback = request.nextUrl.searchParams.get('feedback');
 
@@ -33,6 +33,6 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid params' }, { status: 400 });
   }
 
-  const updated = await updateRecipeFeedback(id, tenant.tenantId, feedback);
+  const updated = await updateRecipeFeedback(id, tenant.tenantId, user.id, feedback);
   return NextResponse.json({ item: updated });
 }

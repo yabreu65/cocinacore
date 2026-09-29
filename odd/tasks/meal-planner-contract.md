@@ -218,3 +218,35 @@
 - Cache scope: user/tenant scope, SHA-256 inventory/profile context hashes, goals hash, model, and prompt context version; private values are not serialized into cache keys.
 - Verification: focused Vitest 23/23; full Vitest 304/304; direct `tsc --noEmit`, lint, build, and `git diff --check` passed. Expected Redis/database degradation logs remained fixture behavior. Native review approved and acknowledged with informational `R3-hash-undefined-context` warning.
 - Commit: `fe66526` (`feat(recipe-search): use persisted inventory and profile`).
+- Documentation evidence: `91de457` (`docs(odd): record persisted recipe context`).
+
+## META 1 / M1.3.4 — Automatic Authenticated Recipe History
+
+- **Status:** in_progress
+- **Base SHA:** `91de4577788d4f8c01b89d557dc2a322601f6e97`
+- **Objective:** Persist each successfully generated authenticated recipe once into existing Recipe History using canonical server result fields and authenticated user/tenant scope.
+- **Storage decision:** Reuse `recipe_ai_history.recipe_payload`, `restrictions_snapshot`, and `inventory_snapshot` JSONB columns; no migration is expected. Store full recipe text, title, provider/model/mode, structured ingredients, requested ingredients, people count, `ragContextUsed`, and authoritative server `sources`.
+- **Auth decision:** Only an authenticated user with tenant context receives automatic history persistence. Anonymous free generation remains supported but creates no history row. Browser user/tenant IDs and source/chunk data are never accepted.
+- **Cache decision:** A valid cache hit counts as the user's requested generation and creates exactly one history row for that route execution; provider generation also creates exactly one row after canonical result parsing.
+- **Failure decision:** If authenticated history insertion fails after successful generation, return controlled HTTP 500 and do not claim generation success. Validation/auth/RAG/provider/malformed-result failures create no row.
+- **Security decision:** Existing history GET is user+tenant scoped. DELETE/PATCH tenant-only mutations are an obvious same-tenant cross-user risk; tighten them to authenticated user+tenant scope as a minimal related fix, with focused tests.
+- **Non-goals:** History redesign, ratings redesign, inventory decrement, meal plans, shopping, Home OS, voice, migrations unless disproven, production, Contabo, deployment, push, and PR.
+
+### Tasks
+
+1. **Explore Recipe History storage and security** — completed. Confirmed existing JSONB schema/repository, history UI/API, canonical fields, cache path, GET user+tenant filter, and tenant-only DELETE/PATCH risk.
+2. **Track M1.3.4 ODD work** — completed. Added this bounded section and decisions before source writes.
+3. **Implement authenticated history persistence** — pending. Persist canonical provider/cache results once for authenticated tenant users; preserve anonymous free behavior.
+4. **Harden touched history scope** — pending. Require user+tenant for DELETE/PATCH repository mutations and route calls.
+5. **Add focused history tests** — pending. Cover success, cache/provider, failures, authoritative fields/provenance, anonymous behavior, and isolation.
+6. **Run verification and commit** — pending. Run focused/full tests, direct TypeScript, lint, build, diff check, native review, and create local Conventional Commit.
+
+### M1.3.4 Evidence
+
+- History storage: pending implementation.
+- Authenticated write scope: pending implementation.
+- Cache hit behavior: pending implementation.
+- Mutation scope: pending implementation.
+- Failure behavior: pending.
+- Verification: pending.
+- Commit: pending.

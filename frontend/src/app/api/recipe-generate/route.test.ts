@@ -11,6 +11,37 @@ const setCachedRecipeMock = vi.fn();
 const checkRateLimitMock = vi.fn();
 const getGeminiApiKeyMock = vi.fn();
 const getGeminiModelMock = vi.fn();
+interface RecipeHistoryCall {
+  tenantId: string;
+  userId: string;
+  source: string;
+  recipeTitle: string;
+  recipePayload: {
+    full_recipe: string;
+    title: string;
+    provider: string;
+    model: string;
+    mode: string;
+    structuredIngredients: unknown;
+    requestedIngredients?: string[];
+    peopleCount?: number;
+    ragContextUsed: boolean;
+    sources: typeof sources;
+  };
+  restrictionsSnapshot: {
+    identity: string[];
+    preferred: string[];
+    avoid: string[];
+    goals: string[];
+    level: string;
+  };
+  inventorySnapshot: {
+    inventoryLines: string[];
+    inventoryContext: string;
+  };
+}
+
+const createRecipeHistoryMock = vi.fn<(history: RecipeHistoryCall) => Promise<unknown>>();
 const fetchMock = vi.fn();
 
 vi.mock('@/lib/auth/server', () => ({ requireUser: requireUserMock }));
@@ -33,6 +64,9 @@ vi.mock('@/lib/ai/gemini-config', () => ({
 }));
 vi.mock('@/lib/serverLogger', () => ({
   serverLogger: { info: vi.fn(), error: vi.fn() },
+}));
+vi.mock('@/lib/db/repositories/recipeRepository', () => ({
+  createRecipeHistory: createRecipeHistoryMock,
 }));
 
 const { POST } = await import('./route');
@@ -92,6 +126,16 @@ const sources = [
   },
 ];
 
+function recipeHistoryCall(): RecipeHistoryCall {
+  const [history] = createRecipeHistoryMock.mock.calls[0] ?? [];
+
+  if (!history) {
+    throw new Error('Expected recipe history to be persisted.');
+  }
+
+  return history;
+}
+
 describe('POST /api/recipe-generate', () => {
   beforeEach(() => {
     requireUserMock.mockReset();
@@ -104,6 +148,7 @@ describe('POST /api/recipe-generate', () => {
     checkRateLimitMock.mockReset();
     getGeminiApiKeyMock.mockReset();
     getGeminiModelMock.mockReset();
+    createRecipeHistoryMock.mockReset();
     fetchMock.mockReset();
 
     requireUserMock.mockResolvedValue({
@@ -121,6 +166,7 @@ describe('POST /api/recipe-generate', () => {
     checkRateLimitMock.mockResolvedValue({ success: true, limit: 10, remaining: 9, resetAt: 1 });
     getGeminiApiKeyMock.mockReturnValue('gemini-test-key');
     getGeminiModelMock.mockReturnValue('gemini-test-model');
+    createRecipeHistoryMock.mockResolvedValue({});
     fetchMock.mockResolvedValue(geminiResponse());
     vi.stubGlobal('fetch', fetchMock);
   });
@@ -314,5 +360,158 @@ describe('POST /api/recipe-generate', () => {
 
     expect(response.status).toBe(502);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(createRecipeHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it('persists one authenticated free generation from canonical server data', async () => {
+    const recipe = 'Sopa de tomate\n\nINGREDIENTES\n- 2 unidades tomate';
+    fetchMock.mockResolvedValue(geminiResponse(recipe));
+
+    const response = await POST(
+      request({
+        mode: 'free',
+        ingredients: ['tomate', 'albahaca'],
+        peopleCount: 2,
+        culinaryProfile: { avoid: ['Browser override'] },
+      }) as unknown as NextRequest
+    );
+
+    expect(response.status).toBe(200);
+    expect(createRecipeHistoryMock).toHaveBeenCalledTimes(1);
+    const history = recipeHistoryCall();
+    expect(history).toMatchObject({
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+      source: 'gemini',
+      recipeTitle: 'Sopa de tomate',
+      recipePayload: {
+        full_recipe: recipe,
+        title: 'Sopa de tomate',
+        provider: 'gemini',
+        model: 'gemini-test-model',
+        mode: 'free',
+        requestedIngredients: ['tomate', 'albahaca'],
+        peopleCount: 2,
+        ragContextUsed: false,
+        sources: [],
+      },
+      restrictionsSnapshot: {
+        identity: ['Mediterránea'],
+        preferred: ['Legumbres'],
+        avoid: ['Maní'],
+        goals: ['Comidas rápidas'],
+        level: 'Intermedio',
+      },
+      inventorySnapshot: {
+        inventoryLines: ['- tomate: 2 kg'],
+        inventoryContext: '- tomate: 2 kg',
+      },
+    });
+    expect(Array.isArray(history.recipePayload.structuredIngredients)).toBe(true);
+    expect(setCachedRecipeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('persists authoritative RAG citations instead of browser chunks', async () => {
+    const response = await POST(
+      request({
+        mode: 'rag',
+        ingredients: ['tomate'],
+        chunks: ['Browser source data that must not persist'],
+      }) as unknown as NextRequest
+    );
+
+    expect(response.status).toBe(200);
+    expect(createRecipeHistoryMock).toHaveBeenCalledTimes(1);
+    const history = recipeHistoryCall();
+    expect(history).toMatchObject({
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+      recipePayload: {
+        mode: 'rag',
+        ragContextUsed: true,
+        sources,
+      },
+    });
+    expect(JSON.stringify(history)).not.toContain(
+      'Browser source data that must not persist'
+    );
+  });
+
+  it('does not persist anonymous free generation', async () => {
+    requireUserMock.mockRejectedValue(new Error('Unauthorized'));
+
+    const response = await POST(request({ mode: 'free', ingredients: ['tomate'] }) as unknown as NextRequest);
+
+    expect(response.status).toBe(200);
+    expect(createRecipeHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it('does not persist validation, authorization, retrieval, or malformed provider failures', async () => {
+    const invalidResponse = await POST(
+      request({ mode: 'unsupported-mode' }) as unknown as NextRequest
+    );
+    expect(invalidResponse.status).toBe(400);
+    expect(createRecipeHistoryMock).not.toHaveBeenCalled();
+
+    requireUserMock.mockRejectedValue(new Error('Unauthorized'));
+    const unauthorizedResponse = await POST(
+      request({ mode: 'rag', ingredients: ['tomate'] }) as unknown as NextRequest
+    );
+    expect(unauthorizedResponse.status).toBe(401);
+    expect(createRecipeHistoryMock).not.toHaveBeenCalled();
+
+    requireUserMock.mockResolvedValue({
+      id: 'user-1',
+      tenant: { tenantId: 'tenant-1', role: 'owner', tenantType: 'home' },
+    });
+    retrieveServerRagContextMock.mockRejectedValueOnce(new Error('vector unavailable'));
+    const retrievalResponse = await POST(
+      request({ mode: 'rag', ingredients: ['tomate'] }) as unknown as NextRequest
+    );
+    expect(retrievalResponse.status).toBe(502);
+    expect(createRecipeHistoryMock).not.toHaveBeenCalled();
+
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ candidates: [] }), { status: 200 })
+    );
+    const malformedResponse = await POST(
+      request({ mode: 'free', ingredients: ['tomate'] }) as unknown as NextRequest
+    );
+    expect(malformedResponse.status).toBe(502);
+    expect(createRecipeHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it('returns controlled 500 and skips caching when authenticated history persistence fails', async () => {
+    createRecipeHistoryMock.mockRejectedValueOnce(new Error('database unavailable'));
+
+    const response = await POST(request({ mode: 'free', ingredients: ['tomate'] }) as unknown as NextRequest);
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: 'No se pudo guardar la receta en el historial.' });
+    expect(setCachedRecipeMock).not.toHaveBeenCalled();
+  });
+
+  it('persists a cache hit once without calling Gemini', async () => {
+    getCachedRecipeMock.mockResolvedValueOnce({
+      recipe: 'Receta cacheada',
+      title: 'Receta cacheada',
+      provider: 'gemini',
+      model: 'gemini-test-model',
+      mode: 'free',
+      structuredIngredients: [],
+      createdAt: Date.now(),
+    });
+
+    const response = await POST(request({ mode: 'free', ingredients: ['tomate'] }) as unknown as NextRequest);
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(createRecipeHistoryMock).toHaveBeenCalledTimes(1);
+    expect(recipeHistoryCall()).toMatchObject({
+      recipePayload: {
+        full_recipe: 'Receta cacheada',
+        model: 'gemini-test-model',
+      },
+    });
   });
 });
