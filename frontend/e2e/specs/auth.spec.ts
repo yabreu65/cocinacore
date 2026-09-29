@@ -11,6 +11,13 @@ test.describe('Authentication', () => {
     await expect(page).toHaveURL(/.*login.*/);
   });
 
+  test('unauthenticated user is redirected to login from legacy dashboard', async ({ page }) => {
+    await clearAuth(page);
+    await page.goto('/dashboard');
+
+    await expect(page).toHaveURL(/.*login.*/);
+  });
+
   test('authenticated user can access protected routes', async ({ page }) => {
     await injectAuth(page);
     await page.goto('/app');
