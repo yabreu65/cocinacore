@@ -5,12 +5,15 @@ import Link from 'next/link';
 import { humanCopy } from '@/lib/copy';
 import { safeFetch } from '@/lib/api';
 
+type HistoryFilter = 'all' | 'saved';
+
 type HistoryRow = {
   id: string;
   recipe_title: string | null;
   recipe_payload: unknown;
   user_feedback: 'accepted' | 'discarded' | null;
   created_at: string;
+  is_saved: boolean;
 };
 
 function toPrettyPayload(payload: unknown): string {
@@ -55,20 +58,28 @@ function toPrettyPayload(payload: unknown): string {
   return 'Sin detalle disponible.';
 }
 
+function initialFilter(): HistoryFilter {
+  if (typeof window === 'undefined') return 'all';
+  return new URLSearchParams(window.location.search).get('saved') === 'true' ? 'saved' : 'all';
+}
+
 export default function RecipeHistoryPage() {
   const [rows, setRows] = useState<HistoryRow[]>([]);
+  const [filter, setFilter] = useState<HistoryFilter>(initialFilter);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [openId, setOpenId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [feedbackWorkingId, setFeedbackWorkingId] = useState<string | null>(null);
+  const [savedWorkingId, setSavedWorkingId] = useState<string | null>(null);
 
   useEffect(() => {
     const load = async () => {
       setLoading(true);
       setError(null);
       try {
-        const result = await safeFetch<{ items: HistoryRow[] }>('/api/recipe-history', {
+        const path = filter === 'saved' ? '/api/recipe-history?saved=true' : '/api/recipe-history';
+        const result = await safeFetch<{ items: HistoryRow[] }>(path, {
           credentials: 'same-origin',
         });
         if (!result.ok) throw new Error(result.error);
@@ -81,7 +92,18 @@ export default function RecipeHistoryPage() {
     };
 
     void load();
-  }, []);
+  }, [filter]);
+
+  const updateFilter = (nextFilter: HistoryFilter) => {
+    const url = new URL(window.location.href);
+    if (nextFilter === 'saved') {
+      url.searchParams.set('saved', 'true');
+    } else {
+      url.searchParams.delete('saved');
+    }
+    window.history.replaceState(null, '', url);
+    setFilter(nextFilter);
+  };
 
   const deleteHistoryItem = async (id: string) => {
     setDeletingId(id);
@@ -126,11 +148,51 @@ export default function RecipeHistoryPage() {
     }
   };
 
+  const setSaved = async (entry: HistoryRow) => {
+    const nextSaved = !entry.is_saved;
+    setSavedWorkingId(entry.id);
+    setError(null);
+    try {
+      const result = await safeFetch<{ item: HistoryRow }>(
+        `/api/recipe-history?id=${encodeURIComponent(entry.id)}&saved=${nextSaved}`,
+        {
+          method: 'PATCH',
+          credentials: 'same-origin',
+        }
+      );
+      if (!result.ok) throw new Error(result.error);
+      setRows((prev) => {
+        if (filter === 'saved' && !result.data.item.is_saved) {
+          return prev.filter((row) => row.id !== entry.id);
+        }
+        return prev.map((row) =>
+          row.id === entry.id ? { ...row, is_saved: result.data.item.is_saved } : row
+        );
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo actualizar la receta guardada.');
+    } finally {
+      setSavedWorkingId(null);
+    }
+  };
+
   return (
     <main className="texture-paper min-h-screen bg-[#FAF6F1] px-4 py-6 text-[#241A14] md:px-6">
       <section className="mx-auto w-full max-w-5xl rounded-3xl border border-[#E8DDD2] bg-white/80 p-5 premium-shadow">
         <h1 className="text-3xl font-semibold">Historial de recetas</h1>
         <p className="mt-1 text-[#6B5A50]">Recetas sugeridas para tu usuario y tenant.</p>
+
+        <label className="mt-4 flex w-fit items-center gap-2 text-sm font-semibold text-[#6B5A50]">
+          Mostrar recetas
+          <select
+            value={filter}
+            onChange={(event) => updateFilter(event.target.value as HistoryFilter)}
+            className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-1.5 text-sm font-medium text-[#3B2F26]"
+          >
+            <option value="all">Todas</option>
+            <option value="saved">Guardadas</option>
+          </select>
+        </label>
 
         {loading ? <p className="mt-4 text-sm text-[#6B5A50]">Cargando historial...</p> : null}
         {error ? (
@@ -139,7 +201,11 @@ export default function RecipeHistoryPage() {
           </p>
         ) : null}
         {!loading && rows.length === 0 ? (
-          <p className="mt-4 text-sm text-[#6B5A50]">Aún no tienes recetas guardadas.</p>
+          <p className="mt-4 text-sm text-[#6B5A50]">
+            {filter === 'saved'
+              ? 'Aún no tienes recetas guardadas.'
+              : 'Aún no tienes recetas en el historial.'}
+          </p>
         ) : null}
 
         <ul className="mt-4 grid gap-3">
@@ -155,6 +221,15 @@ export default function RecipeHistoryPage() {
                     — {new Date(entry.created_at).toLocaleString()}
                   </p>
                   <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void setSaved(entry)}
+                      aria-pressed={entry.is_saved}
+                      disabled={savedWorkingId === entry.id}
+                      className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-1.5 text-sm font-semibold text-[#6B5A50] disabled:opacity-70"
+                    >
+                      {entry.is_saved ? 'Quitar de guardadas' : 'Guardar'}
+                    </button>
                     <button
                       type="button"
                       onClick={() => void setFeedback(entry.id, 'accepted')}

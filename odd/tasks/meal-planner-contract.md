@@ -323,7 +323,7 @@
 - Clean Node 20 snapshot: `npm test` passed 322/322, `npx tsc --noEmit` passed, `npm run lint` passed, and `npm run build` passed. Node 20 emitted the existing `pdfjs-dist` engine warning only; no gate failed.
 - Full Playwright passed 13/13 executed tests with 2 owner-health tests skipped because explicit owner credentials were absent. `git diff --check` passed.
 - Native review lineage `review-a65c73c0422f5a31` approved and acknowledged. Native ASSESS reported `unassessable` because intentionally excluded untracked `.codegraph/` still requires an explicit declaration; the review itself closed successfully.
-- **Implementation commit:** `71810e1` (`fix(meal-planner): prevent stale rehydration overwrite`).
+- **Implementation commit:** `c03b045` (`fix(meal-planner): prevent stale rehydration overwrite`).
 
 ### M1.4.1 Implementation Evidence
 
@@ -341,3 +341,34 @@
 - Full Vitest: 318/318 passed. TypeScript, lint, build, and `git diff --check` passed.
 - Provider strategy: Existing local Gemini-compatible fixture, routed through the existing `GEMINI_BASE_URL` seam; no Meal Planner API route mocks in connected E2E.
 - Intermediate failures: None in M1.4.1 authorized checks.
+
+## META 1 / M1.4.2 — Persisted Saved Recipes in Recipe History
+
+- **Status:** completed
+- **Base SHA:** `c03b0455797536a3c0f37e673075033b620eb1d9`
+- **Objective:** Connect existing `recipe_ai_history.is_saved` persistence to the authenticated Recipe History API and UI, including save/unsave, reload persistence, and server-side saved filtering.
+- **Non-goals:** No ratings, `recipe_ai_ratings`, premium saved recipes, shopping, inventory mutation, generation redesign, production, deployment, push, PR, or M1.4.3.
+- **Storage decision:** Reuse `recipe_ai_history.is_saved`; no migration and no second saved/favorites table.
+- **API decision:** Preserve feedback PATCH compatibility while requiring exactly one intent per PATCH: `feedback=accepted|discarded` or strict `saved=true|false`. Both mutations use authenticated tenant/user scope; missing ownership returns 404 without disclosure. GET accepts absent/`saved=false` for all history and `saved=true` for repository `onlySaved` filtering.
+- **UI decision:** Add a server-backed Guardar/Quitar de guardadas toggle per row, disable only that row's save control while pending, expose `aria-pressed`, retain independent feedback/delete controls, correct the normal-history empty state, and reload state from PostgreSQL.
+
+### Tasks
+
+1. **Explore Recipe History surfaces** — completed. Confirmed existing repository `onlySaved`/`toggleRecipeSaved`, typed `is_saved`, user+tenant GET/feedback/delete scope, active History page, connected Recipe Search fixtures, and no active ratings UI.
+2. **Track M1.4.2 evidence** — completed. Recorded no-migration, API intent separation, authenticated ownership, saved filter, UI, and coverage decisions before source writes.
+3. **Implement saved-state API/repository wiring** — completed. Added strict query contracts, saved-only GET, authenticated save/unsave mutation, controlled 400/404/500 behavior, public response mapping, and repository tests preserving ownership SQL.
+4. **Implement Recipe History saved UI** — completed. Rendered server `is_saved`, row-scoped mutation state, accessible Spanish controls, URL-backed saved filter, and distinct empty-state semantics.
+5. **Add focused and connected coverage** — completed. Focused route/repository tests passed 16/16; connected E2E passed 3/3 with real authenticated PostgreSQL save/reload/filter/unsave behavior.
+6. **Run gates, review, and commit** — completed pending local commit. Full Playwright passed 13/13 after one transient cache miss run; clean Node 20 tests/typecheck/lint/build/diff check passed; native review approved and acknowledged.
+
+### M1.4.2 Implementation Evidence
+
+- GET `/api/recipe-history` derives tenant/user from authenticated context, returns only the public history shape including `is_saved`, and supports `saved=true` through repository `onlySaved: true`; invalid filter values return 400.
+- PATCH requires exactly one strict intent: `feedback=accepted|discarded` or `saved=true|false`. Saved mutations call `toggleRecipeSaved(id, authenticatedTenantId, authenticatedUserId, isSaved)`, return 404 for no scoped row, and return a generic 500 on repository failure. Feedback remains compatible and is now returned through the same public shape.
+- Recipe History renders server-owned saved state with accessible `Guardar`/`Quitar de guardadas` controls (`aria-pressed`), disables only the active save button, and keeps feedback/delete independent. `Todas`/`Guardadas` uses server-side filtering and reloads from PostgreSQL; normal and saved-only empty states are distinct.
+- Repository tests prove `toggleRecipeSaved` updates only `id + tenant_id + user_id` and returns null for no matching row.
+- Connected Recipe Search/History E2E passed 3/3: generated recipe starts unsaved, save persists in PostgreSQL, reload restores saved state, saved-only filter retains it, unsave persists, reload removes it from saved-only results, and all-history view shows it unsaved.
+- Full Playwright first had one transient cache assertion miss (`generationCallCount` 2 instead of 1); the independent connected Recipe Search run passed and no cache code was changed. A clean full rerun passed 13/13 with 2 owner-health tests skipped.
+- Clean Node 20 snapshot: `npm test` passed 335/335, `npx tsc --noEmit`, `npm run lint`, `npm run build`, and `git diff --check` passed. Node 20 emitted only the existing `pdfjs-dist` engine warning.
+- Native review lineage `review-df2dcab38b1758d4` approved and acknowledged. It reported one non-blocking informational warning about a possible filter request race at `frontend/src/app/recipes/history/page.tsx:95`; no correction was required for this slice.
+- **Implementation commit:** `fbb3728` (`feat(recipe-history): persist saved recipes`).

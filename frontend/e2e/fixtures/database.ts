@@ -65,6 +65,7 @@ export interface E2ERecipeHistoryRow {
   tenant_id: string;
   user_id: string;
   recipe_title: string | null;
+  is_saved: boolean;
   recipe_payload: {
     mode?: string;
     ragContextUsed?: boolean;
@@ -343,7 +344,7 @@ export async function latestRecipeHistory(
   identity: AuthenticatedE2EIdentity
 ): Promise<E2ERecipeHistoryRow | null> {
   const result = await getPool().query<E2ERecipeHistoryRow>(
-    `select id, tenant_id, user_id, recipe_title, recipe_payload
+    `select id, tenant_id, user_id, recipe_title, is_saved, recipe_payload
      from public.recipe_ai_history
      where user_id = $1 and tenant_id = $2
      order by created_at desc limit 1`,
