@@ -11,6 +11,7 @@ const setCachedRecipeMock = vi.fn();
 const checkRateLimitMock = vi.fn();
 const getGeminiApiKeyMock = vi.fn();
 const getGeminiModelMock = vi.fn();
+const getGeminiBaseUrlMock = vi.fn();
 interface RecipeHistoryCall {
   tenantId: string;
   userId: string;
@@ -61,6 +62,7 @@ vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: checkRateLimitMock }));
 vi.mock('@/lib/ai/gemini-config', () => ({
   getGeminiApiKey: getGeminiApiKeyMock,
   getGeminiModel: getGeminiModelMock,
+  getGeminiBaseUrl: getGeminiBaseUrlMock,
 }));
 vi.mock('@/lib/serverLogger', () => ({
   serverLogger: { info: vi.fn(), error: vi.fn() },
@@ -148,6 +150,7 @@ describe('POST /api/recipe-generate', () => {
     checkRateLimitMock.mockReset();
     getGeminiApiKeyMock.mockReset();
     getGeminiModelMock.mockReset();
+    getGeminiBaseUrlMock.mockReset();
     createRecipeHistoryMock.mockReset();
     fetchMock.mockReset();
 
@@ -166,6 +169,7 @@ describe('POST /api/recipe-generate', () => {
     checkRateLimitMock.mockResolvedValue({ success: true, limit: 10, remaining: 9, resetAt: 1 });
     getGeminiApiKeyMock.mockReturnValue('gemini-test-key');
     getGeminiModelMock.mockReturnValue('gemini-test-model');
+    getGeminiBaseUrlMock.mockReturnValue('https://generativelanguage.googleapis.com/v1beta');
     createRecipeHistoryMock.mockResolvedValue({});
     fetchMock.mockResolvedValue(geminiResponse());
     vi.stubGlobal('fetch', fetchMock);

@@ -250,3 +250,34 @@
 - Failure behavior: Authenticated history insertion failure returns controlled HTTP 500 and skips cache write; provider/RAG/validation failures create no row.
 - Verification: Focused Vitest 20/20; full Vitest 313/313; direct `tsc --noEmit`, lint, build, and `git diff --check` passed. Expected Redis/database degradation logs remained fixture behavior. Native review approved and acknowledged with no blocking findings.
 - Commit: `20b376a` (`feat(recipe-search): persist generated recipe history`).
+
+## META 1 / M1.3.5 — Connected Recipe Search E2E Validation
+
+- **Status:** completed
+- **Base SHA:** `8f17a5c3482d7037522edf0df52aaad32cc98339`
+- **Objective:** Validate the connected authenticated Recipe Search flow end to end: persisted inventory/profile, tenant-isolated RAG, authoritative citations, and automatic Recipe History persistence.
+- **Scope:** Add the smallest deterministic Playwright coverage supported by the current E2E architecture. Exercise real auth, database repositories, persisted context, RAG filtering, source propagation, history persistence, and UI rendering. Intercept only external Gemini provider calls with a deterministic local-compatible seam if required by the current hard-coded provider boundary.
+- **Non-goals:** Recipe Search redesign, unrelated product features, production access, deployment, migrations, push, PR, or SDD/OpenSpec artifacts.
+- **Environment:** Playwright 1.60.0, Chromium 148.0.7778.96 on macOS arm64, local PostgreSQL pgvector on port 5433, local Redis on port 6379, and Next standalone server on port 3000.
+- **Provider strategy:** Deterministic local Gemini-compatible HTTP fixture on port 4319. It returns a fixed 1536-value embedding and recipe response, captures generation prompts for assertions, and is reached only through the server-side `GEMINI_BASE_URL` seam; production defaults remain Google Gemini.
+- **Database strategy:** Direct `pg` fixture against local/CI PostgreSQL. It resolves the real authenticated identity, seeds inventory/profile/profile terms and global/tenant-A/tenant-B chunks, asserts persisted history rows, restores profile/history state, and removes unique fixture data. Redis recipe keys are cleared between tests.
+
+### Tasks
+
+1. **Explore E2E architecture** — completed. Playwright 1.60.0 runs Chromium serially; auth uses real login/signup cookies; CI provisions pgvector PostgreSQL + Redis, runs migrations/bootstrap, then `npm run test:e2e`; existing route stubs bypass the connected flow and were not reused.
+2. **Track deterministic E2E strategy** — completed. Added local Gemini-compatible provider fixture on port 4319, `GEMINI_BASE_URL` seam with production-default fallback, direct pg fixtures, isolated Redis recipe-cache cleanup, unique run IDs, and restoration of pre-existing profile/history data.
+3. **Implement primary connected RAG flow** — completed. Real authenticated `/api/recipe-generate` loads seeded inventory/profile, performs DB-backed tenant/global retrieval, receives deterministic provider output, renders authoritative citations, persists history, and verifies DB scope/provenance.
+4. **Add minimum secondary coverage** — completed. Added authenticated free mode without citation cards and no-context RAG without fabricated sources; primary test also verifies cache hit creates a second history row without a second provider generation call. Anonymous mode remains unsupported by the protected UI contract and was not forced.
+5. **Run focused and full gates** — completed. Focused connected Playwright 3/3 passed; full Playwright passed 12/12 executed with 2 owner-health tests skipped because explicit owner credentials were absent; full Vitest 313/313, TypeScript, lint, build, and diff checks passed.
+6. **Review and commit** — completed. Native review approved and acknowledged with no blocking findings; local Conventional Commit recorded below.
+- **Final commit:** pending until this work unit is committed.
+
+### M1.3.5 Evidence
+
+- Primary flow: authenticated UI → real recipe route → persisted inventory/profile → DB-backed global + tenant-A RAG retrieval → deterministic Gemini boundary → authoritative citation cards → authenticated Recipe History.
+- Persisted context: Provider prompt assertions include tomato, rice, chicken, persisted `family`, persisted `peanut`, and `Intermedio`; browser restriction input is `none`, proving persisted profile precedence. Requested `chicken` remains explicit request focus while inventory remains separate.
+- Tenant isolation: Prompt/UI/history assertions include global and tenant-A sources and exclude tenant-B title and `TENANT_B_SECRET_RECIPE_MARKER`.
+- History assertions: Latest row is user+tenant scoped; `recipe_payload.mode` is `rag`, `ragContextUsed` is true, authorized sources persist, tenant-B source is absent, and structured ingredients persist. Cache replay creates a second row while provider generation count remains one.
+- Secondary flows: Authenticated free mode creates history without citation heading; no-context RAG succeeds with `ragContextUsed: false`, empty sources, and no fake citation cards.
+- Regression compatibility: Updated stale E2E stub shape for the current structured meal-plan contract and widened the recipe page object to the current accessible ingredient label. Full Playwright now passes 12 executed tests; 2 owner-health tests remain intentionally skipped without explicit owner credentials.
+- Intermediate failures resolved: First connected run asserted English `chicken` against the provider's Spanish canonical `pollo`; the assertion was corrected. Initial full E2E exposed the two stale test fixtures/selectors above; no production behavior defect was found. An exploratory `npm test -- --runInBand` command was invalid for Vitest; the required `npm test` command passed 313/313.

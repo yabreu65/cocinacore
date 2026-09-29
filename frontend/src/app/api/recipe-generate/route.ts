@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { serverLogger } from '@/lib/serverLogger';
-import { getGeminiApiKey, getGeminiModel } from '@/lib/ai/gemini-config';
+import { getGeminiApiKey, getGeminiBaseUrl, getGeminiModel } from '@/lib/ai/gemini-config';
 import {
   buildRecipeCacheKey,
   getCachedRecipe,
@@ -155,6 +155,7 @@ export async function POST(request: NextRequest) {
   const mode = body.mode === 'rag' ? 'rag' : 'free';
   const apiKey = getGeminiApiKey();
   const model = getGeminiModel();
+  const geminiBaseUrl = getGeminiBaseUrl();
 
   const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
   const rateLimit = await checkRateLimit('recipe-generate', ip);
@@ -450,7 +451,7 @@ Reglas:
     let response: Response;
     try {
       response = await fetchWithTimeout(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+        `${geminiBaseUrl}/models/${model}:generateContent?key=${apiKey}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
