@@ -24,6 +24,14 @@ export function getMealPlanPeriodLabel(period: MealPlanPeriod): string {
   return `${getMealPlanDayCount(period)} días`;
 }
 
+export function getMealPlanCanonicalDayLabel(period: MealPlanPeriod, dayIndex: number): string {
+  if (!Number.isInteger(dayIndex) || dayIndex < 1 || dayIndex > getMealPlanDayCount(period)) {
+    throw new RangeError('dayIndex must be within the requested meal plan period');
+  }
+
+  return period === 'week' ? WEEK_DAY_HEADERS[dayIndex - 1] : `Día ${dayIndex}`;
+}
+
 function buildDayMealFormat(dayHeader: string): string {
   return `${dayHeader}
 Desayuno: ...

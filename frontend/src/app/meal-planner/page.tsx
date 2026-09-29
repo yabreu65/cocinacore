@@ -3,6 +3,13 @@
 import { FormEvent, useState } from 'react';
 import Link from 'next/link';
 import { safeFetch } from '@/lib/api';
+import type { StructuredMealPlan, StructuredMealType } from '@/lib/meal-planner/structured-plan';
+
+const mealTypeLabels: Record<StructuredMealType, string> = {
+  breakfast: 'Desayuno',
+  lunch: 'Almuerzo',
+  dinner: 'Cena',
+};
 
 export default function MealPlannerPage() {
   const [peopleCount, setPeopleCount] = useState(4);
@@ -11,7 +18,7 @@ export default function MealPlannerPage() {
   const [restrictions, setRestrictions] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [plan, setPlan] = useState<string | null>(null);
+  const [plan, setPlan] = useState<StructuredMealPlan | null>(null);
 
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -20,7 +27,7 @@ export default function MealPlannerPage() {
     setPlan(null);
 
     try {
-      const result = await safeFetch<{ plan?: string; content?: string }>('/api/meal-plan', {
+      const result = await safeFetch<{ plan?: StructuredMealPlan; content?: string }>('/api/meal-plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
@@ -40,7 +47,10 @@ export default function MealPlannerPage() {
       }
 
       const data = result.data;
-      setPlan(data.plan ?? data.content ?? 'Menú generado.');
+      if (!data.plan) {
+        throw new Error('El proveedor IA no devolvió un menú estructurado.');
+      }
+      setPlan(data.plan);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error desconocido.');
     } finally {
@@ -123,7 +133,34 @@ export default function MealPlannerPage() {
         {plan ? (
           <div className="mt-6 rounded-xl border border-[#E8DDD2] bg-[#faf7f3] p-4">
             <h2 className="font-semibold">Menú generado</h2>
-            <pre className="mt-2 whitespace-pre-wrap text-sm">{plan}</pre>
+            <div className="mt-3 grid gap-3">
+              {plan.days.map((day) => (
+                <section key={day.dayIndex} className="rounded-xl border border-[#E8DDD2] bg-white p-3">
+                  <h3 className="font-semibold">{day.label}</h3>
+                  <div className="mt-2 grid gap-2 text-sm">
+                    {day.meals.map((meal) => (
+                      <article key={meal.mealType}>
+                        <p className="font-semibold text-[#6B5A50]">
+                          {mealTypeLabels[meal.mealType]}: {meal.title}
+                        </p>
+                        {meal.description ? <p className="text-[#6B5A50]">{meal.description}</p> : null}
+                        {meal.ingredients.length > 0 ? (
+                          <ul className="mt-1 list-disc pl-5 text-[#6B5A50]">
+                            {meal.ingredients.map((ingredient, index) => (
+                              <li key={`${ingredient.name}-${index}`}>
+                                {ingredient.quantity === null
+                                  ? ingredient.name
+                                  : `${ingredient.quantity}${ingredient.unit ? ` ${ingredient.unit}` : ''} ${ingredient.name}`}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : null}
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              ))}
+            </div>
           </div>
         ) : null}
       </section>

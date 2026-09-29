@@ -15,10 +15,13 @@ import {
   buildPersistedMealPlanProfileContext,
   formatPersistedMealPlanProfileContext,
 } from '@/lib/meal-planner/profile-context';
+import { getMealPlanPeriodLabel } from '@/lib/meal-planner/prompt';
 import {
-  buildMealPlanFormatInstructions,
-  getMealPlanPeriodLabel,
-} from '@/lib/meal-planner/prompt';
+  buildStructuredMealPlanInstructions,
+  parseStructuredMealPlanResponse,
+  renderStructuredMealPlan,
+  structuredMealPlanResponseJsonSchema,
+} from '@/lib/meal-planner/structured-plan';
 
 const AI_REQUEST_TIMEOUT_MS = 60_000;
 
@@ -124,7 +127,7 @@ export async function POST(request: NextRequest) {
     fusionCount: fusionCuisines.length,
   });
 
-  const formatInstructions = buildMealPlanFormatInstructions(period);
+  const structuredOutputInstructions = buildStructuredMealPlanInstructions(period);
 
   const prompt =
     mode === 'inventory_to_menu'
@@ -150,10 +153,9 @@ Reglas:
 - Si intensidad es media: balancea cocina base y fusión.
 - Si intensidad es alta: fusión protagonista manteniendo coherencia culinaria.
 - No uses texto narrativo largo.
-- ${formatInstructions}
-- Español.
-- Máximo 900 palabras.`
-      : `Genera un menú de ${periodLabel} de cocina ${cuisineLabel} y luego una lista de compras.
+- ${structuredOutputInstructions}
+- Español.`
+      : `Genera un menú de ${periodLabel} de cocina ${cuisineLabel}.
 Inventario real disponible del hogar (base de datos, tenant autenticado):
 ${inventoryContext}
 Intensidad de fusión: ${fusionIntensity}.
@@ -165,16 +167,15 @@ Contexto PDF:
 ${chunks.length > 0 ? chunks.join('\n---\n') : 'Sin contexto PDF.'}
 
 Reglas:
-- ${formatInstructions}
-- Usa primero el inventario real antes de proponer compras y no supongas cantidades no especificadas.
-- Incluir sección "LISTA DE COMPRAS" agrupada por categoría.
+- ${structuredOutputInstructions}
+- Usa primero el inventario real antes de proponer comidas y no supongas cantidades no especificadas.
+- No incluyas una lista de compras: esta respuesta solo contiene el menú estructurado.
 - Respeta estrictamente "Evitar".
 - Integra técnicas/sabores de fusión si se especifican culturas de fusión.
 - Si intensidad es sutil: prioriza cocina base y toques menores de fusión.
 - Si intensidad es media: balancea cocina base y fusión.
 - Si intensidad es alta: fusión protagonista manteniendo coherencia culinaria.
-- Español.
-- Máximo 1000 palabras.`;
+- Español.`;
 
   const fetchWithTimeout = async (url: string, init: RequestInit) => {
     const controller = new AbortController();
@@ -194,7 +195,13 @@ Reglas:
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
+              responseMimeType: 'application/json',
+              responseJsonSchema: structuredMealPlanResponseJsonSchema,
+            },
+          }),
         }
       );
     } catch (error) {
@@ -202,34 +209,56 @@ Reglas:
     }
 
     if (!response.ok) {
-      throw new Error(await response.text());
+      serverLogger.warn('meal_plan.provider_response_failed', {
+        requestId,
+        model,
+        status: response.status,
+      });
+      throw new Error('provider_response_failed');
     }
 
     const payload = (await response.json()) as {
       candidates?: { content?: { parts?: { text?: string }[] } }[];
     };
-    const content = payload.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    const candidateText = payload.candidates?.[0]?.content?.parts?.[0]?.text;
 
-    if (!content) {
-      throw new Error('Gemini no devolvió contenido.');
+    if (!candidateText) {
+      serverLogger.warn('meal_plan.invalid_provider_response', {
+        requestId,
+        model,
+        period,
+        reason: 'empty_response',
+      });
+      return NextResponse.json({ error: 'El proveedor IA devolvió un plan inválido.' }, { status: 502 });
     }
 
+    const parsedPlan = parseStructuredMealPlanResponse(candidateText, period);
+    if (!parsedPlan.success) {
+      serverLogger.warn('meal_plan.invalid_provider_response', {
+        requestId,
+        model,
+        period,
+        reason: parsedPlan.reason,
+      });
+      return NextResponse.json({ error: 'El proveedor IA devolvió un plan inválido.' }, { status: 502 });
+    }
+
+    const content = renderStructuredMealPlan(parsedPlan.plan);
     serverLogger.info('meal_plan.success', {
       requestId,
       durationMs: Date.now() - startedAt,
-      contentLength: content.length,
+      period,
+      dayCount: parsedPlan.plan.dayCount,
     });
-    return NextResponse.json({ content, plan: content });
+    return NextResponse.json({ content, plan: parsedPlan.plan });
   } catch (error) {
     serverLogger.warn('meal_plan.failed', {
       requestId,
       durationMs: Date.now() - startedAt,
-      error: error instanceof Error ? error.message : 'Gemini error desconocido',
+      reason: error instanceof Error ? error.message : 'provider_error',
     });
     return NextResponse.json(
-      {
-        error: `No se pudo generar menú. Gemini: ${error instanceof Error ? error.message : 'error desconocido'}`,
-      },
+      { error: 'No se pudo generar menú con el proveedor IA.' },
       { status: 502 }
     );
   }

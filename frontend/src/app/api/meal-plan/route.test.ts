@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NextRequest } from 'next/server';
 import type { RecipeInventoryItemRow, UserCulinaryProfileRow } from '@/lib/db/types';
 import type { UserCulinaryProfileTermWithLabel } from '@/lib/db/repositories/culinaryProfileRepository';
+import type { StructuredMealPlan } from '@/lib/meal-planner/structured-plan';
 
 const requireUserMock = vi.fn();
 const listInventoryItemsByTenantMock = vi.fn();
@@ -97,12 +98,50 @@ function request(body: unknown): Request {
   });
 }
 
-function geminiPrompt(): string {
+function structuredPlanJson(period: 'week' | 'fortnight' | 'month' = 'week'): string {
+  const dayCount = period === 'week' ? 7 : period === 'fortnight' ? 14 : 30;
+  return JSON.stringify({
+    period,
+    dayCount,
+    days: Array.from({ length: dayCount }, (_, index) => ({
+      dayIndex: index + 1,
+      meals: [
+        {
+          mealType: 'breakfast',
+          title: 'Avena con fruta',
+          description: null,
+          ingredients: [{ name: 'Avena', quantity: 1, unit: 'taza' }],
+        },
+        {
+          mealType: 'lunch',
+          title: 'Arroz con verduras',
+          description: 'Plato principal',
+          ingredients: [{ name: 'Arroz real', quantity: null, unit: null }],
+        },
+        {
+          mealType: 'dinner',
+          title: 'Sopa liviana',
+          description: null,
+          ingredients: [{ name: 'Calabaza', quantity: null, unit: null }],
+        },
+      ],
+    })),
+  });
+}
+
+function geminiRequest(): {
+  contents: Array<{ parts: Array<{ text: string }> }>;
+  generationConfig: { responseMimeType: string; responseJsonSchema: unknown };
+} {
   const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-  const payload = JSON.parse(init.body as string) as {
+  return JSON.parse(init.body as string) as {
     contents: Array<{ parts: Array<{ text: string }> }>;
+    generationConfig: { responseMimeType: string; responseJsonSchema: unknown };
   };
-  return payload.contents[0].parts[0].text;
+}
+
+function geminiPrompt(): string {
+  return geminiRequest().contents[0].parts[0].text;
 }
 
 describe('POST /api/meal-plan', () => {
@@ -134,7 +173,7 @@ describe('POST /api/meal-plan', () => {
     checkRateLimitMock.mockResolvedValue({ success: true, limit: 10, remaining: 9, resetAt: 1 });
     fetchMock.mockResolvedValue(
       new Response(
-        JSON.stringify({ candidates: [{ content: { parts: [{ text: 'Plan generado' }] } }] }),
+        JSON.stringify({ candidates: [{ content: { parts: [{ text: structuredPlanJson() }] } }] }),
         { status: 200 }
       )
     );
@@ -164,6 +203,23 @@ describe('POST /api/meal-plan', () => {
     );
 
     expect(response.status).toBe(200);
+    const responseBody = (await response.json()) as {
+      content: string;
+      plan: StructuredMealPlan;
+    };
+    expect(responseBody.content).toEqual(expect.any(String));
+    expect(responseBody.plan).toMatchObject({ period: 'week', dayCount: 7 });
+    expect(responseBody.plan.days).toHaveLength(7);
+    expect(responseBody.plan.days[0]).toMatchObject({
+      dayIndex: 1,
+      label: 'Lunes',
+      meals: [
+        { mealType: 'breakfast', title: 'Avena con fruta' },
+        { mealType: 'lunch', title: 'Arroz con verduras' },
+        { mealType: 'dinner', title: 'Sopa liviana' },
+      ],
+    });
+    expect(geminiRequest().generationConfig.responseMimeType).toBe('application/json');
     expect(requireUserMock).toHaveBeenCalledTimes(1);
     expect(listInventoryItemsByTenantMock).toHaveBeenCalledWith('tenant-1');
     expect(findCulinaryProfileByUserIdMock).toHaveBeenCalledWith('user-1');
@@ -217,6 +273,20 @@ describe('POST /api/meal-plan', () => {
     );
     expect(geminiPrompt()).toContain('Sin perfil culinario configurado.');
     expect(geminiPrompt()).not.toContain('ingrediente-controlado-por-el-navegador');
+  });
+
+  it('returns a controlled 502 when Gemini returns malformed output', async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ candidates: [{ content: { parts: [{ text: 'not valid JSON' }] } }] }),
+        { status: 200 }
+      )
+    );
+
+    const response = await POST(request({ mode: 'balanced_ai' }) as unknown as NextRequest);
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({ error: 'El proveedor IA devolvió un plan inválido.' });
   });
 
   it('returns a safe unauthorized response without loading persisted context or calling Gemini', async () => {
