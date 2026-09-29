@@ -126,4 +126,35 @@
 - Persistence failure: repository errors return HTTP 500 `{ error: 'No se pudo guardar el menú generado.' }`; raw DB errors are not exposed.
 - Retrieval: latest stored payload is revalidated before response; corrupted JSONB returns controlled HTTP 500.
 - Verification: focused 31/31; full 278/278; `cd frontend && npx tsc --noEmit`; lint; build 48/48 pages; and `git diff --check` all pass. Expected fixture service-degradation logs remain; no blocker.
-- Commit: `287d5db` (`feat(meal-planner): persist structured plans`).
+- Commit: `0032b6a7` (`feat(meal-planner): persist structured plans`).
+
+## META 1 / M1.3.1 — Server-Side Recipe RAG Retrieval
+
+- **Status:** completed
+- **Base SHA:** `0032b6a7cd11e49cb444e4421bfee812d9d80069`
+- **Objective:** When authenticated Recipe Search uses RAG mode, retrieve authorized indexed cookbook chunks server-side before recipe generation instead of trusting browser-provided chunks.
+- **Current truth:** `/api/recipe-generate` accepts `chunks` and inserts them into the RAG prompt but performs no retrieval. `RagEngine` already implements tested query construction, Gemini embedding, pgvector search orchestration, and citation mapping, while `bookChunkRepository.searchChunks` and `match_chunks` provide the concrete indexed-chunk query.
+- **Library policy:** Global cookbook chunks are product-wide shared (`tenant_id IS NULL`); tenant-private chunks are eligible only when their authenticated `tenant_id` matches. Unsupported/AI-generated rows are excluded from cookbook RAG context.
+- **RAG strategy:** Reuse the tested RagEngine retrieval path and existing Gemini embedding/book-chunk primitives through a small authenticated adapter; do not add a vector database/provider or second similarity implementation.
+- **Retrieval bounds:** Reuse match threshold `0.35` and top-k `6`; cap each chunk at `4000` characters and total formatted context at `12000` characters; bound the deterministic query before embedding.
+- **No-result behavior:** Continue generation with an explicit no-documentary-context prompt and return `ragContextUsed: false` with an empty source list.
+- **UI decision:** Existing RAG mode selector remains unchanged; the API now performs retrieval automatically and returns bounded source references for future UI citation rendering.
+- **Non-goals:** Recipe-history persistence, meal-plan changes, shopping, inventory mutation, rating redesign, Home OS, voice, library redesign, migrations, deployment, Contabo, push, PR, and unrelated refactors.
+
+### Tasks
+
+1. **Explore existing recipe/RAG surfaces** — completed. Confirmed current route/UI behavior, RagEngine tests, embedding service, match_chunks tenant/global behavior, indexed metadata, and concrete indexing paths.
+2. **Reuse shared RAG retrieval primitives** — completed. Exported bounded `retrieveRecipeContext`, deterministic intent query construction, citation mapping, and the existing 0.35 / top-k 6 search contract from `RagEngine`; no second vector search was introduced.
+3. **Wire authenticated RAG mode into recipe generation** — completed. RAG requires authenticated tenant context, ignores browser `chunks`, retrieves before prompt/cache, returns controlled 401/502/503 failures, and leaves free mode retrieval-free.
+4. **Return bounded context/source state** — completed. Server adapter filters global/private cookbook rows, caps chunk/context content, preserves title/page/chunk references, and returns explicit no-context state.
+5. **Add focused integration tests** — completed. Route, server adapter, and RagEngine tests cover mode gating, auth/tenant scope, browser override resistance, global/private filtering, bounds, metadata, no-result, failures, and free-mode compatibility.
+6. **Run verification and commit** — completed. Focused tests 19/19; full suite 289/289; direct `tsc --noEmit`, lint, build, and diff check passed. `npm run typecheck` is unavailable because `frontend/package.json` has no such script; the direct compiler gate passed.
+
+### M1.3.1 Evidence
+
+- RAG engine reuse: `frontend/src/services/ragEngine.ts` exports shared retrieval/query/bounds/citation primitives; `RagEngine.generateRecipeFromFridge` uses the same path.
+- Auth/tenant scope: `frontend/src/lib/recipes/server-rag-context.ts` uses authenticated `user.tenant.tenantId`, includes global rows only with `tenant_id === null`, and private rows only for the matching tenant.
+- Browser chunks: `frontend/src/app/api/recipe-generate/route.ts` does not read `body.chunks` for RAG context; tests prove browser content cannot override server context or cache identity.
+- Source references: bounded `Citation[]` preserves existing global/tenant book IDs, title, page, and chunk ID metadata; no embedding is exposed.
+- Verification: focused Vitest 19/19; full Vitest 289/289; direct TypeScript compiler, ESLint, Next build, and `git diff --check` passed. Expected Redis/database degradation logs remain confined to test fixtures. `npm run typecheck` is not defined in the existing frontend package scripts.
+- Commit: pending local commit after native review.

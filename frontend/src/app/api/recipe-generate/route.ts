@@ -14,6 +14,9 @@ import {
 } from '@/lib/recipes/structured-ingredients';
 import { validateRequest, RecipeGenerateSchema, type RecipeGenerateBody } from '@/lib/validation';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { requireUser } from '@/lib/auth/server';
+import { retrieveServerRagContext } from '@/lib/recipes/server-rag-context';
+import type { Citation } from '@/services/types';
 
 const AI_REQUEST_TIMEOUT_MS = 60_000;
 
@@ -41,8 +44,6 @@ function inferTitleFromRecipe(recipe: string): string {
 export async function POST(request: NextRequest) {
   const startedAt = Date.now();
   const requestId = crypto.randomUUID();
-  const apiKey = getGeminiApiKey();
-  const model = getGeminiModel();
 
   const validation = await validateRequest(request, RecipeGenerateSchema);
   if (!validation.success) {
@@ -51,6 +52,9 @@ export async function POST(request: NextRequest) {
 
   const body: RecipeGenerateBody = validation.data;
   const providerPreference = body.provider ?? 'auto';
+  const mode = body.mode === 'rag' ? 'rag' : 'free';
+  const apiKey = getGeminiApiKey();
+  const model = getGeminiModel();
 
   const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
   const rateLimit = await checkRateLimit('recipe-generate', ip);
@@ -69,7 +73,6 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const mode = body.mode === 'rag' ? 'rag' : 'free';
   const requestedRecipeName = body.recipeName?.trim() ?? '';
   const requestedMealType = body.mealType?.trim() ?? '';
   const requestedDay = body.day?.trim() ?? '';
@@ -80,13 +83,58 @@ export async function POST(request: NextRequest) {
     body.peopleCount > 0
       ? Math.floor(body.peopleCount)
       : 4;
-  const chunks = mode === 'rag' ? (body.chunks ?? []).filter(Boolean).slice(0, 14) : [];
   const profile = body.culinaryProfile;
   const preferred = (profile?.preferred ?? []).filter(Boolean).slice(0, 10);
   const avoid = (profile?.avoid ?? []).filter(Boolean).slice(0, 10);
   const goals = (profile?.goals ?? []).filter(Boolean).slice(0, 10);
   const identity = (profile?.identity ?? []).filter(Boolean).slice(0, 6);
   const level = profile?.level?.trim() || 'No especificado';
+  let ragContext: { context: string; citations: Citation[]; ragContextUsed: boolean } = {
+    context: '',
+    citations: [],
+    ragContextUsed: false,
+  };
+
+  if (mode === 'rag') {
+    let user;
+    try {
+      user = await requireUser(request, 'Unauthorized');
+    } catch {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    if (!user.tenant) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: 'Servicio de recetas RAG no disponible.' },
+        { status: 503 }
+      );
+    }
+
+    try {
+      ragContext = await retrieveServerRagContext({
+        apiKey,
+        tenantId: user.tenant.tenantId,
+        ingredients,
+        recipeName: requestedRecipeName || undefined,
+        mealType: requestedMealType || undefined,
+        day: requestedDay || undefined,
+        restrictions: { allergies: avoid, dietaryRules: [] },
+      });
+    } catch (error) {
+      serverLogger.error('recipe_generate.rag_retrieval_failed', {
+        requestId,
+        error: error instanceof Error ? error.message : 'RAG retrieval error',
+      });
+      return NextResponse.json(
+        { error: 'No se pudo recuperar el contexto documental.' },
+        { status: 502 }
+      );
+    }
+  }
 
   serverLogger.info('recipe_generate.request', {
     requestId,
@@ -95,7 +143,7 @@ export async function POST(request: NextRequest) {
     providerPreference,
     peopleCount,
     ingredientsCount: ingredients.length,
-    chunksCount: chunks.length,
+    chunksCount: mode === 'rag' ? ragContext.citations.length : 0,
     hasProfile: Boolean(profile),
     requestedRecipeName,
     requestedMealType,
@@ -130,8 +178,10 @@ Perfil culinario del usuario:
 - Comensales: ${peopleCount}
 `;
 
-  const ragPrompt = `Contexto documental:
-${chunks.length > 0 ? chunks.join('\n---\n') : 'Sin contexto documental.'}
+  const ragPrompt = `Contexto documental confiable recuperado del recetario autorizado:
+${ragContext.context || 'Sin contexto documental relevante encontrado para esta búsqueda.'}
+
+Usá este contexto como verdad de fuente: no fabriques citas, autores ni páginas. Cuando una receta sea una síntesis propia a partir del contexto, distinguí explícitamente esa síntesis de las técnicas o datos documentados.
 
 Formato de salida OBLIGATORIO:
 [TITULO]
@@ -205,7 +255,7 @@ Reglas:
     preferred,
     avoid,
     level,
-    chunks,
+    chunks: mode === 'rag' && ragContext.context ? [ragContext.context] : [],
   };
   const recipeCacheKey = buildRecipeCacheKey(recipeCacheKeyInput);
 
@@ -218,6 +268,8 @@ Reglas:
       model: cached.model,
       mode: cached.mode,
       structuredIngredients: cached.structuredIngredients,
+      ragContextUsed: ragContext.ragContextUsed,
+      sources: ragContext.citations,
       cached: true,
     });
   }
@@ -292,6 +344,8 @@ Reglas:
       provider: 'gemini',
       mode,
       structuredIngredients: safeStructuredIngredients,
+      ragContextUsed: ragContext.ragContextUsed,
+      sources: ragContext.citations,
     });
   } catch (error) {
     serverLogger.error('recipe_generate.failed', {

@@ -1,6 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { PdfUploadLimitError, RagEngine, TrialSoftBlockError } from '../ragEngine';
+import {
+  RAG_MATCH_COUNT,
+  RAG_MATCH_THRESHOLD,
+  RAG_MAX_CHUNK_CONTENT_CHARS,
+  RAG_MAX_CONTEXT_CONTENT_CHARS,
+  PdfUploadLimitError,
+  RagEngine,
+  retrieveRecipeContext,
+  TrialSoftBlockError,
+} from '../ragEngine';
 import {
   EmbeddingService,
   PdfChunkerService,
@@ -245,6 +254,55 @@ describe('RagEngine trial gating', () => {
 
     expect(getEmbeddingQueries()[0]).toContain(
       'No inventory ingredients were provided. Return versatile recipes using common pantry assumptions.'
+    );
+  });
+
+  it('reuses bounded retrieval with recipe intent and cookbook context limits', async () => {
+    const embeddingQueries: string[] = [];
+    const searchChunks = vi.fn<SemanticSearchService['searchChunks']>(async () =>
+      Array.from({ length: 7 }, (_, index) => ({
+        id: `chunk-${index}`,
+        book_id: 'book-1',
+        content: 'x'.repeat(RAG_MAX_CHUNK_CONTENT_CHARS + 50),
+        sourceType: 'global_pdf' as const,
+        metadata: { global_book_id: 'book-1' },
+      }))
+    );
+
+    const result = await retrieveRecipeContext(
+      {
+        ingredients: ['tomate'],
+        recipeName: 'Sopa de tomate',
+        mealType: 'Cena',
+        day: 'Lunes',
+        restrictionProfile: { allergies: ['maní'], dietaryRules: ['sin gluten'] },
+      },
+      {
+        embedder: {
+          async generateEmbedding(query) {
+            embeddingQueries.push(query);
+            return [0.1, 0.2, 0.3];
+          },
+          async generateEmbeddings() {
+            return [];
+          },
+        },
+        dbAdapter: { searchChunks },
+      }
+    );
+
+    expect(embeddingQueries[0]).toContain('Requested recipe: Sopa de tomate.');
+    expect(embeddingQueries[0]).toContain('Meal type: Cena.');
+    expect(embeddingQueries[0]).toContain('Planned day: Lunes.');
+    expect(searchChunks).toHaveBeenCalledWith([0.1, 0.2, 0.3], {
+      matchThreshold: RAG_MATCH_THRESHOLD,
+      matchCount: RAG_MATCH_COUNT,
+      bookIds: undefined,
+    });
+    expect(result.chunks).toHaveLength(3);
+    expect(result.chunks[0]?.content).toHaveLength(RAG_MAX_CHUNK_CONTENT_CHARS);
+    expect(result.chunks.reduce((total, chunk) => total + chunk.content.length, 0)).toBe(
+      RAG_MAX_CONTEXT_CONTENT_CHARS
     );
   });
 });
