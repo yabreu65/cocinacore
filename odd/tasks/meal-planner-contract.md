@@ -157,4 +157,5 @@
 - Browser chunks: `frontend/src/app/api/recipe-generate/route.ts` does not read `body.chunks` for RAG context; tests prove browser content cannot override server context or cache identity.
 - Source references: bounded `Citation[]` preserves existing global/tenant book IDs, title, page, and chunk ID metadata; no embedding is exposed.
 - Verification: focused Vitest 19/19; full Vitest 289/289; direct TypeScript compiler, ESLint, Next build, and `git diff --check` passed. Expected Redis/database degradation logs remain confined to test fixtures. `npm run typecheck` is not defined in the existing frontend package scripts.
-- Commit: pending local commit after native review.
+- Commit: `97e9a6c` (`feat(recipe-search): connect authenticated cookbook rag`).
+- Native review: approved and acknowledged for candidate `97e9a6c`; informational warnings `R3-context-load-failure` and `R3-menu-to-shopping-regression` were pre-existing, non-blocking findings in unrelated meal-plan paths.
