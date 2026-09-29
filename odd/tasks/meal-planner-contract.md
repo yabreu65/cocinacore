@@ -190,7 +190,7 @@
 
 ## META 1 / M1.3.3 — Persisted Recipe Inventory and Profile Context
 
-- **Status:** in_progress
+- **Status:** completed
 - **Base SHA:** `dc2e32fd9a2a1f7d17cf38f6df2b865737ccd8bb`
 - **Objective:** Make authenticated Recipe Search generation use the real tenant inventory and authenticated user's persisted culinary profile while preserving explicit per-request ingredient intent.
 - **Decision:** Keep unauthenticated free mode as a bounded compatibility fallback because M1.3.1 intentionally left free mode public. Authenticated users are enriched with persisted context; RAG remains authenticated and tenant-bound. Authenticated users without a tenant cannot use RAG.
@@ -204,17 +204,17 @@
 
 1. **Explore persisted recipe context surfaces** — completed. Confirmed route/UI semantics, repository tenant/user filters, reusable M1.2.2/M1.2.3 helpers, auth behavior, cache omissions, and RAG query construction.
 2. **Track M1.3.3 ODD work** — completed. Added this bounded section and decisions before source writes.
-3. **Implement authenticated context wiring** — pending. Load exact tenant inventory and user profile, distinguish request intent, and preserve anonymous free fallback.
-4. **Harden prompt, RAG, and cache scope** — pending. Label context sections, bound deterministic retrieval fallback, and prevent authoritative-context cache leakage.
-5. **Add focused boundary tests** — pending. Cover isolation, browser override resistance, missing context, free/RAG behavior, cache identity, and source preservation.
-6. **Run verification and commit** — pending. Run focused/full tests, direct TypeScript, lint, build, diff check, native review, and local Conventional Commit.
+3. **Implement authenticated context wiring** — completed. Added a bounded server loader using exact authenticated tenant inventory and user profile/terms; authenticated free and RAG use persisted context, while anonymous free remains request-only fallback.
+4. **Harden prompt, RAG, and cache scope** — completed. Prompt sections distinguish request intent, real inventory, persisted profile, and trusted RAG context; RAG falls back to bounded inventory names; cache keys include scope and hashed authoritative context.
+5. **Add focused boundary tests** — completed. Route, persisted-context, and cache tests cover isolation, browser override resistance, missing context, free/RAG behavior, cache identity, and source preservation.
+6. **Run verification and commit** — completed. Focused 23/23; full 304/304; direct TypeScript, lint, build, and diff checks passed; native review approved and acknowledged.
 
 ### M1.3.3 Evidence
 
-- Auth policy: pending implementation.
-- Inventory source/isolation: pending implementation.
-- Profile source/isolation: pending implementation.
-- Request intent semantics: pending implementation.
-- Cache scope: pending implementation.
-- Verification: pending.
-- Commit: pending.
+- Auth policy: unauthenticated free mode remains bounded request-only compatibility; authenticated users receive persisted context; RAG requires authenticated tenant context.
+- Inventory source/isolation: `listInventoryItemsByTenant` plus `buildMealPlanInventoryContext`; exact tenant rows, quantity/unit, explicit unknown quantity marker, and bounded 30-line/6000-character recipe context.
+- Profile source/isolation: persisted profile/terms repositories plus M1.2.3 helper; exact user/tenant checks and bounded identity/preferred/avoid/goals/level; browser profile cannot override authenticated data.
+- Request intent semantics: browser `ingredients` are labeled explicit current request focus, never persisted availability; RAG uses them when present, otherwise bounded inventory names.
+- Cache scope: user/tenant scope, SHA-256 inventory/profile context hashes, goals hash, model, and prompt context version; private values are not serialized into cache keys.
+- Verification: focused Vitest 23/23; full Vitest 304/304; direct `tsc --noEmit`, lint, build, and `git diff --check` passed. Expected Redis/database degradation logs remained fixture behavior. Native review approved and acknowledged with informational `R3-hash-undefined-context` warning.
+- Commit: `fe66526` (`feat(recipe-search): use persisted inventory and profile`).
