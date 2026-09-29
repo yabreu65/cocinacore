@@ -158,17 +158,28 @@ Cada día debe incluir exactamente un mealType breakfast, lunch y dinner.
 Para cantidades desconocidas usa quantity: null y unit: null; no inventes cantidades.`;
 }
 
-export function parseStructuredMealPlanResponse(
-  text: string,
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isUnknownArray(value: unknown): value is unknown[] {
+  return Array.isArray(value);
+}
+
+function withoutPersistedDayLabel(day: unknown): unknown {
+  if (!isRecord(day)) return day;
+
+  const candidateDay: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(day)) {
+    if (key !== 'label') candidateDay[key] = entry;
+  }
+  return candidateDay;
+}
+
+function parseStructuredMealPlanCandidate(
+  candidate: unknown,
   requestedPeriod: MealPlanPeriod
 ): StructuredMealPlanParseResult {
-  let candidate: unknown;
-  try {
-    candidate = JSON.parse(text);
-  } catch {
-    return { success: false, reason: 'invalid_json' };
-  }
-
   const parsed = structuredMealPlanCandidateSchema.safeParse(candidate);
   if (!parsed.success) {
     return { success: false, reason: 'schema_invalid' };
@@ -210,6 +221,52 @@ export function parseStructuredMealPlanResponse(
       days,
     },
   };
+}
+
+export function parseStructuredMealPlanResponse(
+  text: string,
+  requestedPeriod: MealPlanPeriod
+): StructuredMealPlanParseResult {
+  let candidate: unknown;
+  try {
+    candidate = JSON.parse(text);
+  } catch {
+    return { success: false, reason: 'invalid_json' };
+  }
+
+  return parseStructuredMealPlanCandidate(candidate, requestedPeriod);
+}
+
+export function parseStructuredMealPlanValue(
+  value: unknown,
+  requestedPeriod: MealPlanPeriod
+): StructuredMealPlanParseResult {
+  if (!isRecord(value)) {
+    return { success: false, reason: 'schema_invalid' };
+  }
+
+  const valueRecord = value;
+  if (!isUnknownArray(valueRecord.days)) {
+    return { success: false, reason: 'schema_invalid' };
+  }
+
+  const candidate = {
+    ...valueRecord,
+    days: valueRecord.days.map(withoutPersistedDayLabel),
+  };
+
+  const parsedPlan = parseStructuredMealPlanCandidate(candidate, requestedPeriod);
+  if (!parsedPlan.success) return parsedPlan;
+
+  for (let index = 0; index < valueRecord.days.length; index += 1) {
+    const day = valueRecord.days[index];
+    if (!isRecord(day)) continue;
+    if ('label' in day && day.label !== parsedPlan.plan.days[index].label) {
+      return { success: false, reason: 'schema_invalid' };
+    }
+  }
+
+  return parsedPlan;
 }
 
 export function renderStructuredMealPlan(plan: StructuredMealPlan): string {

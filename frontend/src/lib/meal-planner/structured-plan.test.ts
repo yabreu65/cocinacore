@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   parseStructuredMealPlanResponse,
+  parseStructuredMealPlanValue,
   type StructuredMealType,
 } from './structured-plan';
 import type { MealPlanPeriod } from './prompt';
@@ -135,5 +136,40 @@ describe('parseStructuredMealPlanResponse', () => {
       success: false,
       reason: 'day_index_mismatch',
     });
+  });
+});
+
+describe('parseStructuredMealPlanValue', () => {
+  it('accepts a persisted canonical plan and reassigns canonical labels', () => {
+    const rawPlan = candidate('week', 7);
+    const canonicalPlan = parseStructuredMealPlanResponse(JSON.stringify(rawPlan), 'week');
+    if (!canonicalPlan.success) throw new Error('Expected fixture to be valid');
+
+    const result = parseStructuredMealPlanValue(canonicalPlan.plan, 'week');
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.plan.days[0].label).toBe('Lunes');
+    expect(result.plan.days.at(-1)?.label).toBe('Domingo');
+  });
+
+  it('rejects wrong periods and malformed JSONB values', () => {
+    expect(parseStructuredMealPlanValue(candidate('fortnight', 14), 'week')).toEqual({
+      success: false,
+      reason: 'period_mismatch',
+    });
+    expect(parseStructuredMealPlanValue(['not', 'a', 'plan'], 'week')).toEqual({
+      success: false,
+      reason: 'schema_invalid',
+    });
+    expect(
+      parseStructuredMealPlanValue(
+        {
+          ...candidate('week', 7),
+          days: candidate('week', 7).days.map((day) => ({ ...day, label: 'not canonical' })),
+        },
+        'week'
+      )
+    ).toEqual({ success: false, reason: 'schema_invalid' });
   });
 });

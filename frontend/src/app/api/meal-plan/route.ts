@@ -10,6 +10,10 @@ import {
   findCulinaryProfileByUserId,
   findCulinaryProfileTermsByUserId,
 } from '@/lib/db/repositories/culinaryProfileRepository';
+import {
+  createMealPlan,
+  findLatestMealPlanByUserAndTenant,
+} from '@/lib/db/repositories/mealPlanRepository';
 import { buildMealPlanInventoryContext } from '@/lib/meal-planner/inventory-context';
 import {
   buildPersistedMealPlanProfileContext,
@@ -19,6 +23,7 @@ import { getMealPlanPeriodLabel } from '@/lib/meal-planner/prompt';
 import {
   buildStructuredMealPlanInstructions,
   parseStructuredMealPlanResponse,
+  parseStructuredMealPlanValue,
   renderStructuredMealPlan,
   structuredMealPlanResponseJsonSchema,
 } from '@/lib/meal-planner/structured-plan';
@@ -243,6 +248,27 @@ Reglas:
       return NextResponse.json({ error: 'El proveedor IA devolvió un plan inválido.' }, { status: 502 });
     }
 
+    try {
+      await createMealPlan({
+        tenantId,
+        userId: user.id,
+        peopleCount,
+        period,
+        mode,
+        baseCuisine,
+        fusionCuisines,
+        fusionIntensity,
+        structuredPlan: parsedPlan.plan,
+      });
+    } catch {
+      serverLogger.warn('meal_plan.persistence_failed', {
+        requestId,
+        period,
+        mode,
+      });
+      return NextResponse.json({ error: 'No se pudo guardar el menú generado.' }, { status: 500 });
+    }
+
     const content = renderStructuredMealPlan(parsedPlan.plan);
     serverLogger.info('meal_plan.success', {
       requestId,
@@ -262,4 +288,52 @@ Reglas:
       { status: 502 }
     );
   }
+}
+
+export async function GET(request: NextRequest) {
+  const requestId = crypto.randomUUID();
+
+  let user: AuthUser;
+  try {
+    user = await requireUser(request);
+  } catch {
+    serverLogger.warn('meal_plan.unauthorized', { requestId });
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  if (!user.tenant) {
+    serverLogger.warn('meal_plan.unauthorized', { requestId });
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const tenantId = user.tenant.tenantId;
+  let persistedPlan;
+  try {
+    persistedPlan = await findLatestMealPlanByUserAndTenant(user.id, tenantId);
+  } catch {
+    serverLogger.warn('meal_plan.retrieval_failed', { requestId });
+    return NextResponse.json({ error: 'No se pudo recuperar el menú guardado.' }, { status: 500 });
+  }
+
+  if (!persistedPlan) {
+    return NextResponse.json({ plan: null, content: null });
+  }
+
+  const parsedPlan = parseStructuredMealPlanValue(persistedPlan.calendar_payload, persistedPlan.period);
+  if (!parsedPlan.success) {
+    serverLogger.warn('meal_plan.invalid_persisted_plan', {
+      requestId,
+      mealPlanId: persistedPlan.id,
+      period: persistedPlan.period,
+      reason: parsedPlan.reason,
+    });
+    return NextResponse.json({ error: 'No se pudo recuperar el menú guardado.' }, { status: 500 });
+  }
+
+  return NextResponse.json({
+    plan: parsedPlan.plan,
+    content: renderStructuredMealPlan(parsedPlan.plan),
+    id: persistedPlan.id,
+    createdAt: persistedPlan.created_at,
+  });
 }

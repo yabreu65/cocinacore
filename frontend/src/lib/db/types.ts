@@ -183,6 +183,25 @@ export interface RecipeAiHistoryRow {
   created_at: string;
 }
 
+export interface UserMealPlanRow {
+  id: string;
+  tenant_id: string;
+  user_id: string;
+  people_count: number;
+  period: MealPlanPeriod;
+  mode: MealPlanMode;
+  base_cuisine: string;
+  fusion_cuisines: string[];
+  fusion_intensity: FusionIntensity;
+  goal: string | null;
+  restrictions: string[];
+  inventory_snapshot: unknown;
+  calendar_payload: unknown;
+  ai_content: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface BookChunkRow {
   id: string;
   tenant_id: string | null;
