@@ -270,7 +270,8 @@
 4. **Add minimum secondary coverage** — completed. Added authenticated free mode without citation cards and no-context RAG without fabricated sources; primary test also verifies cache hit creates a second history row without a second provider generation call. Anonymous mode remains unsupported by the protected UI contract and was not forced.
 5. **Run focused and full gates** — completed. Focused connected Playwright 3/3 passed; full Playwright passed 12/12 executed with 2 owner-health tests skipped because explicit owner credentials were absent; full Vitest 313/313, TypeScript, lint, build, and diff checks passed.
 6. **Review and commit** — completed. Native review approved and acknowledged with no blocking findings; local Conventional Commit recorded below.
-- **Final commit:** pending until this work unit is committed.
+- **Implementation commit:** `c1864e6` (`test(recipe-search): validate rag flow end to end`).
+- **Evidence commit:** this documentation commit.
 
 ### M1.3.5 Evidence
 
