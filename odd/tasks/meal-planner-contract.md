@@ -222,7 +222,7 @@
 
 ## META 1 / M1.3.4 — Automatic Authenticated Recipe History
 
-- **Status:** in_progress
+- **Status:** completed
 - **Base SHA:** `91de4577788d4f8c01b89d557dc2a322601f6e97`
 - **Objective:** Persist each successfully generated authenticated recipe once into existing Recipe History using canonical server result fields and authenticated user/tenant scope.
 - **Storage decision:** Reuse `recipe_ai_history.recipe_payload`, `restrictions_snapshot`, and `inventory_snapshot` JSONB columns; no migration is expected. Store full recipe text, title, provider/model/mode, structured ingredients, requested ingredients, people count, `ragContextUsed`, and authoritative server `sources`.
@@ -236,17 +236,17 @@
 
 1. **Explore Recipe History storage and security** — completed. Confirmed existing JSONB schema/repository, history UI/API, canonical fields, cache path, GET user+tenant filter, and tenant-only DELETE/PATCH risk.
 2. **Track M1.3.4 ODD work** — completed. Added this bounded section and decisions before source writes.
-3. **Implement authenticated history persistence** — pending. Persist canonical provider/cache results once for authenticated tenant users; preserve anonymous free behavior.
-4. **Harden touched history scope** — pending. Require user+tenant for DELETE/PATCH repository mutations and route calls.
-5. **Add focused history tests** — pending. Cover success, cache/provider, failures, authoritative fields/provenance, anonymous behavior, and isolation.
-6. **Run verification and commit** — pending. Run focused/full tests, direct TypeScript, lint, build, diff check, native review, and create local Conventional Commit.
+3. **Implement authenticated history persistence** — completed. Persist canonical provider/cache results once for authenticated tenant users; anonymous free remains history-free.
+4. **Harden touched history scope** — completed. DELETE/PATCH require authenticated user and tenant predicates in both route and repository.
+5. **Add focused history tests** — completed. Covered success, cache/provider, failures, authoritative fields/provenance, anonymous behavior, and user/tenant isolation.
+6. **Run verification and commit** — completed. Focused 20/20; full 313/313; direct TypeScript, lint, build, and diff checks passed; native review approved and acknowledged.
 
 ### M1.3.4 Evidence
 
-- History storage: pending implementation.
-- Authenticated write scope: pending implementation.
-- Cache hit behavior: pending implementation.
-- Mutation scope: pending implementation.
-- Failure behavior: pending.
-- Verification: pending.
-- Commit: pending.
+- History storage: Reused existing `recipe_ai_history` JSONB columns; no migration required.
+- Authenticated write scope: `createRecipeHistory` receives only `user.id` and `user.tenant.tenantId`; browser IDs are ignored.
+- Cache hit behavior: A valid cache hit creates exactly one history row for the route execution before returning.
+- Mutation scope: GET remains user+tenant scoped; DELETE/PATCH SQL now require `id`, `tenant_id`, and `user_id`.
+- Failure behavior: Authenticated history insertion failure returns controlled HTTP 500 and skips cache write; provider/RAG/validation failures create no row.
+- Verification: Focused Vitest 20/20; full Vitest 313/313; direct `tsc --noEmit`, lint, build, and `git diff --check` passed. Expected Redis/database degradation logs remained fixture behavior. Native review approved and acknowledged with no blocking findings.
+- Commit: `20b376a` (`feat(recipe-search): persist generated recipe history`).
