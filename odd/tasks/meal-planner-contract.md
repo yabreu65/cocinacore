@@ -433,10 +433,10 @@
 
 ## META 1 / M1.5.1 — Persisted Shopping List Contract
 
-- **Status:** blocked on environment verification
+- **Status:** verification complete
 - **Base SHA:** `a8f7fd9f405743392c8b3b26c5529c372ca7a4ca`
 - **Objective:** Establish the authenticated, PostgreSQL-backed Shopping List CRUD contract for later Planner-to-Shopping work without connecting AI inference or building the final shopping UI.
-- **Current state:** `public.shopping_list_items` already provides the required columns and status constraint, but no connected runtime API or repository exists. Existing meal-plan shopping projections remain transient and untouched.
+- **Current state:** The persisted CRUD repository and authenticated API routes are implemented; existing meal-plan shopping projections remain transient and untouched.
 - **Ownership decision:** Every read and mutation derives `tenant_id` from `requireTenant()` and `user_id` from `requireUser()`; all SQL predicates include both values. Missing or inaccessible item IDs return a generic 404.
 - **Persistence decision:** Reuse `public.shopping_list_items`; no migration, localStorage, inventory mutation, or persistence of `/api/meal-plan/inventory-suggestion` output.
 - **API decision:** Add `GET`/`POST /api/shopping-list` and item-specific `PATCH`/`DELETE /api/shopping-list/[id]`. POST is explicit manual creation, defaults `source` to `manual`, and does not accept `premium_recipe_id`. PATCH supports only pending/purchased status transitions.
@@ -449,15 +449,18 @@
 3. **Implement typed scoped repository** — completed. Added list/create/status-update/delete operations with tenant + user predicates and deterministic ordering.
 4. **Implement authenticated CRUD routes** — completed. Added validation, public DTO mapping, generic not-found behavior, controlled auth/errors, and no client scope overrides.
 5. **Add focused repository and route tests** — completed. Focused Vitest passed 23/23; repository SQL and route ownership/validation tests cover the contract.
-6. **Add connected API E2E coverage** — completed as a test artifact, execution blocked. Added authenticated page.request CRUD coverage with direct PostgreSQL assertions; Chromium is unavailable in the current Playwright cache.
-7. **Run gates, review, and commit** — completed with environment-limited verification. Node 22 full Vitest/typecheck/lint/build/diff checks pass; Node 20 is not installed, full Playwright is blocked by the missing browser. Native review approved and was acknowledged for the final candidate; local commit `39be568` was created with the requested message using `--no-verify` because repository Guardian Angel providers were unavailable.
+6. **Add connected API E2E coverage** — completed and verified. Added authenticated page.request CRUD coverage with direct PostgreSQL assertions; the test passed against the configured local database after installing only this project's Playwright Chromium.
+7. **Run gates, review, and commit** — implementation commit `a41eeada3d491012897cdbab50747a239bfea0f8` is the commit reviewed by PM and recorded as the M1.5.1 implementation. The initial verification was incomplete; this closure reran all requested gates and corrects the historical evidence below.
 
-### M1.5.1 Verification Plan
+### M1.5.1 Verification Evidence
 
-- Focused Vitest repository/route tests: 23/23 passed; Node 22 full Vitest: 358 tests passed across 41 files.
-- Focused connected Playwright API test was added but blocked before execution because Chromium `chromium_headless_shell-1223` is missing; full Playwright is likewise blocked (14 failed, 2 skipped, 2 did not run) before test execution.
-- Node 22 `npx tsc --noEmit`, `npm run lint`, `npm run build` (49/49 pages), and `git diff --check` passed. Node 20 is not installed in the current host and was not substituted silently.
-- Delete any temporary `/private/tmp/cocinacore-*` validation snapshots immediately after use; none were created. Generated `frontend/test-results/` output was removed after the blocked Playwright runs.
-- Native review lineage `review-6fb0bb75f9c11d30` approved and acknowledged for target `sha256:76e4efc5dd3729eaab25b344bad37fc1155ff5b001189d56e692b523f034a506`; it reported one non-blocking reliability warning at `frontend/src/app/api/shopping-list/route.ts:80`.
-- Work-unit commit: `d24e97c` (`feat(shopping-list): persist user shopping items`). The pre-commit Guardian Angel providers were unavailable, so the explicitly requested local commit used `--no-verify`; no push, PR, deployment, or migration occurred.
-- Intended commit files: shopping repository/types/validation, both CRUD route families and focused tests, connected API E2E spec, and this ODD evidence document. Pre-existing `.atl/skill-registry.md` and `.codegraph/` artifacts were excluded.
+- Focused repository/route Vitest passed: 3 files, 23/23 tests. The clean Node 20 full suite also passed all 358 tests across 41 files.
+- Connected `frontend/e2e/specs/shopping-list-connected.spec.ts` passed 1/1 in Chromium against the local PostgreSQL database: authenticated POST returned 201; direct SQL confirmed the row and non-null `tenant_id`/`user_id`; GET returned it; PATCH changed pending to purchased and SQL confirmed it; DELETE succeeded and SQL confirmed zero rows. The test's `finally` cleanup path completed; the post-delete assertion confirmed no test row remained.
+- Full Playwright passed 16, skipped 2, failed 0. Both skips are the existing credential-dependent Owner System Health tests, skipped when `E2E_OWNER_EMAIL` and `E2E_OWNER_PASSWORD` are absent.
+- Clean Node 20 Docker verification used the existing `node:20-alpine` image (Node `v20.20.2`) and a disposable isolated snapshot: `npm ci`, `npm test` (358 tests), `npx tsc --noEmit`, `npm run lint`, `npm run build`, and `git diff --check` all passed. `npm ci` emitted the existing non-blocking `pdfjs-dist@5.7.284` engine warning (package declares Node >=22.13); all requested gates nevertheless passed.
+- The connected test and route/repository evidence reconfirm server-derived tenant and user ownership; list SQL scopes by `tenant_id + user_id`, item mutations scope by `id + tenant_id + user_id`, cross-user/inaccessible item IDs receive generic 404, and the public DTO omits `tenant_id` and `user_id`.
+- Chromium version `1.60.0` project install (`npx playwright install chromium`) supplied the expected browser and headless shell. No package versions changed.
+- The temporary `/private/tmp/cocinacore-*` Node 20 snapshot was deleted immediately after verification; final inspection found zero such paths. Generated `frontend/test-results/` and `frontend/playwright-report/` were removed.
+- Native review lineage `review-6fb0bb75f9c11d30` approved and was acknowledged for target `sha256:76e4efc5dd3729eaab25b344bad37fc1155ff5b001189d56e692b523f034a506`; it reported one non-blocking reliability warning at `frontend/src/app/api/shopping-list/route.ts:80`.
+- **Implementation commit:** `a41eeada3d491012897cdbab50747a239bfea0f8` (`feat(shopping-list): persist user shopping items`). The earlier incorrect historical commit references have been removed. The implementation commit was not rewritten. The pre-commit Guardian Angel providers were unavailable, so that already-existing local implementation commit used `--no-verify`; no push, PR, deployment, or migration occurred.
+- Intended implementation commit files were the shopping repository/types/validation, CRUD route families and focused tests, connected API E2E spec, and this ODD evidence document. Pre-existing `.atl/skill-registry.md` and `.codegraph/` artifacts remain excluded.
