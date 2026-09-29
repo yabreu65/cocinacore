@@ -5,6 +5,7 @@ import type { UserMealPlanRow } from '@/lib/db/types';
 const requireUserMock = vi.fn();
 const findMealPlanByIdForUserAndTenantMock = vi.fn();
 const listInventoryItemsByTenantMock = vi.fn();
+const addMealPlanShoppingItemsMock = vi.fn();
 
 vi.mock('@/lib/auth/server', () => ({ requireUser: requireUserMock }));
 vi.mock('@/lib/db/repositories/mealPlanRepository', () => ({
@@ -13,8 +14,11 @@ vi.mock('@/lib/db/repositories/mealPlanRepository', () => ({
 vi.mock('@/lib/db/repositories/inventoryRepository', () => ({
   listInventoryItemsByTenant: listInventoryItemsByTenantMock,
 }));
+vi.mock('@/lib/db/repositories/shoppingListRepository', () => ({
+  addMealPlanShoppingItems: addMealPlanShoppingItemsMock,
+}));
 
-const { GET } = await import('./route');
+const { GET, POST } = await import('./route');
 
 const planId = '123e4567-e89b-42d3-a456-426614174000';
 
@@ -102,6 +106,8 @@ describe('GET /api/meal-plan/shopping-suggestions', () => {
     requireUserMock.mockReset();
     findMealPlanByIdForUserAndTenantMock.mockReset();
     listInventoryItemsByTenantMock.mockReset();
+    addMealPlanShoppingItemsMock.mockReset();
+    addMealPlanShoppingItemsMock.mockResolvedValue({ added: [], alreadyPresent: [] });
     requireUserMock.mockResolvedValue({ id: 'user-1', tenant: { tenantId: 'tenant-1' } });
     findMealPlanByIdForUserAndTenantMock.mockResolvedValue(persistedPlan());
     listInventoryItemsByTenantMock.mockResolvedValue([
@@ -165,5 +171,87 @@ describe('GET /api/meal-plan/shopping-suggestions', () => {
     expect(body.items.some((item) => item.normalizedName === 'arroz')).toBe(false);
     expect(body.items.some((item) => item.normalizedName === 'harina')).toBe(false);
     expect(body.items.some((item) => item.normalizedName === 'aceite')).toBe(false);
+  });
+});
+
+function postRequest(body: unknown): NextRequest {
+  return new Request('https://app.example.test/api/meal-plan/shopping-suggestions', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  }) as unknown as NextRequest;
+}
+
+describe('POST /api/meal-plan/shopping-suggestions', () => {
+  beforeEach(() => {
+    requireUserMock.mockReset();
+    findMealPlanByIdForUserAndTenantMock.mockReset();
+    listInventoryItemsByTenantMock.mockReset();
+    addMealPlanShoppingItemsMock.mockReset();
+    requireUserMock.mockResolvedValue({ id: 'user-1', tenant: { tenantId: 'tenant-1' } });
+    findMealPlanByIdForUserAndTenantMock.mockResolvedValue(persistedPlan());
+    listInventoryItemsByTenantMock.mockResolvedValue([
+      inventoryItem('Arroz', '500', 'g'),
+      inventoryItem('Harina', '2', 'kg'),
+      inventoryItem('Aceite', '2', 'l'),
+    ]);
+    addMealPlanShoppingItemsMock.mockResolvedValue({ added: [], alreadyPresent: [] });
+  });
+
+  it('recomputes current candidates and persists only selected actionable keys with server-owned data', async () => {
+    const response = await POST(postRequest({ mealPlanId: planId, selectedItems: ['arroz', 'sal', 'harina'] }));
+    expect(response.status).toBe(200);
+    expect(listInventoryItemsByTenantMock).toHaveBeenCalledWith('tenant-1');
+    expect(addMealPlanShoppingItemsMock).toHaveBeenCalledWith({
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+      source: `meal-plan:${planId}`,
+      items: [
+        { ingredientName: 'Arroz', quantity: '1.5 kg' },
+        { ingredientName: 'Sal', quantity: null },
+      ],
+    });
+    expect(await response.json()).toEqual({ added: [], alreadyPresent: [], ignored: ['harina'] });
+  });
+
+  it('rejects malformed, empty, invalid, and spoofed confirmation bodies', async () => {
+    for (const body of [
+      { mealPlanId: 'bad', selectedItems: ['arroz'] },
+      { mealPlanId: planId, selectedItems: [] },
+      { mealPlanId: planId, selectedItems: [' Arroz '] },
+      { mealPlanId: planId, selectedItems: ['arroz'], tenantId: 'tenant-2' },
+      { mealPlanId: planId, selectedItems: ['arroz'], userId: 'user-2' },
+      { mealPlanId: planId, selectedItems: ['arroz'], quantity: '9 kg' },
+      { mealPlanId: planId, selectedItems: ['arroz'], source: 'manual' },
+    ]) {
+      const response = await POST(postRequest(body));
+      expect(response.status).toBe(400);
+    }
+    expect(findMealPlanByIdForUserAndTenantMock).not.toHaveBeenCalled();
+    expect(addMealPlanShoppingItemsMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 before reads and generic 404 for an unavailable plan', async () => {
+    requireUserMock.mockRejectedValueOnce(new Error('Unauthorized'));
+    expect((await POST(postRequest({ mealPlanId: planId, selectedItems: ['arroz'] }))).status).toBe(401);
+    expect(findMealPlanByIdForUserAndTenantMock).not.toHaveBeenCalled();
+    findMealPlanByIdForUserAndTenantMock.mockResolvedValueOnce(null);
+    const response = await POST(postRequest({ mealPlanId: planId, selectedItems: ['arroz'] }));
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: 'Menú no encontrado.' });
+    expect(listInventoryItemsByTenantMock).not.toHaveBeenCalled();
+  });
+
+  it('reports stale keys as ignored and supports already-present purchased rows', async () => {
+    addMealPlanShoppingItemsMock.mockResolvedValueOnce({
+      added: [],
+      alreadyPresent: [{ id: 'existing', ingredient_name: 'Arroz', status: 'purchased' }],
+    });
+    const response = await POST(postRequest({ mealPlanId: planId, selectedItems: ['stale', 'arroz'] }));
+    expect(await response.json()).toEqual({
+      added: [],
+      alreadyPresent: [{ id: 'existing', ingredient_name: 'Arroz', status: 'purchased' }],
+      ignored: ['stale'],
+    });
   });
 });

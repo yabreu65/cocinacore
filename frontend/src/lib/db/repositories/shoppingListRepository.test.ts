@@ -2,13 +2,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const queryMock = vi.fn();
 const mapSingleRowMock = vi.fn();
+const transactionMock = vi.fn();
 
 vi.mock('@/lib/db', () => ({
   query: queryMock,
   mapSingleRow: mapSingleRowMock,
+  transaction: transactionMock,
 }));
 
 const {
+  addMealPlanShoppingItems,
   createShoppingListItem,
   deleteShoppingListItem,
   listShoppingListItems,
@@ -32,6 +35,7 @@ describe('shoppingListRepository', () => {
   beforeEach(() => {
     queryMock.mockReset();
     mapSingleRowMock.mockReset();
+    transactionMock.mockReset();
     mapSingleRowMock.mockImplementation((result: { rows: unknown[] }) => result.rows[0] ?? null);
   });
 
@@ -73,6 +77,56 @@ describe('shoppingListRepository', () => {
     expect(sql).toContain('insert into public.shopping_list_items');
     expect(sql).not.toContain('premium_recipe_id');
     expect(params).toEqual(['tenant-1', 'user-1', 'manual', 'Arroz', '1 kg']);
+  });
+
+  it('locks, reads scoped source rows, and inserts only absent normalized identities in one transaction', async () => {
+    const clientQuery = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [row] })
+      .mockResolvedValueOnce({ rows: [{ ...row, id: 'shopping-2', ingredient_name: 'Sal', quantity: null }] });
+    transactionMock.mockImplementation(async (callback: (client: { query: typeof clientQuery }) => unknown) =>
+      callback({ query: clientQuery })
+    );
+
+    const result = await addMealPlanShoppingItems({
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+      source: 'meal-plan:plan-1',
+      items: [
+        { ingredientName: 'arroz', quantity: '2 kg' },
+        { ingredientName: 'Sal', quantity: null },
+      ],
+    });
+
+    expect(transactionMock).toHaveBeenCalledOnce();
+    expect(clientQuery.mock.calls.map(([sql]) => sql)).toEqual([
+      'select pg_advisory_xact_lock(hashtextextended($1, 0))',
+      expect.stringContaining('where tenant_id = $1 and user_id = $2 and source = $3'),
+      expect.stringContaining('insert into public.shopping_list_items'),
+    ]);
+    expect(clientQuery.mock.calls[0]?.[1]).toEqual(['tenant-1:user-1:meal-plan:plan-1']);
+    expect(clientQuery.mock.calls[1]?.[1]).toEqual(['tenant-1', 'user-1', 'meal-plan:plan-1']);
+    expect(clientQuery.mock.calls[2]?.[1]).toEqual(['tenant-1', 'user-1', 'meal-plan:plan-1', 'Sal', null]);
+    expect(result).toEqual({
+      added: [{ ...row, id: 'shopping-2', ingredient_name: 'Sal', quantity: null }],
+      alreadyPresent: [row],
+    });
+  });
+
+  it('propagates a transaction failure without performing follow-up writes', async () => {
+    const failure = new Error('insert failed');
+    const clientQuery = vi.fn().mockRejectedValue(failure);
+    transactionMock.mockImplementation(async (callback: (client: { query: typeof clientQuery }) => unknown) =>
+      callback({ query: clientQuery })
+    );
+
+    await expect(addMealPlanShoppingItems({
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+      source: 'meal-plan:plan-1',
+      items: [{ ingredientName: 'Sal', quantity: null }],
+    })).rejects.toBe(failure);
+    expect(clientQuery).toHaveBeenCalledOnce();
   });
 
   it('updates status only with id, tenant, and user predicates', async () => {
