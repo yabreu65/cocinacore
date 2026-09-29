@@ -6,6 +6,7 @@ const requireUserMock = vi.fn();
 const findMealPlanByIdForUserAndTenantMock = vi.fn();
 const listInventoryItemsByTenantMock = vi.fn();
 const addMealPlanShoppingItemsMock = vi.fn();
+const listShoppingListItemsMock = vi.fn();
 
 vi.mock('@/lib/auth/server', () => ({ requireUser: requireUserMock }));
 vi.mock('@/lib/db/repositories/mealPlanRepository', () => ({
@@ -16,6 +17,7 @@ vi.mock('@/lib/db/repositories/inventoryRepository', () => ({
 }));
 vi.mock('@/lib/db/repositories/shoppingListRepository', () => ({
   addMealPlanShoppingItems: addMealPlanShoppingItemsMock,
+  listShoppingListItems: listShoppingListItemsMock,
 }));
 
 const { GET, POST } = await import('./route');
@@ -107,6 +109,8 @@ describe('GET /api/meal-plan/shopping-suggestions', () => {
     findMealPlanByIdForUserAndTenantMock.mockReset();
     listInventoryItemsByTenantMock.mockReset();
     addMealPlanShoppingItemsMock.mockReset();
+    listShoppingListItemsMock.mockReset();
+    listShoppingListItemsMock.mockResolvedValue([]);
     addMealPlanShoppingItemsMock.mockResolvedValue({ added: [], alreadyPresent: [] });
     requireUserMock.mockResolvedValue({ id: 'user-1', tenant: { tenantId: 'tenant-1' } });
     findMealPlanByIdForUserAndTenantMock.mockResolvedValue(persistedPlan());
@@ -122,6 +126,7 @@ describe('GET /api/meal-plan/shopping-suggestions', () => {
     expect(response.status).toBe(200);
     expect(findMealPlanByIdForUserAndTenantMock).toHaveBeenCalledWith(planId, 'user-1', 'tenant-1');
     expect(listInventoryItemsByTenantMock).toHaveBeenCalledWith('tenant-1');
+    expect(listShoppingListItemsMock).toHaveBeenCalledWith('tenant-1', 'user-1');
     const body = (await response.json()) as { items: Array<Record<string, unknown>> };
     expect(body.items).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -136,6 +141,22 @@ describe('GET /api/meal-plan/shopping-suggestions', () => {
     expect(body.items.some((item) => item.normalizedName === 'harina' || item.normalizedName === 'aceite')).toBe(false);
     expect(body.items.every((item) => !('tenant_id' in item) && !('user_id' in item) && !('id' in item))).toBe(true);
     expect(JSON.stringify(body)).not.toContain('do-not-use-snapshot');
+  });
+
+  it('marks only exact-source normalized shopping rows with their current status', async () => {
+    listShoppingListItemsMock.mockResolvedValue([
+      { id: 'private-row', tenant_id: 'tenant-1', user_id: 'user-1', source: `meal-plan:${planId}`, ingredient_name: ' ARROZ ', status: 'pending' },
+      { id: 'purchased-row', tenant_id: 'tenant-1', user_id: 'user-1', source: `meal-plan:${planId}`, ingredient_name: 'Sal', status: 'purchased' },
+      { id: 'manual-row', tenant_id: 'tenant-1', user_id: 'user-1', source: 'manual', ingredient_name: 'Harina', status: 'pending' },
+    ]);
+
+    const response = await GET(request() as unknown as NextRequest);
+    const body = (await response.json()) as { items: Array<Record<string, unknown>> };
+    expect(body.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ normalizedName: 'arroz', alreadyPresent: true, shoppingStatus: 'pending' }),
+      expect.objectContaining({ normalizedName: 'sal', alreadyPresent: true, shoppingStatus: 'purchased' }),
+    ]));
+    expect(body.items.every((item) => !('tenant_id' in item) && !('user_id' in item) && !('id' in item))).toBe(true);
   });
 
   it('rejects unauthenticated callers before database reads', async () => {
@@ -188,6 +209,7 @@ describe('POST /api/meal-plan/shopping-suggestions', () => {
     findMealPlanByIdForUserAndTenantMock.mockReset();
     listInventoryItemsByTenantMock.mockReset();
     addMealPlanShoppingItemsMock.mockReset();
+    listShoppingListItemsMock.mockReset();
     requireUserMock.mockResolvedValue({ id: 'user-1', tenant: { tenantId: 'tenant-1' } });
     findMealPlanByIdForUserAndTenantMock.mockResolvedValue(persistedPlan());
     listInventoryItemsByTenantMock.mockResolvedValue([

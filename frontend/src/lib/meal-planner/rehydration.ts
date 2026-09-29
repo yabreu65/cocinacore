@@ -30,6 +30,14 @@ export interface MealPlannerRehydrationGuard {
   userEdited: boolean;
 }
 
+export interface MealPlannerSuggestionsGuard {
+  componentActive: boolean;
+  requestVersion: number;
+  latestRequestVersion: number;
+  activePlanId: string | null;
+  mealPlanId: string;
+}
+
 const DEFAULT_STATE: Omit<MealPlannerRehydratedState, 'plan'> = {
   peopleCount: 4,
   period: 'week',
@@ -43,6 +51,20 @@ export function shouldApplyMealPlannerRehydration({
   userEdited,
 }: MealPlannerRehydrationGuard): boolean {
   return active && !generationStarted && !userEdited;
+}
+
+export function shouldApplyMealPlannerSuggestions({
+  componentActive,
+  requestVersion,
+  latestRequestVersion,
+  activePlanId,
+  mealPlanId,
+}: MealPlannerSuggestionsGuard): boolean {
+  return (
+    componentActive &&
+    requestVersion === latestRequestVersion &&
+    activePlanId === mealPlanId
+  );
 }
 
 function normalizeRestrictionList(values: string[] | undefined): string {

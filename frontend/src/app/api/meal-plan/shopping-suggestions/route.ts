@@ -4,7 +4,10 @@ import type { AuthUser } from '@/lib/auth/types';
 import type { ShoppingListItemRow } from '@/lib/db/types';
 import { findMealPlanByIdForUserAndTenant } from '@/lib/db/repositories/mealPlanRepository';
 import { listInventoryItemsByTenant } from '@/lib/db/repositories/inventoryRepository';
-import { addMealPlanShoppingItems } from '@/lib/db/repositories/shoppingListRepository';
+import {
+  addMealPlanShoppingItems,
+  listShoppingListItems,
+} from '@/lib/db/repositories/shoppingListRepository';
 import { buildQuantifiedShoppingList } from '@/lib/inventory/meal-plan-projection';
 import { structuredMealPlanToRequirements } from '@/lib/inventory/structured-meal-requirements';
 import { ShoppingListIdSchema } from '@/lib/validation';
@@ -96,19 +99,32 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const inventoryItems = await listInventoryItemsByTenant(user.tenant.tenantId);
+    const [inventoryItems, shoppingItems] = await Promise.all([
+      listInventoryItemsByTenant(user.tenant.tenantId),
+      listShoppingListItems(user.tenant.tenantId, user.id),
+    ]);
+    const existingByName = new Map(
+      shoppingItems
+        .filter((item) => item.source === `meal-plan:${mealPlanId}`)
+        .map((item) => [normalizeInventoryName(item.ingredient_name), item])
+    );
     const items = getActionableCandidates(parsedPlan.plan, inventoryItems)
-      .map((item) => ({
-        normalizedName: item.normalizedName,
-        ingredientName: item.ingredientName,
-        requiredQuantity: item.requiredQuantity,
-        availableQuantity: item.availableQuantity,
-        quantityToBuy: item.quantityToBuy,
-        unit: item.unit,
-        status: item.status,
-        usedInRecipes: item.usedInRecipes,
-        estimatedCost: item.estimatedCost,
-      }));
+      .map((item) => {
+        const existing = existingByName.get(item.normalizedName);
+        return {
+          normalizedName: item.normalizedName,
+          ingredientName: item.ingredientName,
+          requiredQuantity: item.requiredQuantity,
+          availableQuantity: item.availableQuantity,
+          quantityToBuy: item.quantityToBuy,
+          unit: item.unit,
+          status: item.status,
+          usedInRecipes: item.usedInRecipes,
+          estimatedCost: item.estimatedCost,
+          alreadyPresent: Boolean(existing),
+          shoppingStatus: existing?.status ?? null,
+        };
+      });
     return NextResponse.json({ items });
   } catch {
     return NextResponse.json({ error: 'No se pudieron calcular las sugerencias.' }, { status: 500 });

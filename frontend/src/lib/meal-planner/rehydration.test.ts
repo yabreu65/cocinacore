@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   rehydrateMealPlanner,
   shouldApplyMealPlannerRehydration,
+  shouldApplyMealPlannerSuggestions,
   type MealPlanPublicResponse,
 } from './rehydration';
 import type { StructuredMealPlan } from './structured-plan';
@@ -89,6 +90,38 @@ describe('shouldApplyMealPlannerRehydration', () => {
         userEdited: false,
       })
     ).toBe(false);
+  });
+});
+
+describe('shouldApplyMealPlannerSuggestions', () => {
+  const currentRequest = {
+    componentActive: true,
+    requestVersion: 2,
+    latestRequestVersion: 2,
+    activePlanId: 'new-plan',
+    mealPlanId: 'new-plan',
+  };
+
+  it('allows the active plan suggestions even after generation has started', () => {
+    expect(shouldApplyMealPlannerSuggestions(currentRequest)).toBe(true);
+  });
+
+  it('rejects stale requests and responses for a different active plan', () => {
+    expect(shouldApplyMealPlannerSuggestions({
+      ...currentRequest,
+      requestVersion: 1,
+    })).toBe(false);
+    expect(shouldApplyMealPlannerSuggestions({
+      ...currentRequest,
+      activePlanId: 'another-plan',
+    })).toBe(false);
+  });
+
+  it('rejects responses after the component becomes inactive', () => {
+    expect(shouldApplyMealPlannerSuggestions({
+      ...currentRequest,
+      componentActive: false,
+    })).toBe(false);
   });
 });
 
