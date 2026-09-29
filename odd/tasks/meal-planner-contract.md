@@ -159,3 +159,30 @@
 - Verification: focused Vitest 19/19; full Vitest 289/289; direct TypeScript compiler, ESLint, Next build, and `git diff --check` passed. Expected Redis/database degradation logs remain confined to test fixtures. `npm run typecheck` is not defined in the existing frontend package scripts.
 - Commit: `97e9a6c` (`feat(recipe-search): connect authenticated cookbook rag`).
 - Native review: approved and acknowledged for candidate `97e9a6c`; informational warnings `R3-context-load-failure` and `R3-menu-to-shopping-regression` were pre-existing, non-blocking findings in unrelated meal-plan paths.
+
+## META 1 / M1.3.2 — Recipe Search Source Citations
+
+- **Status:** in_progress
+- **Base SHA:** `b7bf1bd9fc8961181da17ffbe367cc04f6d606a9`
+- **Objective:** Show authoritative server-returned cookbook source references in Recipe Search when RAG context was used, without parsing or fabricating citations from Gemini prose.
+- **Current truth:** `/api/recipe-generate` returns typed `ragContextUsed` and `sources: Citation[]`; `frontend/src/app/recipes/search/page.tsx` currently types only recipe/title/structured ingredients and renders only the recipe text.
+- **Source of truth:** Only the API `sources` array is authoritative. UI must preserve source type/book IDs/page/chunk data in typed state but display human-readable title/type/page only when actually present.
+- **Source labels:** `global_pdf` → `Recetario global`; `tenant_pdf` → `Mi recetario`; `ai_generated` → safe non-documentary handling, never presented as authoritative cookbook evidence.
+- **Deduplication:** Use deterministic identity over source type, book ID, page number, and chunk ID; do not merge distinct pages/chunks.
+- **Non-goals:** Retrieval, embeddings, RAG query/prompt behavior, auth/profile/inventory wiring, history persistence, ratings, broad visual redesign, production, Contabo, migrations, deployment, push, and PR.
+
+### Tasks
+
+1. **Explore Recipe Search citation surfaces** — completed. Confirmed page-local response typing, existing `Citation` union, API response fields, no reusable citation component, and current source-type metadata.
+2. **Track M1.3.2 ODD work** — completed. Added this bounded section and task evidence before source writes.
+3. **Implement typed source citation UI** — pending. Add a pure normalization/display helper and render an accessible source section only for RAG responses.
+4. **Add focused citation tests** — pending. Cover authoritative sources, labels, missing title/page, no-context/free mode, AI-generated safety, and deterministic duplicates.
+5. **Run verification and commit** — pending. Run focused/full tests, direct TypeScript check, lint, build, diff check, native review, and create a local Conventional Commit.
+
+### M1.3.2 Evidence
+
+- API typing: pending implementation.
+- Source rendering: pending implementation.
+- Citation source of truth: pending implementation; recipe prose must remain untouched.
+- Verification: pending.
+- Commit: pending.
