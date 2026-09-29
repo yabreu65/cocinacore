@@ -295,6 +295,36 @@
 - **Implementation commit:** `994b53b` (`feat(meal-planner): rehydrate persisted plans`).
 - **Evidence commit:** this documentation commit.
 
+## META 1 / M1.4.1 FIX — Protect Dirty Planner State During Rehydration
+
+- **Status:** completed
+- **Base SHA:** `0e41cd38a377b1d9776f30f8b0d13399c04ab168`
+- **Objective:** Fix the reviewed UI race where delayed initial GET rehydration overwrites user-edited Meal Planner fields before generation.
+- **Root cause:** The page guarded only `generationStartedRef`; edits to people count, period, base cuisine, and restrictions made before GET resolution were not tracked.
+- **Fix decision:** Track a `userEditedRef` from every rendered editable field and allow initial rehydration only while the component is active, generation has not started, and the form remains pristine. Keep the form interactive while GET is pending.
+- **E2E decision:** Delay only authenticated GET `/api/meal-plan`, edit all required fields while it is pending, release the response, verify edits remain, then generate and assert persisted values. Retain reload/no-provider-call assertions.
+- **Recipe cache decision:** Re-run connected Recipe Search independently and in the full Playwright suite. Do not change Recipe Search code unless the cache failure reproduces deterministically and is proven caused by this fix.
+
+### Tasks
+
+1. **Explore M1.4.1 race surfaces** — completed. Confirmed current generation-only guard, real connected Meal Planner E2E, reusable provider/DB fixtures, and Recipe Search cache scenario.
+2. **Track fix evidence** — completed. Recorded dirty-state semantics, deterministic delayed-GET E2E, and cache recheck scope before source writes.
+3. **Implement pristine/dirty rehydration guard** — completed. Added a shared active/generation/dirty predicate, used it in the real page, and marked every editable field dirty before state updates.
+4. **Add deterministic race coverage** — completed. Covered pristine apply, dirty/generation/inactive rejection, safe no-plan defaults, and the delayed-GET connected persistence path.
+5. **Recheck cache and run gates** — completed. Focused Recipe Search connected E2E passed 3/3; full Playwright passed 13/13 executed with 2 owner-health tests skipped; clean Node 20 Vitest passed 322/322, typecheck, lint, build, and diff checks passed.
+6. **Review and corrective commit** — completed. Native review approved and acknowledged with no blocking findings; local Conventional Commit recorded below.
+
+### M1.4.1 FIX Focused Evidence
+
+- `shouldApplyMealPlannerRehydration` allows initial GET state only for an active, pristine form before generation; `MealPlannerPage` invokes it before any restored state is applied. All four editable controls set `userEditedRef` before their state setters, while the form remains enabled during initial GET.
+- `cd frontend && npm test -- src/lib/meal-planner/rehydration.test.ts` passed: 6/6 tests, including pristine apply, dirty/generation/inactive rejection, and no-plan defaults.
+- `cd frontend && npm run test:e2e -- e2e/specs/meal-planner-connected.spec.ts` passed: the route delays only initial GET, edits all rendered fields (returning period to the fixture-compatible week value), releases and removes the route, verifies retained values, uses real POST/GET for generation/reload, verifies persisted DB fields, and confirms zero provider generation calls after reload.
+- `cd frontend && npm run test:e2e -- e2e/specs/recipe-connected.spec.ts --project=chromium` passed independently: 3/3 connected Recipe Search tests; no cache failure reproduced and no Recipe Search code changed.
+- Clean Node 20 snapshot: `npm test` passed 322/322, `npx tsc --noEmit` passed, `npm run lint` passed, and `npm run build` passed. Node 20 emitted the existing `pdfjs-dist` engine warning only; no gate failed.
+- Full Playwright passed 13/13 executed tests with 2 owner-health tests skipped because explicit owner credentials were absent. `git diff --check` passed.
+- Native review lineage `review-a65c73c0422f5a31` approved and acknowledged. Native ASSESS reported `unassessable` because intentionally excluded untracked `.codegraph/` still requires an explicit declaration; the review itself closed successfully.
+- **Implementation commit:** `71810e1` (`fix(meal-planner): prevent stale rehydration overwrite`).
+
 ### M1.4.1 Implementation Evidence
 
 - POST normalizes explicit request restrictions (trimmed, case-insensitive deduplicated, bounded by the request schema) and keeps them separate from the authenticated persisted profile `avoid` context in both prompt branches.

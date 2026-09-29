@@ -56,14 +56,53 @@ test.describe('Connected meal planner', () => {
     await closeE2EDatabase();
   });
 
-  test('persists and rehydrates the authenticated meal plan without regenerating', async ({ page }) => {
+  test('preserves edits made before rehydration, then persists and reloads the authenticated meal plan', async ({ page }) => {
     if (!seed) throw new Error('Connected meal planner seed was not initialized.');
+
+    let releaseInitialGet!: () => void;
+    const initialGetReleased = new Promise<void>((resolve) => {
+      releaseInitialGet = resolve;
+    });
+    let signalInitialGetPending!: () => void;
+    const initialGetPending = new Promise<void>((resolve) => {
+      signalInitialGetPending = resolve;
+    });
+
+    await page.route('**/api/meal-plan', async (route) => {
+      if (route.request().method() !== 'GET') {
+        await route.continue();
+        return;
+      }
+
+      signalInitialGetPending();
+      await initialGetReleased;
+      await route.continue();
+    });
+    const initialGetResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes('/api/meal-plan') && response.request().method() === 'GET'
+    );
 
     await page.goto('/meal-planner');
     await expect(page.getByRole('heading', { name: 'Planificador de menú' })).toBeVisible();
+    await initialGetPending;
     await page.getByLabel('Comensales').fill('2');
+    await page.getByLabel('Período').selectOption('fortnight');
+    await page.getByLabel('Período').selectOption('week');
     await page.getByLabel('Cocina base').fill('Italiana');
-    await page.getByLabel('Restricciones (separadas por comas)').fill(' Gluten, gluten, Lácteos ');
+    await page.getByLabel('Restricciones (separadas por comas)').fill('Gluten, Lácteos');
+
+    releaseInitialGet();
+    await initialGetResponse;
+    await page.unroute('**/api/meal-plan');
+
+    await expect(page.getByLabel('Comensales')).toHaveValue('2');
+    await expect(page.getByLabel('Período')).toHaveValue('week');
+    await expect(page.getByLabel('Cocina base')).toHaveValue('Italiana');
+    await expect(page.getByLabel('Restricciones (separadas por comas)')).toHaveValue(
+      'Gluten, Lácteos'
+    );
+
     await page.getByRole('button', { name: 'Generar menú' }).click();
 
     await expect(page.getByRole('heading', { name: 'Menú generado' })).toBeVisible();
@@ -95,6 +134,7 @@ test.describe('Connected meal planner', () => {
     await page.reload();
     await expect(page.getByRole('heading', { name: 'Menú generado' })).toBeVisible();
     await expect(page.getByLabel('Comensales')).toHaveValue('2');
+    await expect(page.getByLabel('Período')).toHaveValue('week');
     await expect(page.getByLabel('Cocina base')).toHaveValue('Italiana');
     await expect(page.getByLabel('Restricciones (separadas por comas)')).toHaveValue(
       'Gluten, Lácteos'

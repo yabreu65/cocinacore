@@ -24,12 +24,26 @@ export interface MealPlannerRehydratedState {
   restrictions: string;
 }
 
+export interface MealPlannerRehydrationGuard {
+  active: boolean;
+  generationStarted: boolean;
+  userEdited: boolean;
+}
+
 const DEFAULT_STATE: Omit<MealPlannerRehydratedState, 'plan'> = {
   peopleCount: 4,
   period: 'week',
   baseCuisine: 'Latinoamericana',
   restrictions: '',
 };
+
+export function shouldApplyMealPlannerRehydration({
+  active,
+  generationStarted,
+  userEdited,
+}: MealPlannerRehydrationGuard): boolean {
+  return active && !generationStarted && !userEdited;
+}
 
 function normalizeRestrictionList(values: string[] | undefined): string {
   if (!values) return '';

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   rehydrateMealPlanner,
+  shouldApplyMealPlannerRehydration,
   type MealPlanPublicResponse,
 } from './rehydration';
 import type { StructuredMealPlan } from './structured-plan';
@@ -48,6 +49,48 @@ function response(overrides: Partial<MealPlanPublicResponse> = {}): MealPlanPubl
     ...overrides,
   };
 }
+
+describe('shouldApplyMealPlannerRehydration', () => {
+  it('allows a pristine active form to apply the initial response', () => {
+    expect(
+      shouldApplyMealPlannerRehydration({
+        active: true,
+        generationStarted: false,
+        userEdited: false,
+      })
+    ).toBe(true);
+  });
+
+  it('rejects the initial response after a user edit', () => {
+    expect(
+      shouldApplyMealPlannerRehydration({
+        active: true,
+        generationStarted: false,
+        userEdited: true,
+      })
+    ).toBe(false);
+  });
+
+  it('rejects the initial response after generation starts', () => {
+    expect(
+      shouldApplyMealPlannerRehydration({
+        active: true,
+        generationStarted: true,
+        userEdited: false,
+      })
+    ).toBe(false);
+  });
+
+  it('rejects the initial response after the component becomes inactive', () => {
+    expect(
+      shouldApplyMealPlannerRehydration({
+        active: false,
+        generationStarted: false,
+        userEdited: false,
+      })
+    ).toBe(false);
+  });
+});
 
 describe('rehydrateMealPlanner', () => {
   it('restores the persisted plan and editable settings without exposing fusion UI state', () => {

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { safeFetch } from '@/lib/api';
 import {
   rehydrateMealPlanner,
+  shouldApplyMealPlannerRehydration,
   type MealPlanPublicResponse,
 } from '@/lib/meal-planner/rehydration';
 import type { StructuredMealPlan, StructuredMealType } from '@/lib/meal-planner/structured-plan';
@@ -26,6 +27,7 @@ export default function MealPlannerPage() {
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [plan, setPlan] = useState<StructuredMealPlan | null>(null);
   const generationStartedRef = useRef(false);
+  const userEditedRef = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -38,7 +40,15 @@ export default function MealPlannerPage() {
         if (!result.ok) {
           throw new Error(result.error ?? 'No se pudo cargar el menú guardado.');
         }
-        if (!active || generationStartedRef.current) return;
+        if (
+          !shouldApplyMealPlannerRehydration({
+            active,
+            generationStarted: generationStartedRef.current,
+            userEdited: userEditedRef.current,
+          })
+        ) {
+          return;
+        }
 
         const restored = rehydrateMealPlanner(result.data);
         setPeopleCount(restored.peopleCount);
@@ -128,7 +138,10 @@ export default function MealPlannerPage() {
               type="number"
               min={1}
               value={peopleCount}
-              onChange={(event) => setPeopleCount(Number(event.target.value))}
+              onChange={(event) => {
+                userEditedRef.current = true;
+                setPeopleCount(Number(event.target.value));
+              }}
               className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 outline-none"
             />
           </label>
@@ -137,7 +150,10 @@ export default function MealPlannerPage() {
             Período
             <select
               value={period}
-              onChange={(event) => setPeriod(event.target.value as 'week' | 'fortnight' | 'month')}
+              onChange={(event) => {
+                userEditedRef.current = true;
+                setPeriod(event.target.value as 'week' | 'fortnight' | 'month');
+              }}
               className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 outline-none"
             >
               <option value="week">Semana</option>
@@ -150,7 +166,10 @@ export default function MealPlannerPage() {
             Cocina base
             <input
               value={baseCuisine}
-              onChange={(event) => setBaseCuisine(event.target.value)}
+              onChange={(event) => {
+                userEditedRef.current = true;
+                setBaseCuisine(event.target.value);
+              }}
               placeholder="Latinoamericana"
               className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 outline-none"
             />
@@ -160,7 +179,10 @@ export default function MealPlannerPage() {
             Restricciones (separadas por comas)
             <input
               value={restrictions}
-              onChange={(event) => setRestrictions(event.target.value)}
+              onChange={(event) => {
+                userEditedRef.current = true;
+                setRestrictions(event.target.value);
+              }}
               className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 outline-none"
             />
           </label>
