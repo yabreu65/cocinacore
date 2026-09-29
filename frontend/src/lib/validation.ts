@@ -77,6 +77,24 @@ export const MealPlanWarmupSchema = z.object({
 
 export type MealPlanWarmupBody = z.infer<typeof MealPlanWarmupSchema>;
 
+/** Schema for POST /api/shopping-list. */
+export const ShoppingListCreateSchema = z.object({
+  ingredientName: z.string().trim().min(1).max(200),
+  quantity: z.string().trim().max(100).nullable().optional(),
+  source: z.string().trim().max(50).optional().default('manual'),
+});
+
+export type ShoppingListCreateBody = z.infer<typeof ShoppingListCreateSchema>;
+
+/** Schema for PATCH /api/shopping-list/:id. */
+export const ShoppingListStatusUpdateSchema = z.object({
+  status: z.enum(['pending', 'purchased']),
+});
+
+export type ShoppingListStatusUpdateBody = z.infer<typeof ShoppingListStatusUpdateSchema>;
+
+export const ShoppingListIdSchema = z.string().uuid();
+
 // ---------------------------------------------------------------------------
 // Validation helper
 // ---------------------------------------------------------------------------
