@@ -162,7 +162,7 @@
 
 ## META 1 / M1.3.2 — Recipe Search Source Citations
 
-- **Status:** in_progress
+- **Status:** completed
 - **Base SHA:** `b7bf1bd9fc8961181da17ffbe367cc04f6d606a9`
 - **Objective:** Show authoritative server-returned cookbook source references in Recipe Search when RAG context was used, without parsing or fabricating citations from Gemini prose.
 - **Current truth:** `/api/recipe-generate` returns typed `ragContextUsed` and `sources: Citation[]`; `frontend/src/app/recipes/search/page.tsx` currently types only recipe/title/structured ingredients and renders only the recipe text.
@@ -175,14 +175,14 @@
 
 1. **Explore Recipe Search citation surfaces** — completed. Confirmed page-local response typing, existing `Citation` union, API response fields, no reusable citation component, and current source-type metadata.
 2. **Track M1.3.2 ODD work** — completed. Added this bounded section and task evidence before source writes.
-3. **Implement typed source citation UI** — pending. Add a pure normalization/display helper and render an accessible source section only for RAG responses.
-4. **Add focused citation tests** — pending. Cover authoritative sources, labels, missing title/page, no-context/free mode, AI-generated safety, and deterministic duplicates.
-5. **Run verification and commit** — pending. Run focused/full tests, direct TypeScript check, lint, build, diff check, native review, and create a local Conventional Commit.
+3. **Implement typed source citation UI** — completed. Added a pure Citation-based normalization/display helper and an accessible source section only for RAG responses; recipe prose remains unchanged.
+4. **Add focused citation tests** — completed. Covered authoritative sources, labels, missing title/page, no-context/free mode, AI-generated safety, and deterministic duplicates.
+5. **Run verification and commit** — completed. Focused 7/7; full 296/296; direct TypeScript, lint, build, and diff checks passed; native review approved and acknowledged.
 
 ### M1.3.2 Evidence
 
-- API typing: pending implementation.
-- Source rendering: pending implementation.
-- Citation source of truth: pending implementation; recipe prose must remain untouched.
-- Verification: pending.
-- Commit: pending.
+- API typing: `RecipeGenerationResponse` now includes optional `ragContextUsed` and `sources: Citation[]`; compatibility defaults remain false/empty.
+- Source rendering: `getVisibleRecipeSources` produces deterministic documentary display data; Recipe Search renders semantic heading/list cards with human-readable labels and available title/page only.
+- Citation source of truth: only server-returned `sources` are normalized; Gemini recipe prose is never parsed or rewritten.
+- Verification: focused Vitest 7/7; full Vitest 296/296; direct `tsc --noEmit`, lint, build, and `git diff --check` passed. Expected Redis/database degradation logs remain confined to fixtures. Native review approved and acknowledged with informational warnings `R3-missing-page-render-test` and `R3-unrecognized-source-type`.
+- Commit: `779488e` (`feat(recipe-search): show rag source citations`).
