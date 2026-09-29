@@ -292,7 +292,8 @@
 4. **Implement UI rehydration and request restrictions** — completed. Loaded latest plan safely, restored settings, kept generation usable after load failure, and prevented stale GET from overwriting a newer generation.
 5. **Add focused and connected E2E coverage** — completed. Added route/repository/rehydration tests plus connected real-auth/database/provider E2E coverage for persistence, reload rehydration, and zero provider calls on reload.
 6. **Run verification, review, and commit** — completed. Focused/full gates passed; native review approved and acknowledged with no blocking findings; local Conventional Commit recorded below.
-- **Implementation commit:** pending until this work unit is committed.
+- **Implementation commit:** `994b53b` (`feat(meal-planner): rehydrate persisted plans`).
+- **Evidence commit:** this documentation commit.
 
 ### M1.4.1 Implementation Evidence
 
