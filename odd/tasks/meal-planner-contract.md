@@ -371,4 +371,33 @@
 - Full Playwright first had one transient cache assertion miss (`generationCallCount` 2 instead of 1); the independent connected Recipe Search run passed and no cache code was changed. A clean full rerun passed 13/13 with 2 owner-health tests skipped.
 - Clean Node 20 snapshot: `npm test` passed 335/335, `npx tsc --noEmit`, `npm run lint`, `npm run build`, and `git diff --check` passed. Node 20 emitted only the existing `pdfjs-dist` engine warning.
 - Native review lineage `review-df2dcab38b1758d4` approved and acknowledged. It reported one non-blocking informational warning about a possible filter request race at `frontend/src/app/recipes/history/page.tsx:95`; no correction was required for this slice.
-- **Implementation commit:** `fbb3728` (`feat(recipe-history): persist saved recipes`).
+- **Implementation commit:** `1b4768d` (`feat(recipe-history): persist saved recipes`).
+
+## META 1 / M1.4.3 — Complete Persistence Closure Audit
+
+- **Status:** blocked
+- **Base SHA:** `1b4768d13188b61f85c1e921ac71e24cd69686d2`
+- **Audit objective:** Verify all active, user-visible META 1 persistence belonging to M1.4 and classify later-milestone or inactive persistence-looking surfaces without inventing new product work.
+- **Audit result:** Core M1.4 entities are persisted and rehydrated correctly, but one protected legacy `/dashboard` surface contains an active-looking settings form whose `Guardar Cambios` action only shows `Ajustes guardados correctamente en localStorage`; it does not persist or even write browser storage. This is a concrete durable-state claim defect, but implementing real persistence would require a separately scoped dashboard-settings product decision and storage contract.
+
+### M1.4.3 Audit Classification
+
+- **PROFILE — M1.4_COMPLETE:** `/profile` GET loads authenticated full name and culinary level; PUT updates the user and tenant-scoped culinary profile; UI reloads from `/api/profile`. Preference/avoid/goal terms are AI context, not editable profile-page state.
+- **INVENTORY — M1.4_COMPLETE:** `/recipes/inventory` GET/POST/DELETE uses real repository/database paths and server tenant context; visible ingredient fields round-trip through PostgreSQL. Automatic consumption remains M1.6.
+- **MEAL_PLANNER — M1.4_COMPLETE:** Existing M1.4.1 canonical plan persistence, authenticated context snapshot, GET rehydration, stale-GET protection, and connected verification remain present.
+- **RECIPE_HISTORY — M1.4_COMPLETE:** Existing M1.4.2 generated-history persistence, feedback, saved state, authenticated ownership, saved filter, reload, and connected verification remain present.
+- **SHOPPING_LIST — M1.5:** `shopping_list_items` is schema-only for the current active product; no connected Shopping page/runtime flow was found. `/api/meal-plan/inventory-suggestion` returns transient AI suggestions and does not persist them.
+- **MEAL_PLAN_INVENTORY_SUGGESTIONS — M1.5:** The route is purchase-planning output, rate-limited and transient; it has no active persisted suggestion workflow.
+- **COOKING_CONSUMPTION — M1.6:** Inventory movements, automatic decrement, and cooking completion are not active M1.4 flows.
+- **RECIPE_RATINGS — LATER_PRODUCT:** `/recipes/rating` redirects to `/recipes/history`; `recipe_ai_ratings` and mock rating helpers are not active product behavior.
+- **OPTIMIZATION_SNAPSHOTS — LATER_PRODUCT:** No active route/page reads or writes `user_meal_plan_optimization_snapshots`; current optimization/simulation controls explicitly describe temporary state.
+- **PREMIUM SAVED RECIPES — LATER_PRODUCT:** Premium saved recipes are a separate placeholder/reconstruction subsystem and are not AI Recipe History state.
+- **LEGACY `/dashboard` settings — REAL_M1_4_DEFECT:** The protected route contains client-only `glowEnabled`/`glassIntensity` settings and a save button claiming localStorage persistence, while the handler only calls `alert`. The route is not linked from the current `/app` navigation and is explicitly mock/high-fidelity, but its user-visible save claim is still an unresolved persistence contract.
+
+### M1.4.3 Closure Evidence
+
+- Audit search found no browser `localStorage`/`sessionStorage` persistence implementation for active M1.4 entities; Recipe History, Meal Planner, Profile, Inventory, and Recipe Search all use server APIs.
+- Dashboard `/app` reads persisted dashboard data from `/api/dashboard`; current navigation links to `/app`, not the legacy mock `/dashboard` settings route.
+- No source behavior was changed during this audit. Only this ODD document was updated.
+- Expensive verification was not rerun because source code did not change; prior approved M1.4.1/M1.4.2 gate evidence remains valid.
+- **Proposed corrective slice:** M1.4.x — decide whether legacy `/dashboard` settings are to be removed/reclassified or given a real authenticated persistence contract; do not implement localStorage as a substitute.
