@@ -99,7 +99,7 @@ export default function RecipeSearchPage() {
 
         <form onSubmit={onSubmit} className="grid gap-3">
           <label className="grid gap-1 text-sm font-semibold text-[#6B5A50]">
-            Ingredientes (uno por línea)
+            Quiero cocinar con (opcional; enfoca la solicitud, uno por línea)
             <textarea
               value={ingredients}
               onChange={(e) => setIngredients(e.target.value)}

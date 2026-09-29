@@ -4,6 +4,7 @@ import { getGeminiApiKey, getGeminiModel } from '@/lib/ai/gemini-config';
 import {
   buildRecipeCacheKey,
   getCachedRecipe,
+  hashRecipeContext,
   setCachedRecipe,
   type RecipeCacheKeyInput,
 } from '@/lib/cache/recipe-cache';
@@ -15,10 +16,23 @@ import {
 import { validateRequest, RecipeGenerateSchema, type RecipeGenerateBody } from '@/lib/validation';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { requireUser } from '@/lib/auth/server';
+import type { AuthUser } from '@/lib/auth/types';
+import { loadPersistedRecipeContext } from '@/lib/recipes/persisted-context';
 import { retrieveServerRagContext } from '@/lib/recipes/server-rag-context';
 import type { Citation } from '@/services/types';
 
 const AI_REQUEST_TIMEOUT_MS = 60_000;
+const RECIPE_PROMPT_CONTEXT_VERSION = 'recipe-persisted-context-v1';
+
+type RequestProfile = NonNullable<RecipeGenerateBody['culinaryProfile']>;
+
+interface RecipeProfileFields {
+  identity: string[];
+  preferred: string[];
+  avoid: string[];
+  goals: string[];
+  level: string;
+}
 
 function inferTitleFromRecipe(recipe: string): string {
   const clean = recipe
@@ -39,6 +53,33 @@ function inferTitleFromRecipe(recipe: string): string {
     .replace(/^#+\s*/, '')
     .replace(/^\d+[\.)-]\s*/, '')
     .trim();
+}
+
+function normalizeRequestValues(values: readonly string[] | undefined, maxItems: number): string[] {
+  return (values ?? [])
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .slice(0, maxItems);
+}
+
+function buildRequestProfile(profile: RequestProfile | undefined): RecipeProfileFields {
+  return {
+    identity: normalizeRequestValues(profile?.identity, 6),
+    preferred: normalizeRequestValues(profile?.preferred, 10),
+    avoid: normalizeRequestValues(profile?.avoid, 10),
+    goals: normalizeRequestValues(profile?.goals, 10),
+    level: profile?.level?.trim() || 'No especificado',
+  };
+}
+
+function formatRequestProfile(profile: RecipeProfileFields): string {
+  return [
+    `- Identidad de cocina: ${profile.identity.join(', ') || 'No especificado'}`,
+    `- Preferencias: ${profile.preferred.join(', ') || 'No especificado'}`,
+    `- Objetivos: ${profile.goals.join(', ') || 'No especificado'}`,
+    `- Restricciones/evitar: ${profile.avoid.join(', ') || 'No especificado'}`,
+    `- Nivel culinario: ${profile.level}`,
+  ].join('\n');
 }
 
 export async function POST(request: NextRequest) {
@@ -73,22 +114,54 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  let user: AuthUser | null = null;
+  try {
+    user = await requireUser(request, 'Unauthorized');
+  } catch {
+    user = null;
+  }
+
+  let persistedContext: Awaited<ReturnType<typeof loadPersistedRecipeContext>> | null = null;
+  if (user?.tenant) {
+    try {
+      persistedContext = await loadPersistedRecipeContext(user.id, user.tenant.tenantId);
+    } catch (error) {
+      serverLogger.error('recipe_generate.persisted_context_failed', {
+        requestId,
+        error: error instanceof Error ? error.message : 'Persisted context error',
+      });
+      return NextResponse.json(
+        { error: 'No se pudo cargar el contexto culinario persistido.' },
+        { status: 503 }
+      );
+    }
+  }
+
+  const ragUser = user?.tenant ? user : null;
+  if (mode === 'rag' && !ragUser) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   const requestedRecipeName = body.recipeName?.trim() ?? '';
   const requestedMealType = body.mealType?.trim() ?? '';
   const requestedDay = body.day?.trim() ?? '';
-  const ingredients = (body.ingredients ?? []).filter(Boolean).slice(0, 30);
+  const requestedIngredients = normalizeRequestValues(body.ingredients, 30);
   const peopleCount =
     typeof body.peopleCount === 'number' &&
     Number.isFinite(body.peopleCount) &&
     body.peopleCount > 0
       ? Math.floor(body.peopleCount)
       : 4;
-  const profile = body.culinaryProfile;
-  const preferred = (profile?.preferred ?? []).filter(Boolean).slice(0, 10);
-  const avoid = (profile?.avoid ?? []).filter(Boolean).slice(0, 10);
-  const goals = (profile?.goals ?? []).filter(Boolean).slice(0, 10);
-  const identity = (profile?.identity ?? []).filter(Boolean).slice(0, 6);
-  const level = profile?.level?.trim() || 'No especificado';
+  const requestProfile = buildRequestProfile(body.culinaryProfile);
+  const profileFields: RecipeProfileFields = persistedContext
+    ? {
+        identity: persistedContext.profile?.identity ?? [],
+        preferred: persistedContext.profile?.preferred ?? [],
+        avoid: persistedContext.profile?.avoid ?? [],
+        goals: persistedContext.profile?.goals ?? [],
+        level: persistedContext.profile?.level ?? 'No especificado',
+      }
+    : requestProfile;
   let ragContext: { context: string; citations: Citation[]; ragContextUsed: boolean } = {
     context: '',
     citations: [],
@@ -96,14 +169,7 @@ export async function POST(request: NextRequest) {
   };
 
   if (mode === 'rag') {
-    let user;
-    try {
-      user = await requireUser(request, 'Unauthorized');
-    } catch {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    if (!user.tenant) {
+    if (!ragUser?.tenant) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -114,15 +180,18 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const ragIngredients =
+      requestedIngredients.length > 0 ? requestedIngredients : persistedContext?.inventoryNames ?? [];
+
     try {
       ragContext = await retrieveServerRagContext({
         apiKey,
-        tenantId: user.tenant.tenantId,
-        ingredients,
+        tenantId: ragUser.tenant.tenantId,
+        ingredients: ragIngredients,
         recipeName: requestedRecipeName || undefined,
         mealType: requestedMealType || undefined,
         day: requestedDay || undefined,
-        restrictions: { allergies: avoid, dietaryRules: [] },
+        restrictions: { allergies: profileFields.avoid, dietaryRules: [] },
       });
     } catch (error) {
       serverLogger.error('recipe_generate.rag_retrieval_failed', {
@@ -142,9 +211,10 @@ export async function POST(request: NextRequest) {
     mode,
     providerPreference,
     peopleCount,
-    ingredientsCount: ingredients.length,
+    requestedIngredientsCount: requestedIngredients.length,
+    inventoryCount: persistedContext?.inventoryLines.length ?? 0,
     chunksCount: mode === 'rag' ? ragContext.citations.length : 0,
-    hasProfile: Boolean(profile),
+    hasPersistedProfile: Boolean(persistedContext?.profile),
     requestedRecipeName,
     requestedMealType,
     requestedDay,
@@ -152,30 +222,37 @@ export async function POST(request: NextRequest) {
 
   const focusedRecipeInstruction = requestedRecipeName
     ? `Receta objetivo (OBLIGATORIO): ${requestedRecipeName}`
-    : 'Receta objetivo (OBLIGATORIO): usa el primer ingrediente como plato principal.';
+    : requestedIngredients.length > 0
+      ? `Receta objetivo (OBLIGATORIO): usa el primer ingrediente solicitado como plato principal.`
+      : 'Receta objetivo (OBLIGATORIO): elige un plato coherente priorizando el inventario real del hogar.';
 
   const slotContextInstruction =
     requestedMealType || requestedDay
       ? `Contexto del slot: ${requestedDay || 'Día no especificado'} · ${requestedMealType || 'Comida no especificada'}`
       : 'Contexto del slot: no especificado';
 
+  const inventoryContext = persistedContext?.inventoryContext ?? 'Sin inventario persistido para este hogar.';
+  const profileContext = persistedContext?.profileContext ?? formatRequestProfile(requestProfile);
+  const profileSectionTitle = persistedContext
+    ? 'Perfil culinario persistido del usuario autenticado:'
+    : 'Perfil culinario de esta solicitud (no persistido):';
   const commonPromptHeader = `Eres un chef-editor culinario. Debes devolver una receta en español con formato claro y exacto, sin JSON.
 
+Solicitud actual:
 ${focusedRecipeInstruction}
 ${slotContextInstruction}
+- Ingredientes solicitados explícitamente: ${requestedIngredients.join('; ') || 'No especificados'}
+- Estos ingredientes son solo el foco de la receta actual; no prueban disponibilidad en el inventario del hogar.
+- Comensales: ${peopleCount}
+
+Inventario real del hogar:
+${inventoryContext}
+No inventes cantidades de inventario: si una línea indica "cantidad no especificada", no la supongas.
+
+${profileSectionTitle}
+${profileContext}
 
 SI HAY CONTEXTO DOCUMENTAL, prioriza ese contenido y usa el NOMBRE de la receta que aparezca en el texto fuente.
-
-Ingredientes del usuario:
-${ingredients.join('; ') || 'No especificados'}
-
-Perfil culinario del usuario:
-- Identidad de cocina: ${identity.join(', ') || 'No especificado'}
-- Preferencias: ${preferred.join(', ') || 'No especificado'}
-- Objetivos: ${goals.join(', ') || 'No especificado'}
-- Restricciones/evitar: ${avoid.join(', ') || 'No especificado'}
-- Nivel culinario: ${level}
-- Comensales: ${peopleCount}
 `;
 
   const ragPrompt = `Contexto documental confiable recuperado del recetario autorizado:
@@ -246,15 +323,17 @@ Reglas:
   const prompt = `${commonPromptHeader}\n${mode === 'rag' ? ragPrompt : freePrompt}`;
   const recipeCacheKeyInput: RecipeCacheKeyInput = {
     mode,
+    scope: user?.tenant ? { userId: user.id, tenantId: user.tenant.tenantId } : null,
     requestedRecipeName,
     requestedMealType,
     requestedDay,
-    ingredients,
+    ingredients: requestedIngredients,
     peopleCount,
-    identity,
-    preferred,
-    avoid,
-    level,
+    goals: profileFields.goals,
+    inventoryContextHash: hashRecipeContext(inventoryContext),
+    profileContextHash: hashRecipeContext(profileContext),
+    contextVersion: RECIPE_PROMPT_CONTEXT_VERSION,
+    model,
     chunks: mode === 'rag' && ragContext.context ? [ragContext.context] : [],
   };
   const recipeCacheKey = buildRecipeCacheKey(recipeCacheKeyInput);

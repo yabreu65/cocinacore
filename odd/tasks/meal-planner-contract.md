@@ -186,3 +186,35 @@
 - Citation source of truth: only server-returned `sources` are normalized; Gemini recipe prose is never parsed or rewritten.
 - Verification: focused Vitest 7/7; full Vitest 296/296; direct `tsc --noEmit`, lint, build, and `git diff --check` passed. Expected Redis/database degradation logs remain confined to fixtures. Native review approved and acknowledged with informational warnings `R3-missing-page-render-test` and `R3-unrecognized-source-type`.
 - Commit: `779488e` (`feat(recipe-search): show rag source citations`).
+- Documentation evidence: `dc2e32f` (`docs(odd): record citation ui evidence`).
+
+## META 1 / M1.3.3 — Persisted Recipe Inventory and Profile Context
+
+- **Status:** in_progress
+- **Base SHA:** `dc2e32fd9a2a1f7d17cf38f6df2b865737ccd8bb`
+- **Objective:** Make authenticated Recipe Search generation use the real tenant inventory and authenticated user's persisted culinary profile while preserving explicit per-request ingredient intent.
+- **Decision:** Keep unauthenticated free mode as a bounded compatibility fallback because M1.3.1 intentionally left free mode public. Authenticated users are enriched with persisted context; RAG remains authenticated and tenant-bound. Authenticated users without a tenant cannot use RAG.
+- **Inventory semantics:** `requestedIngredients` remains current request focus; persisted tenant inventory is a separate authoritative context and is never fabricated from browser input. If no explicit request ingredients exist, bounded persisted inventory names are the RAG retrieval fallback.
+- **Profile semantics:** For authenticated users, persisted `user_culinary_profiles` and profile terms are canonical; browser `culinaryProfile` is ignored for canonical fields. Missing profile becomes a neutral marker. Anonymous free fallback may retain bounded browser intent because no authenticated profile exists.
+- **Reuse:** Follow M1.2.2/M1.2.3 helpers and repositories; no schema or migration changes.
+- **Cache policy:** Add authenticated user/tenant scope and hashes of the bounded authoritative inventory/profile context to recipe cache identity; include persisted goals and a prompt/context version so private context cannot cross-contaminate users or tenants.
+- **Non-goals:** Recipe history, meal planner changes, inventory mutation, shopping, ratings, Home OS, voice, retrieval/embedding redesign, production, Contabo, migrations, deployment, push, and PR.
+
+### Tasks
+
+1. **Explore persisted recipe context surfaces** — completed. Confirmed route/UI semantics, repository tenant/user filters, reusable M1.2.2/M1.2.3 helpers, auth behavior, cache omissions, and RAG query construction.
+2. **Track M1.3.3 ODD work** — completed. Added this bounded section and decisions before source writes.
+3. **Implement authenticated context wiring** — pending. Load exact tenant inventory and user profile, distinguish request intent, and preserve anonymous free fallback.
+4. **Harden prompt, RAG, and cache scope** — pending. Label context sections, bound deterministic retrieval fallback, and prevent authoritative-context cache leakage.
+5. **Add focused boundary tests** — pending. Cover isolation, browser override resistance, missing context, free/RAG behavior, cache identity, and source preservation.
+6. **Run verification and commit** — pending. Run focused/full tests, direct TypeScript, lint, build, diff check, native review, and local Conventional Commit.
+
+### M1.3.3 Evidence
+
+- Auth policy: pending implementation.
+- Inventory source/isolation: pending implementation.
+- Profile source/isolation: pending implementation.
+- Request intent semantics: pending implementation.
+- Cache scope: pending implementation.
+- Verification: pending.
+- Commit: pending.

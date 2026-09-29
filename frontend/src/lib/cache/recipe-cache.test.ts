@@ -42,6 +42,40 @@ describe('recipe-cache (memory fallback)', () => {
     expect(buildRecipeCacheKey(input)).toBe(buildRecipeCacheKey(reordered));
   });
 
+  it('separates scope and hashed persisted context without serializing private values', () => {
+    const input: RecipeCacheKeyInput = {
+      mode: 'free',
+      scope: { userId: 'user-1', tenantId: 'tenant-1' },
+      requestedRecipeName: 'Sopa',
+      requestedMealType: 'Cena',
+      requestedDay: 'Lunes',
+      ingredients: ['tomate'],
+      peopleCount: 2,
+      goals: ['Comidas rápidas'],
+      identity: ['private profile identity'],
+      inventoryContextHash: 'inventory-hash-a',
+      profileContextHash: 'profile-hash-a',
+      contextVersion: 'recipe-persisted-context-v1',
+      model: 'gemini-2.0',
+      chunks: [],
+    };
+
+    const key = buildRecipeCacheKey(input);
+
+    expect(buildRecipeCacheKey({ ...input, scope: { userId: 'user-2', tenantId: 'tenant-1' } })).not.toBe(
+      key
+    );
+    expect(buildRecipeCacheKey({ ...input, scope: { userId: 'user-1', tenantId: 'tenant-2' } })).not.toBe(
+      key
+    );
+    expect(buildRecipeCacheKey({ ...input, inventoryContextHash: 'inventory-hash-b' })).not.toBe(key);
+    expect(buildRecipeCacheKey({ ...input, profileContextHash: 'profile-hash-b' })).not.toBe(key);
+    expect(buildRecipeCacheKey({ ...input, goals: ['Otro objetivo'] })).not.toBe(key);
+    expect(key).not.toContain('Comidas rápidas');
+    expect(key).not.toContain('private profile identity');
+    expect(key).not.toContain('private pantry item');
+  });
+
   it('returns cached recipe while TTL is valid and expires after TTL', async () => {
     // Stub REDIS_URL empty so memory fallback is used
     vi.stubEnv('REDIS_URL', '');
