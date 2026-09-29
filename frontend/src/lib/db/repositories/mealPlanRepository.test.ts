@@ -12,6 +12,7 @@ vi.mock('@/lib/db', () => ({
 const {
   createMealPlan,
   findLatestMealPlanByUserAndTenant,
+  findMealPlanByIdForUserAndTenant,
   MealPlanRepositoryError,
 } = await import('./mealPlanRepository');
 
@@ -113,6 +114,17 @@ describe('mealPlanRepository', () => {
       JSON.stringify(plan),
       'Lunes\nDesayuno: Avena (1 taza Avena)\nAlmuerzo: Arroz (Arroz)\nCena: Sopa (Calabaza)\n\nDía 2\nDesayuno: Avena (1 taza Avena)\nAlmuerzo: Arroz (Arroz)\nCena: Sopa (Calabaza)\n\nDía 3\nDesayuno: Avena (1 taza Avena)\nAlmuerzo: Arroz (Arroz)\nCena: Sopa (Calabaza)\n\nDía 4\nDesayuno: Avena (1 taza Avena)\nAlmuerzo: Arroz (Arroz)\nCena: Sopa (Calabaza)\n\nDía 5\nDesayuno: Avena (1 taza Avena)\nAlmuerzo: Arroz (Arroz)\nCena: Sopa (Calabaza)\n\nDía 6\nDesayuno: Avena (1 taza Avena)\nAlmuerzo: Arroz (Arroz)\nCena: Sopa (Calabaza)\n\nDomingo\nDesayuno: Avena (1 taza Avena)\nAlmuerzo: Arroz (Arroz)\nCena: Sopa (Calabaza)',
     ]);
+  });
+
+  it('looks up a plan using id, tenant and user ownership predicates', async () => {
+    const row = mealPlanRow();
+    queryMock.mockResolvedValue({ rows: [row] });
+
+    await expect(findMealPlanByIdForUserAndTenant('meal-plan-1', 'user-1', 'tenant-1')).resolves.toEqual(row);
+
+    const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
+    expect(sql).toMatch(/where id = \$1 and tenant_id = \$2 and user_id = \$3/);
+    expect(params).toEqual(['meal-plan-1', 'tenant-1', 'user-1']);
   });
 
   it('throws a controlled error when an insert returns no row', async () => {

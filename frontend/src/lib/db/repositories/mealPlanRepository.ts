@@ -61,6 +61,20 @@ export async function createMealPlan(input: CreateMealPlanInput): Promise<UserMe
   return mealPlan;
 }
 
+export async function findMealPlanByIdForUserAndTenant(
+  id: string,
+  userId: string,
+  tenantId: string
+): Promise<UserMealPlanRow | null> {
+  const result = await query<UserMealPlanRow>(
+    `select * from public.user_meal_plans
+     where id = $1 and tenant_id = $2 and user_id = $3
+     limit 1`,
+    [id, tenantId, userId]
+  );
+  return mapSingleRow(result);
+}
+
 export async function findLatestMealPlanByUserAndTenant(
   userId: string,
   tenantId: string

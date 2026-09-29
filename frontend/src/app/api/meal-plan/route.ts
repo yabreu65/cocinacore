@@ -327,8 +327,9 @@ Reglas:
       return NextResponse.json({ error: 'El proveedor IA devolvió un plan inválido.' }, { status: 502 });
     }
 
+    let persistedPlan;
     try {
-      await createMealPlan({
+      persistedPlan = await createMealPlan({
         tenantId,
         userId: user.id,
         peopleCount,
@@ -357,7 +358,7 @@ Reglas:
       period,
       dayCount: parsedPlan.plan.dayCount,
     });
-    return NextResponse.json({ content, plan: parsedPlan.plan });
+    return NextResponse.json({ id: persistedPlan.id, content, plan: parsedPlan.plan });
   } catch (error) {
     serverLogger.warn('meal_plan.failed', {
       requestId,

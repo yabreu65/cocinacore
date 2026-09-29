@@ -254,7 +254,8 @@ describe('POST /api/meal-plan', () => {
     );
 
     expect(response.status).toBe(200);
-    const responseBody = (await response.json()) as { content: string; plan: StructuredMealPlan };
+    const responseBody = (await response.json()) as { id: string; content: string; plan: StructuredMealPlan };
+    expect(responseBody.id).toBe('meal-plan-1');
     expect(responseBody.content).toEqual(expect.any(String));
     expect(responseBody.plan).toMatchObject({ period: 'week', dayCount: 7 });
     expect(responseBody.plan.days).toHaveLength(7);
