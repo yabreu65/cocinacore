@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { serverLogger } from '@/lib/serverLogger';
 import { validateRequest, MealPlanSchema, type MealPlanBody } from '@/lib/validation';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { getGeminiApiKey, getGeminiModel } from '@/lib/ai/gemini-config';
+import { getGeminiApiKey, getGeminiBaseUrl, getGeminiModel } from '@/lib/ai/gemini-config';
 import { requireUser } from '@/lib/auth/server';
 import type { AuthUser } from '@/lib/auth/types';
 import { listInventoryItemsByTenant } from '@/lib/db/repositories/inventoryRepository';
@@ -29,6 +29,75 @@ import {
 } from '@/lib/meal-planner/structured-plan';
 
 const AI_REQUEST_TIMEOUT_MS = 60_000;
+const DEFAULT_PEOPLE_COUNT = 4;
+const DEFAULT_BASE_CUISINE = 'Latinoamericana';
+
+function normalizeRestrictions(values: string[]): string[] {
+  const seen = new Set<string>();
+  const restrictions: string[] = [];
+
+  for (const value of values) {
+    const normalized = value.trim().replace(/\s+/g, ' ').slice(0, 100);
+    const key = normalized.toLocaleLowerCase();
+    if (!normalized || seen.has(key)) continue;
+
+    seen.add(key);
+    restrictions.push(normalized);
+  }
+
+  return restrictions;
+}
+
+function isMealPlanPeriod(value: unknown): value is MealPlanBody['period'] {
+  return value === 'week' || value === 'fortnight' || value === 'month';
+}
+
+function getPublicMealPlanSettings(persistedPlan: {
+  people_count: unknown;
+  period: unknown;
+  mode: unknown;
+  base_cuisine: unknown;
+  fusion_cuisines: unknown;
+  fusion_intensity: unknown;
+  restrictions: unknown;
+}) {
+  return {
+    peopleCount:
+      typeof persistedPlan.people_count === 'number' &&
+      Number.isInteger(persistedPlan.people_count) &&
+      persistedPlan.people_count >= 1 &&
+      persistedPlan.people_count <= 100
+        ? persistedPlan.people_count
+        : DEFAULT_PEOPLE_COUNT,
+    period: isMealPlanPeriod(persistedPlan.period) ? persistedPlan.period : 'week',
+    mode:
+      persistedPlan.mode === 'inventory_to_menu' ||
+      persistedPlan.mode === 'menu_to_shopping' ||
+      persistedPlan.mode === 'balanced_ai'
+        ? persistedPlan.mode
+        : 'inventory_to_menu',
+    baseCuisine:
+      typeof persistedPlan.base_cuisine === 'string' && persistedPlan.base_cuisine.trim()
+        ? persistedPlan.base_cuisine.trim().slice(0, 100)
+        : DEFAULT_BASE_CUISINE,
+    fusionCuisines: Array.isArray(persistedPlan.fusion_cuisines)
+      ? persistedPlan.fusion_cuisines
+          .filter((value): value is string => typeof value === 'string')
+          .map((value) => value.trim().slice(0, 100))
+          .filter(Boolean)
+          .slice(0, 2)
+      : [],
+    fusionIntensity:
+      persistedPlan.fusion_intensity === 'sutil' ||
+      persistedPlan.fusion_intensity === 'media' ||
+      persistedPlan.fusion_intensity === 'alta'
+        ? persistedPlan.fusion_intensity
+        : 'media',
+    restrictions: Array.isArray(persistedPlan.restrictions)
+      ? normalizeRestrictions(persistedPlan.restrictions.filter((value): value is string => typeof value === 'string'))
+      : [],
+  };
+}
 
 export async function POST(request: NextRequest) {
   const startedAt = Date.now();
@@ -50,6 +119,7 @@ export async function POST(request: NextRequest) {
   const tenantId = user.tenant.tenantId;
 
   const apiKey = getGeminiApiKey();
+  const baseUrl = getGeminiBaseUrl();
   const model = getGeminiModel();
 
   const validation = await validateRequest(request, MealPlanSchema.passthrough());
@@ -94,6 +164,7 @@ export async function POST(request: NextRequest) {
     .filter(Boolean)
     .slice(0, 2);
   const fusionIntensity = body.fusionIntensity ?? 'media';
+  const restrictions = normalizeRestrictions(body.restrictions);
   const [inventoryItems, persistedProfile, persistedProfileTerms] = await Promise.all([
     listInventoryItemsByTenant(tenantId),
     findCulinaryProfileByUserId(user.id),
@@ -110,12 +181,16 @@ export async function POST(request: NextRequest) {
     Number.isFinite(body.peopleCount) &&
     body.peopleCount > 0
       ? Math.floor(body.peopleCount)
-      : 4;
+      : DEFAULT_PEOPLE_COUNT;
   const chunks = (body.chunks ?? [])
     .map((value) => value.trim())
     .filter(Boolean)
     .slice(0, 10);
 
+  const restrictionContext =
+    restrictions.length > 0
+      ? restrictions.map((restriction) => `- ${restriction}`).join('\n')
+      : 'Sin restricciones explícitas para esta solicitud.';
   const periodLabel = getMealPlanPeriodLabel(period);
   const cuisineLabel =
     fusionCuisines.length > 0
@@ -145,6 +220,8 @@ Perfil del usuario:
 - Personas: ${peopleCount}
 Perfil culinario persistido del usuario autenticado:
 ${persistedProfileContext}
+Restricciones explícitas de esta solicitud (no reemplazan el perfil persistido):
+${restrictionContext}
 Contexto PDF:
 ${chunks.length > 0 ? chunks.join('\n---\n') : 'Sin contexto PDF.'}
 
@@ -152,7 +229,7 @@ Reglas:
 - Usa solo ingredientes disponibles en el inventario real.
 - No inventes cantidades de inventario; cuando diga "cantidad no especificada", no la supongas.
 - Si falta algo crítico, marcar como "pendiente de compra".
-- Respeta estrictamente "Evitar".
+- Respeta estrictamente "Evitar" y las restricciones explícitas de esta solicitud.
 - Integra técnicas/sabores de fusión si se especifican culturas de fusión.
 - Si intensidad es sutil: prioriza cocina base y toques menores de fusión.
 - Si intensidad es media: balancea cocina base y fusión.
@@ -168,6 +245,8 @@ Perfil del usuario:
 - Personas: ${peopleCount}
 Perfil culinario persistido del usuario autenticado:
 ${persistedProfileContext}
+Restricciones explícitas de esta solicitud (no reemplazan el perfil persistido):
+${restrictionContext}
 Contexto PDF:
 ${chunks.length > 0 ? chunks.join('\n---\n') : 'Sin contexto PDF.'}
 
@@ -175,7 +254,7 @@ Reglas:
 - ${structuredOutputInstructions}
 - Usa primero el inventario real antes de proponer comidas y no supongas cantidades no especificadas.
 - No incluyas una lista de compras: esta respuesta solo contiene el menú estructurado.
-- Respeta estrictamente "Evitar".
+- Respeta estrictamente "Evitar" y las restricciones explícitas de esta solicitud.
 - Integra técnicas/sabores de fusión si se especifican culturas de fusión.
 - Si intensidad es sutil: prioriza cocina base y toques menores de fusión.
 - Si intensidad es media: balancea cocina base y fusión.
@@ -196,7 +275,7 @@ Reglas:
     let response: Response;
     try {
       response = await fetchWithTimeout(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+        `${baseUrl}/models/${model}:generateContent?key=${apiKey}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -258,6 +337,8 @@ Reglas:
         baseCuisine,
         fusionCuisines,
         fusionIntensity,
+        restrictions,
+        inventorySnapshot: { inventoryLines },
         structuredPlan: parsedPlan.plan,
       });
     } catch {
@@ -319,6 +400,16 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ plan: null, content: null });
   }
 
+  const settings = getPublicMealPlanSettings(persistedPlan);
+  if (!isMealPlanPeriod(persistedPlan.period)) {
+    serverLogger.warn('meal_plan.invalid_persisted_plan', {
+      requestId,
+      mealPlanId: persistedPlan.id,
+      reason: 'period_invalid',
+    });
+    return NextResponse.json({ error: 'No se pudo recuperar el menú guardado.' }, { status: 500 });
+  }
+
   const parsedPlan = parseStructuredMealPlanValue(persistedPlan.calendar_payload, persistedPlan.period);
   if (!parsedPlan.success) {
     serverLogger.warn('meal_plan.invalid_persisted_plan', {
@@ -335,5 +426,6 @@ export async function GET(request: NextRequest) {
     content: renderStructuredMealPlan(parsedPlan.plan),
     id: persistedPlan.id,
     createdAt: persistedPlan.created_at,
+    ...settings,
   });
 }

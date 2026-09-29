@@ -44,6 +44,7 @@ vi.mock('@/lib/rate-limit', () => ({
 
 vi.mock('@/lib/ai/gemini-config', () => ({
   getGeminiApiKey: () => 'gemini-test-key',
+  getGeminiBaseUrl: () => 'https://generativelanguage.googleapis.com/v1beta',
   getGeminiModel: () => 'gemini-test-model',
 }));
 
@@ -316,8 +317,32 @@ describe('POST /api/meal-plan', () => {
       baseCuisine: 'Italiana',
       fusionCuisines: ['Japonesa'],
       fusionIntensity: 'alta',
+      restrictions: [],
+      inventorySnapshot: { inventoryLines: ['- arroz real: 2 kg'] },
       structuredPlan: canonicalStructuredPlan(),
     });
+  });
+
+  it('keeps explicit request restrictions separate from persisted profile avoidance and snapshots trusted inventory', async () => {
+    findCulinaryProfileByUserIdMock.mockResolvedValue(profile());
+    findCulinaryProfileTermsByUserIdMock.mockResolvedValue([profileTerm('avoid', 'Maní')]);
+
+    const response = await POST(
+      request({ mode: 'balanced_ai', restrictions: [' Gluten ', 'gluten', 'Lácteos'] }) as unknown as NextRequest
+    );
+
+    expect(response.status).toBe(200);
+    expect(geminiPrompt()).toContain('Evitar: Maní');
+    expect(geminiPrompt()).toContain(
+      'Restricciones explícitas de esta solicitud (no reemplazan el perfil persistido):\n- Gluten\n- Lácteos'
+    );
+    expect(createMealPlanMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        restrictions: ['Gluten', 'Lácteos'],
+        inventorySnapshot: { inventoryLines: ['- arroz real: 2 kg'] },
+        structuredPlan: canonicalStructuredPlan(),
+      })
+    );
   });
 
   it('excludes another user profile and terms while allowing a missing profile to generate normally', async () => {
@@ -349,6 +374,20 @@ describe('POST /api/meal-plan', () => {
     );
     expect(geminiPrompt()).toContain('Sin perfil culinario configurado.');
     expect(geminiPrompt()).not.toContain('ingrediente-controlado-por-el-navegador');
+  });
+
+  it('rejects over-bounded explicit restrictions before calling Gemini or persistence', async () => {
+    const response = await POST(
+      request({ restrictions: Array.from({ length: 21 }, (_, index) => `restriction-${index}`) }) as unknown as NextRequest
+    );
+
+    expect(response.status).toBe(400);
+    const tooLongResponse = await POST(
+      request({ restrictions: ['x'.repeat(101)] }) as unknown as NextRequest
+    );
+    expect(tooLongResponse.status).toBe(400);
+    expect(createMealPlanMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('does not persist malformed Gemini output', async () => {
@@ -483,6 +522,40 @@ describe('GET /api/meal-plan', () => {
         'Domingo\nDesayuno: Avena con fruta (1 taza Avena)\nAlmuerzo: Arroz con verduras — Plato principal (Arroz real)\nCena: Sopa liviana (Calabaza)',
       id: 'meal-plan-1',
       createdAt: '2026-01-01T00:00:00.000Z',
+      peopleCount: 4,
+      period: 'week',
+      mode: 'inventory_to_menu',
+      baseCuisine: 'Latinoamericana',
+      fusionCuisines: [],
+      fusionIntensity: 'media',
+      restrictions: [],
+    });
+  });
+
+  it('uses safe defaults for missing legacy metadata without exposing the database row', async () => {
+    const storedPlan = canonicalStructuredPlan();
+    findLatestMealPlanByUserAndTenantMock.mockResolvedValue(
+      mealPlanRow({
+        calendar_payload: storedPlan,
+        people_count: 0,
+        base_cuisine: '',
+        fusion_cuisines: null as unknown as string[],
+        fusion_intensity: null as unknown as 'media',
+        restrictions: null as unknown as string[],
+      })
+    );
+
+    const response = await GET(getRequest() as unknown as NextRequest);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      peopleCount: 4,
+      period: 'week',
+      mode: 'inventory_to_menu',
+      baseCuisine: 'Latinoamericana',
+      fusionCuisines: [],
+      fusionIntensity: 'media',
+      restrictions: [],
     });
   });
 

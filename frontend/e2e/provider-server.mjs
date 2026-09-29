@@ -5,6 +5,36 @@ const port = Number(process.env.E2E_PROVIDER_PORT ?? 4319);
 const embedding = Array.from({ length: 1536 }, () => 1);
 const requests = [];
 
+function structuredMealPlanText() {
+  return JSON.stringify({
+    period: 'week',
+    dayCount: 7,
+    days: Array.from({ length: 7 }, (_, index) => ({
+      dayIndex: index + 1,
+      meals: [
+        {
+          mealType: 'breakfast',
+          title: 'Avena conectada',
+          description: null,
+          ingredients: [{ name: 'avena', quantity: 1, unit: 'taza' }],
+        },
+        {
+          mealType: 'lunch',
+          title: 'Arroz conectado',
+          description: 'Menú determinista',
+          ingredients: [{ name: 'arroz', quantity: 1, unit: 'taza' }],
+        },
+        {
+          mealType: 'dinner',
+          title: 'Pollo conectado',
+          description: null,
+          ingredients: [{ name: 'pollo', quantity: 200, unit: 'g' }],
+        },
+      ],
+    })),
+  });
+}
+
 const recipeText = `[TITULO]
 
 Pollo conectado determinista
@@ -86,8 +116,15 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (url.pathname.endsWith(':generateContent')) {
+      const responseJsonSchema = body.generationConfig?.responseJsonSchema;
       return json(response, 200, {
-        candidates: [{ content: { parts: [{ text: recipeText }] } }],
+        candidates: [
+          {
+            content: {
+              parts: [{ text: responseJsonSchema ? structuredMealPlanText() : recipeText }],
+            },
+          },
+        ],
       });
     }
 

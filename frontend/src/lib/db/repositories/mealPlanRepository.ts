@@ -5,7 +5,10 @@ import type {
   MealPlanPeriod,
   UserMealPlanRow,
 } from '@/lib/db/types';
-import type { StructuredMealPlan } from '@/lib/meal-planner/structured-plan';
+import {
+  renderStructuredMealPlan,
+  type StructuredMealPlan,
+} from '@/lib/meal-planner/structured-plan';
 
 export class MealPlanRepositoryError extends Error {
   constructor(message: string) {
@@ -23,6 +26,8 @@ export interface CreateMealPlanInput {
   baseCuisine: string;
   fusionCuisines: string[];
   fusionIntensity: FusionIntensity;
+  restrictions: string[];
+  inventorySnapshot: { inventoryLines: string[] };
   structuredPlan: StructuredMealPlan;
 }
 
@@ -30,8 +35,8 @@ export async function createMealPlan(input: CreateMealPlanInput): Promise<UserMe
   const result = await query<UserMealPlanRow>(
     `insert into public.user_meal_plans
      (tenant_id, user_id, people_count, period, mode, base_cuisine, fusion_cuisines,
-      fusion_intensity, calendar_payload)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      fusion_intensity, restrictions, inventory_snapshot, calendar_payload, ai_content)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
      returning *`,
     [
       input.tenantId,
@@ -42,7 +47,10 @@ export async function createMealPlan(input: CreateMealPlanInput): Promise<UserMe
       input.baseCuisine,
       input.fusionCuisines,
       input.fusionIntensity,
+      input.restrictions,
+      JSON.stringify(input.inventorySnapshot),
       JSON.stringify(input.structuredPlan),
+      renderStructuredMealPlan(input.structuredPlan),
     ]
   );
 

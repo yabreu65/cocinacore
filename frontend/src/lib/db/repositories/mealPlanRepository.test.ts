@@ -86,6 +86,8 @@ describe('mealPlanRepository', () => {
       baseCuisine: 'Latinoamericana',
       fusionCuisines: ['Japonesa'],
       fusionIntensity: 'media',
+      restrictions: ['Gluten'],
+      inventorySnapshot: { inventoryLines: ['- arroz: 1 taza'] },
       structuredPlan: plan,
     });
 
@@ -93,8 +95,10 @@ describe('mealPlanRepository', () => {
     expect(queryMock).toHaveBeenCalledTimes(1);
     const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain('insert into public.user_meal_plans');
+    expect(sql).toContain('restrictions');
+    expect(sql).toContain('inventory_snapshot');
     expect(sql).toContain('calendar_payload');
-    expect(sql).not.toContain('ai_content');
+    expect(sql).toContain('ai_content');
     expect(params).toEqual([
       'tenant-1',
       'user-1',
@@ -104,7 +108,10 @@ describe('mealPlanRepository', () => {
       'Latinoamericana',
       ['Japonesa'],
       'media',
+      ['Gluten'],
+      JSON.stringify({ inventoryLines: ['- arroz: 1 taza'] }),
       JSON.stringify(plan),
+      'Lunes\nDesayuno: Avena (1 taza Avena)\nAlmuerzo: Arroz (Arroz)\nCena: Sopa (Calabaza)\n\nDía 2\nDesayuno: Avena (1 taza Avena)\nAlmuerzo: Arroz (Arroz)\nCena: Sopa (Calabaza)\n\nDía 3\nDesayuno: Avena (1 taza Avena)\nAlmuerzo: Arroz (Arroz)\nCena: Sopa (Calabaza)\n\nDía 4\nDesayuno: Avena (1 taza Avena)\nAlmuerzo: Arroz (Arroz)\nCena: Sopa (Calabaza)\n\nDía 5\nDesayuno: Avena (1 taza Avena)\nAlmuerzo: Arroz (Arroz)\nCena: Sopa (Calabaza)\n\nDía 6\nDesayuno: Avena (1 taza Avena)\nAlmuerzo: Arroz (Arroz)\nCena: Sopa (Calabaza)\n\nDomingo\nDesayuno: Avena (1 taza Avena)\nAlmuerzo: Arroz (Arroz)\nCena: Sopa (Calabaza)',
     ]);
   });
 
@@ -121,6 +128,8 @@ describe('mealPlanRepository', () => {
         baseCuisine: 'Latinoamericana',
         fusionCuisines: [],
         fusionIntensity: 'media',
+        restrictions: [],
+        inventorySnapshot: { inventoryLines: [] },
         structuredPlan: structuredPlan(),
       })
     ).rejects.toBeInstanceOf(MealPlanRepositoryError);

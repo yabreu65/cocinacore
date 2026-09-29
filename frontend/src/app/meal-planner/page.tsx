@@ -1,8 +1,12 @@
 'use client';
 
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { safeFetch } from '@/lib/api';
+import {
+  rehydrateMealPlanner,
+  type MealPlanPublicResponse,
+} from '@/lib/meal-planner/rehydration';
 import type { StructuredMealPlan, StructuredMealType } from '@/lib/meal-planner/structured-plan';
 
 const mealTypeLabels: Record<StructuredMealType, string> = {
@@ -16,14 +20,54 @@ export default function MealPlannerPage() {
   const [period, setPeriod] = useState<'week' | 'fortnight' | 'month'>('week');
   const [baseCuisine, setBaseCuisine] = useState('');
   const [restrictions, setRestrictions] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [generationError, setGenerationError] = useState<string | null>(null);
   const [plan, setPlan] = useState<StructuredMealPlan | null>(null);
+  const generationStartedRef = useRef(false);
+
+  useEffect(() => {
+    let active = true;
+
+    const loadLatestMealPlan = async () => {
+      try {
+        const result = await safeFetch<MealPlanPublicResponse>('/api/meal-plan', {
+          credentials: 'same-origin',
+        });
+        if (!result.ok) {
+          throw new Error(result.error ?? 'No se pudo cargar el menú guardado.');
+        }
+        if (!active || generationStartedRef.current) return;
+
+        const restored = rehydrateMealPlanner(result.data);
+        setPeopleCount(restored.peopleCount);
+        setPeriod(restored.period);
+        setBaseCuisine(restored.baseCuisine);
+        setRestrictions(restored.restrictions);
+        setPlan(restored.plan);
+      } catch (error) {
+        if (active && !generationStartedRef.current) {
+          setLoadError(
+            error instanceof Error ? error.message : 'No se pudo cargar el menú guardado.'
+          );
+        }
+      } finally {
+        if (active) setIsInitialLoading(false);
+      }
+    };
+
+    void loadLatestMealPlan();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    setLoading(true);
-    setError(null);
+    generationStartedRef.current = true;
+    setIsGenerating(true);
+    setGenerationError(null);
     setPlan(null);
 
     try {
@@ -37,7 +81,7 @@ export default function MealPlannerPage() {
           baseCuisine: baseCuisine || 'Latinoamericana',
           fusionCuisines: [],
           fusionIntensity: 'media',
-          restrictions: restrictions.split(',').map((r) => r.trim()).filter(Boolean),
+          restrictions: restrictions.split(',').map((restriction) => restriction.trim()).filter(Boolean),
           mode: 'balanced_ai',
         }),
       });
@@ -46,15 +90,14 @@ export default function MealPlannerPage() {
         throw new Error(result.error ?? 'No se pudo generar el menú.');
       }
 
-      const data = result.data;
-      if (!data.plan) {
+      if (!result.data.plan) {
         throw new Error('El proveedor IA no devolvió un menú estructurado.');
       }
-      setPlan(data.plan);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Error desconocido.');
+      setPlan(result.data.plan);
+    } catch (error) {
+      setGenerationError(error instanceof Error ? error.message : 'Error desconocido.');
     } finally {
-      setLoading(false);
+      setIsGenerating(false);
     }
   };
 
@@ -71,6 +114,13 @@ export default function MealPlannerPage() {
           </Link>
         </div>
 
+        {isInitialLoading ? <p className="mb-3 text-sm text-[#6B5A50]">Cargando menú guardado...</p> : null}
+        {loadError ? (
+          <p className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            No pudimos cargar el menú guardado. Podés generar uno nuevo.
+          </p>
+        ) : null}
+
         <form onSubmit={onSubmit} className="grid gap-3">
           <label className="grid gap-1 text-sm font-semibold text-[#6B5A50]">
             Comensales
@@ -78,7 +128,7 @@ export default function MealPlannerPage() {
               type="number"
               min={1}
               value={peopleCount}
-              onChange={(e) => setPeopleCount(Number(e.target.value))}
+              onChange={(event) => setPeopleCount(Number(event.target.value))}
               className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 outline-none"
             />
           </label>
@@ -87,7 +137,7 @@ export default function MealPlannerPage() {
             Período
             <select
               value={period}
-              onChange={(e) => setPeriod(e.target.value as 'week' | 'fortnight' | 'month')}
+              onChange={(event) => setPeriod(event.target.value as 'week' | 'fortnight' | 'month')}
               className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 outline-none"
             >
               <option value="week">Semana</option>
@@ -100,7 +150,7 @@ export default function MealPlannerPage() {
             Cocina base
             <input
               value={baseCuisine}
-              onChange={(e) => setBaseCuisine(e.target.value)}
+              onChange={(event) => setBaseCuisine(event.target.value)}
               placeholder="Latinoamericana"
               className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 outline-none"
             />
@@ -110,23 +160,23 @@ export default function MealPlannerPage() {
             Restricciones (separadas por comas)
             <input
               value={restrictions}
-              onChange={(e) => setRestrictions(e.target.value)}
+              onChange={(event) => setRestrictions(event.target.value)}
               className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 outline-none"
             />
           </label>
 
           <button
             type="submit"
-            disabled={loading}
+            disabled={isGenerating}
             className="h-11 rounded-xl bg-[#C56A1A] px-4 font-semibold text-white disabled:opacity-60"
           >
-            {loading ? 'Generando...' : 'Generar menú'}
+            {isGenerating ? 'Generando...' : 'Generar menú'}
           </button>
         </form>
 
-        {error ? (
+        {generationError ? (
           <p className="mt-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-            {error}
+            {generationError}
           </p>
         ) : null}
 

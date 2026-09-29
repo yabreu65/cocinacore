@@ -41,6 +41,23 @@ export interface ConnectedRecipeSeed {
   originalProfile: ProfileSnapshot | null;
   originalProfileTerms: ProfileTermSnapshot[];
   originalHistoryIds: string[];
+  originalMealPlanIds: string[];
+}
+
+export interface E2EMealPlanRow {
+  id: string;
+  tenant_id: string;
+  user_id: string;
+  people_count: number;
+  period: string;
+  mode: string;
+  base_cuisine: string;
+  fusion_cuisines: string[];
+  fusion_intensity: string;
+  restrictions: string[];
+  inventory_snapshot: { inventoryLines?: string[] };
+  calendar_payload: { period?: string; dayCount?: number; days?: unknown[] };
+  ai_content: string | null;
 }
 
 export interface E2ERecipeHistoryRow {
@@ -125,7 +142,7 @@ export async function seedConnectedRecipeData({
   const tenantBBookTitle = `E2E Tenant B Secret ${safeRunId}`;
   const tenantBSecretMarker = `TENANT_B_SECRET_RECIPE_MARKER_${safeRunId}`;
 
-  const [profileResult, profileTermsResult, historyResult] = await Promise.all([
+  const [profileResult, profileTermsResult, historyResult, mealPlanResult] = await Promise.all([
     db.query<ProfileSnapshot>(
       'select tenant_id as "tenantId", level from public.user_culinary_profiles where user_id = $1',
       [identity.userId]
@@ -137,6 +154,10 @@ export async function seedConnectedRecipeData({
     ),
     db.query<{ id: string }>(
       'select id from public.recipe_ai_history where user_id = $1 and tenant_id = $2',
+      [identity.userId, identity.tenantId]
+    ),
+    db.query<{ id: string }>(
+      'select id from public.user_meal_plans where user_id = $1 and tenant_id = $2',
       [identity.userId, identity.tenantId]
     ),
   ]);
@@ -198,6 +219,7 @@ export async function seedConnectedRecipeData({
     originalProfile: profileResult.rows[0] ?? null,
     originalProfileTerms: profileTermsResult.rows,
     originalHistoryIds: historyResult.rows.map((row) => row.id),
+    originalMealPlanIds: mealPlanResult.rows.map((row) => row.id),
   };
 
   if (!includeRagChunks) return seed;
@@ -283,6 +305,11 @@ export async function cleanupConnectedRecipeData(seed: ConnectedRecipeSeed): Pro
      where user_id = $1 and tenant_id = $2 and not (id = any($3::uuid[]))`,
     [seed.identity.userId, seed.identity.tenantId, seed.originalHistoryIds]
   );
+  await db.query(
+    `delete from public.user_meal_plans
+     where user_id = $1 and tenant_id = $2 and not (id = any($3::uuid[]))`,
+    [seed.identity.userId, seed.identity.tenantId, seed.originalMealPlanIds]
+  );
   await db.query('delete from public.user_culinary_profile_terms where user_id = $1', [
     seed.identity.userId,
   ]);
@@ -320,6 +347,20 @@ export async function latestRecipeHistory(
      from public.recipe_ai_history
      where user_id = $1 and tenant_id = $2
      order by created_at desc limit 1`,
+    [identity.userId, identity.tenantId]
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function latestMealPlan(
+  identity: AuthenticatedE2EIdentity
+): Promise<E2EMealPlanRow | null> {
+  const result = await getPool().query<E2EMealPlanRow>(
+    `select id, tenant_id, user_id, people_count, period, mode, base_cuisine, fusion_cuisines,
+            fusion_intensity, restrictions, inventory_snapshot, calendar_payload, ai_content
+     from public.user_meal_plans
+     where user_id = $1 and tenant_id = $2
+     order by created_at desc, id desc limit 1`,
     [identity.userId, identity.tenantId]
   );
   return result.rows[0] ?? null;

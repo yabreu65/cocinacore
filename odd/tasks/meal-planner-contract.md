@@ -273,12 +273,40 @@
 - **Implementation commit:** `c1864e6` (`test(recipe-search): validate rag flow end to end`).
 - **Evidence commit:** this documentation commit.
 
-### M1.3.5 Evidence
+## META 1 / M1.4.1 — Persisted Meal Planner Rehydration
 
-- Primary flow: authenticated UI → real recipe route → persisted inventory/profile → DB-backed global + tenant-A RAG retrieval → deterministic Gemini boundary → authoritative citation cards → authenticated Recipe History.
-- Persisted context: Provider prompt assertions include tomato, rice, chicken, persisted `family`, persisted `peanut`, and `Intermedio`; browser restriction input is `none`, proving persisted profile precedence. Requested `chicken` remains explicit request focus while inventory remains separate.
-- Tenant isolation: Prompt/UI/history assertions include global and tenant-A sources and exclude tenant-B title and `TENANT_B_SECRET_RECIPE_MARKER`.
-- History assertions: Latest row is user+tenant scoped; `recipe_payload.mode` is `rag`, `ragContextUsed` is true, authorized sources persist, tenant-B source is absent, and structured ingredients persist. Cache replay creates a second row while provider generation count remains one.
-- Secondary flows: Authenticated free mode creates history without citation heading; no-context RAG succeeds with `ragContextUsed: false`, empty sources, and no fake citation cards.
-- Regression compatibility: Updated stale E2E stub shape for the current structured meal-plan contract and widened the recipe page object to the current accessible ingredient label. Full Playwright now passes 12 executed tests; 2 owner-health tests remain intentionally skipped without explicit owner credentials.
-- Intermediate failures resolved: First connected run asserted English `chicken` against the provider's Spanish canonical `pollo`; the assertion was corrected. Initial full E2E exposed the two stale test fixtures/selectors above; no production behavior defect was found. An exploratory `npm test -- --runInBand` command was invalid for Vitest; the required `npm test` command passed 313/313.
+- **Status:** completed
+- **Base SHA:** `0595f53447fd2fbb615c30a090525093754808e6`
+- **Objective:** Complete Meal Planner persistence as a user-visible feature: save validated plans plus bounded generation context, retrieve the latest authenticated user/tenant plan, and rehydrate planner state after navigation or reload.
+- **Scope:** Complete existing `user_meal_plans` write columns, integrate explicit request restrictions without overwriting persisted profile avoidance, return a safe typed GET payload, rehydrate the current UI, and add focused/connected tests.
+- **Storage decision:** No migration expected. Reuse existing `restrictions`, `inventory_snapshot`, `calendar_payload`, and `ai_content` columns. `calendar_payload` remains the only canonical structured plan; `ai_content` derives from `renderStructuredMealPlan(validatedPlan)`.
+- **Inventory decision:** Persist bounded normalized inventory context lines already used by the authenticated prompt, not arbitrary browser data or raw inventory rows.
+- **Profile/restriction decision:** Persist request restrictions separately from persisted profile `avoid`; both are included in prompt semantics and request restrictions are normalized/bounded before persistence.
+- **Non-goals:** Shopping persistence, inventory decrement, cooking confirmation, ratings, recipe favorites, Home OS, voice, production, Contabo, deployment, migrations unless disproven, push, PR, or SDD/OpenSpec artifacts.
+
+### Tasks
+
+1. **Explore Meal Planner persistence architecture** — completed. Existing schema already contains all required columns; POST ignored request restrictions and context columns, GET returned only plan/content/id/timestamp, and UI never loaded GET.
+2. **Track M1.4.1 ODD work** — completed. Recorded no-migration, canonical-plan, bounded-context, request-restriction, GET, UI, and E2E decisions before implementation.
+3. **Complete canonical persistence and GET contract** — completed. Persisted normalized restrictions, bounded inventory snapshot, canonical plan, derived compatibility content, and typed settings under authenticated user+tenant scope.
+4. **Implement UI rehydration and request restrictions** — completed. Loaded latest plan safely, restored settings, kept generation usable after load failure, and prevented stale GET from overwriting a newer generation.
+5. **Add focused and connected E2E coverage** — completed. Added route/repository/rehydration tests plus connected real-auth/database/provider E2E coverage for persistence, reload rehydration, and zero provider calls on reload.
+6. **Run verification, review, and commit** — completed. Focused/full gates passed; native review approved and acknowledged with no blocking findings; local Conventional Commit recorded below.
+- **Implementation commit:** pending until this work unit is committed.
+
+### M1.4.1 Implementation Evidence
+
+- POST normalizes explicit request restrictions (trimmed, case-insensitive deduplicated, bounded by the request schema) and keeps them separate from the authenticated persisted profile `avoid` context in both prompt branches.
+- The repository now persists the canonical validated plan, a typed `{ inventoryLines }` snapshot from the authenticated tenant context, restrictions, and `ai_content` rendered only from the canonical plan. Provider text is never persisted.
+- GET revalidates the canonical payload and returns only the typed public plan/settings shape with legacy-safe defaults; it never spreads a database row or returns tenant/user/provider fields.
+- The Meal Planner loads the latest plan on mount, rehydrates editable settings, preserves Generate after a controlled load failure, and guards against a stale GET replacing an in-flight/new generation.
+- The deterministic Gemini fixture recognizes structured JSON requests, while retaining recipe responses. Connected fixture cleanup snapshots/restores meal-plan rows alongside recipe data.
+
+### M1.4.1 Verification Evidence
+
+- Focused tests: route, repository, and rehydration tests passed 24/24.
+- Connected E2E: real authenticated UI + PostgreSQL fixture + deterministic Gemini provider passed; generated plan persisted settings/restrictions/inventory snapshot/canonical payload/derived content, reload restored state, and provider generation count remained zero on reload.
+- Full E2E: 13 executed tests passed; 2 owner-health tests skipped because explicit owner credentials were absent.
+- Full Vitest: 318/318 passed. TypeScript, lint, build, and `git diff --check` passed.
+- Provider strategy: Existing local Gemini-compatible fixture, routed through the existing `GEMINI_BASE_URL` seam; no Meal Planner API route mocks in connected E2E.
+- Intermediate failures: None in M1.4.1 authorized checks.

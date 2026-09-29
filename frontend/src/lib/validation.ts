@@ -37,6 +37,8 @@ export const MealPlanSchema = z.object({
   baseCuisine: z.string().max(100).optional(),
   fusionCuisines: z.array(z.string().max(100)).max(2).optional(),
   fusionIntensity: z.enum(['sutil', 'media', 'alta']).optional(),
+  /** Explicit one-off generation intent; persisted profile preferences remain server-owned. */
+  restrictions: z.array(z.string().max(100)).max(20).optional().default([]),
   inventory: z.array(z.string().max(200)).max(120).optional(),
   peopleCount: z.number().int().min(1).max(100).optional().default(4),
   chunks: z.array(z.string().max(2000)).max(10).optional(),
