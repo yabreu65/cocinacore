@@ -15,6 +15,14 @@ test.describe('Connected shopping list API', () => {
 
   test('persists, updates, and deletes an explicitly created item', async ({ page }, testInfo) => {
     await injectAuth(page);
+    const profileResponse = await page.request.get('/api/profile');
+    expect(profileResponse.ok()).toBeTruthy();
+    const profile = (await profileResponse.json()) as {
+      user: { id: string; tenant: { tenantId: string } | null };
+    };
+    const { id: userId, tenant } = profile.user;
+    const tenantId = tenant?.tenantId;
+    if (!tenantId) throw new Error('Authenticated E2E identity is missing a tenant.');
     const ingredientName = `E2E shopping item ${Date.now()}-${testInfo.workerIndex}`;
     let itemId: string | null = null;
 
@@ -52,17 +60,18 @@ test.describe('Connected shopping list API', () => {
         status: string;
       }>(
         `select id, tenant_id, user_id, ingredient_name, status
-         from public.shopping_list_items where id = $1`,
-        [itemId]
+         from public.shopping_list_items
+         where id = $1 and tenant_id = $2 and user_id = $3`,
+        [itemId, tenantId, userId]
       );
       expect(stored.rows).toHaveLength(1);
       expect(stored.rows[0]).toMatchObject({
         id: itemId,
+        tenant_id: tenantId,
+        user_id: userId,
         ingredient_name: ingredientName,
         status: 'pending',
       });
-      expect(stored.rows[0]?.tenant_id).toBeTruthy();
-      expect(stored.rows[0]?.user_id).toBeTruthy();
 
       const listedResponse = await page.request.get('/api/shopping-list?status=pending');
       expect(listedResponse.ok()).toBeTruthy();
@@ -83,8 +92,9 @@ test.describe('Connected shopping list API', () => {
       expect(updatedResponse.item.status).toBe('purchased');
 
       const updated = await database.query<{ status: string }>(
-        'select status from public.shopping_list_items where id = $1',
-        [itemId]
+        `select status from public.shopping_list_items
+         where id = $1 and tenant_id = $2 and user_id = $3`,
+        [itemId, tenantId, userId]
       );
       expect(updated.rows[0]?.status).toBe('purchased');
 
@@ -92,14 +102,19 @@ test.describe('Connected shopping list API', () => {
       expect(deleteResponse.ok()).toBeTruthy();
       expect(await deleteResponse.json()).toEqual({ ok: true });
 
-      const deleted = await database.query('select id from public.shopping_list_items where id = $1', [
-        itemId,
-      ]);
+      const deleted = await database.query(
+        `select id from public.shopping_list_items
+         where id = $1 and tenant_id = $2 and user_id = $3`,
+        [itemId, tenantId, userId]
+      );
       expect(deleted.rows).toHaveLength(0);
       itemId = null;
     } finally {
       if (itemId) {
-        await database.query('delete from public.shopping_list_items where id = $1', [itemId]);
+        await database.query(
+          'delete from public.shopping_list_items where id = $1 and tenant_id = $2 and user_id = $3',
+          [itemId, tenantId, userId]
+        );
       }
     }
   });

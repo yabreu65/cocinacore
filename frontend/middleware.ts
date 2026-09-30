@@ -21,6 +21,7 @@ const PROTECTED_PREFIXES = [
   '/dashboard',
   '/library',
   '/meal-planner',
+  '/shopping-list',
   '/premium',
   '/profile',
   '/recipes',
@@ -32,13 +33,18 @@ const PUBLIC_PATHS = new Set(['/', '/login', '/signup', '/invite', '/mfa']);
 /** Public path prefixes — any path starting with one of these is allowed. */
 const PUBLIC_PREFIXES = ['/api/health', '/_next', '/favicon', '/api/auth/'];
 
+function matchesPathPrefix(pathname: string, prefix: string): boolean {
+  if (prefix.endsWith('/')) return pathname.startsWith(prefix);
+  return pathname === prefix || pathname.startsWith(`${prefix}/`);
+}
+
 function isProtectedRoute(pathname: string): boolean {
-  return PROTECTED_PREFIXES.some((prefix) => pathname.startsWith(prefix));
+  return PROTECTED_PREFIXES.some((prefix) => matchesPathPrefix(pathname, prefix));
 }
 
 function isPublicPath(pathname: string): boolean {
   if (PUBLIC_PATHS.has(pathname)) return true;
-  return PUBLIC_PREFIXES.some((prefix) => pathname.startsWith(prefix));
+  return PUBLIC_PREFIXES.some((prefix) => matchesPathPrefix(pathname, prefix));
 }
 
 function isApiRoute(pathname: string): boolean {

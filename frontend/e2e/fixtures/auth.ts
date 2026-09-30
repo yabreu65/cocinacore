@@ -12,6 +12,10 @@ interface SignupPayload extends LoginPayload {
   termsAccepted: true;
 }
 
+interface AuthOptions {
+  allowSignup?: boolean;
+}
+
 const TEST_USER_ID = '00000000-0000-0000-0000-000000000001';
 const RAW_E2E_EMAIL = process.env.E2E_USER_EMAIL;
 const RAW_E2E_PASSWORD = process.env.E2E_USER_PASSWORD;
@@ -23,10 +27,14 @@ const OWNER_EMAIL = RAW_E2E_OWNER_EMAIL ?? RAW_E2E_EMAIL;
 const OWNER_PASSWORD = RAW_E2E_OWNER_PASSWORD ?? RAW_E2E_PASSWORD;
 const TEST_FULL_NAME = process.env.E2E_USER_FULL_NAME ?? 'E2E Owner';
 let cachedAuthCookies: Cookie[] | null = null;
+let cachedAuthCookiesFromSignup: boolean | null = null;
 let cachedOwnerAuthCookies: Cookie[] | null = null;
 
-export function hasExplicitE2ECredentials(): boolean {
-  return Boolean(RAW_E2E_EMAIL && RAW_E2E_PASSWORD);
+export function hasExplicitE2ECredentials(
+  email: string | undefined,
+  password: string | undefined
+): boolean {
+  return email !== undefined || password !== undefined;
 }
 
 export function hasExplicitOwnerCredentials(): boolean {
@@ -67,19 +75,30 @@ async function signup(page: Page) {
  */
 export async function injectAuth(
   page: Page,
-  userId: string = TEST_USER_ID
+  userId: string = TEST_USER_ID,
+  options: AuthOptions = {}
 ): Promise<void> {
+  const allowSignup =
+    options.allowSignup ?? !hasExplicitE2ECredentials(RAW_E2E_EMAIL, RAW_E2E_PASSWORD);
+
   if (cachedAuthCookies) {
-    await page.context().addCookies(cachedAuthCookies);
-    return;
+    if (allowSignup || cachedAuthCookiesFromSignup !== true) {
+      await page.context().addCookies(cachedAuthCookies);
+      return;
+    }
+
+    cachedAuthCookies = null;
+    cachedAuthCookiesFromSignup = null;
   }
 
   let response = await login(page);
+  let authenticatedBySignup = false;
 
-  if (!response.ok()) {
+  if (!response.ok() && allowSignup) {
     const signupResponse = await signup(page);
     if (signupResponse.ok()) {
       response = signupResponse;
+      authenticatedBySignup = true;
     }
   }
 
@@ -90,6 +109,7 @@ export async function injectAuth(
   }
 
   cachedAuthCookies = await page.context().cookies();
+  cachedAuthCookiesFromSignup = authenticatedBySignup;
 }
 
 export async function injectOwnerAuth(page: Page): Promise<void> {
@@ -118,6 +138,7 @@ export async function injectOwnerAuth(page: Page): Promise<void> {
  */
 export async function clearAuth(page: Page): Promise<void> {
   cachedAuthCookies = null;
+  cachedAuthCookiesFromSignup = null;
   cachedOwnerAuthCookies = null;
   await page.context().clearCookies();
 }

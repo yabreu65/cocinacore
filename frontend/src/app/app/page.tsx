@@ -12,6 +12,7 @@ import {
   User,
   Users,
   CreditCard,
+  ShoppingCart,
 } from 'lucide-react';
 import { humanCopy } from '@/lib/copy';
 import { safeFetch } from '@/lib/api';
@@ -46,6 +47,7 @@ const sidebarItems = [
   { label: 'Inicio', icon: LayoutGrid, active: true, href: '/app' },
   { label: humanCopy.assistantRecipesNav, icon: Sparkles, href: '/recipes/search' },
   { label: 'Planificador', icon: CalendarDays, href: '/meal-planner' },
+  { label: 'Compras', icon: ShoppingCart, href: '/shopping-list' },
   { label: 'Inventario', icon: Package, href: '/recipes/inventory' },
   { label: 'Biblioteca', icon: Library, href: '/library' },
   { label: 'Tablero Premium', icon: Crown, href: '/app/premium' },
