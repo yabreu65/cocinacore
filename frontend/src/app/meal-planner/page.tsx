@@ -11,6 +11,12 @@ import {
 } from '@/lib/meal-planner/rehydration';
 import type { StructuredMealPlan, StructuredMealType } from '@/lib/meal-planner/structured-plan';
 import { normalizeInventoryName } from '@/lib/inventory/normalize-inventory';
+import {
+  mealConsumptionKey,
+  type MealConsumptionPayload,
+  type MealConsumptionRecord,
+} from '@/lib/meal-planner/consumption';
+import { shouldApplyConsumptionResponse, withConsumptionRecord } from './consumptionState';
 
 type ShoppingSuggestion = {
   normalizedName: string;
@@ -53,9 +59,15 @@ export default function MealPlannerPage() {
   const [isConfirming, setIsConfirming] = useState(false);
   const [shoppingMessage, setShoppingMessage] = useState<string | null>(null);
   const [shoppingError, setShoppingError] = useState<string | null>(null);
+  const [consumptions, setConsumptions] = useState<MealConsumptionPayload>({});
+  const [isLoadingConsumptions, setIsLoadingConsumptions] = useState(false);
+  const [consumingMealKeys, setConsumingMealKeys] = useState<Set<string>>(new Set());
+  const [consumptionMessage, setConsumptionMessage] = useState<string | null>(null);
+  const [consumptionError, setConsumptionError] = useState<string | null>(null);
   const generationStartedRef = useRef(false);
   const activePlanIdRef = useRef<string | null>(null);
   const suggestionRequestVersionRef = useRef(0);
+  const consumptionRequestVersionRef = useRef(0);
   const componentActiveRef = useRef(true);
   const userEditedRef = useRef(false);
 
@@ -70,30 +82,75 @@ export default function MealPlannerPage() {
         { credentials: 'same-origin' }
       );
       if (!result.ok) throw new Error(result.error ?? 'No se pudieron cargar los faltantes.');
-      if (!shouldApplyMealPlannerSuggestions({
-        componentActive: componentActiveRef.current,
-        requestVersion,
-        latestRequestVersion: suggestionRequestVersionRef.current,
-        activePlanId: activePlanIdRef.current,
-        mealPlanId,
-      })) return;
+      if (
+        !shouldApplyMealPlannerSuggestions({
+          componentActive: componentActiveRef.current,
+          requestVersion,
+          latestRequestVersion: suggestionRequestVersionRef.current,
+          activePlanId: activePlanIdRef.current,
+          mealPlanId,
+        })
+      )
+        return;
       setSuggestions(result.data.items);
-      setSelectedItems(new Set(
-        result.data.items
-          .filter((item) => item.status === 'buy' && !item.alreadyPresent)
-          .map((item) => item.normalizedName)
-      ));
+      setSelectedItems(
+        new Set(
+          result.data.items
+            .filter((item) => item.status === 'buy' && !item.alreadyPresent)
+            .map((item) => item.normalizedName)
+        )
+      );
     } catch (error) {
       if (
         componentActiveRef.current &&
         suggestionRequestVersionRef.current === requestVersion &&
         activePlanIdRef.current === mealPlanId
       ) {
-        setShoppingError(error instanceof Error ? error.message : 'No se pudieron cargar los faltantes.');
+        setShoppingError(
+          error instanceof Error ? error.message : 'No se pudieron cargar los faltantes.'
+        );
       }
     } finally {
       if (componentActiveRef.current && suggestionRequestVersionRef.current === requestVersion) {
         setIsLoadingSuggestions(false);
+      }
+    }
+  }, []);
+
+  const loadConsumptions = useCallback(async (mealPlanId: string) => {
+    const requestVersion = ++consumptionRequestVersionRef.current;
+    setIsLoadingConsumptions(true);
+    setConsumptionError(null);
+    try {
+      const result = await safeFetch<{ consumptions: MealConsumptionPayload }>(
+        `/api/meal-plan/consumption?mealPlanId=${encodeURIComponent(mealPlanId)}`,
+        { credentials: 'same-origin' }
+      );
+      if (!result.ok) throw new Error(result.error ?? 'No se pudo cargar el estado de comidas.');
+      if (
+        !shouldApplyConsumptionResponse({
+          componentActive: componentActiveRef.current,
+          requestVersion,
+          latestRequestVersion: consumptionRequestVersionRef.current,
+          activePlanId: activePlanIdRef.current,
+          mealPlanId,
+        })
+      )
+        return;
+      setConsumptions(result.data.consumptions);
+    } catch (error) {
+      if (
+        componentActiveRef.current &&
+        consumptionRequestVersionRef.current === requestVersion &&
+        activePlanIdRef.current === mealPlanId
+      ) {
+        setConsumptionError(
+          error instanceof Error ? error.message : 'No se pudo cargar el estado de comidas.'
+        );
+      }
+    } finally {
+      if (componentActiveRef.current && consumptionRequestVersionRef.current === requestVersion) {
+        setIsLoadingConsumptions(false);
       }
     }
   }, []);
@@ -121,7 +178,8 @@ export default function MealPlannerPage() {
         }
 
         const restored = rehydrateMealPlanner(result.data);
-        const restoredPlanId = restored.plan && typeof result.data.id === 'string' ? result.data.id : null;
+        const restoredPlanId =
+          restored.plan && typeof result.data.id === 'string' ? result.data.id : null;
         activePlanIdRef.current = restoredPlanId;
         setActivePlanId(restoredPlanId);
         setPeopleCount(restored.peopleCount);
@@ -129,7 +187,10 @@ export default function MealPlannerPage() {
         setBaseCuisine(restored.baseCuisine);
         setRestrictions(restored.restrictions);
         setPlan(restored.plan);
-        if (restoredPlanId) void loadSuggestions(restoredPlanId);
+        if (restoredPlanId) {
+          void loadSuggestions(restoredPlanId);
+          void loadConsumptions(restoredPlanId);
+        }
       } catch (error) {
         if (active && !generationStartedRef.current) {
           setLoadError(
@@ -146,39 +207,52 @@ export default function MealPlannerPage() {
       active = false;
       componentActiveRef.current = false;
       suggestionRequestVersionRef.current += 1;
+      consumptionRequestVersionRef.current += 1;
     };
-  }, [loadSuggestions]);
+  }, [loadConsumptions, loadSuggestions]);
 
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
     generationStartedRef.current = true;
     suggestionRequestVersionRef.current += 1;
+    consumptionRequestVersionRef.current += 1;
     activePlanIdRef.current = null;
     setActivePlanId(null);
     setSuggestions([]);
     setSelectedItems(new Set());
     setShoppingMessage(null);
     setShoppingError(null);
+    setConsumptions({});
+    setIsLoadingConsumptions(false);
+    setConsumingMealKeys(new Set());
+    setConsumptionMessage(null);
+    setConsumptionError(null);
     setIsConfirming(false);
     setIsGenerating(true);
     setGenerationError(null);
     setPlan(null);
 
     try {
-      const result = await safeFetch<{ id?: string; plan?: StructuredMealPlan; content?: string }>('/api/meal-plan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify({
-          peopleCount,
-          period,
-          baseCuisine: baseCuisine || 'Latinoamericana',
-          fusionCuisines: [],
-          fusionIntensity: 'media',
-          restrictions: restrictions.split(',').map((restriction) => restriction.trim()).filter(Boolean),
-          mode: 'balanced_ai',
-        }),
-      });
+      const result = await safeFetch<{ id?: string; plan?: StructuredMealPlan; content?: string }>(
+        '/api/meal-plan',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            peopleCount,
+            period,
+            baseCuisine: baseCuisine || 'Latinoamericana',
+            fusionCuisines: [],
+            fusionIntensity: 'media',
+            restrictions: restrictions
+              .split(',')
+              .map((restriction) => restriction.trim())
+              .filter(Boolean),
+            mode: 'balanced_ai',
+          }),
+        }
+      );
 
       if (!result.ok) {
         throw new Error(result.error ?? 'No se pudo generar el menú.');
@@ -191,7 +265,10 @@ export default function MealPlannerPage() {
       const generatedPlanId = typeof result.data.id === 'string' ? result.data.id : null;
       activePlanIdRef.current = generatedPlanId;
       setActivePlanId(generatedPlanId);
-      if (generatedPlanId) void loadSuggestions(generatedPlanId);
+      if (generatedPlanId) {
+        void loadSuggestions(generatedPlanId);
+        void loadConsumptions(generatedPlanId);
+      }
     } catch (error) {
       setGenerationError(error instanceof Error ? error.message : 'Error desconocido.');
     } finally {
@@ -223,25 +300,30 @@ export default function MealPlannerPage() {
         generationStartedRef.current ||
         activePlanIdRef.current !== mealPlanId ||
         suggestionRequestVersionRef.current !== requestVersion
-      ) return;
+      )
+        return;
 
       const confirmed = new Map<string, 'pending' | 'purchased'>();
       for (const item of [...result.data.added, ...result.data.alreadyPresent]) {
         confirmed.set(normalizeInventoryName(item.ingredient_name), item.status);
       }
-      setSuggestions((current) => current.map((item) => {
-        const status = confirmed.get(item.normalizedName);
-        return status ? { ...item, alreadyPresent: true, shoppingStatus: status } : item;
-      }));
-      setSelectedItems((current) => new Set(
-        [...current].filter((name) => !confirmed.has(name))
-      ));
+      setSuggestions((current) =>
+        current.map((item) => {
+          const status = confirmed.get(item.normalizedName);
+          return status ? { ...item, alreadyPresent: true, shoppingStatus: status } : item;
+        })
+      );
+      setSelectedItems((current) => new Set([...current].filter((name) => !confirmed.has(name))));
       const parts: string[] = [];
       if (result.data.added.length) {
-        parts.push(`Se agregaron ${result.data.added.length} ${result.data.added.length === 1 ? 'artículo' : 'artículos'}.`);
+        parts.push(
+          `Se agregaron ${result.data.added.length} ${result.data.added.length === 1 ? 'artículo' : 'artículos'}.`
+        );
       }
       if (result.data.alreadyPresent.length) {
-        parts.push(`${result.data.alreadyPresent.length} ${result.data.alreadyPresent.length === 1 ? 'ya estaba' : 'ya estaban'} en compras.`);
+        parts.push(
+          `${result.data.alreadyPresent.length} ${result.data.alreadyPresent.length === 1 ? 'ya estaba' : 'ya estaban'} en compras.`
+        );
       }
       if (result.data.ignored.length) {
         parts.push(`Se ignoraron claves desactualizadas: ${result.data.ignored.join(', ')}.`);
@@ -249,10 +331,72 @@ export default function MealPlannerPage() {
       setShoppingMessage(parts.join(' ') || 'No hubo artículos nuevos para agregar.');
     } catch (error) {
       if (componentActiveRef.current && activePlanIdRef.current === mealPlanId) {
-        setShoppingError(error instanceof Error ? error.message : 'No se pudieron agregar los artículos.');
+        setShoppingError(
+          error instanceof Error ? error.message : 'No se pudieron agregar los artículos.'
+        );
       }
     } finally {
-      if (componentActiveRef.current && activePlanIdRef.current === mealPlanId) setIsConfirming(false);
+      if (componentActiveRef.current && activePlanIdRef.current === mealPlanId)
+        setIsConfirming(false);
+    }
+  };
+
+  const onConfirmMealConsumed = async (dayIndex: number, mealType: StructuredMealType) => {
+    if (!activePlanId) return;
+    const mealPlanId = activePlanId;
+    const key = mealConsumptionKey(dayIndex, mealType);
+    if (consumptions[key] || consumingMealKeys.has(key)) return;
+
+    consumptionRequestVersionRef.current += 1;
+    setIsLoadingConsumptions(false);
+    setConsumingMealKeys((current) => new Set(current).add(key));
+    setConsumptionError(null);
+    setConsumptionMessage(null);
+    try {
+      const result = await safeFetch<{
+        alreadyConsumed: boolean;
+        record: MealConsumptionRecord;
+      }>('/api/meal-plan/consumption', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ mealPlanId, dayIndex, mealType }),
+      });
+      if (!result.ok) throw new Error(result.error ?? 'No se pudo registrar la comida cocinada.');
+      if (!componentActiveRef.current || activePlanIdRef.current !== mealPlanId) return;
+
+      setConsumptions((current) => withConsumptionRecord(current, key, result.data.record));
+      if (result.data.alreadyConsumed) {
+        setConsumptionMessage('Esta comida ya estaba registrada como cocinada.');
+      } else {
+        const updated = result.data.record.decrements.length;
+        const skipped = result.data.record.skipped.length;
+        const parts = ['Comida registrada.'];
+        if (updated > 0)
+          parts.push(
+            `Se actualizaron ${updated} ${updated === 1 ? 'existencia' : 'existencias'} del inventario.`
+          );
+        if (skipped > 0)
+          parts.push(
+            `${skipped} ${skipped === 1 ? 'ingrediente quedó' : 'ingredientes quedaron'} sin descuento automático.`
+          );
+        setConsumptionMessage(parts.join(' '));
+      }
+      void loadSuggestions(mealPlanId);
+    } catch (error) {
+      if (componentActiveRef.current && activePlanIdRef.current === mealPlanId) {
+        setConsumptionError(
+          error instanceof Error ? error.message : 'No se pudo registrar la comida cocinada.'
+        );
+      }
+    } finally {
+      if (componentActiveRef.current && activePlanIdRef.current === mealPlanId) {
+        setConsumingMealKeys((current) => {
+          const next = new Set(current);
+          next.delete(key);
+          return next;
+        });
+      }
     }
   };
 
@@ -269,7 +413,9 @@ export default function MealPlannerPage() {
           </Link>
         </div>
 
-        {isInitialLoading ? <p className="mb-3 text-sm text-[#6B5A50]">Cargando menú guardado...</p> : null}
+        {isInitialLoading ? (
+          <p className="mb-3 text-sm text-[#6B5A50]">Cargando menú guardado...</p>
+        ) : null}
         {loadError ? (
           <p className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
             No pudimos cargar el menú guardado. Podés generar uno nuevo.
@@ -350,30 +496,77 @@ export default function MealPlannerPage() {
         {plan ? (
           <div className="mt-6 rounded-xl border border-[#E8DDD2] bg-[#faf7f3] p-4">
             <h2 className="font-semibold">Menú generado</h2>
+            {isLoadingConsumptions ? (
+              <p className="mt-2 text-sm text-[#6B5A50]">Cargando comidas cocinadas...</p>
+            ) : null}
+            {consumptionError ? (
+              <p role="alert" className="mt-2 text-sm text-red-700">
+                {consumptionError}
+              </p>
+            ) : null}
+            {consumptionMessage ? (
+              <p role="status" className="mt-2 text-sm font-semibold text-green-800">
+                {consumptionMessage}
+              </p>
+            ) : null}
             <div className="mt-3 grid gap-3">
               {plan.days.map((day) => (
-                <section key={day.dayIndex} className="rounded-xl border border-[#E8DDD2] bg-white p-3">
+                <section
+                  key={day.dayIndex}
+                  className="rounded-xl border border-[#E8DDD2] bg-white p-3"
+                >
                   <h3 className="font-semibold">{day.label}</h3>
                   <div className="mt-2 grid gap-2 text-sm">
-                    {day.meals.map((meal) => (
-                      <article key={meal.mealType}>
-                        <p className="font-semibold text-[#6B5A50]">
-                          {mealTypeLabels[meal.mealType]}: {meal.title}
-                        </p>
-                        {meal.description ? <p className="text-[#6B5A50]">{meal.description}</p> : null}
-                        {meal.ingredients.length > 0 ? (
-                          <ul className="mt-1 list-disc pl-5 text-[#6B5A50]">
-                            {meal.ingredients.map((ingredient, index) => (
-                              <li key={`${ingredient.name}-${index}`}>
-                                {ingredient.quantity === null
-                                  ? ingredient.name
-                                  : `${ingredient.quantity}${ingredient.unit ? ` ${ingredient.unit}` : ''} ${ingredient.name}`}
-                              </li>
-                            ))}
-                          </ul>
-                        ) : null}
-                      </article>
-                    ))}
+                    {day.meals.map((meal) => {
+                      const consumptionKey = mealConsumptionKey(day.dayIndex, meal.mealType);
+                      const consumed = consumptions[consumptionKey];
+                      const isConsuming = consumingMealKeys.has(consumptionKey);
+                      return (
+                        <article
+                          key={meal.mealType}
+                          className="rounded-lg border border-[#F0E7DE] p-3"
+                        >
+                          <p className="font-semibold text-[#6B5A50]">
+                            {mealTypeLabels[meal.mealType]}: {meal.title}
+                          </p>
+                          {meal.description ? (
+                            <p className="text-[#6B5A50]">{meal.description}</p>
+                          ) : null}
+                          {meal.ingredients.length > 0 ? (
+                            <ul className="mt-1 list-disc pl-5 text-[#6B5A50]">
+                              {meal.ingredients.map((ingredient, index) => (
+                                <li key={`${ingredient.name}-${index}`}>
+                                  {ingredient.quantity === null
+                                    ? ingredient.name
+                                    : `${ingredient.quantity}${ingredient.unit ? ` ${ingredient.unit}` : ''} ${ingredient.name}`}
+                                </li>
+                              ))}
+                            </ul>
+                          ) : null}
+                          {activePlanId ? (
+                            <div className="mt-3">
+                              {consumed ? (
+                                <span className="inline-flex rounded-full bg-green-50 px-3 py-1 text-xs font-semibold text-green-800">
+                                  Cocinado
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    void onConfirmMealConsumed(day.dayIndex, meal.mealType)
+                                  }
+                                  disabled={isLoadingConsumptions || isGenerating || isConsuming}
+                                  aria-label={`Ya cociné ${mealTypeLabels[meal.mealType]}: ${meal.title}`}
+                                  className="h-9 rounded-lg border border-[#C56A1A] px-3 text-sm font-semibold text-[#A55412] disabled:opacity-60"
+                                >
+                                  {isConsuming ? 'Registrando...' : 'Ya cociné'}
+                                </button>
+                              )}
+                            </div>
+                          ) : null}
+                        </article>
+                      );
+                    })}
                   </div>
                 </section>
               ))}
@@ -382,44 +575,74 @@ export default function MealPlannerPage() {
         ) : null}
 
         {activePlanId ? (
-          <section className="mt-6 rounded-xl border border-[#E8DDD2] bg-white p-4" aria-busy={isLoadingSuggestions || isConfirming}>
+          <section
+            className="mt-6 rounded-xl border border-[#E8DDD2] bg-white p-4"
+            aria-busy={isLoadingSuggestions || isConfirming}
+          >
             <h2 className="font-semibold">Faltantes para este menú</h2>
-            {isLoadingSuggestions ? <p className="mt-2 text-sm text-[#6B5A50]">Cargando faltantes...</p> : null}
-            {shoppingError ? <p role="alert" className="mt-2 text-sm text-red-700">{shoppingError}</p> : null}
+            {isLoadingSuggestions ? (
+              <p className="mt-2 text-sm text-[#6B5A50]">Cargando faltantes...</p>
+            ) : null}
+            {shoppingError ? (
+              <p role="alert" className="mt-2 text-sm text-red-700">
+                {shoppingError}
+              </p>
+            ) : null}
             {!isLoadingSuggestions && suggestions.length === 0 ? (
-              <p className="mt-2 text-sm text-[#6B5A50]">No hay faltantes accionables para este menú.</p>
+              <p className="mt-2 text-sm text-[#6B5A50]">
+                No hay faltantes accionables para este menú.
+              </p>
             ) : null}
             {suggestions.length > 0 ? (
               <ul className="mt-3 grid gap-3">
                 {suggestions.map((item) => {
                   const existingLabel = item.alreadyPresent
-                    ? item.shoppingStatus === 'purchased' ? 'Ya comprado' : 'Ya está en compras'
+                    ? item.shoppingStatus === 'purchased'
+                      ? 'Ya comprado'
+                      : 'Ya está en compras'
                     : null;
                   const quantity = (value: number | null) =>
-                    value === null ? 'Sin cantidad especificada' : `${value}${item.unit !== 'unknown' ? ` ${item.unit}` : ''}`;
+                    value === null
+                      ? 'Sin cantidad especificada'
+                      : `${value}${item.unit !== 'unknown' ? ` ${item.unit}` : ''}`;
                   return (
-                    <li key={item.normalizedName} className="rounded-xl border border-[#E8DDD2] p-3">
+                    <li
+                      key={item.normalizedName}
+                      className="rounded-xl border border-[#E8DDD2] p-3"
+                    >
                       <label className="flex items-start gap-3">
                         <input
                           type="checkbox"
                           checked={selectedItems.has(item.normalizedName)}
-                          disabled={isLoadingSuggestions || isConfirming || isGenerating || Boolean(existingLabel)}
-                          onChange={(event) => setSelectedItems((current) => {
-                            const next = new Set(current);
-                            if (event.target.checked) next.add(item.normalizedName);
-                            else next.delete(item.normalizedName);
-                            return next;
-                          })}
+                          disabled={
+                            isLoadingSuggestions ||
+                            isConfirming ||
+                            isGenerating ||
+                            Boolean(existingLabel)
+                          }
+                          onChange={(event) =>
+                            setSelectedItems((current) => {
+                              const next = new Set(current);
+                              if (event.target.checked) next.add(item.normalizedName);
+                              else next.delete(item.normalizedName);
+                              return next;
+                            })
+                          }
                           aria-label={`${item.ingredientName}, ${item.status === 'buy' ? 'Comprar' : 'Revisar'}`}
                         />
                         <span className="grid gap-1 text-sm">
                           <span className="font-semibold">{item.ingredientName}</span>
-                          <span>Requerido: {quantity(item.requiredQuantity)} · Disponible: {quantity(item.availableQuantity)}</span>
+                          <span>
+                            Requerido: {quantity(item.requiredQuantity)} · Disponible:{' '}
+                            {quantity(item.availableQuantity)}
+                          </span>
                           <span>Para comprar: {quantity(item.quantityToBuy)}</span>
                           <span className="font-semibold">
                             {existingLabel ?? (item.status === 'buy' ? 'Comprar' : 'Revisar')}
                           </span>
-                          <span className="text-[#6B5A50]">Usado en: {item.usedInRecipes.join('; ')}</span>
+                          <span className="text-[#6B5A50]">
+                            Usado en: {item.usedInRecipes.join('; ')}
+                          </span>
                         </span>
                       </label>
                     </li>
@@ -427,11 +650,17 @@ export default function MealPlannerPage() {
                 })}
               </ul>
             ) : null}
-            {shoppingMessage ? <p role="status" className="mt-3 text-sm font-semibold text-green-800">{shoppingMessage}</p> : null}
+            {shoppingMessage ? (
+              <p role="status" className="mt-3 text-sm font-semibold text-green-800">
+                {shoppingMessage}
+              </p>
+            ) : null}
             <button
               type="button"
               onClick={() => void onConfirmSelected()}
-              disabled={isLoadingSuggestions || isConfirming || isGenerating || selectedItems.size === 0}
+              disabled={
+                isLoadingSuggestions || isConfirming || isGenerating || selectedItems.size === 0
+              }
               className="mt-4 h-11 rounded-xl bg-[#C56A1A] px-4 font-semibold text-white disabled:opacity-60"
             >
               {isConfirming ? 'Agregando...' : 'Agregar seleccionados a compras'}
