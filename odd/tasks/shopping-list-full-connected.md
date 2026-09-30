@@ -107,17 +107,17 @@ M1.5.4 is **not closed yet**. Required connected execution and final full Playwr
 - Cleanup: runtime-proven; exact tenant+user scoped shopping, meal-plan, and inventory fixtures removed.
 - Product code changed: **no**; M1.5.4 is a test-only closure slice.
 - M1.5.4: **FUNCTIONALLY GREEN; administrative commit closure blocked by Guardian provider availability**.
-- M1.5 Compras conectadas: **FUNCTIONALLY GREEN; formal local closure pending Guardian-reviewed commit hashes**.
+- Historical status at that point: M1.5 Compras conectadas was functionally green while formal local closure still awaited Guardian-reviewed commit hashes. This was later resolved; see Final closure below.
 - No push, PR, staging, production deploy, or M1.6 work performed.
 
 
-## Guardian closure blocker
+## Historical Guardian closure blocker — resolved
 - Normal commit attempted with Guardian Angel; no bypass used.
 - Codex provider returned no review output on both attempts.
 - OpenCode provider returned `UnknownError / Unexpected server error` on both attempts.
 - A temporary Codex model switch to `gpt-5.6-sol` was retried without bypass; Codex still returned no review output.
-- Global Codex configuration was restored exactly to `gpt-6-luna`.
-- Commit hashes remain pending; functional evidence above is green and product code remains unchanged.
+- At that historical point, global Codex configuration was restored to `gpt-6-luna`; the root cause was later identified and Codex CLI was permanently moved to `gpt-5.6-sol` for Guardian compatibility.
+- At that historical point, commit hashes remained pending. This blocker was later resolved and the hashes are recorded in Final closure below.
 
 
 ## Final closure
