@@ -210,6 +210,7 @@ export interface UserMealPlanRow {
   restrictions: string[];
   inventory_snapshot: unknown;
   calendar_payload: unknown;
+  consumption_payload: unknown;
   ai_content: string | null;
   created_at: string;
   updated_at: string;

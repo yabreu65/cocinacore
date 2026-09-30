@@ -22,7 +22,7 @@ const fs = require('fs');
 const path = require('path');
 const [manifestPath, directory, base] = process.argv.slice(2);
 const HISTORICAL_BASELINE_COUNT = 10;
-const CURRENT_MIGRATION_COUNT = 11;
+const CURRENT_MIGRATION_COUNT = 12;
 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 if (manifest.manifestVersion !== 1 || manifest.trustedBaseCommit !== base) process.exit(1);
 if (manifest.migrationLaneVersion !== 1) process.exit(1);
@@ -54,6 +54,10 @@ if (canonical.legacyChecksumBackfillAllowed !== false) process.exit(1);
 if (JSON.stringify(canonical.catalogAdditions) !== JSON.stringify([{
   kind: 'constraint', schema: 'public', identity: 'users.users_email_canonical_check'
 }])) process.exit(1);
+const consumption = manifest.migrations[11];
+if (consumption.id !== '012' || consumption.filename !== '012_meal_plan_consumption.sql') process.exit(1);
+if (consumption.lane !== 'migration' || consumption.transactional !== 'required' || consumption.legacyChecksumBackfillAllowed !== false) process.exit(1);
+if (consumption.catalogAdditions !== undefined) process.exit(1);
 const sql = fs.readdirSync(directory).filter((name) => name.endsWith('.sql')).sort();
 if (sql.length !== names.size || sql.some((name) => !names.has(name))) process.exit(1);
 const extensions = new Map(manifest.extensions.map((entry) => [entry.name, entry]));

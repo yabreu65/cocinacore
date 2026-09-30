@@ -8,7 +8,10 @@
     "derivation": "pg_catalog.hashtextextended(namespacePrefix || current_database(), 0)",
     "scope": "session"
   },
-  "managedSchemas": ["internal", "public"],
+  "managedSchemas": [
+    "internal",
+    "public"
+  ],
   "extensions": [
     {
       "name": "vector",
@@ -78,7 +81,9 @@
           "setOption": true
         }
       ],
-      "databasePrivileges": ["CONNECT"],
+      "databasePrivileges": [
+        "CONNECT"
+      ],
       "roleSettings": [],
       "allowedOwnedObjects": []
     },
@@ -94,7 +99,9 @@
       "connectionLimit": -1,
       "validUntil": null,
       "memberOf": [],
-      "databasePrivileges": ["CREATE"],
+      "databasePrivileges": [
+        "CREATE"
+      ],
       "roleSettings": [],
       "allowedOwnedObjects": "baselineObjects.transferable"
     }
@@ -105,7 +112,10 @@
   },
   "bootstrapPolicy": {
     "durableOrdinaryObjectsAllowed": 0,
-    "reservedRoles": ["cocinacore_schema_owner", "migration_admin"],
+    "reservedRoles": [
+      "cocinacore_schema_owner",
+      "migration_admin"
+    ],
     "autoRunOnDeploy": false
   },
   "migrations": [
@@ -214,6 +224,15 @@
           "identity": "users.users_email_canonical_check"
         }
       ]
+    },
+    {
+      "id": "012",
+      "filename": "012_meal_plan_consumption.sql",
+      "lane": "migration",
+      "sha256": "163cac4f23aa6376d65c38c9e0132482d689a4a1faec74ce5858b665241160b9",
+      "byteLength": 310,
+      "transactional": "required",
+      "legacyChecksumBackfillAllowed": false
     }
   ],
   "baselineObjects": {
