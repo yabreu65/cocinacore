@@ -99,7 +99,8 @@ describe('shoppingListRepository', () => {
     });
 
     expect(transactionMock).toHaveBeenCalledOnce();
-    expect(clientQuery.mock.calls.map(([sql]) => sql)).toEqual([
+    const clientQueries = clientQuery.mock.calls as unknown as Array<[string, ...unknown[]]>;
+    expect(clientQueries.map(([sql]) => sql)).toEqual([
       'select pg_advisory_xact_lock(hashtextextended($1, 0))',
       expect.stringContaining('where tenant_id = $1 and user_id = $2 and source = $3'),
       expect.stringContaining('insert into public.shopping_list_items'),

@@ -134,7 +134,7 @@ describe('GET /api/meal-plan/shopping-suggestions', () => {
         status: 'buy',
         quantityToBuy: 1.5,
         unit: 'kg',
-        usedInRecipes: expect.arrayContaining(['Lunes · Desayuno · Avena del día']),
+        usedInRecipes: expect.arrayContaining<string>(['Lunes · Desayuno · Avena del día']) as unknown,
       }),
       expect.objectContaining({ normalizedName: 'sal', status: 'review', quantityToBuy: null }),
     ]));
