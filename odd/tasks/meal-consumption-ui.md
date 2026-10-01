@@ -46,7 +46,7 @@ Expose the M1.6.1 consumption contract in Meal Planner so the user explicitly co
 1. [x] Consumption load/race state.
 2. [x] Per-meal confirmation UI.
 3. [x] Focused UI-state tests and full gates.
-4. [ ] Guardian-reviewed commit and M1.6.2 local closure.
+4. [x] Guardian-reviewed commit and M1.6.2 local closure.
 
 ## Verification evidence
 
@@ -61,4 +61,5 @@ Expose the M1.6.1 consumption contract in Meal Planner so the user explicitly co
 
 - UI implementation commit: `adc1a27` (`feat(meal-plan): add cooked meal confirmation UI`).
 - M1.6.2 verification remains green: 4 files / 19 tests focused, 48 files / 397 tests full after M1.6.3, TypeScript/ESLint/build PASS.
-- Documentary closure commit is pending Guardian availability only; no bypass will be used.
+- Guardian-reviewed documentary closure commit: `9140080` (`docs(odd): close cooked meal planner UI`).
+- M1.6.2 status: **CLOSED locally**.
