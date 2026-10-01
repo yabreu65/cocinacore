@@ -16,15 +16,20 @@ import {
   type StructuredMealPlan,
 } from '@/lib/meal-planner/structured-plan';
 import { normalizeInventoryName } from '@/lib/inventory/normalize-inventory';
+import { parseMealConsumptionPayload } from '@/lib/meal-planner/consumption';
 
 const MAX_SELECTED_ITEMS = 100;
 const MAX_NORMALIZED_NAME_LENGTH = 200;
 
 function getActionableCandidates(
   plan: StructuredMealPlan,
-  inventoryItems: Awaited<ReturnType<typeof listInventoryItemsByTenant>>
+  inventoryItems: Awaited<ReturnType<typeof listInventoryItemsByTenant>>,
+  consumedMealKeys: ReadonlySet<string> = new Set()
 ) {
-  return buildQuantifiedShoppingList(structuredMealPlanToRequirements(plan), inventoryItems)
+  return buildQuantifiedShoppingList(
+    structuredMealPlanToRequirements(plan, consumedMealKeys),
+    inventoryItems
+  )
     .groups.flatMap((group) => group.items)
     .filter((item) => item.status === 'buy' || item.status === 'review');
 }
@@ -38,18 +43,24 @@ function parseConfirmationBody(
   if (
     typeof body.mealPlanId !== 'string' ||
     !ShoppingListIdSchema.safeParse(body.mealPlanId).success
-  ) return null;
+  )
+    return null;
   if (
     !Array.isArray(body.selectedItems) ||
     body.selectedItems.length < 1 ||
     body.selectedItems.length > MAX_SELECTED_ITEMS
-  ) return null;
-  if (!body.selectedItems.every((name) =>
-    typeof name === 'string' &&
-    name.length > 0 &&
-    name.length <= MAX_NORMALIZED_NAME_LENGTH &&
-    normalizeInventoryName(name) === name
-  )) return null;
+  )
+    return null;
+  if (
+    !body.selectedItems.every(
+      (name) =>
+        typeof name === 'string' &&
+        name.length > 0 &&
+        name.length <= MAX_NORMALIZED_NAME_LENGTH &&
+        normalizeInventoryName(name) === name
+    )
+  )
+    return null;
   return { mealPlanId: body.mealPlanId, selectedItems: body.selectedItems as string[] };
 }
 
@@ -93,7 +104,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'No se pudo recuperar el menú.' }, { status: 500 });
   }
 
-  const parsedPlan = parseStructuredMealPlanValue(persistedPlan.calendar_payload, persistedPlan.period);
+  const parsedPlan = parseStructuredMealPlanValue(
+    persistedPlan.calendar_payload,
+    persistedPlan.period
+  );
   if (!parsedPlan.success) {
     return NextResponse.json({ error: 'No se pudo recuperar el menú.' }, { status: 500 });
   }
@@ -108,8 +122,11 @@ export async function GET(request: NextRequest) {
         .filter((item) => item.source === `meal-plan:${mealPlanId}`)
         .map((item) => [normalizeInventoryName(item.ingredient_name), item])
     );
-    const items = getActionableCandidates(parsedPlan.plan, inventoryItems)
-      .map((item) => {
+    const consumedMealKeys = new Set(
+      Object.keys(parseMealConsumptionPayload(persistedPlan.consumption_payload))
+    );
+    const items = getActionableCandidates(parsedPlan.plan, inventoryItems, consumedMealKeys).map(
+      (item) => {
         const existing = existingByName.get(item.normalizedName);
         return {
           normalizedName: item.normalizedName,
@@ -124,10 +141,14 @@ export async function GET(request: NextRequest) {
           alreadyPresent: Boolean(existing),
           shoppingStatus: existing?.status ?? null,
         };
-      });
+      }
+    );
     return NextResponse.json({ items });
   } catch {
-    return NextResponse.json({ error: 'No se pudieron calcular las sugerencias.' }, { status: 500 });
+    return NextResponse.json(
+      { error: 'No se pudieron calcular las sugerencias.' },
+      { status: 500 }
+    );
   }
 }
 
@@ -164,39 +185,57 @@ export async function POST(request: NextRequest) {
     persistedPlan.period !== 'week' &&
     persistedPlan.period !== 'fortnight' &&
     persistedPlan.period !== 'month'
-  ) return NextResponse.json({ error: 'No se pudo recuperar el menú.' }, { status: 500 });
+  )
+    return NextResponse.json({ error: 'No se pudo recuperar el menú.' }, { status: 500 });
 
-  const parsedPlan = parseStructuredMealPlanValue(persistedPlan.calendar_payload, persistedPlan.period);
-  if (!parsedPlan.success) return NextResponse.json({ error: 'No se pudo recuperar el menú.' }, { status: 500 });
+  const parsedPlan = parseStructuredMealPlanValue(
+    persistedPlan.calendar_payload,
+    persistedPlan.period
+  );
+  if (!parsedPlan.success)
+    return NextResponse.json({ error: 'No se pudo recuperar el menú.' }, { status: 500 });
 
   try {
     const inventoryItems = await listInventoryItemsByTenant(user.tenant.tenantId);
-    const candidates = getActionableCandidates(parsedPlan.plan, inventoryItems);
-    const candidateByName = new Map(candidates.map((candidate) => [candidate.normalizedName, candidate]));
+    const consumedMealKeys = new Set(
+      Object.keys(parseMealConsumptionPayload(persistedPlan.consumption_payload))
+    );
+    const candidates = getActionableCandidates(parsedPlan.plan, inventoryItems, consumedMealKeys);
+    const candidateByName = new Map(
+      candidates.map((candidate) => [candidate.normalizedName, candidate])
+    );
     const matched = new Set(body.selectedItems.filter((name) => candidateByName.has(name)));
     const ignored = body.selectedItems.filter((name) => !candidateByName.has(name));
-    const selectedCandidates = candidates.filter((candidate) => matched.has(candidate.normalizedName));
-    const result = selectedCandidates.length === 0
-      ? { added: [], alreadyPresent: [] }
-      : await addMealPlanShoppingItems({
-          tenantId: user.tenant.tenantId,
-          userId: user.id,
-          source: `meal-plan:${body.mealPlanId}`,
-          items: selectedCandidates.map((candidate) => ({
-            ingredientName: candidate.ingredientName,
-            quantity: typeof candidate.quantityToBuy === 'number' &&
-                Number.isFinite(candidate.quantityToBuy) && candidate.unit !== 'unknown'
-              ? `${Number(candidate.quantityToBuy.toFixed(3))} ${candidate.unit}`
-              : null,
-          })),
-        });
+    const selectedCandidates = candidates.filter((candidate) =>
+      matched.has(candidate.normalizedName)
+    );
+    const result =
+      selectedCandidates.length === 0
+        ? { added: [], alreadyPresent: [] }
+        : await addMealPlanShoppingItems({
+            tenantId: user.tenant.tenantId,
+            userId: user.id,
+            source: `meal-plan:${body.mealPlanId}`,
+            items: selectedCandidates.map((candidate) => ({
+              ingredientName: candidate.ingredientName,
+              quantity:
+                typeof candidate.quantityToBuy === 'number' &&
+                Number.isFinite(candidate.quantityToBuy) &&
+                candidate.unit !== 'unknown'
+                  ? `${Number(candidate.quantityToBuy.toFixed(3))} ${candidate.unit}`
+                  : null,
+            })),
+          });
     return NextResponse.json({
       added: result.added.map(toConfirmationItem),
       alreadyPresent: result.alreadyPresent.map(toConfirmationItem),
       ignored,
     });
   } catch {
-    return NextResponse.json({ error: 'No se pudieron guardar los artículos seleccionados.' }, { status: 500 });
+    return NextResponse.json(
+      { error: 'No se pudieron guardar los artículos seleccionados.' },
+      { status: 500 }
+    );
   }
 }
 

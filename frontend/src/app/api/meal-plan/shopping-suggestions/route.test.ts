@@ -49,25 +49,30 @@ function persistedPlan(overrides: Partial<UserMealPlanRow> = {}): UserMealPlanRo
             mealType: 'breakfast',
             title: 'Avena del día',
             description: null,
-            ingredients: index === 0
-              ? [
-                  { name: 'Arroz', quantity: 2, unit: 'kg' },
-                  { name: 'Harina', quantity: 1, unit: 'kg' },
-                  { name: 'Sal', quantity: null, unit: null },
-                ]
-              : [{ name: `Otro ${index}`, quantity: 1, unit: 'unidad' }],
+            ingredients:
+              index === 0
+                ? [
+                    { name: 'Arroz', quantity: 2, unit: 'kg' },
+                    { name: 'Harina', quantity: 1, unit: 'kg' },
+                    { name: 'Sal', quantity: null, unit: null },
+                  ]
+                : [{ name: `Otro ${index}`, quantity: 1, unit: 'unidad' }],
           },
           {
             mealType: 'lunch',
             title: 'Almuerzo',
             description: null,
-            ingredients: [{ name: index === 0 ? 'Aceite' : `Almuerzo ${index}`, quantity: 1, unit: 'l' }],
+            ingredients: [
+              { name: index === 0 ? 'Aceite' : `Almuerzo ${index}`, quantity: 1, unit: 'l' },
+            ],
           },
           {
             mealType: 'dinner',
             title: 'Cena',
             description: null,
-            ingredients: [{ name: index === 0 ? 'Papa' : `Cena ${index}`, quantity: 1, unit: 'kg' }],
+            ingredients: [
+              { name: index === 0 ? 'Papa' : `Cena ${index}`, quantity: 1, unit: 'kg' },
+            ],
           },
         ],
       })),
@@ -101,7 +106,22 @@ function inventoryItem(ingredient_name: string, quantity: string, unit: string) 
 }
 
 function request(id = planId): NextRequest {
-  return new Request(`https://app.example.test/api/meal-plan/shopping-suggestions?mealPlanId=${id}`) as unknown as NextRequest;
+  return new Request(
+    `https://app.example.test/api/meal-plan/shopping-suggestions?mealPlanId=${id}`
+  ) as unknown as NextRequest;
+}
+
+function consumedBreakfastPayload() {
+  return {
+    '1:breakfast': {
+      consumedAt: '2026-09-30T20:00:00.000Z',
+      dayIndex: 1,
+      mealType: 'breakfast',
+      mealTitle: 'Avena del día',
+      decrements: [],
+      skipped: [],
+    },
+  };
 }
 
 describe('GET /api/meal-plan/shopping-suggestions', () => {
@@ -129,35 +149,78 @@ describe('GET /api/meal-plan/shopping-suggestions', () => {
     expect(listInventoryItemsByTenantMock).toHaveBeenCalledWith('tenant-1');
     expect(listShoppingListItemsMock).toHaveBeenCalledWith('tenant-1', 'user-1');
     const body = (await response.json()) as { items: Array<Record<string, unknown>> };
-    expect(body.items).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        normalizedName: 'arroz',
-        status: 'buy',
-        quantityToBuy: 1.5,
-        unit: 'kg',
-        usedInRecipes: expect.arrayContaining<string>(['Lunes · Desayuno · Avena del día']) as unknown,
-      }),
-      expect.objectContaining({ normalizedName: 'sal', status: 'review', quantityToBuy: null }),
-    ]));
-    expect(body.items.some((item) => item.normalizedName === 'harina' || item.normalizedName === 'aceite')).toBe(false);
-    expect(body.items.every((item) => !('tenant_id' in item) && !('user_id' in item) && !('id' in item))).toBe(true);
+    expect(body.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          normalizedName: 'arroz',
+          status: 'buy',
+          quantityToBuy: 1.5,
+          unit: 'kg',
+          usedInRecipes: expect.arrayContaining<string>([
+            'Lunes · Desayuno · Avena del día',
+          ]) as unknown,
+        }),
+        expect.objectContaining({ normalizedName: 'sal', status: 'review', quantityToBuy: null }),
+      ])
+    );
+    expect(
+      body.items.some(
+        (item) => item.normalizedName === 'harina' || item.normalizedName === 'aceite'
+      )
+    ).toBe(false);
+    expect(
+      body.items.every((item) => !('tenant_id' in item) && !('user_id' in item) && !('id' in item))
+    ).toBe(true);
     expect(JSON.stringify(body)).not.toContain('do-not-use-snapshot');
   });
 
   it('marks only exact-source normalized shopping rows with their current status', async () => {
     listShoppingListItemsMock.mockResolvedValue([
-      { id: 'private-row', tenant_id: 'tenant-1', user_id: 'user-1', source: `meal-plan:${planId}`, ingredient_name: ' ARROZ ', status: 'pending' },
-      { id: 'purchased-row', tenant_id: 'tenant-1', user_id: 'user-1', source: `meal-plan:${planId}`, ingredient_name: 'Sal', status: 'purchased' },
-      { id: 'manual-row', tenant_id: 'tenant-1', user_id: 'user-1', source: 'manual', ingredient_name: 'Harina', status: 'pending' },
+      {
+        id: 'private-row',
+        tenant_id: 'tenant-1',
+        user_id: 'user-1',
+        source: `meal-plan:${planId}`,
+        ingredient_name: ' ARROZ ',
+        status: 'pending',
+      },
+      {
+        id: 'purchased-row',
+        tenant_id: 'tenant-1',
+        user_id: 'user-1',
+        source: `meal-plan:${planId}`,
+        ingredient_name: 'Sal',
+        status: 'purchased',
+      },
+      {
+        id: 'manual-row',
+        tenant_id: 'tenant-1',
+        user_id: 'user-1',
+        source: 'manual',
+        ingredient_name: 'Harina',
+        status: 'pending',
+      },
     ]);
 
     const response = await GET(request() as unknown as NextRequest);
     const body = (await response.json()) as { items: Array<Record<string, unknown>> };
-    expect(body.items).toEqual(expect.arrayContaining([
-      expect.objectContaining({ normalizedName: 'arroz', alreadyPresent: true, shoppingStatus: 'pending' }),
-      expect.objectContaining({ normalizedName: 'sal', alreadyPresent: true, shoppingStatus: 'purchased' }),
-    ]));
-    expect(body.items.every((item) => !('tenant_id' in item) && !('user_id' in item) && !('id' in item))).toBe(true);
+    expect(body.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          normalizedName: 'arroz',
+          alreadyPresent: true,
+          shoppingStatus: 'pending',
+        }),
+        expect.objectContaining({
+          normalizedName: 'sal',
+          alreadyPresent: true,
+          shoppingStatus: 'purchased',
+        }),
+      ])
+    );
+    expect(
+      body.items.every((item) => !('tenant_id' in item) && !('user_id' in item) && !('id' in item))
+    ).toBe(true);
   });
 
   it('rejects unauthenticated callers before database reads', async () => {
@@ -194,6 +257,17 @@ describe('GET /api/meal-plan/shopping-suggestions', () => {
     expect(body.items.some((item) => item.normalizedName === 'harina')).toBe(false);
     expect(body.items.some((item) => item.normalizedName === 'aceite')).toBe(false);
   });
+
+  it('does not suggest ingredients from meals that are already consumed', async () => {
+    findMealPlanByIdForUserAndTenantMock.mockResolvedValue(
+      persistedPlan({ consumption_payload: consumedBreakfastPayload() })
+    );
+    const response = await GET(request() as unknown as NextRequest);
+    const body = (await response.json()) as { items: Array<{ normalizedName: string }> };
+    expect(body.items.some((item) => item.normalizedName === 'arroz')).toBe(false);
+    expect(body.items.some((item) => item.normalizedName === 'sal')).toBe(false);
+    expect(body.items.some((item) => item.normalizedName === 'papa')).toBe(true);
+  });
 });
 
 function postRequest(body: unknown): NextRequest {
@@ -222,7 +296,9 @@ describe('POST /api/meal-plan/shopping-suggestions', () => {
   });
 
   it('recomputes current candidates and persists only selected actionable keys with server-owned data', async () => {
-    const response = await POST(postRequest({ mealPlanId: planId, selectedItems: ['arroz', 'sal', 'harina'] }));
+    const response = await POST(
+      postRequest({ mealPlanId: planId, selectedItems: ['arroz', 'sal', 'harina'] })
+    );
     expect(response.status).toBe(200);
     expect(listInventoryItemsByTenantMock).toHaveBeenCalledWith('tenant-1');
     expect(addMealPlanShoppingItemsMock).toHaveBeenCalledWith({
@@ -256,7 +332,9 @@ describe('POST /api/meal-plan/shopping-suggestions', () => {
 
   it('returns 401 before reads and generic 404 for an unavailable plan', async () => {
     requireUserMock.mockRejectedValueOnce(new Error('Unauthorized'));
-    expect((await POST(postRequest({ mealPlanId: planId, selectedItems: ['arroz'] }))).status).toBe(401);
+    expect((await POST(postRequest({ mealPlanId: planId, selectedItems: ['arroz'] }))).status).toBe(
+      401
+    );
     expect(findMealPlanByIdForUserAndTenantMock).not.toHaveBeenCalled();
     findMealPlanByIdForUserAndTenantMock.mockResolvedValueOnce(null);
     const response = await POST(postRequest({ mealPlanId: planId, selectedItems: ['arroz'] }));
@@ -270,11 +348,23 @@ describe('POST /api/meal-plan/shopping-suggestions', () => {
       added: [],
       alreadyPresent: [{ id: 'existing', ingredient_name: 'Arroz', status: 'purchased' }],
     });
-    const response = await POST(postRequest({ mealPlanId: planId, selectedItems: ['stale', 'arroz'] }));
+    const response = await POST(
+      postRequest({ mealPlanId: planId, selectedItems: ['stale', 'arroz'] })
+    );
     expect(await response.json()).toEqual({
       added: [],
       alreadyPresent: [{ id: 'existing', ingredient_name: 'Arroz', status: 'purchased' }],
       ignored: ['stale'],
     });
+  });
+
+  it('treats a consumed-meal ingredient as stale during confirmation recomputation', async () => {
+    findMealPlanByIdForUserAndTenantMock.mockResolvedValue(
+      persistedPlan({ consumption_payload: consumedBreakfastPayload() })
+    );
+    const response = await POST(postRequest({ mealPlanId: planId, selectedItems: ['arroz'] }));
+    expect(response.status).toBe(200);
+    expect(addMealPlanShoppingItemsMock).not.toHaveBeenCalled();
+    expect(await response.json()).toEqual({ added: [], alreadyPresent: [], ignored: ['arroz'] });
   });
 });

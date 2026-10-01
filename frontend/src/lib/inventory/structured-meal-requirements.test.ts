@@ -72,4 +72,12 @@ describe('structuredMealPlanToRequirements', () => {
     const requirement = structuredMealPlanToRequirements(plan())[0];
     expect(requirement.requiredQuantity).toBe(2);
   });
+
+  it('omits requirements from meals that are already consumed', () => {
+    const requirements = structuredMealPlanToRequirements(plan(), new Set(['1:breakfast']));
+    expect(requirements.map((requirement) => requirement.ingredientName)).toEqual([
+      'Arroz',
+      'Calabaza',
+    ]);
+  });
 });
