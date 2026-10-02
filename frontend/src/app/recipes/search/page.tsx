@@ -4,6 +4,25 @@ import { FormEvent, useState } from 'react';
 import Link from 'next/link';
 import type { StructuredRecipeIngredient } from '@/components/recipe-view/types';
 import { safeFetch } from '@/lib/api';
+import { getVisibleRecipeSources, type VisibleRecipeSource } from '@/lib/recipes/source-citations';
+import type { Citation } from '@/services/types';
+
+type RecipeGenerationResponse = {
+  recipe: string;
+  title: string;
+  structuredIngredients?: StructuredRecipeIngredient[];
+  ragContextUsed?: boolean;
+  sources?: Citation[];
+};
+
+interface RecipeSearchResult {
+  recipe: string;
+  title: string;
+  structuredIngredients: StructuredRecipeIngredient[];
+  mode: 'free' | 'rag';
+  ragContextUsed: boolean;
+  sources: VisibleRecipeSource[];
+}
 
 export default function RecipeSearchPage() {
   const [ingredients, setIngredients] = useState('');
@@ -11,11 +30,7 @@ export default function RecipeSearchPage() {
   const [mode, setMode] = useState<'free' | 'rag'>('free');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<{
-    recipe: string;
-    title: string;
-    structuredIngredients: StructuredRecipeIngredient[];
-  } | null>(null);
+  const [result, setResult] = useState<RecipeSearchResult | null>(null);
 
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -24,11 +39,7 @@ export default function RecipeSearchPage() {
     setResult(null);
 
     try {
-      const result = await safeFetch<{
-        recipe: string;
-        title: string;
-        structuredIngredients?: StructuredRecipeIngredient[];
-      }>('/api/recipe-generate', {
+      const result = await safeFetch<RecipeGenerationResponse>('/api/recipe-generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
@@ -56,10 +67,15 @@ export default function RecipeSearchPage() {
 
       const data = result.data;
 
+      const ragContextUsed = data.ragContextUsed ?? false;
+
       setResult({
         recipe: data.recipe,
         title: data.title,
         structuredIngredients: data.structuredIngredients ?? [],
+        mode,
+        ragContextUsed,
+        sources: getVisibleRecipeSources(mode, ragContextUsed, data.sources ?? []),
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error desconocido.');
@@ -83,7 +99,7 @@ export default function RecipeSearchPage() {
 
         <form onSubmit={onSubmit} className="grid gap-3">
           <label className="grid gap-1 text-sm font-semibold text-[#6B5A50]">
-            Ingredientes (uno por línea)
+            Quiero cocinar con (opcional; enfoca la solicitud, uno por línea)
             <textarea
               value={ingredients}
               onChange={(e) => setIngredients(e.target.value)}
@@ -132,6 +148,35 @@ export default function RecipeSearchPage() {
           <div className="mt-6 rounded-xl border border-[#E8DDD2] bg-[#faf7f3] p-4">
             <h2 className="font-semibold">{result.title}</h2>
             <pre className="mt-2 whitespace-pre-wrap text-sm">{result.recipe}</pre>
+
+            {result.sources.length > 0 ? (
+              <section className="mt-4" aria-labelledby="recipe-sources-heading">
+                <h3 id="recipe-sources-heading" className="font-semibold">
+                  Fuentes del recetario
+                </h3>
+                <ul className="mt-2 grid gap-2">
+                  {result.sources.map((source) => (
+                    <li
+                      key={JSON.stringify([
+                        source.sourceType,
+                        source.sourceId,
+                        source.pageNumber ?? null,
+                        source.chunkId ?? null,
+                      ])}
+                      className="rounded-lg border border-[#E8DDD2] bg-white px-3 py-2 text-sm"
+                    >
+                      <p className="font-medium">{source.label}</p>
+                      {source.title ? <p>{source.title}</p> : null}
+                      {source.pageNumber ? <p>Página {source.pageNumber}</p> : null}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : result.mode === 'rag' && (!result.ragContextUsed || result.sources.length === 0) ? (
+              <p className="mt-4 text-sm text-[#6B5A50]">
+                No se encontró contexto documental relevante para esta receta.
+              </p>
+            ) : null}
           </div>
         ) : null}
       </section>

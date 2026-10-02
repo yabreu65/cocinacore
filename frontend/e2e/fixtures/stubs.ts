@@ -12,8 +12,45 @@ export const STUB_RECIPE_RESPONSE = {
   ],
 };
 
+const STUB_MEAL_PLAN_DAYS = [
+  'LUNES',
+  'MARTES',
+  'MIÉRCOLES',
+  'JUEVES',
+  'VIERNES',
+  'SÁBADO',
+  'DOMINGO',
+];
+
 export const STUB_MEAL_PLAN_RESPONSE = {
-  content: 'LUNES\nDesayuno: Avena con frutas\nAlmuerzo: Pollo al horno con ensalada\nCena: Sopa de verduras\n\nMARTES\nDesayuno: Tostadas con aguacate\nAlmuerzo: Ensalada César con pollo\nCena: Pescado a la plancha\n\nMIÉRCOLES\nDesayuno: Smoothie de frutas\nAlmuerzo: Pasta con salsa de tomate\nCena: Wrap de vegetales',
+  plan: {
+    period: 'week',
+    dayCount: STUB_MEAL_PLAN_DAYS.length,
+    days: STUB_MEAL_PLAN_DAYS.map((label, index) => ({
+      dayIndex: index + 1,
+      label,
+      meals: [
+        {
+          mealType: 'breakfast',
+          title: 'Avena con frutas',
+          description: null,
+          ingredients: [{ name: 'avena', quantity: null, unit: null }],
+        },
+        {
+          mealType: 'lunch',
+          title: 'Pollo al horno',
+          description: null,
+          ingredients: [{ name: 'pollo', quantity: null, unit: null }],
+        },
+        {
+          mealType: 'dinner',
+          title: 'Sopa de verduras',
+          description: null,
+          ingredients: [{ name: 'verduras', quantity: null, unit: null }],
+        },
+      ],
+    })),
+  },
 };
 
 /**

@@ -17,3 +17,14 @@ export function getGeminiModel(): string {
 export function getGeminiEmbeddingModel(): string {
   return process.env.GEMINI_EMBEDDING_MODEL?.trim() || 'gemini-embedding-001';
 }
+
+/**
+ * Server-only Gemini API base URL. The default preserves the production
+ * provider endpoint; E2E can point this at its local Gemini-compatible server.
+ */
+export function getGeminiBaseUrl(): string {
+  return (
+    process.env.GEMINI_BASE_URL?.trim().replace(/\/+$/, '') ||
+    'https://generativelanguage.googleapis.com/v1beta'
+  );
+}

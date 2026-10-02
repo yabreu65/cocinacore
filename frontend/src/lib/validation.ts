@@ -29,11 +29,16 @@ export type RecipeGenerateBody = z.infer<typeof RecipeGenerateSchema>;
 
 /** Schema for POST /api/meal-plan */
 export const MealPlanSchema = z.object({
-  mode: z.enum(['inventory_to_menu', 'menu_to_shopping']).optional().default('inventory_to_menu'),
+  mode: z
+    .enum(['inventory_to_menu', 'menu_to_shopping', 'balanced_ai'])
+    .optional()
+    .default('inventory_to_menu'),
   period: z.enum(['week', 'fortnight', 'month']).optional().default('week'),
   baseCuisine: z.string().max(100).optional(),
   fusionCuisines: z.array(z.string().max(100)).max(2).optional(),
   fusionIntensity: z.enum(['sutil', 'media', 'alta']).optional(),
+  /** Explicit one-off generation intent; persisted profile preferences remain server-owned. */
+  restrictions: z.array(z.string().max(100)).max(20).optional().default([]),
   inventory: z.array(z.string().max(200)).max(120).optional(),
   peopleCount: z.number().int().min(1).max(100).optional().default(4),
   chunks: z.array(z.string().max(2000)).max(10).optional(),
@@ -71,6 +76,24 @@ export const MealPlanWarmupSchema = z.object({
 });
 
 export type MealPlanWarmupBody = z.infer<typeof MealPlanWarmupSchema>;
+
+/** Schema for POST /api/shopping-list. */
+export const ShoppingListCreateSchema = z.object({
+  ingredientName: z.string().trim().min(1).max(200),
+  quantity: z.string().trim().max(100).nullable().optional(),
+  source: z.string().trim().max(50).optional().default('manual'),
+});
+
+export type ShoppingListCreateBody = z.infer<typeof ShoppingListCreateSchema>;
+
+/** Schema for PATCH /api/shopping-list/:id. */
+export const ShoppingListStatusUpdateSchema = z.object({
+  status: z.enum(['pending', 'purchased']),
+});
+
+export type ShoppingListStatusUpdateBody = z.infer<typeof ShoppingListStatusUpdateSchema>;
+
+export const ShoppingListIdSchema = z.string().uuid();
 
 // ---------------------------------------------------------------------------
 // Validation helper

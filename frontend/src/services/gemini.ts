@@ -4,6 +4,7 @@ import {
   isGeminiGenerateContentResponseDto,
 } from './apiDtos';
 import { getServerSecret } from './env';
+import { getGeminiBaseUrl } from '@/lib/ai/gemini-config';
 import { serverLogger } from '@/lib/serverLogger';
 import {
   EmbeddingService,
@@ -15,11 +16,12 @@ import {
 
 export class GeminiEmbeddingService implements EmbeddingService {
   private apiKey: string;
-  private baseUrl = 'https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004';
+  private baseUrl: string;
 
   constructor(apiKey?: string) {
     // Server-only API key. Do not fall back to NEXT_PUBLIC_* secrets.
     this.apiKey = apiKey ?? getServerSecret('GEMINI_API_KEY');
+    this.baseUrl = `${getGeminiBaseUrl()}/models/text-embedding-004`;
   }
 
   /**
@@ -105,11 +107,12 @@ export class GeminiEmbeddingService implements EmbeddingService {
 
 export class GeminiRecipeGenerator implements RecipeGenerationService {
   private apiKey: string;
-  private baseUrl = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash';
+  private baseUrl: string;
 
   constructor(apiKey?: string) {
     // Server-only API key. Do not fall back to NEXT_PUBLIC_* secrets.
     this.apiKey = apiKey ?? getServerSecret('GEMINI_API_KEY');
+    this.baseUrl = `${getGeminiBaseUrl()}/models/gemini-1.5-flash`;
   }
 
   /**

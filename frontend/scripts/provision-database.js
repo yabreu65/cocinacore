@@ -17,6 +17,7 @@ const SCHEMA_OWNER = 'cocinacore_schema_owner';
 const LOCK_NAMESPACE_PREFIX = 'cocinacore:database-change:v1:';
 const MANIFEST_VERSION = 1;
 const TRUSTED_BASE = '2069fc1f5a1ffc8407bd99cd91f9fadfbd04c6c4';
+const HISTORICAL_BASELINE_COUNT = 10;
 const MIGRATION_NAME = /^(\d{3})_[a-z0-9]+(?:_[a-z0-9]+)*(\.bootstrap)?\.sql$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 
@@ -93,6 +94,7 @@ function loadTrustedManifest() {
 
   const names = new Set();
   const ids = new Set();
+  const catalogAdditions = new Set();
   let previous = 0;
   for (const entry of manifest.migrations) {
     const match = entry.filename?.match(MIGRATION_NAME);
@@ -116,11 +118,42 @@ function loadTrustedManifest() {
     ) {
       throw new Error(`Trusted manifest migration metadata is invalid: ${entry.filename}.`);
     }
+    const historical = previous <= HISTORICAL_BASELINE_COUNT;
+    if (entry.legacyChecksumBackfillAllowed !== historical) {
+      throw new Error(`Trusted historical migration metadata is invalid: ${entry.filename}.`);
+    }
+    if (historical && entry.catalogAdditions !== undefined) {
+      throw new Error(`Historical migration cannot declare catalog additions: ${entry.filename}.`);
+    }
+    if (entry.catalogAdditions !== undefined) {
+      if (!Array.isArray(entry.catalogAdditions)) {
+        throw new Error(`Trusted catalog additions are invalid: ${entry.filename}.`);
+      }
+      for (const addition of entry.catalogAdditions) {
+        if (
+          !addition ||
+          typeof addition !== 'object' ||
+          Array.isArray(addition) ||
+          Object.keys(addition).sort().join(',') !== 'identity,kind,schema' ||
+          addition.kind !== 'constraint' ||
+          !['internal', 'public'].includes(addition.schema) ||
+          !/^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$/.test(addition.identity)
+        ) {
+          throw new Error(`Trusted catalog addition is unsupported: ${entry.filename}.`);
+        }
+        const key = `${addition.kind}|${addition.schema}|${addition.identity}`;
+        if (catalogAdditions.has(key)) throw new Error(`Duplicate trusted catalog addition: ${key}`);
+        catalogAdditions.add(key);
+      }
+    }
     const bytes = fs.readFileSync(path.join(directory, entry.filename));
     const checksum = crypto.createHash('sha256').update(bytes).digest('hex');
     if (bytes.length !== entry.byteLength || checksum !== entry.sha256) {
       throw new Error(`MIGRATION_CHECKSUM_MISMATCH: trusted file ${entry.filename}`);
     }
+  }
+  if (manifest.migrations.length < HISTORICAL_BASELINE_COUNT) {
+    throw new Error('Trusted historical migration baseline is incomplete.');
   }
   const sqlNames = fs.readdirSync(directory).filter((name) => name.endsWith('.sql'));
   if (
@@ -820,9 +853,9 @@ async function getCatalog(client) {
   };
 }
 
-function expectedCatalog(manifest) {
+function expectedCatalog(manifest, appliedMigrations) {
   const transferable = manifest.baselineObjects.transferable;
-  return {
+  const expected = {
     schemas: transferable.filter((o) => o.kind === 'schema').map((o) => o.schema),
     tables: transferable.filter((o) => o.kind === 'table').map((o) => `${o.schema}.${o.name}`),
     functions: transferable
@@ -835,6 +868,15 @@ function expectedCatalog(manifest) {
     types: manifest.baselineObjects.dependent.types.map((o) => `${o.schema}.${o.name}`),
     extensions: manifest.extensions.map((o) => `${o.name}@${o.expectedSchema}`),
   };
+  for (const migration of manifest.migrations) {
+    if (!appliedMigrations.has(migration.filename)) continue;
+    for (const addition of migration.catalogAdditions || []) {
+      if (addition.kind === 'constraint') {
+        expected.constraints.push(`${addition.schema}.${addition.identity}`);
+      }
+    }
+  }
+  return expected;
 }
 
 async function ledgerExists(client) {
@@ -900,11 +942,13 @@ async function attestLedger(client, manifest, established) {
       ? 'select filename, checksum from public.schema_migrations order by filename'
       : 'select filename, null::text as checksum from public.schema_migrations order by filename'
   );
-  const expected = manifest.migrations.filter((entry) => entry.legacyChecksumBackfillAllowed);
+  const expected = established
+    ? manifest.migrations.slice(0, rows.rowCount)
+    : manifest.migrations.filter((entry) => entry.legacyChecksumBackfillAllowed);
   compareExact(
     rows.rows.map((row) => row.filename),
     expected.map((entry) => entry.filename),
-    'Legacy ledger migration set'
+    established ? 'Established ledger migration prefix' : 'Legacy ledger migration set'
   );
   if (established) {
     const expectedByName = new Map(expected.map((entry) => [entry.filename, entry.sha256]));
@@ -914,11 +958,12 @@ async function attestLedger(client, manifest, established) {
       }
     }
   }
+  return new Set(rows.rows.map((row) => row.filename));
 }
 
-async function attestBaselineCatalog(client, manifest, ownerState) {
+async function attestBaselineCatalog(client, manifest, ownerState, appliedMigrations) {
   const catalog = await getCatalog(client);
-  const expected = expectedCatalog(manifest);
+  const expected = expectedCatalog(manifest, appliedMigrations);
   compareExact(
     catalog.schemas.rows.map((row) => row.identity),
     expected.schemas,
@@ -1338,10 +1383,16 @@ async function main() {
 
     const roleState = await inspectReservedRoles(client);
     const hasLedger = await ledgerExists(client);
+    let appliedMigrations = new Set();
     await preflightExtensions(client, manifest, { established: hasLedger });
     if (hasLedger) {
-      await attestLedger(client, manifest, roleState === 'established');
-      await attestBaselineCatalog(client, manifest, roleState === 'absent' ? 'legacy' : 'target');
+      appliedMigrations = await attestLedger(client, manifest, roleState === 'established');
+      await attestBaselineCatalog(
+        client,
+        manifest,
+        roleState === 'absent' ? 'legacy' : 'target',
+        appliedMigrations
+      );
     } else {
       await attestFreshCatalog(client, manifest, roleState === 'absent' ? 'legacy' : 'target');
     }
@@ -1376,8 +1427,8 @@ async function main() {
       await assertReservedRoleAclState(client);
       await assertReservedRoleOwnership(client, manifest);
       if (hasLedger) {
-        await attestLedger(client, manifest, true);
-        await attestBaselineCatalog(client, manifest, 'target');
+        appliedMigrations = await attestLedger(client, manifest, true);
+        await attestBaselineCatalog(client, manifest, 'target', appliedMigrations);
       } else {
         await attestFreshCatalog(client, manifest, 'target');
       }

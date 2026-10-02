@@ -21,6 +21,35 @@ export interface RagEngineConfig {
   dbAdapter: SemanticSearchService;
 }
 
+export interface RecipeContextDbAdapter {
+  searchChunks: SemanticSearchService['searchChunks'];
+}
+
+export interface RecipeContextRetrievalDependencies {
+  embedder: EmbeddingService;
+  dbAdapter: RecipeContextDbAdapter;
+}
+
+export interface RecipeContextRetrievalOptions {
+  bookIds?: string[];
+  matchCount?: number;
+  matchThreshold?: number;
+}
+
+export interface RecipeContextRetrievalResult {
+  searchQuery: string;
+  ingredients: string[];
+  restrictions: RestrictionProfile;
+  chunks: RecipeBookChunk[];
+  citations: Citation[];
+}
+
+export const RAG_MATCH_THRESHOLD = 0.35;
+export const RAG_MATCH_COUNT = 6;
+export const RAG_MAX_CHUNK_CONTENT_CHARS = 4_000;
+export const RAG_MAX_CONTEXT_CONTENT_CHARS = 12_000;
+export const RAG_MAX_QUERY_CHARS = 6_000;
+
 export class TrialSoftBlockError extends Error {
   constructor(action: 'generate recipes' | 'upload PDFs') {
     super(`Trial expired: cannot ${action}.`);
@@ -68,7 +97,15 @@ function resolveRestrictions(
   };
 }
 
-function buildRecipeSearchQuery(ingredients: string[], restrictions: RestrictionProfile): string {
+export function buildRecipeSearchQuery(searchInput: RecipeSearchInput): string {
+  const ingredients = normalizeArray(searchInput.ingredients);
+  const restrictions = resolveRestrictions(
+    searchInput.restrictionProfile,
+    searchInput.overrideRestrictions
+  );
+  const recipeName = searchInput.recipeName?.trim();
+  const mealType = searchInput.mealType?.trim();
+  const day = searchInput.day?.trim();
   const ingredientClause =
     ingredients.length > 0
       ? `Available ingredients: ${ingredients.join(', ')}.`
@@ -84,7 +121,41 @@ function buildRecipeSearchQuery(ingredients: string[], restrictions: Restriction
       ? `Respect dietary rules: ${restrictions.dietaryRules.join(', ')}.`
       : 'No additional dietary rules were specified.';
 
-  return `Gourmet recipe preparation and cooking instructions. ${ingredientClause} ${allergiesClause} ${dietaryClause}`;
+  const intentClauses = [
+    recipeName ? `Requested recipe: ${recipeName}.` : '',
+    mealType ? `Meal type: ${mealType}.` : '',
+    day ? `Planned day: ${day}.` : '',
+  ].filter(Boolean);
+
+  return [
+    'Gourmet recipe preparation and cooking instructions.',
+    ingredientClause,
+    allergiesClause,
+    dietaryClause,
+    ...intentClauses,
+  ].join(' ');
+}
+
+function boundSearchQuery(query: string): string {
+  return query.slice(0, RAG_MAX_QUERY_CHARS);
+}
+
+function boundContextChunks(chunks: RecipeBookChunk[]): RecipeBookChunk[] {
+  let remainingContentChars = RAG_MAX_CONTEXT_CONTENT_CHARS;
+
+  return chunks.reduce<RecipeBookChunk[]>((boundedChunks, chunk) => {
+    if (remainingContentChars <= 0 || !chunk.content.trim()) {
+      return boundedChunks;
+    }
+
+    const content = chunk.content.slice(
+      0,
+      Math.min(RAG_MAX_CHUNK_CONTENT_CHARS, remainingContentChars)
+    );
+    remainingContentChars -= content.length;
+    boundedChunks.push({ ...chunk, content });
+    return boundedChunks;
+  }, []);
 }
 
 function assertServerOnlyModelBoundary(action: 'pdf ingestion' | 'recipe generation'): void {
@@ -109,7 +180,7 @@ function assertTrialAllows(action: 'generate' | 'upload', trialState?: TrialStat
   }
 }
 
-function toCitation(chunk: RecipeBookChunk): Citation {
+export function toCitation(chunk: RecipeBookChunk): Citation {
   const sourceType = chunk.sourceType ?? chunk.metadata.source_type ?? 'ai_generated';
   const baseCitation = {
     title: chunk.metadata.book_title,
@@ -137,6 +208,43 @@ function toCitation(chunk: RecipeBookChunk): Citation {
   return {
     sourceType: 'ai_generated',
     ...baseCitation,
+  };
+}
+
+export async function retrieveRecipeContext(
+  searchInput: RecipeSearchInput,
+  dependencies: RecipeContextRetrievalDependencies,
+  options: RecipeContextRetrievalOptions = {}
+): Promise<RecipeContextRetrievalResult> {
+  assertServerOnlyModelBoundary('recipe generation');
+
+  const ingredients = normalizeArray(searchInput.ingredients);
+  const restrictions = resolveRestrictions(
+    searchInput.restrictionProfile,
+    searchInput.overrideRestrictions
+  );
+  const searchQuery = boundSearchQuery(buildRecipeSearchQuery(searchInput));
+  const matchCount = Math.min(Math.max(options.matchCount ?? RAG_MATCH_COUNT, 1), RAG_MATCH_COUNT);
+
+  serverLogger.info('rag_engine.query_embedding', { ingredientCount: ingredients.length });
+  const queryEmbedding = await dependencies.embedder.generateEmbedding(searchQuery);
+
+  serverLogger.info('rag_engine.querying_match_chunks');
+  const matchedChunks = await dependencies.dbAdapter.searchChunks(queryEmbedding, {
+    matchThreshold: options.matchThreshold ?? RAG_MATCH_THRESHOLD,
+    matchCount,
+    bookIds: options.bookIds,
+  });
+  const chunks = boundContextChunks(matchedChunks);
+
+  serverLogger.info('rag_engine.match_chunks_found', { matchCount: chunks.length });
+
+  return {
+    searchQuery,
+    ingredients,
+    restrictions,
+    chunks,
+    citations: chunks.map(toCitation),
   };
 }
 
@@ -245,47 +353,28 @@ export class RagEngine {
     assertTrialAllows('generate', options.trialState);
     assertServerOnlyModelBoundary('recipe generation');
 
-    const ingredients = normalizeArray(searchInput.ingredients);
-    const restrictions = resolveRestrictions(
-      searchInput.restrictionProfile,
-      searchInput.overrideRestrictions
+    const retrievedContext = await retrieveRecipeContext(
+      searchInput,
+      { embedder: this.embedder, dbAdapter: this.dbAdapter },
+      options
     );
-
-    // 1. Formulate a semantic search query based on ingredients
-    // A clean conceptual query helps text-embedding-004 align closer with recipes and preparations
-    const searchQuery = buildRecipeSearchQuery(ingredients, restrictions);
-
-    serverLogger.info('rag_engine.query_embedding', { ingredientCount: ingredients.length });
-    const queryEmbedding = await this.embedder.generateEmbedding(searchQuery);
-
-    serverLogger.info('rag_engine.querying_match_chunks');
-    // 2. Fetch matched chunks from cookbooks
-    const matchedChunks = await this.dbAdapter.searchChunks(queryEmbedding, {
-      matchThreshold: options.matchThreshold ?? 0.35, // Relaxed threshold for ingredient overlaps
-      matchCount: options.matchCount ?? 6, // High chunk context to capture multiple ingredients/steps
-      bookIds: options.bookIds,
-    });
-
-    serverLogger.info('rag_engine.match_chunks_found', { matchCount: matchedChunks.length });
 
     // 3. Generate recipe grounded strictly in the matched context
     serverLogger.info('rag_engine.recipe_generation_start');
     const promptInput: RecipeGenerationPromptInput = {
-      ingredients,
-      restrictions,
+      ingredients: retrievedContext.ingredients,
+      restrictions: retrievedContext.restrictions,
     };
 
-    const recipe = await this.generator.generateRecipe(promptInput, matchedChunks, {
+    const recipe = await this.generator.generateRecipe(promptInput, retrievedContext.chunks, {
       temperature: options.temperature,
       maxOutputTokens: options.maxOutputTokens,
     });
 
-    const citations = matchedChunks.map(toCitation);
-
     return {
       recipe,
-      retrievedChunks: matchedChunks,
-      citations,
+      retrievedChunks: retrievedContext.chunks,
+      citations: retrievedContext.citations,
     };
   }
 }

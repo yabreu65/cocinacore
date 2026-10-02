@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { StructuredRecipeIngredient } from '@/lib/recipes/structured-ingredients';
 import { serverLogger } from '@/lib/serverLogger';
 import Redis from 'ioredis';
@@ -12,17 +13,32 @@ export type CachedRecipe = {
   createdAt: number;
 };
 
+export type RecipeCacheScope = {
+  userId: string;
+  tenantId: string | null;
+};
+
 export type RecipeCacheKeyInput = {
   mode: 'free' | 'rag';
+  scope?: RecipeCacheScope | null;
   requestedRecipeName: string;
   requestedMealType: string;
   requestedDay: string;
   ingredients: string[];
   peopleCount: number;
-  identity: string[];
-  preferred: string[];
-  avoid: string[];
-  level: string;
+  goals?: string[];
+  inventoryContextHash?: string;
+  profileContextHash?: string;
+  contextVersion?: string;
+  model?: string;
+  /** @deprecated Private profile fields are represented by profileContextHash. */
+  identity?: string[];
+  /** @deprecated Private profile fields are represented by profileContextHash. */
+  preferred?: string[];
+  /** @deprecated Private profile fields are represented by profileContextHash. */
+  avoid?: string[];
+  /** @deprecated Private profile fields are represented by profileContextHash. */
+  level?: string;
   chunks: string[];
 };
 
@@ -106,13 +122,24 @@ function memorySet(key: string, value: CachedRecipe): void {
 // Public API
 // ---------------------------------------------------------------------------
 
+export function hashRecipeContext(context: unknown): string {
+  return createHash('sha256').update(JSON.stringify(context)).digest('hex');
+}
+
 export function buildRecipeCacheKey(input: RecipeCacheKeyInput): string {
   return JSON.stringify({
-    ...input,
+    mode: input.mode,
+    scope: input.scope ?? null,
+    requestedRecipeName: input.requestedRecipeName,
+    requestedMealType: input.requestedMealType,
+    requestedDay: input.requestedDay,
     ingredients: [...input.ingredients].sort(),
-    identity: [...input.identity].sort(),
-    preferred: [...input.preferred].sort(),
-    avoid: [...input.avoid].sort(),
+    peopleCount: input.peopleCount,
+    goalsHash: hashRecipeContext([...(input.goals ?? [])].sort()),
+    inventoryContextHash: input.inventoryContextHash ?? null,
+    profileContextHash: input.profileContextHash ?? null,
+    contextVersion: input.contextVersion ?? null,
+    model: input.model ?? null,
     chunks: [...input.chunks],
   });
 }

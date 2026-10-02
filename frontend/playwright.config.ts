@@ -27,19 +27,28 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
   ],
-  webServer: {
-    command: standaloneServerCommand,
-    url: 'http://localhost:3000',
-    reuseExistingServer: false,
-    env: {
-      DATABASE_URL:
-        process.env.DATABASE_URL ??
-        'postgresql://cocinacore_user:cocinacore_password@localhost:5433/cocinacore_local_db',
-      REDIS_URL: process.env.REDIS_URL ?? 'redis://localhost:6379',
-      AUTH_SECRET: process.env.AUTH_SECRET ?? 'e2e-auth-secret-change-me',
-      GEMINI_API_KEY: process.env.GEMINI_API_KEY ?? 'CHANGE_ME',
-      STORAGE_DRIVER: process.env.STORAGE_DRIVER ?? 'local',
-      LOCAL_UPLOAD_DIR: process.env.LOCAL_UPLOAD_DIR ?? './uploads',
+  webServer: [
+    {
+      command: 'node e2e/provider-server.mjs',
+      url: 'http://127.0.0.1:4319/__e2e/health',
+      reuseExistingServer: false,
     },
-  },
+    {
+      command: standaloneServerCommand,
+      url: 'http://localhost:3000',
+      reuseExistingServer: false,
+      env: {
+        DATABASE_URL:
+          process.env.DATABASE_URL ??
+          'postgresql://cocinacore_user:cocinacore_password@localhost:5433/cocinacore_local_db',
+        REDIS_URL:
+          process.env.E2E_REDIS_URL ?? process.env.REDIS_URL ?? 'redis://localhost:6379/15',
+        AUTH_SECRET: process.env.AUTH_SECRET ?? 'e2e-auth-secret-change-me',
+        GEMINI_API_KEY: process.env.GEMINI_API_KEY ?? 'e2e-gemini-key',
+        GEMINI_BASE_URL: process.env.GEMINI_BASE_URL ?? 'http://127.0.0.1:4319/v1beta/',
+        STORAGE_DRIVER: process.env.STORAGE_DRIVER ?? 'local',
+        LOCAL_UPLOAD_DIR: process.env.LOCAL_UPLOAD_DIR ?? './uploads',
+      },
+    },
+  ],
 });

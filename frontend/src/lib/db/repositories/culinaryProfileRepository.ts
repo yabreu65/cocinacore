@@ -44,11 +44,19 @@ export async function findCulinaryProfileByUserId(
   return mapSingleRow(result);
 }
 
+export interface UserCulinaryProfileTermWithLabel extends UserCulinaryProfileTermRow {
+  term_label: string;
+}
+
 export async function findCulinaryProfileTermsByUserId(
   userId: string
-): Promise<UserCulinaryProfileTermRow[]> {
-  const result = await query<UserCulinaryProfileTermRow>(
-    `select * from public.user_culinary_profile_terms where user_id = $1 order by created_at desc`,
+): Promise<UserCulinaryProfileTermWithLabel[]> {
+  const result = await query<UserCulinaryProfileTermWithLabel>(
+    `select profile_terms.*, terms.label as term_label
+     from public.user_culinary_profile_terms as profile_terms
+     join public.culinary_terms as terms on terms.id = profile_terms.term_id
+     where profile_terms.user_id = $1
+     order by profile_terms.created_at desc, profile_terms.term_id`,
     [userId]
   );
   return result.rows;

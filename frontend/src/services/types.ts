@@ -110,6 +110,9 @@ export interface InventoryItemDto {
 
 export interface RecipeSearchInput {
   ingredients?: string[];
+  recipeName?: string;
+  mealType?: string;
+  day?: string;
   restrictionProfile?: RestrictionProfile;
   overrideRestrictions?: RestrictionOverrideInput;
 }

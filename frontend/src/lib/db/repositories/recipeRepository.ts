@@ -71,24 +71,30 @@ export async function createRecipeHistory(
   return recipe;
 }
 
-export async function deleteRecipeHistory(id: string, tenantId: string): Promise<void> {
-  await query('delete from public.recipe_ai_history where id = $1 and tenant_id = $2', [
+export async function deleteRecipeHistory(
+  id: string,
+  tenantId: string,
+  userId: string
+): Promise<void> {
+  await query('delete from public.recipe_ai_history where id = $1 and tenant_id = $2 and user_id = $3', [
     id,
     tenantId,
+    userId,
   ]);
 }
 
 export async function updateRecipeFeedback(
   id: string,
   tenantId: string,
+  userId: string,
   feedback: 'accepted' | 'discarded'
 ): Promise<RecipeAiHistoryRow | null> {
   const result = await query<RecipeAiHistoryRow>(
     `update public.recipe_ai_history
      set user_feedback = $1, user_feedback_at = now()
-     where id = $2 and tenant_id = $3
+     where id = $2 and tenant_id = $3 and user_id = $4
      returning *`,
-    [feedback, id, tenantId]
+    [feedback, id, tenantId, userId]
   );
   return mapSingleRow(result);
 }
@@ -96,14 +102,15 @@ export async function updateRecipeFeedback(
 export async function toggleRecipeSaved(
   id: string,
   tenantId: string,
+  userId: string,
   isSaved: boolean
 ): Promise<RecipeAiHistoryRow | null> {
   const result = await query<RecipeAiHistoryRow>(
     `update public.recipe_ai_history
      set is_saved = $1
-     where id = $2 and tenant_id = $3
+     where id = $2 and tenant_id = $3 and user_id = $4
      returning *`,
-    [isSaved, id, tenantId]
+    [isSaved, id, tenantId, userId]
   );
   return mapSingleRow(result);
 }

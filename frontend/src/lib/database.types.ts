@@ -18,6 +18,7 @@ export type Database = {
           restrictions: string[];
           inventory_snapshot: Json;
           calendar_payload: Json;
+          consumption_payload: Json;
           ai_content: string | null;
           created_at: string;
           updated_at: string;
@@ -36,6 +37,7 @@ export type Database = {
           restrictions?: string[];
           inventory_snapshot: Json;
           calendar_payload: Json;
+          consumption_payload?: Json;
           ai_content?: string | null;
           created_at?: string;
           updated_at?: string;
@@ -54,6 +56,7 @@ export type Database = {
           restrictions?: string[];
           inventory_snapshot?: Json;
           calendar_payload?: Json;
+          consumption_payload?: Json;
           ai_content?: string | null;
           created_at?: string;
           updated_at?: string;

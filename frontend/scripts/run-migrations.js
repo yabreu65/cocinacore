@@ -17,6 +17,7 @@ const MIGRATION_LANE_VERSION = 1;
 const MIGRATION_ROLE = 'migration_admin';
 const SCHEMA_OWNER = 'cocinacore_schema_owner';
 const LOCK_NAMESPACE_PREFIX = 'cocinacore:database-change:v1:';
+const HISTORICAL_BASELINE_COUNT = 10;
 const MIGRATION_NAME = /^(\d{3})_[a-z0-9]+(?:_[a-z0-9]+)*(\.bootstrap)?\.sql$/;
 const LANES = new Set(['migration', 'bootstrap']);
 const SHA256 = /^[0-9a-f]{64}$/;
@@ -219,6 +220,30 @@ function assertPlainObject(value, label) {
   }
 }
 
+function assertCatalogAdditions(entry, historical, seen) {
+  if (historical && entry.catalogAdditions !== undefined) {
+    throw new Error(`Historical migration ${entry.filename} cannot declare catalog additions.`);
+  }
+  if (entry.catalogAdditions === undefined) return;
+  if (!Array.isArray(entry.catalogAdditions)) {
+    throw new Error(`Migration ${entry.filename} has invalid catalog additions.`);
+  }
+  for (const addition of entry.catalogAdditions) {
+    assertPlainObject(addition, `Catalog addition for ${entry.filename}`);
+    if (
+      Object.keys(addition).sort().join(',') !== 'identity,kind,schema' ||
+      addition.kind !== 'constraint' ||
+      !['internal', 'public'].includes(addition.schema) ||
+      !/^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$/.test(addition.identity)
+    ) {
+      throw new Error(`Migration ${entry.filename} has an unsupported catalog addition.`);
+    }
+    const key = `${addition.kind}|${addition.schema}|${addition.identity}`;
+    if (seen.has(key)) throw new Error(`Duplicate catalog addition: ${key}`);
+    seen.add(key);
+  }
+}
+
 function loadManifestAndMigrations() {
   const directory = resolveMigrationsDir();
   const manifestPath = path.join(directory, 'manifest.json');
@@ -409,6 +434,7 @@ function loadManifestAndMigrations() {
   const ids = new Set();
   const filenames = new Set();
   const migrations = [];
+  const catalogAdditions = new Set();
   let previous = 0;
   for (const entry of manifest.migrations) {
     assertPlainObject(entry, 'Migration entry');
@@ -443,6 +469,11 @@ function loadManifestAndMigrations() {
     if (typeof entry.legacyChecksumBackfillAllowed !== 'boolean') {
       throw new Error(`Migration ${entry.filename} has invalid legacy backfill metadata.`);
     }
+    const historical = migrations.length < HISTORICAL_BASELINE_COUNT;
+    if (entry.legacyChecksumBackfillAllowed !== historical) {
+      throw new Error(`Migration ${entry.filename} has invalid historical trust metadata.`);
+    }
+    assertCatalogAdditions(entry, historical, catalogAdditions);
     const bytes = fs.readFileSync(path.join(directory, entry.filename));
     const checksum = crypto.createHash('sha256').update(bytes).digest('hex');
     if (bytes.length !== entry.byteLength || checksum !== entry.sha256) {
@@ -451,6 +482,10 @@ function loadManifestAndMigrations() {
     const sql = bytes.toString('utf8');
     assertTransactionPolicy(entry.filename, entry.lane, sql);
     migrations.push({ ...entry, prefix: numericId, checksum, sql });
+  }
+
+  if (migrations.length < HISTORICAL_BASELINE_COUNT) {
+    throw new Error('Trusted historical migration baseline is incomplete.');
   }
 
   if (

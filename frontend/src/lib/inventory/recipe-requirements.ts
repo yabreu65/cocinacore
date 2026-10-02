@@ -1,7 +1,9 @@
 import { normalizeInventoryName } from './normalize-inventory';
 import {
   type NormalizedUnit,
+  canCompareUnits,
   compareInventoryToRequirement,
+  convertQuantity,
   normalizeUnit,
   parseQuantity,
 } from './quantity-normalization';
@@ -77,7 +79,15 @@ function extractIngredientsNode(recipePayload: unknown): unknown[] {
         inIngredients = true;
         continue;
       }
-      if (inIngredients && /^#+\s+/.test(clean)) break;
+      if (
+        inIngredients &&
+        (/^#+\s+/.test(clean) ||
+          /^#?\s*(preparaci[oó]n|elaboraci[oó]n|instrucciones|pasos|procedimiento|modo de preparaci[oó]n):?\s*$/i.test(
+            clean
+          ))
+      ) {
+        break;
+      }
       if (inIngredients && clean.length > 0) candidates.push(clean);
     }
   }
@@ -109,10 +119,21 @@ export function normalizeRecipeIngredient(input: unknown): RecipeRequirement | n
     if (!clean) return null;
     const parsed = parseQuantity(clean);
     const ingredientName = parsed.structured
-      ? clean
-          .replace(/^(\d+([.,]\d+)?|\d+\s*\/\s*\d+|\d+\s+\d+\s*\/\s*\d+)\s*/u, '')
-          .replace(/^(de)\s+/i, '')
-          .trim()
+      ? (() => {
+          const withoutQuantity = clean
+            .replace(/^(\d+\s+\d+\s*\/\s*\d+|\d+\s*\/\s*\d+|\d+([.,]\d+)?)\s*/u, '')
+            .trim();
+          const unitToken = withoutQuantity.split(/\s+/, 1)[0];
+          const normalizedUnitToken = normalizeUnit(unitToken);
+          const preserveCountableName = /^(tomate|tomates)$/i.test(unitToken);
+          const withoutUnit =
+            !preserveCountableName &&
+            normalizedUnitToken !== 'unknown' &&
+            normalizedUnitToken === parsed.unit
+              ? withoutQuantity.replace(/^\S+\s*/, '')
+              : withoutQuantity;
+          return withoutUnit.replace(/^(de)\s+/i, '').trim();
+        })()
       : clean;
     const normalizedName = normalizeInventoryName(ingredientName);
     if (!normalizedName) return null;
@@ -163,6 +184,7 @@ export function groupRequirementsByIngredient(
   requirements: RecipeRequirement[]
 ): RecipeRequirement[] {
   const map = new Map<string, RecipeRequirement>();
+  const incompatibleQuantities = new Set<string>();
   for (const item of requirements) {
     const existing = map.get(item.normalizedName);
     if (!existing) {
@@ -170,14 +192,38 @@ export function groupRequirementsByIngredient(
       continue;
     }
 
-    if (
-      existing.requiredUnit === item.requiredUnit &&
-      existing.requiredQuantity !== null &&
-      item.requiredQuantity !== null
-    ) {
-      existing.requiredQuantity = Number(
-        (existing.requiredQuantity + item.requiredQuantity).toFixed(2)
-      );
+    if (incompatibleQuantities.has(item.normalizedName)) {
+      existing.requiredQuantity = null;
+      existing.requiredUnit = 'unknown';
+    } else if (existing.requiredQuantity !== null && item.requiredQuantity !== null) {
+      const compatible = canCompareUnits(existing.requiredUnit, item.requiredUnit);
+      const targetUnit =
+        existing.requiredUnit === 'kg' || item.requiredUnit === 'kg'
+          ? 'kg'
+          : existing.requiredUnit === 'l' || item.requiredUnit === 'l'
+            ? 'l'
+            : existing.requiredUnit;
+      const existingQuantity =
+        compatible && existing.requiredUnit === targetUnit
+          ? existing.requiredQuantity
+          : compatible
+            ? convertQuantity(existing.requiredQuantity, existing.requiredUnit, targetUnit)
+            : null;
+      const itemQuantity =
+        compatible && item.requiredUnit === targetUnit
+          ? item.requiredQuantity
+          : compatible
+            ? convertQuantity(item.requiredQuantity, item.requiredUnit, targetUnit)
+            : null;
+
+      if (existingQuantity !== null && itemQuantity !== null) {
+        existing.requiredQuantity = Number((existingQuantity + itemQuantity).toFixed(2));
+        existing.requiredUnit = targetUnit;
+      } else {
+        existing.requiredQuantity = null;
+        existing.requiredUnit = 'unknown';
+        incompatibleQuantities.add(item.normalizedName);
+      }
     } else if (existing.requiredQuantity === null && item.requiredQuantity !== null) {
       existing.requiredQuantity = item.requiredQuantity;
       existing.requiredUnit = item.requiredUnit;
@@ -200,13 +246,17 @@ export function compareRecipeRequirementsToInventory(
   inventoryItems: InventoryComparableItem[]
 ): ComparedRequirement[] {
   const groupedRequirements = groupRequirementsByIngredient(requirements);
-  const inventoryByName = new Map(
-    inventoryItems.map((item) => [normalizeInventoryName(item.ingredient_name), item])
-  );
+  const inventoryByName = new Map<string, InventoryComparableItem[]>();
+  for (const item of inventoryItems) {
+    const key = normalizeInventoryName(item.ingredient_name);
+    const current = inventoryByName.get(key) ?? [];
+    current.push(item);
+    inventoryByName.set(key, current);
+  }
 
   return groupedRequirements.map((req) => {
-    const inv = inventoryByName.get(req.normalizedName);
-    if (!inv) {
+    const matchingInventory = inventoryByName.get(req.normalizedName) ?? [];
+    if (matchingInventory.length === 0) {
       return {
         ingredientName: req.ingredientName,
         normalizedName: req.normalizedName,
@@ -221,8 +271,37 @@ export function compareRecipeRequirementsToInventory(
       };
     }
 
+    let comparableTotal = 0;
+    let comparableRows = 0;
+    if (req.requiredQuantity !== null && req.requiredUnit !== 'unknown') {
+      for (const item of matchingInventory) {
+        const parsed = parseQuantity(
+          [item.quantity ?? '', item.unit ?? ''].filter(Boolean).join(' ').trim()
+        );
+        if (
+          !parsed.structured ||
+          parsed.value === null ||
+          parsed.unit === 'unknown' ||
+          !canCompareUnits(parsed.unit, req.requiredUnit)
+        ) {
+          continue;
+        }
+        const converted =
+          parsed.unit === req.requiredUnit
+            ? parsed.value
+            : convertQuantity(parsed.value, parsed.unit, req.requiredUnit);
+        if (converted === null) continue;
+        comparableTotal += converted;
+        comparableRows += 1;
+      }
+    }
+
+    const inventoryForComparison =
+      comparableRows > 0
+        ? { quantity: String(Number(comparableTotal.toFixed(4))), unit: req.requiredUnit }
+        : matchingInventory[0];
     const compared = compareInventoryToRequirement(
-      { quantity: inv.quantity, unit: inv.unit },
+      { quantity: inventoryForComparison.quantity, unit: inventoryForComparison.unit },
       {
         quantity: req.requiredQuantity === null ? null : String(req.requiredQuantity),
         unit: req.requiredUnit === 'unknown' ? null : req.requiredUnit,
@@ -235,7 +314,8 @@ export function compareRecipeRequirementsToInventory(
       requiredQuantity: req.requiredQuantity,
       requiredUnit: req.requiredUnit,
       availableQuantity: compared.available,
-      availableUnit: normalizeUnit(inv.unit),
+      availableUnit:
+        comparableRows > 0 ? req.requiredUnit : normalizeUnit(inventoryForComparison.unit),
       missingQuantity: compared.missing,
       remainingQuantity: compared.remaining,
       status: compared.status,

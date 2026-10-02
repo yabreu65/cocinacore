@@ -1,8 +1,14 @@
 import { test, expect } from '@playwright/test';
-import { injectAuth, clearAuth } from '../fixtures/auth';
+import { injectAuth, clearAuth, hasExplicitE2ECredentials } from '../fixtures/auth';
 import { LoginPage } from '../pages/login';
 
 test.describe('Authentication', () => {
+  test('signup is disabled when either explicit E2E credential is configured', () => {
+    expect(hasExplicitE2ECredentials('e2e-email@example.invalid', undefined)).toBe(true);
+    expect(hasExplicitE2ECredentials(undefined, 'configured-placeholder')).toBe(true);
+    expect(hasExplicitE2ECredentials(undefined, undefined)).toBe(false);
+  });
+
   test('unauthenticated user is redirected to login', async ({ page }) => {
     await clearAuth(page);
     await page.goto('/app');
@@ -11,8 +17,26 @@ test.describe('Authentication', () => {
     await expect(page).toHaveURL(/.*login.*/);
   });
 
+  test('unauthenticated user is redirected to login from legacy dashboard', async ({ page }) => {
+    await clearAuth(page);
+    await page.goto('/dashboard');
+
+    await expect(page).toHaveURL(/.*login.*/);
+  });
+
+  test('unauthenticated user is redirected to login from shopping-list', async ({ page }) => {
+    await clearAuth(page);
+    await page.goto('/shopping-list');
+
+    await expect(page).toHaveURL(/.*login.*/);
+  });
+
   test('authenticated user can access protected routes', async ({ page }) => {
     await injectAuth(page);
+
+    const profileResponse = await page.request.get('/api/profile');
+    expect(profileResponse.status()).toBe(200);
+
     await page.goto('/app');
 
     // Should stay on /app
