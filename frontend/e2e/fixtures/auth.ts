@@ -16,6 +16,16 @@ interface AuthOptions {
   allowSignup?: boolean;
 }
 
+interface ResponseCookie {
+  name: string;
+  value: string;
+  url: string;
+  expires?: number;
+  httpOnly: boolean;
+  secure: boolean;
+  sameSite?: 'Strict' | 'Lax' | 'None';
+}
+
 const TEST_USER_ID = '00000000-0000-0000-0000-000000000001';
 const RAW_E2E_EMAIL = process.env.E2E_USER_EMAIL;
 const RAW_E2E_PASSWORD = process.env.E2E_USER_PASSWORD;
@@ -70,6 +80,57 @@ async function signup(page: Page) {
   });
 }
 
+async function installResponseCookies(
+  page: Page,
+  response: Awaited<ReturnType<typeof loginWithCredentials>>
+): Promise<void> {
+  const header = response.headers()['set-cookie'];
+  if (!header) {
+    throw new Error('E2E auth response did not include a session cookie.');
+  }
+
+  const [pair = '', ...attributes] = header.split(';');
+  const separator = pair.indexOf('=');
+  const name = separator < 0 ? '' : pair.slice(0, separator).trim();
+  const value = separator < 0 ? '' : pair.slice(separator + 1);
+  if (!name || !value.trim()) {
+    throw new Error('E2E auth response contained a malformed session cookie.');
+  }
+
+  const cookie: ResponseCookie = {
+    name,
+    value,
+    url: new URL(response.url()).origin,
+    httpOnly: false,
+    secure: false,
+  };
+  let maxAge: number | undefined;
+  let expires: number | undefined;
+
+  for (const attribute of attributes) {
+    const [key, ...parts] = attribute.trim().split('=');
+    const attributeValue = parts.join('=').trim();
+    switch (key?.toLowerCase()) {
+      case 'httponly': cookie.httpOnly = true; break;
+      case 'secure': cookie.secure = true; break;
+      case 'max-age': maxAge = Number(attributeValue); break;
+      case 'expires': expires = Date.parse(attributeValue) / 1000; break;
+      case 'samesite':
+        if (attributeValue.toLowerCase() === 'strict') cookie.sameSite = 'Strict';
+        else if (attributeValue.toLowerCase() === 'lax') cookie.sameSite = 'Lax';
+        else if (attributeValue.toLowerCase() === 'none') cookie.sameSite = 'None';
+        break;
+    }
+  }
+
+  if (maxAge !== undefined && Number.isFinite(maxAge)) {
+    cookie.expires = Math.floor(Date.now() / 1000) + maxAge;
+  } else if (expires !== undefined && Number.isFinite(expires)) {
+    cookie.expires = Math.floor(expires);
+  }
+  await page.context().addCookies([cookie]);
+}
+
 /**
  * Authenticate through the app login API so the server issues real session cookies.
  */
@@ -108,6 +169,7 @@ export async function injectAuth(
     );
   }
 
+  await installResponseCookies(page, response);
   cachedAuthCookies = await page.context().cookies();
   cachedAuthCookiesFromSignup = authenticatedBySignup;
 }
@@ -130,6 +192,7 @@ export async function injectOwnerAuth(page: Page): Promise<void> {
     );
   }
 
+  await installResponseCookies(page, response);
   cachedOwnerAuthCookies = await page.context().cookies();
 }
 

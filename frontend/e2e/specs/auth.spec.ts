@@ -33,6 +33,10 @@ test.describe('Authentication', () => {
 
   test('authenticated user can access protected routes', async ({ page }) => {
     await injectAuth(page);
+
+    const profileResponse = await page.request.get('/api/profile');
+    expect(profileResponse.status()).toBe(200);
+
     await page.goto('/app');
 
     // Should stay on /app
