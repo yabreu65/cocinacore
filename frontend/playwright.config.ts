@@ -44,8 +44,8 @@ export default defineConfig({
         REDIS_URL:
           process.env.E2E_REDIS_URL ?? process.env.REDIS_URL ?? 'redis://localhost:6379/15',
         AUTH_SECRET: process.env.AUTH_SECRET ?? 'e2e-auth-secret-change-me',
-        GEMINI_API_KEY: process.env.GEMINI_API_KEY ?? 'e2e-gemini-key',
-        GEMINI_BASE_URL: process.env.GEMINI_BASE_URL ?? 'http://127.0.0.1:4319/v1beta/',
+        GEMINI_API_KEY: 'e2e-gemini-key',
+        GEMINI_BASE_URL: 'http://127.0.0.1:4319/v1beta',
         STORAGE_DRIVER: process.env.STORAGE_DRIVER ?? 'local',
         LOCAL_UPLOAD_DIR: process.env.LOCAL_UPLOAD_DIR ?? './uploads',
       },
