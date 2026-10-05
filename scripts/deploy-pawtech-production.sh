@@ -71,7 +71,7 @@ public_health_ok() {
 }
 
 container_networks_exact() {
-  actual_networks=$(docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{"\n"}}{{end}}' "$1" 2>/dev/null | LC_ALL=C sort) || return 1
+  actual_networks=$(docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{"\n"}}{{end}}' "$1" 2>/dev/null | awk 'NF' | LC_ALL=C sort) || return 1
   expected_networks=$(printf '%s\n' "$INTERNAL_NETWORK" "$PUBLIC_NETWORK" | LC_ALL=C sort)
   [ "$actual_networks" = "$expected_networks" ]
 }
@@ -213,7 +213,7 @@ rollback_mode() {
       fi
     fi
   done
-  attached_networks=$(docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{"\n"}}{{end}}' "$APP_CONTAINER" 2>/dev/null | LC_ALL=C sort) || rollback_fail 'restored app network state unavailable'
+  attached_networks=$(docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{"\n"}}{{end}}' "$APP_CONTAINER" 2>/dev/null | awk 'NF' | LC_ALL=C sort) || rollback_fail 'restored app network state unavailable'
   expected_networks=$(printf '%s\n' "$INTERNAL_NETWORK" "$PUBLIC_NETWORK" | LC_ALL=C sort)
   [ "$attached_networks" = "$expected_networks" ] || rollback_fail 'restored app has unexpected network membership'
 
@@ -319,7 +319,7 @@ cleanup() {
         fi
       done
       if [ "$rollback_ok" -eq 1 ]; then
-        attached_networks=$(docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{"\n"}}{{end}}' "$APP_CONTAINER" 2>/dev/null | LC_ALL=C sort) || rollback_ok=0
+        attached_networks=$(docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{"\n"}}{{end}}' "$APP_CONTAINER" 2>/dev/null | awk 'NF' | LC_ALL=C sort) || rollback_ok=0
         expected_networks=$(printf '%s\n' "$INTERNAL_NETWORK" "$PUBLIC_NETWORK" | LC_ALL=C sort)
         [ "$attached_networks" = "$expected_networks" ] || rollback_ok=0
       fi
