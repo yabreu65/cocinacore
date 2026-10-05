@@ -125,6 +125,27 @@ grep -Fq 'grep -Eq '\''^[0-9a-f]{64}$'\''' "$SCRIPT" || fail 'preflight must req
 grep -Fq 'docker exec "$POSTGRES_CONTAINER" sh -c '\''command -v pg_dump' "$SCRIPT" || fail 'preflight must inspect pg_dump inside PostgreSQL'
 grep -Fq 'docker exec "$POSTGRES_CONTAINER" sh -c '\''command -v pg_restore' "$SCRIPT" || fail 'preflight must inspect pg_restore inside PostgreSQL'
 grep -Fq 'container_networks_exact "$APP_CONTAINER"' "$SCRIPT" || fail 'preflight must require exact previous-app network membership'
+
+# Exact network-set comparisons must ignore Docker's formatter-added trailing blank line
+# without weakening exact membership (extra or missing networks must still fail).
+network_normalization_count=$(grep -Ec "docker inspect --format .*NetworkSettings.Networks.*awk 'NF'.*LC_ALL=C sort" "$SCRIPT" || true)
+[ "$network_normalization_count" -eq 3 ] ||
+  fail 'all three exact network comparisons must drop blank lines before sorting'
+
+normalize_network_fixture() {
+  awk 'NF' | LC_ALL=C sort
+}
+expected_network_fixture=$(printf '%s\n' pawtech_internal pawtech_public | LC_ALL=C sort)
+trailing_blank_fixture=$(printf '%s\n' pawtech_internal pawtech_public '')
+extra_network_fixture=$(printf '%s\n' pawtech_internal pawtech_public unexpected_network '')
+missing_network_fixture=$(printf '%s\n' pawtech_internal '')
+
+[ "$(printf '%s' "$trailing_blank_fixture" | normalize_network_fixture)" = "$expected_network_fixture" ] ||
+  fail 'network normalization must accept only the Docker-added trailing blank'
+[ "$(printf '%s' "$extra_network_fixture" | normalize_network_fixture)" != "$expected_network_fixture" ] ||
+  fail 'network normalization must still reject an extra network'
+[ "$(printf '%s' "$missing_network_fixture" | normalize_network_fixture)" != "$expected_network_fixture" ] ||
+  fail 'network normalization must still reject a missing required network'
 grep -Fq 'previous_internal_health_ok' "$SCRIPT" && grep -Fq 'public_health_ok' "$SCRIPT" || fail 'preflight must prove prior app internal and public health'
 grep -Fq '[ -n "$PREVIOUS" ] || fail' "$SCRIPT" || fail 'deploy must fail before cutover if prior app identity is unexpectedly absent'
 ! grep -Fq "DATABASE_CHANGED=YES" "$SCRIPT" || fail 'database-changed YES path is forbidden'

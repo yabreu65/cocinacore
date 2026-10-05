@@ -318,7 +318,7 @@ if grep -Eiq 'ROLLBACK_HEALTH|wait_rollback_health' "$PRODUCTION_DEPLOY"; then
   fail 'rollback readiness helper/constants must remain confined to the rehearsal harness'
 fi
 production_sha=$(shasum -a 256 "$PRODUCTION_DEPLOY" | awk '{print $1}')
-[[ $production_sha == 259f473e336e6204276d655da1a384dd9caf7e8fee36b900ec230890d17abb2c ]] || fail 'production deploy script SHA changed'
+[[ $production_sha == be5762f4654d201b2a4709d42745a41068dc7792fa3fb40efd44a3855aa3c065 ]] || fail 'production deploy script SHA changed'
 forbid_harness_text 'previous_network_before' 'stale post-rollback network baseline identifier is forbidden'
 awk '
   /rollback_previous "\$previous_id"/ { rollback=NR }
