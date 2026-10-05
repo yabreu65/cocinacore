@@ -22,6 +22,11 @@ for required_file in "$WORKFLOW" "$CI" "$DEPLOY_SCRIPT" "$BACKUP_HELPER" "$DEPLO
   [ -f "$required_file" ] || fail "required static contract input is missing: ${required_file#"$ROOT"/}"
 done
 
+ci_node_versions=$(grep -E '^[[:space:]]*node-version:' "$CI" || true)
+[ -n "$ci_node_versions" ] &&
+  ! printf '%s\n' "$ci_node_versions" | grep -Ev '^[[:space:]]*node-version:[[:space:]]*22\.22\.3[[:space:]]*$' >/dev/null ||
+  fail 'every CI node-version must be pinned to 22.22.3'
+
 # This contract reads repository text only. It never executes workflows,
 # Docker, SSH, backup, migration, or production commands.
 workflow_triggers=$(sed -n '/^on:/,/^[^[:space:]]/p' "$WORKFLOW")
