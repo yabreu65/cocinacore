@@ -28,10 +28,10 @@ cleanup() {
   if [ "$status" -ne 0 ]; then
     printf 'integration failure: stage=%s check=%s status=%s\n' "$STAGE" "$CHECK" "$status" >&2
   fi
-  if [ -n "$CONTAINER" ]; then docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; fi
+  if [ -n "$CONTAINER" ]; then docker rm -fv "$CONTAINER" >/dev/null 2>&1 || true; fi
   if [ -n "$PREFIX" ]; then
     for leftover in $(docker ps -a --format '{{.Names}}' | grep "^$PREFIX" || true); do
-      docker rm -f "$leftover" >/dev/null 2>&1 || true
+      docker rm -fv "$leftover" >/dev/null 2>&1 || true
     done
   fi
   if [ -n "$TMP_ROOT" ]; then rm -rf "$TMP_ROOT"; fi
@@ -64,7 +64,7 @@ start_container() {
     -e POSTGRES_DB="$DB" -e POSTGRES_USER=cocinacore -e POSTGRES_PASSWORD="$ADMIN_PASSWORD" \
     -p 127.0.0.1::5432 "$IMAGE" >/dev/null
   attempt=0
-  until docker exec "$CONTAINER" pg_isready -U cocinacore -d "$DB" >/dev/null 2>&1; do
+  until docker exec "$CONTAINER" pg_isready -h 127.0.0.1 -U cocinacore -d "$DB" >/dev/null 2>&1; do
     attempt=$((attempt + 1)); [ "$attempt" -lt 60 ] || fail 'PostgreSQL did not become ready'; sleep 1
   done
   PORT=$(docker port "$CONTAINER" 5432/tcp | sed 's/.*://')
@@ -73,7 +73,7 @@ start_container() {
 }
 
 stop_container() {
-  docker rm -f "$CONTAINER" >/dev/null
+  docker rm -fv "$CONTAINER" >/dev/null
   CONTAINER=
 }
 

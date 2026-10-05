@@ -14,6 +14,39 @@ fail() {
   exit 1
 }
 
+for helper in test-bootstrap-migrator-integration.sh test-canonical-email-integration.sh; do
+  helper_path="$ROOT/scripts/$helper"
+  grep -Fq 'until docker exec "$CONTAINER" pg_isready -h 127.0.0.1 -U cocinacore -d "$DB"' "$helper_path" \
+    || fail "$helper TCP readiness probe is missing"
+  ! grep -Fq 'pg_isready -U cocinacore -d "$DB"' "$helper_path" \
+    || fail "$helper retains socket-only readiness"
+  grep -Fq '[ "$attempt" -lt 60 ]' "$helper_path" \
+    || fail "$helper bounded readiness loop is missing"
+  awk '/start_container fresh / { startup = NR } /provision >"\$LOG"/ { provision = NR } END { exit !(startup && provision && startup < provision) }' "$helper_path" \
+    || fail "$helper provisions before container startup readiness"
+  grep -Fq 'stop_container() {
+  docker rm -fv "$CONTAINER" >/dev/null' "$helper_path" \
+    || fail "$helper normal stop does not remove anonymous volumes"
+  grep -Fq 'docker rm -fv "$CONTAINER" >/dev/null 2>&1 || true' "$helper_path" \
+    || fail "$helper EXIT cleanup does not remove anonymous volumes"
+  grep -Fq 'grep "^$PREFIX"' "$helper_path" \
+    || fail "$helper leftover cleanup is not PREFIX-scoped"
+  grep -Fq 'docker rm -fv "$leftover"' "$helper_path" \
+    || fail "$helper PREFIX-scoped cleanup does not remove anonymous volumes"
+  ! grep -Eq 'docker rm -f([[:space:]]|$)' "$helper_path" \
+    || fail "$helper retains volume-unaware docker rm -f cleanup"
+done
+
+CANONICAL_HELPER="$ROOT/scripts/test-canonical-email-integration.sh"
+! grep -Eq 'select count\(\*\) from schema_migrations.*=[[:space:]]*11' "$CANONICAL_HELPER" \
+  || fail 'canonical fresh ledger count is hardcoded to 11'
+grep -Fq 'EXPECTED_MIGRATION_COUNT=$(node -e "const m=require('\''$ROOT/db/migrations/manifest.json'\''); console.log(m.migrations.length)")' "$CANONICAL_HELPER" \
+  || fail 'canonical expected migration count is not manifest-derived'
+grep -Fq '[ "$(admin_sql "select count(*) from schema_migrations")" = "$EXPECTED_MIGRATION_COUNT" ]' "$CANONICAL_HELPER" \
+  || fail 'canonical fresh ledger count does not use manifest-derived expectation'
+grep -Fq "grep -q 'DONE 011_canonical_email_invariant.sql' \"\$LOG\"" "$CANONICAL_HELPER" \
+  || fail 'canonical fresh migration completion assertion for 011 is missing'
+
 node --check "$PROVISIONER"
 node --check "$RUNNER"
 node - "$MANIFEST" "$ROOT/db/migrations" "$BASE" <<'NODE'
