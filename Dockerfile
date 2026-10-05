@@ -1,5 +1,5 @@
 # Multi-stage production-parity build for CocinaCore Next.js frontend
-FROM node:22-alpine AS base
+FROM node:22.22.3-alpine AS base
 RUN apk add --no-cache libc6-compat
 WORKDIR /app
 

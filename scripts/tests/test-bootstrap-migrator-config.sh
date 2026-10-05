@@ -97,10 +97,12 @@ grep -q 'COCINACORE_SEPARATED_DB_LANES_ENABLED' "$RUNNER" || fail 'runner gate m
 ! grep -qi 'reassign owned' "$PROVISIONER" || fail 'REASSIGN OWNED is forbidden'
 ! grep -q 'process.env.DATABASE_URL.*MIGRATION_DATABASE_URL\|MIGRATION_DATABASE_URL.*process.env.DATABASE_URL' "$RUNNER" || fail 'migration secret fallback detected'
 ! grep -Eq 'alter (index|type|constraint).*owner' "$PROVISIONER" || fail 'dependent object direct ownership transfer detected'
-! grep -q 'provisioner npm run db:provision' "$ROOT/.github/workflows/deploy.yml" || fail 'ordinary deploy invokes bootstrap'
-grep -q 'app npm run db:migrate' "$ROOT/.github/workflows/deploy.yml" || fail 'disabled legacy deploy path missing'
-grep -q 'migrator npm run db:migrate' "$ROOT/.github/workflows/deploy.yml" || fail 'enabled restricted deploy path missing'
-grep -q 'Invalid COCINACORE_SEPARATED_DB_LANES_ENABLED' "$ROOT/.github/workflows/deploy.yml" || fail 'deploy strict gate validation missing'
+PAWTECH_DEPLOY="$ROOT/scripts/deploy-pawtech-production.sh"
+! grep -Eq 'db:provision|\.env\.migration|MIGRATION_ENV_FILE|MIGRATION_DATABASE_URL|BOOTSTRAP_DATABASE_URL|migration_admin' "$PAWTECH_DEPLOY" || fail 'PawTech deploy contains forbidden provisioning or migration-env behavior'
+grep -Fq 'RUNTIME_ENV_FILE=${2:-$EXPECTED_RUNTIME_ENV_FILE}' "$PAWTECH_DEPLOY" || fail 'PawTech deploy does not use the shared runtime env'
+grep -Fq -- '--env-file "$RUNTIME_ENV_FILE"' "$PAWTECH_DEPLOY" || fail 'PawTech deploy does not pass the shared runtime env'
+grep -Fq 'npm run db:migrate:verify' "$PAWTECH_DEPLOY" || fail 'read-only runtime migration verification missing'
+! grep -Eq 'npm run db:migrate([[:space:]]|$)' "$PAWTECH_DEPLOY" || fail 'mutating runtime migration command is forbidden'
 grep -Fq "$IMAGE" "$ROOT/.github/workflows/ci.yml" || fail 'CI PostgreSQL image policy is missing'
 grep -q 'COCINACORE_SEPARATED_DB_LANES_ENABLED: "true"' "$ROOT/.github/workflows/ci.yml" || fail 'CI separated test gate missing'
 grep -Fq "$IMAGE" "$ROOT/docker-compose.prod.yml" || fail 'production PostgreSQL image policy is missing'
@@ -111,8 +113,9 @@ node -e "const p=require(process.argv[1]); if(p.scripts['db:provision']!=='node 
 
 TMP_ENV=$(mktemp)
 TMP_MIGRATION=$(mktemp)
+TMP_NO_AUTH=$(mktemp)
 TMP_CONFIG=$(mktemp)
-cleanup() { rm -f "$TMP_ENV" "$TMP_MIGRATION" "$TMP_CONFIG"; }
+cleanup() { rm -f "$TMP_ENV" "$TMP_MIGRATION" "$TMP_NO_AUTH" "$TMP_CONFIG"; }
 trap cleanup EXIT INT TERM
 umask 077
 cat >"$TMP_ENV" <<'ENV'
@@ -121,8 +124,6 @@ POSTGRES_PASSWORD=placeholder-postgres
 APP_PUBLIC_URL=https://example.invalid
 AUTH_SECRET=placeholder-auth
 GEMINI_API_KEY=placeholder-gemini
-RESEND_API_KEY=placeholder-resend
-EMAIL_FROM=placeholder@example.invalid
 S3_ENDPOINT=https://storage.invalid
 S3_BUCKET=placeholder
 S3_ACCESS_KEY_ID=placeholder
@@ -135,7 +136,7 @@ MIGRATION_DATABASE_URL=postgresql://migration_admin:placeholder@postgres:5432/co
 MIGRATION_ADMIN_PASSWORD=placeholder-placeholder-placeholder
 ENV
 
-docker compose -f "$ROOT/docker-compose.prod.yml" --project-directory "$ROOT" \
+env -u RESEND_API_KEY -u EMAIL_FROM docker compose -f "$ROOT/docker-compose.prod.yml" --project-directory "$ROOT" \
   --env-file "$TMP_ENV" config --format json >"$TMP_CONFIG"
 node - "$TMP_CONFIG" <<'NODE'
 const fs = require('fs');
@@ -144,10 +145,18 @@ const app = config.services.app.environment;
 for (const secret of ['MIGRATION_DATABASE_URL','BOOTSTRAP_DATABASE_URL','MIGRATION_ADMIN_PASSWORD']) {
   if (Object.prototype.hasOwnProperty.call(app, secret)) process.exit(1);
 }
+if (!app.AUTH_SECRET) process.exit(1);
+if (app.RESEND_API_KEY !== '' || app.EMAIL_FROM !== '') process.exit(1);
 if (app.COCINACORE_SEPARATED_DB_LANES_ENABLED !== 'false') process.exit(1);
 NODE
 
-docker compose -f "$ROOT/docker-compose.prod.yml" --project-directory "$ROOT" \
+grep -v '^AUTH_SECRET=' "$TMP_ENV" >"$TMP_NO_AUTH"
+if env -u AUTH_SECRET -u RESEND_API_KEY -u EMAIL_FROM docker compose -f "$ROOT/docker-compose.prod.yml" --project-directory "$ROOT" \
+  --env-file "$TMP_NO_AUTH" config --format json >"$TMP_CONFIG" 2>/dev/null; then
+  fail 'Compose must reject a runtime env file without required AUTH_SECRET'
+fi
+
+env -u RESEND_API_KEY -u EMAIL_FROM docker compose -f "$ROOT/docker-compose.prod.yml" --project-directory "$ROOT" \
   --env-file "$TMP_ENV" --env-file "$TMP_MIGRATION" --profile operations config --format json >"$TMP_CONFIG"
 node - "$TMP_CONFIG" <<'NODE'
 const fs = require('fs');

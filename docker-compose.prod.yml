@@ -1,5 +1,6 @@
-# CocinaCore production stack for a single VPS.
-# Secrets are loaded from ./.env.production on the server. Do not commit that file.
+# STANDALONE REFERENCE ONLY — NOT the Pawtech live production topology.
+# Pawtech production uses shared services and its approved deploy workflow; do not deploy
+# this Compose stack to the live Pawtech VPS.
 
 services:
   postgres:
@@ -70,8 +71,8 @@ services:
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
       GEMINI_EMBEDDING_MODEL: ${GEMINI_EMBEDDING_MODEL:-gemini-embedding-001}
       EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1536}
-      RESEND_API_KEY: ${RESEND_API_KEY:?RESEND_API_KEY is required}
-      EMAIL_FROM: ${EMAIL_FROM:?EMAIL_FROM is required}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
       S3_ENDPOINT: ${S3_ENDPOINT:?S3_ENDPOINT is required}
       S3_REGION: ${S3_REGION:-auto}
       S3_BUCKET: ${S3_BUCKET:?S3_BUCKET is required}

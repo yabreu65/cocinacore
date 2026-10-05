@@ -1,33 +1,58 @@
 #!/bin/sh
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+STAGE=initialization
+CHECK=initialization
+ROOT=
 IMAGE='pgvector/pgvector:pg16'
-PREFIX="cocinacore-pr0a-cp21-$$"
+PREFIX=
 CONTAINER=
-TMP_ROOT=$(mktemp -d)
-LOG="$TMP_ROOT/operation.log"
-MIGRATION_PASSWORD=$(openssl rand -hex 18)
-ADMIN_PASSWORD=$(openssl rand -hex 18)
+TMP_ROOT=
+LOG=
+MIGRATION_PASSWORD=
+ADMIN_PASSWORD=
 PORT=
 DB=
 ADMIN_URL=
 MIGRATION_URL=
 
+set_check() {
+  if [ "$CHECK" != "$1" ]; then
+    CHECK=$1
+    printf 'integration check: %s\n' "$CHECK" >&2
+  fi
+}
+
 cleanup() {
   status=$?
-  if [ "$status" -ne 0 ] && [ -s "$LOG" ]; then tail -n 200 "$LOG" >&2; fi
+  if [ "$status" -ne 0 ]; then
+    printf 'integration failure: stage=%s check=%s status=%s\n' "$STAGE" "$CHECK" "$status" >&2
+  fi
   if [ -n "$CONTAINER" ]; then docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; fi
-  for leftover in $(docker ps -a --format '{{.Names}}' | grep "^$PREFIX" || true); do
-    docker rm -f "$leftover" >/dev/null 2>&1 || true
-  done
-  rm -rf "$TMP_ROOT"
+  if [ -n "$PREFIX" ]; then
+    for leftover in $(docker ps -a --format '{{.Names}}' | grep "^$PREFIX" || true); do
+      docker rm -f "$leftover" >/dev/null 2>&1 || true
+    done
+  fi
+  if [ -n "$TMP_ROOT" ]; then rm -rf "$TMP_ROOT"; fi
   return "$status"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+STAGE=initialization
+CHECK=initialization
+printf '%s\n' 'integration stage: initialization' >&2
+printf '%s\n' 'integration check: initialization' >&2
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+PREFIX="cocinacore-pr0a-cp21-$$"
+TMP_ROOT=$(mktemp -d)
+LOG="$TMP_ROOT/operation.log"
+MIGRATION_PASSWORD=$(openssl rand -hex 18)
+ADMIN_PASSWORD=$(openssl rand -hex 18)
 
 fail() {
-  printf '%s\n' "integration failure: $1" >&2
   exit 1
 }
 
@@ -109,9 +134,13 @@ PY
 # ---------------------------------------------------------------------------
 # Fresh installation, extension boundary, activation, SQL policy, and locks.
 # ---------------------------------------------------------------------------
+STAGE=fresh-install
+set_check startup
+printf '%s\n' 'integration stage: fresh-install' >&2
 start_container fresh cocinacore_fresh
 
 # Unavailable vector fails before roles, ledger, or migrations exist.
+set_check vector-unavailable
 SHARE_DIR=$(docker exec "$CONTAINER" pg_config --sharedir)
 docker exec "$CONTAINER" mv "$SHARE_DIR/extension/vector.control" "$SHARE_DIR/extension/vector.control.cp21"
 expect_provision_failure VECTOR_NOT_AVAILABLE
@@ -120,12 +149,14 @@ expect_provision_failure VECTOR_NOT_AVAILABLE
 docker exec "$CONTAINER" mv "$SHARE_DIR/extension/vector.control.cp21" "$SHARE_DIR/extension/vector.control"
 
 # Wrong installed vector state fails closed and is not repaired.
+set_check vector-mismatch
 admin_sql "$DB" "create schema vector_wrong; create extension vector with schema vector_wrong"
 expect_provision_failure VECTOR_STATE_MISMATCH
 [ "$(admin_sql "$DB" "select n.nspname from pg_extension e join pg_namespace n on n.oid=e.extnamespace where e.extname='vector'")" = vector_wrong ] || fail 'wrong vector schema was repaired'
 [ "$(admin_sql "$DB" "select count(*) from pg_roles where rolname in ('migration_admin','cocinacore_schema_owner')")" = 0 ] || fail 'wrong vector state created roles'
 admin_sql "$DB" 'drop extension vector; drop schema vector_wrong'
 
+set_check provision
 provision >"$LOG" 2>&1
 grep -q 'trusted ownership are provisioned' "$LOG" || fail 'fresh bootstrap did not finish'
 [ "$(admin_sql "$DB" "select n.nspname||','||r.rolname||','||r.rolsuper from pg_extension e join pg_namespace n on n.oid=e.extnamespace join pg_roles r on r.oid=e.extowner where e.extname='vector'")" = 'public,cocinacore,true' ] || fail 'fresh vector state is invalid'
@@ -133,6 +164,7 @@ grep -q 'trusted ownership are provisioned' "$LOG" || fail 'fresh bootstrap did 
 [ "$(admin_sql "$DB" "select n.nspname from pg_extension e join pg_namespace n on n.oid=e.extnamespace where e.extname='plpgsql'")" = pg_catalog ] || fail 'plpgsql attestation failed'
 
 # Exact rerun before migrations is a safe no-op, including credential state.
+set_check provision-rerun
 VECTOR_OID=$(admin_sql "$DB" "select oid from pg_extension where extname='vector'")
 PASSWORD_BEFORE=$(admin_sql "$DB" "select rolpassword from pg_authid where rolname='migration_admin'")
 provision >"$LOG" 2>&1
@@ -140,6 +172,7 @@ provision >"$LOG" 2>&1
 [ "$(admin_sql "$DB" "select rolpassword from pg_authid where rolname='migration_admin'")" = "$PASSWORD_BEFORE" ] || fail 'rerun rotated migration password'
 
 # The restricted actor cannot install vector in another prepared database.
+set_check role-ownership
 admin_sql "$DB" 'create database vector_denied'
 admin_sql vector_denied "alter schema public owner to cocinacore_schema_owner; grant create on database vector_denied to cocinacore_schema_owner"
 if migrator_sql vector_denied 'set role cocinacore_schema_owner; create extension vector with schema public' >"$LOG" 2>&1; then
@@ -149,16 +182,23 @@ grep -Eq 'permission denied|Must be superuser' "$LOG" || fail 'vector denial was
 admin_sql "$DB" 'drop database vector_denied'
 
 # Explicit bootstrap preinstall makes unchanged 001 safe; pgcrypto remains migration-owned.
+set_check migration-apply
 migrate >"$LOG" 2>&1
+set_check migration-marker
 grep -q 'DONE 012_meal_plan_consumption.sql' "$LOG" || fail 'fresh 001-012 did not complete'
+set_check verify-complete
 migrate --verify-complete >"$LOG" 2>&1
+set_check verify-marker
 grep -q 'Migration ledger is complete' "$LOG" || fail 'fresh completeness verification failed'
+set_check ledger-count
 [ "$(admin_sql "$DB" "select count(*) from public.schema_migrations")" = 12 ] || fail 'fresh ledger count is not 12'
+set_check schema-ownership
 [ "$(admin_sql "$DB" "select count(*) from pg_constraint where conrelid='public.users'::regclass and conname='users_email_canonical_check'")" = 1 ] || fail 'forward canonical constraint is missing'
 [ "$(admin_sql "$DB" "select pg_get_userbyid(extowner) from pg_extension where extname='pgcrypto'")" = cocinacore_schema_owner ] || fail 'pgcrypto was not created by schema owner'
 [ "$(admin_sql "$DB" "select pg_get_userbyid(relowner) from pg_class where oid='public.tenants'::regclass")" = cocinacore_schema_owner ] || fail 'fresh objects are not schema-owner owned'
 
 # Established ledgers accept only a checksummed continuous manifest prefix.
+set_check provision-ledger
 CHECKSUM_010=$(admin_sql "$DB" "select checksum from schema_migrations where filename='010_password_reset_tokens.sql'")
 CHECKSUM_011=$(admin_sql "$DB" "select checksum from schema_migrations where filename='011_canonical_email_invariant.sql'")
 admin_sql "$DB" "delete from schema_migrations where filename='010_password_reset_tokens.sql'"
@@ -172,6 +212,7 @@ expect_provision_failure 'Established ledger migration prefix'
 admin_sql "$DB" "delete from schema_migrations where filename='999_unknown.sql'"
 
 # Malformed extension membership is detected, while extension members remain outside app adoption.
+set_check role-ownership
 VECTOR_OPERATOR=$(admin_sql "$DB" "select d.objid from pg_extension e join pg_depend d on d.refclassid='pg_extension'::regclass and d.refobjid=e.oid and d.deptype='e' where e.extname='vector' and d.classid='pg_operator'::regclass order by d.objid limit 1")
 admin_sql "$DB" "delete from pg_depend where refclassid='pg_extension'::regclass and refobjid=(select oid from pg_extension where extname='vector') and deptype='e' and classid='pg_operator'::regclass and objid=$VECTOR_OPERATOR"
 expect_provision_failure 'extension vector membership is outside policy'
@@ -221,6 +262,7 @@ grep -q ROLE_STATE_MISMATCH "$LOG" || fail 'runner missing-owner failure was not
 admin_sql "$DB" 'alter table public.tenants owner to cocinacore_schema_owner; drop role cp21_foreign_owner'
 
 # Activation failure matrix.
+set_check activation
 if COCINACORE_SEPARATED_DB_LANES_ENABLED=true \
    node "$ROOT/frontend/scripts/run-migrations.js" --lane migration >"$LOG" 2>&1; then
   fail 'enabled runner accepted missing MIGRATION_DATABASE_URL'
@@ -244,6 +286,7 @@ grep -q 'Migration ledger is complete' "$LOG" || fail 'false-gate legacy mode fa
 admin_sql "$DB" 'drop database legacy_disabled'
 
 # Role attributes and least-privilege boundaries.
+set_check role-ownership
 [ "$(admin_sql "$DB" "select rolcanlogin||','||rolinherit||','||rolsuper||','||rolcreatedb||','||rolcreaterole||','||rolreplication||','||rolbypassrls||','||rolconnlimit||','||(rolvaliduntil is null)||','||(rolconfig is null) from pg_roles where rolname='migration_admin'")" = 'true,false,false,false,false,false,false,-1,true,true' ] || fail 'migration_admin attributes drifted'
 [ "$(admin_sql "$DB" "select rolcanlogin||','||rolinherit||','||rolsuper||','||rolcreatedb||','||rolcreaterole||','||rolreplication||','||rolbypassrls||','||rolconnlimit||','||(rolvaliduntil is null)||','||(rolconfig is null) from pg_roles where rolname='cocinacore_schema_owner'")" = 'false,false,false,false,false,false,false,-1,true,true' ] || fail 'schema owner attributes drifted'
 if migrator_sql "$DB" 'create role forbidden_role' >"$LOG" 2>&1; then fail 'migration_admin created a role'; fi
@@ -276,6 +319,9 @@ expect_provision_failure 'unexpected memberships'
 admin_sql "$DB" 'revoke membership_drift from migration_admin; drop role membership_drift'
 
 # SQL analyzer fixtures are validated before any connection.
+STAGE=sql-analyzer
+set_check sql-analyzer
+printf '%s\n' 'integration stage: sql-analyzer' >&2
 printf '%s\n' 'begin;' >"$TMP_ROOT/begin.sql"
 printf '%s\n' 'commit;' >"$TMP_ROOT/commit.sql"
 printf '%s\n' 'create index concurrently cp21_idx on public.tenants(id);' >"$TMP_ROOT/concurrently.sql"
@@ -334,6 +380,9 @@ fi
 [ "$(admin_sql "$DB" "select count(*) from schema_migrations where filename='013_atomic_failure.sql'")" = 0 ] || fail 'failed migration left a ledger row'
 
 # Shared advisory-lock matrix. A real first actor holds the exact key while the second executable times out.
+STAGE=advisory-locks
+set_check locks
+printf '%s\n' 'integration stage: advisory-locks' >&2
 wait_for_lock() {
   attempt=0
   until [ "$(admin_sql "$DB" "select count(*) from pg_locks where locktype='advisory' and granted")" -ge 1 ]; do
@@ -351,9 +400,15 @@ start_runner_holder() {
     "set role cocinacore_schema_owner; select pg_advisory_lock(hashtextextended('cocinacore:database-change:v1:'||current_database(),0)); select pg_sleep(1.5)" >/dev/null 2>&1 &
   HOLDER_PID=$!; wait_for_lock
 }
+expect_verify_without_lock() {
+  if MIGRATION_LOCK_TIMEOUT_MS=120 migrate --verify-complete >"$LOG" 2>&1; then
+    grep -q 'Migration ledger is complete' "$LOG" || fail 'read-only verification did not report completion'
+  else
+    fail 'read-only verification failed while an advisory lock was held'
+  fi
+}
 expect_runner_lock_timeout() {
-  if COCINACORE_SEPARATED_DB_LANES_ENABLED=true MIGRATION_DATABASE_URL="$MIGRATION_URL" \
-     MIGRATION_LOCK_TIMEOUT_MS=120 node "$ROOT/frontend/scripts/run-migrations.js" --lane migration --verify-complete >"$LOG" 2>&1; then
+  if MIGRATION_LOCK_TIMEOUT_MS=120 migrate "$DB" >"$LOG" 2>&1; then
     fail 'runner entered a held mutable critical section'
   fi
   grep -q LOCK_TIMEOUT "$LOG" || fail 'runner lock timeout was not explicit'
@@ -366,9 +421,15 @@ expect_provisioner_lock_timeout() {
   fi
   grep -q LOCK_TIMEOUT "$LOG" || fail 'provisioner lock timeout was not explicit'
 }
+set_check verify-complete-under-runner-lock
+start_runner_holder; expect_verify_without_lock; wait "$HOLDER_PID"
+set_check runner-timeout-under-runner-lock
 start_runner_holder; expect_runner_lock_timeout; wait "$HOLDER_PID"
+set_check runner-timeout-under-admin-lock
 start_admin_holder; expect_runner_lock_timeout; wait "$HOLDER_PID"
+set_check provisioner-timeout-under-runner-lock
 start_runner_holder; expect_provisioner_lock_timeout; wait "$HOLDER_PID"
+set_check provisioner-timeout-under-admin-lock
 start_admin_holder; expect_provisioner_lock_timeout; wait "$HOLDER_PID"
 
 # VALID UNTIL drift is tested last because PostgreSQL exposes no ALTER ROLE syntax restoring catalog NULL.
@@ -379,6 +440,9 @@ stop_container
 # ---------------------------------------------------------------------------
 # Existing trusted legacy upgrade, exact backfill, ownership, and compatibility.
 # ---------------------------------------------------------------------------
+STAGE=legacy-upgrade
+set_check startup
+printf '%s\n' 'integration stage: legacy-upgrade' >&2
 ADMIN_PASSWORD=$(openssl rand -hex 18)
 MIGRATION_PASSWORD=$(openssl rand -hex 18)
 start_container legacy cocinacore_legacy
@@ -451,6 +515,9 @@ admin_sql "$DB" "insert into tenants(name) values ('legacy-after')" >/dev/null
 provision >"$LOG" 2>&1
 [ "$(admin_sql "$DB" "select count(*) from tenants where name in ('legacy-before','legacy-after')")" = 2 ] || fail 'reprovision changed application data'
 
+STAGE=final-cleanup
+set_check cleanup
+printf '%s\n' 'integration stage: final-cleanup' >&2
 stop_container
 [ "$(docker ps -a --format '{{.Names}}' | grep -c "^$PREFIX" || true)" = 0 ] || fail 'temporary containers remain'
 printf '%s\n' 'bootstrap/migrator integration passed: fresh legacy extensions baseline roles locks transactions activation'
