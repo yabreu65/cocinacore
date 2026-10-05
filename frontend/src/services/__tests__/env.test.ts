@@ -52,6 +52,49 @@ describe('server environment validation', () => {
   });
 });
 
+describe('Playwright standalone Gemini fixture environment', () => {
+  async function getStandaloneServerEnv() {
+    vi.resetModules();
+    const { default: config } = await import('../../../playwright.config');
+    const webServers = Array.isArray(config.webServer)
+      ? config.webServer
+      : config.webServer
+        ? [config.webServer]
+        : [];
+    const standaloneServer = webServers.find((server) =>
+      server.command.includes('node .next/standalone/server.js')
+    );
+
+    expect(standaloneServer).toBeDefined();
+    return standaloneServer?.env;
+  }
+
+  it('uses the deterministic fixture key instead of an ambient placeholder', async () => {
+    process.env = { ...ORIGINAL_ENV, GEMINI_API_KEY: 'CHANGE_ME' };
+
+    expect((await getStandaloneServerEnv())?.GEMINI_API_KEY).toBe('e2e-gemini-key');
+  });
+
+  it('uses the local fixture URL instead of an ambient external base URL', async () => {
+    process.env = {
+      ...ORIGINAL_ENV,
+      GEMINI_BASE_URL: 'https://ambient.invalid/v1beta',
+    };
+
+    expect((await getStandaloneServerEnv())?.GEMINI_BASE_URL).toBe(
+      'http://127.0.0.1:4319/v1beta'
+    );
+  });
+
+  it('keeps CHANGE_ME invalid for the application Gemini configuration', async () => {
+    process.env = { ...ORIGINAL_ENV, GEMINI_API_KEY: 'CHANGE_ME' };
+    vi.resetModules();
+    const { getGeminiApiKey } = await import('@/lib/ai/gemini-config');
+
+    expect(getGeminiApiKey()).toBeNull();
+  });
+});
+
 describe('getOptionalServerSecret', () => {
   it('returns the value when set to a real value', () => {
     process.env = { ...ORIGINAL_ENV, GEMINI_API_KEY: 'real-key' };

@@ -28,11 +28,19 @@ function getSecret(): Uint8Array {
 }
 
 function getSessionTtlSeconds(): number {
-  const raw = process.env.AUTH_SESSION_TTL_SECONDS;
-  if (!raw) return DEFAULT_SESSION_TTL_SECONDS;
-  const parsed = Number.parseInt(raw, 10);
-  if (Number.isNaN(parsed) || parsed <= 0) return DEFAULT_SESSION_TTL_SECONDS;
-  return parsed;
+  const configuredTtl = process.env.AUTH_SESSION_TTL_SECONDS;
+  if (configuredTtl) {
+    const parsed = Number.parseInt(configuredTtl, 10);
+    return Number.isNaN(parsed) || parsed <= 0 ? DEFAULT_SESSION_TTL_SECONDS : parsed;
+  }
+
+  const legacyDays = process.env.SESSION_DAYS;
+  if (legacyDays) {
+    const parsedDays = Number.parseInt(legacyDays, 10);
+    if (!Number.isNaN(parsedDays) && parsedDays > 0) return parsedDays * 24 * 60 * 60;
+  }
+
+  return DEFAULT_SESSION_TTL_SECONDS;
 }
 
 interface SessionCookieOptions {

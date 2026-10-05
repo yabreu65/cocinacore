@@ -1,309 +1,109 @@
 # CocinaCore Production Runbook
 
-## Target runtime
+## Active runtime: Pawtech M1
 
-- Single VPS running Docker Compose.
-- PostgreSQL and Redis run on the VPS private Docker network.
-- The app listens on `127.0.0.1:3000`; terminate HTTPS with Caddy, Nginx, or Traefik.
-- PDFs/uploads use S3-compatible storage via `STORAGE_DRIVER=s3`.
-- Transactional email uses Resend.
+This is the authoritative Pawtech production path. Read [Production Reality First](production-reality-first.md)
+for the mandatory `DISCOVER → DEMONSTRATE → COMPARE → DESIGN → TEST → REHEARSAL → APPROVE →
+DEPLOY → VERIFY` sequence and PM approval checkpoint. The standalone `docker-compose.prod.yml` is a
+reference only and is **not** the Pawtech live topology.
 
-## Required server files
+- App: `cocinacore-web`, built from the manually selected exact release SHA.
+- App directory: `/opt/pawtech/apps/cocinacore`; runtime environment:
+  `/opt/pawtech/env/cocinacore.env` (mode `0600`, outside Git).
+- PostgreSQL: `pawtech-postgres`, database `cocinacore_db`, runtime user `cocinacore_user`.
+- Redis: `pawtech-redis:6379`; networks `pawtech_internal` and `pawtech_public`; routing by
+  existing Pawtech Traefik.
+- Local uploads bind: `/opt/pawtech/data/cocinacore/uploads:/app/uploads`; `STORAGE_DRIVER=local`
+  is supported and requires this directory to exist.
+- Email is optional; absent or partial `RESEND_API_KEY` / `EMAIL_FROM` does not block M1. Legacy
+  session duration remains 30 days. Separated database lanes remain disabled.
+- Secrets stay on the VPS. No `.env.production`, `.env.migration`, `migration_admin`,
+  `db:provision`, standalone Compose deployment, or shared infrastructure creation/mutation is part
+  of this release path.
 
-Create `.env.production` on the VPS next to `docker-compose.prod.yml`. Never commit it.
+## Controlled release sequence
 
-Required values:
+Before any future deployment, the GitHub `production` Environment secret
+`VPS_SSH_KNOWN_HOSTS` must be populated with the VPS host key entry obtained from an independently
+trusted public host-key source. The workflow fails closed if the secret is empty or does not contain
+`VPS_HOST`, and both deploy and rollback require strict SSH host-key checking. Do not establish trust
+with `ssh-keyscan`; no host-key value is documented here. GitHub configuration is not changed by
+this runbook or this hardening change.
 
-```bash
-POSTGRES_DB=cocinacore
-POSTGRES_USER=cocinacore
-POSTGRES_PASSWORD=change-me
-APP_PORT=3000
-APP_PUBLIC_URL=https://your-domain.example
-AUTH_SECRET=change-me-long-random-secret
-GEMINI_API_KEY=change-me
-RESEND_API_KEY=change-me
-EMAIL_FROM=CocinaCore <no-reply@your-domain.example>
-S3_ENDPOINT=https://s3-compatible-endpoint.example
-S3_REGION=auto
-S3_BUCKET=cocinacore-production
-S3_ACCESS_KEY_ID=change-me
-S3_SECRET_ACCESS_KEY=change-me
-S3_FORCE_PATH_STYLE=true
-NEXT_PUBLIC_SENTRY_DSN=
-SENTRY_DSN=
-SENTRY_TRACES_SAMPLE_RATE=0.1
-NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE=0.1
-```
+1. A human manually selects the exact 40-hex SHA already integrated into `origin/main`. GitHub
+   validates the SHA, confirms ancestry, checks out the exact commit, and runs Node `22.22.3`,
+   `npm ci`, lint, `test:coverage`, typecheck, build, and all four maintained static contracts
+   before configuring SSH. The manual workflow uses the `production` environment and serialized
+   `deploy-production` concurrency with cancellation disabled; it has no automatic retry.
+2. SSH uses the pinned `/opt/pawtech/apps/cocinacore` path and validates its canonical realpath.
+   The VPS receives the exact release SHA and production URL; it explicitly runs read-only preflight
+   before deploy mode. Preflight validates the absolute URL, runtime env path/mode/expected target,
+   shared networks and service health, uploads directory, source ancestry, and required tools/helper.
+   It creates no files and returns before deploy lock, trap, or mutations.
+3. Deploy uses `git archive "$RELEASE_SHA"` as the sole release source, excluding untracked VPS
+   files, and builds that exact-SHA image before backup.
+4. The extracted release's versioned `scripts/backup-pawtech-cocinacore-predeploy.sh` handles only
+   `cocinacore_db` on `pawtech-postgres`. It requires the pre-existing
+   `/opt/pawtech/backups/postgres/cocinacore_db/manual` hierarchy and creates a unique private
+   timestamp/SHA run directory. It produces a custom `pg_dump -Fc --no-owner --no-acl`, private
+   SHA-256 sidecar, verifies the checksum, and validates the archive with `pg_restore --list` in the
+   PostgreSQL container. Deploy verifies artifact/sidecar ownership and modes, directory mode,
+   checksum, and helper success before migration verification or candidate startup. Any failure
+   stops deployment and leaves artifacts in place. The shared multi-database backup routine,
+   retention, offsite transfer, and restore are never invoked by this helper.
+5. Only `npm run db:migrate:verify` runs, after backup integrity validation. It is read-only and
+   requires the existing migration ledger to be complete and ordered. M1 requires
+   `MIGRATION_EXPECTATION=NO_OP` and `DATABASE_CHANGED=NO`; pending migrations fail closed. No
+   provisioning, mutating migration, DDL, or automatic database restore is allowed. Never run `pg_restore --clean` or restore automatically.
+6. A candidate runs on `pawtech_internal` only. App, database, and Redis health must pass before
+   application cutover. Before cutover, the deploy writes a mode-`0600` non-secret state record in
+   the private CocinaCore backup run directory, binding release SHA, image, previous container/id/
+   image, backup artifact, `DATABASE_CHANGED=NO`, and the deterministic GitHub attempt ID. The
+   record and backup evidence are preserved.
+7. The new app is connected to the existing public network and must pass internal and public health.
+   Public health requires successful HTTP and JSON app/database/Redis health. The remote script then
+   reports `REMOTE_DEPLOY_READY`, not final deployment success. GitHub performs an independent
+   second `/api/health` HTTP+JSON smoke check; the workflow is successful only if it passes.
+8. If remote cutover health fails, the deploy script's guarded application rollback runs. If the
+   second public health smoke fails after remote deploy succeeded, a failure-only GitHub continuation
+   invokes the exact release script's rollback mode with the same attempt ID. Rollback locates exactly
+   one matching state record, validates its owner/mode/path/content and the retained previous
+   container identity, removes only the app proven to match this attempt/image (or accepts it absent),
+   restores and starts the prior app, then proves its identity, running state, exact two-network
+   membership, and internal/public app/database/Redis health. Success reports `APP_ROLLBACK_SAFE`;
+   uncertainty or mutation/proof failure reports `MANUAL_INTERVENTION_REQUIRED`. A successful
+   recovery does not turn the failed smoke or workflow green. Recovery never builds, backs up,
+   migrates, or restores a database.
 
-## Production deploy procedure
+## Recovery boundaries and operational evidence
 
-Merging to `main` does **not** deploy production. Production deployment is an explicit, controlled
-GitHub Actions operation and remains separate from database lane activation.
+An application rollback does not reverse a database change. M1 must keep `DATABASE_CHANGED=NO`;
+any unexpected database state stops automatic recovery and requires an explicit human decision. A
+backup artifact and checksum are not proof of restorability: restore drills belong to a separately
+authorized future step and approved environment. Preserve existing shared services and tenant
+boundaries. Do not treat production as a lab or infer destructive authority from access.
 
-1. Select the exact full 40-character commit SHA to deploy. The SHA must already be integrated into
-   `main`; it may be an earlier `main` ancestor for an explicit application rollback.
-2. In GitHub, open **Actions** → **Deploy** → **Run workflow**, keep the `main` workflow ref selected,
-   and enter the exact SHA in the required `sha` input.
-3. The `validate-deploy` job checks the SHA format, confirms that it resolves to a commit, and verifies
-   that it is an ancestor of `origin/main`. Invalid, incomplete, or non-`main` SHAs fail before the
-   production environment or its secrets are used.
-4. The `production` GitHub Environment is the deployment boundary. Configure any protection rules or
-   required reviewers in GitHub Environment settings; this repository does not claim they are enabled.
-5. The deploy job checks out that exact validated SHA. On the VPS, tracked changes in the deployment
-   repository abort the release. The build source is then generated from a Git archive of that SHA, so
-   untracked and ignored VPS files cannot enter the application image or migration source.
-6. Runtime configuration remains external in `.env.production`; it is used by Docker Compose but is not
-   part of the archived Docker build context. Local VPS edits must never silently enter a release.
-7. Verify the production health/smoke check and perform the approved acceptance checks after deployment.
+For a historical SHA redeploy, separately record and review compatibility with the current database
+schema before approval. Runtime migrations are forward-only; older application source does not roll
+the database backward. Never print credentials, copy runtime env into the repository, or improvise
+restore commands.
 
-`MERGE != DB LANE ACTIVATION`. Any separated database lane activation follows its own explicit,
-approved ceremony; running a production deploy does not change its configuration.
-
-## Historical SHA compatibility gate
-
-Deploying the current or a new SHA from `main` follows the normal production deploy procedure above.
-Deploying a historical SHA from `main` is an **application/code redeploy**, not a database rollback.
-
-Before running a historical SHA, the maintainer must perform and record an explicit compatibility
-assessment between the historical application code and the current production database schema:
-
-1. Identify the historical `DEPLOY_SHA`, the current production application SHA, and the current applied
-   database migration state.
-2. Review every migration applied after the selected SHA and determine whether it introduced an
-   incompatibility for the historical code, including removed or renamed columns/tables, incompatible
-   constraints, changed or removed enum values, type changes, database contract/API changes, or permission
-   and role changes the historical code does not support.
-3. Record `DEPLOY_SHA`, `CURRENT_PRODUCTION_SHA`, `CURRENT_DB_MIGRATION_STATE`,
-   `COMPATIBILITY_VERDICT`, `EVIDENCE/NOTES`, and `APPROVED_BY` in the operational release record.
-4. Continue with the application/code redeploy only when the verdict is `COMPATIBLE`. A verdict of
-   `NOT COMPATIBLE` or `UNKNOWN` blocks the historical application deploy.
-
-Normal deployment migrations are forward-only. Selecting an older SHA does not revert already-applied
-database migrations. If the required recovery also needs to move the database schema or data backward,
-use the approved backup/restore or disaster-recovery procedure; do not assume this deploy workflow performs
-database rollback. See the backup and rollback guidance in this runbook.
-
-## Runtime boundary
-
-CocinaCore runs on one VPS with a dedicated PostgreSQL database and Redis on the private Compose
-network. The long-running app listens on `127.0.0.1:3000`, uses S3-compatible object storage, and
-never receives bootstrap or migration credentials.
-
-PR0A separates three database actors:
-
-- the existing PostgreSQL administrator is an exceptional, operator-invoked bootstrap actor;
-- `migration_admin` is a restricted login that can only assume `cocinacore_schema_owner`;
-- `cocinacore_schema_owner` is a non-login owner for ordinary CocinaCore database objects.
-
-Merging this code is **not** activation. The separated lane is disabled by default and an ordinary
-deploy keeps the legacy migration behavior until the activation ceremony is approved.
-
-## Server configuration
-
-Create `.env.production` next to `docker-compose.prod.yml`; never commit it. Use mode `0600`.
-At minimum it contains the normal application and infrastructure configuration:
-
-```bash
-chmod 600 .env.production
-COCINACORE_SEPARATED_DB_LANES_ENABLED=false
-POSTGRES_DB=cocinacore
-POSTGRES_USER=cocinacore
-POSTGRES_PASSWORD=<secret>
-APP_PORT=3000
-APP_PUBLIC_URL=https://your-domain.example
-AUTH_SECRET=<secret>
-GEMINI_API_KEY=<secret>
-RESEND_API_KEY=<secret>
-EMAIL_FROM="CocinaCore <no-reply@your-domain.example>"
-S3_ENDPOINT=https://s3-compatible-endpoint.example
-S3_REGION=auto
-S3_BUCKET=cocinacore-production
-S3_ACCESS_KEY_ID=<secret>
-S3_SECRET_ACCESS_KEY=<secret>
-S3_FORCE_PATH_STYLE=true
-NEXT_PUBLIC_SENTRY_DSN=
-SENTRY_DSN=
-SENTRY_TRACES_SAMPLE_RATE=0.1
-NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE=0.1
-```
-
-The gate accepts explicit true values (`true`, `1`, `yes`, `on`) and explicit false values
-(`false`, `0`, `no`, `off`). Missing means disabled; any other value fails configuration validation.
-
-For the one-time activation ceremony, create a separate root-readable `.env.migration`:
-
-```bash
-chmod 600 .env.migration
-BOOTSTRAP_DATABASE_URL=postgresql://<existing-admin>:<secret>@postgres:5432/cocinacore
-MIGRATION_DATABASE_URL=postgresql://migration_admin:<different-secret>@postgres:5432/cocinacore
-MIGRATION_ADMIN_PASSWORD=<same-migration-admin-secret>
-```
-
-`BOOTSTRAP_DATABASE_URL` and `MIGRATION_ADMIN_PASSWORD` are projected only into the one-shot
-`provisioner`. `MIGRATION_DATABASE_URL` is projected only into the one-shot `migrator`. Neither
-operations service loads an env file, and the app environment is explicitly allowlisted rather
-than inheriting `.env.migration`.
-
-For local operations, the same variables may be placed in private `frontend/.env.local`.
-`frontend/.env.example` remains the application/local runtime contract. The migration runner never
-falls back from `MIGRATION_DATABASE_URL` to `DATABASE_URL` while separated mode is enabled.
-
-## Trusted baseline and extension boundary
-
-`db/migrations/manifest.json` is the versioned root of trust for historical migrations 001–010,
-the exact legacy catalog, the 38 ownership-transfer targets, roles, lock, and extensions. It is not
-generated or rewritten during deployment.
-
-The PostgreSQL server must expose the extensions declared in the manifest. Production and CI use
-`pgvector/pgvector:pg16`. The reviewed local digest is an arm64 platform manifest, so it is not a safe
-pin for the amd64 CI runner or an unconfirmed VPS architecture. Resolving and approving a
-platform-specific or multi-architecture digest remains an activation prerequisite and a documented
-reproducibility risk; this PR does not perform network resolution to invent one. Node, npm, the app,
-and deploy scripts never install OS packages or download extension binaries.
-
-- `vector` is the only bootstrap-managed extension. On a fresh pre-001 database the explicit
-  provisioner installs it in `public` when available and absent. On an established database it is
-  attestation-only. It is never dropped, relocated, or automatically updated.
-- `pgcrypto` remains owned by historical migration 001. In a fresh separated install it is created
-  by `cocinacore_schema_owner`; a trusted legacy administrative owner is also accepted.
-- `plpgsql` must already exist in `pg_catalog` and is attested only.
-
-Extension-managed objects never enter the application ownership allowlist. Every extension and DB
-mutation uses the shared session advisory-lock namespace
-`cocinacore:database-change:v1:<database>`.
-
-## Merge-safe deployment (default)
-
-With the gate missing or false, no migration or bootstrap secret is required. The deployment runs
-the legacy migration command through the app container and does not invoke the provisioner.
-
-```bash
-docker compose -f docker-compose.prod.yml --env-file .env.production build app
-docker compose -f docker-compose.prod.yml --env-file .env.production up -d postgres redis
-docker compose -f docker-compose.prod.yml --env-file .env.production run --rm app npm run db:migrate
-docker compose -f docker-compose.prod.yml --env-file .env.production up -d app
-```
-
-## Explicit activation ceremony
-
-Do not perform this ceremony merely because PR0A was merged. Schedule and approve it separately:
-
-1. Take and verify a database backup.
-2. Perform the read-only ledger/catalog attestation against the trusted manifest.
-3. Install `.env.migration` with mode `0600` and verify the target database identities.
-4. While the production gate is still disabled, invoke the explicit provisioner once:
-
-   ```bash
-   COCINACORE_SEPARATED_DB_LANES_ENABLED=true \
-   docker compose -f docker-compose.prod.yml \
-     --env-file .env.production --env-file .env.migration \
-     --profile operations run --rm provisioner npm run db:provision
-   ```
-
-5. Verify roles, extensions, owners, ACLs, legacy reads/writes, and persistent data.
-6. Set `COCINACORE_SEPARATED_DB_LANES_ENABLED=true` in `.env.production`.
-7. Run the restricted migration lane and completeness verification:
-
-   ```bash
-   docker compose -f docker-compose.prod.yml \
-     --env-file .env.production --env-file .env.migration \
-     --profile operations run --rm migrator npm run db:migrate
-   docker compose -f docker-compose.prod.yml \
-     --env-file .env.production --env-file .env.migration \
-     --profile operations run --rm migrator npm run db:migrate:verify
-   ```
-
-8. Start the app and perform the approved health and acceptance checks.
-
-Bootstrap is never part of app startup or an ordinary deploy. A failed bootstrap prevents migration
-from starting. Stable operational identifiers include `VECTOR_NOT_AVAILABLE`,
-`VECTOR_STATE_MISMATCH`, `BASELINE_MISMATCH`, `ROLE_STATE_MISMATCH`, `LOCK_TIMEOUT`,
-`MIGRATION_IDENTITY_MISMATCH`, and `MIGRATION_CHECKSUM_MISMATCH`; reports must not include URLs or
-passwords.
-
-## Reprovisioning
-
-An exact second provision is an attestation/no-op except for intentional external rotation of the
-`migration_admin` password. Missing roles are created only when both are absent. Partial roles,
-attribute/membership/config/ACL/ownership drift, catalog drift, or an established missing extension
-fails before persistent mutation.
-
-## Rollback
-
-Before any activation database mutation, leave or return the gate to disabled and keep the legacy
-path. After ownership or ledger mutation, do **not** delete roles, rewrite trusted history, reinstall
-extensions, or blindly run an old runner. Preserve the database and new DB tooling. Roll back only
-the app image when backward compatibility was proven, then diagnose and forward-fix. A full catalog
-rollback requires the preactivation backup and a separately approved restore procedure.
-
-## First deploy
-
-```bash
-git fetch --all --prune
-git checkout <release-sha>
-docker compose -f docker-compose.prod.yml --env-file .env.production build app
-docker compose -f docker-compose.prod.yml --env-file .env.production up -d postgres redis
-docker compose -f docker-compose.prod.yml --env-file .env.production run --rm app npm run db:migrate
-docker compose -f docker-compose.prod.yml --env-file .env.production up -d app
-curl -fsS https://your-domain.example/api/health
-```
-
-Bootstrap the first platform owner once only:
-
-```bash
-docker compose -f docker-compose.prod.yml --env-file .env.production run --rm app \
-  node scripts/bootstrap-owner.js owner@example.com "Owner Name" "TemporaryStrongPassword123!"
-```
-
-## Deploy update
-
-```bash
-git fetch --all --prune
-git checkout <release-sha>
-docker compose -f docker-compose.prod.yml --env-file .env.production build app
-docker compose -f docker-compose.prod.yml --env-file .env.production run --rm app npm run db:migrate
-docker compose -f docker-compose.prod.yml --env-file .env.production up -d app
-curl -fsS https://your-domain.example/api/health
-```
-
-## Rollback
-
-```bash
-git checkout <previous-release-sha>
-docker compose -f docker-compose.prod.yml --env-file .env.production build app
-docker compose -f docker-compose.prod.yml --env-file .env.production up -d app
-curl -fsS https://your-domain.example/api/health
-```
-
-An application rollback does not roll back database migrations. If a migration is not backward-compatible,
-restore the database backup before starting the app.
-
-## Backups
-
-Daily cron example:
-
-```cron
-15 3 * * * cd /opt/cocinacore && . ./.env.production && scripts/postgres-backup.sh
-```
-
-Retention defaults to 30 days. Test restore before launch:
-
-```bash
-scripts/postgres-restore.sh backups/cocinacore-YYYYMMDDTHHMMSSZ.dump
-```
-
-Redis is treated as cache/queue state, not canonical data.
+The PostgreSQL extension image policy is `pgvector/pgvector:pg16`. The reviewed digest is an
+arm64 platform manifest, so it is not asserted as a safe pin for amd64 CI or an unconfirmed VPS
+architecture. Resolving a platform-specific or multi-architecture digest is a separate approved
+reproducibility task.
 
 ## Release checklist
 
-- HTTPS is active and redirects HTTP to HTTPS.
-- `AUTH_SECRET` is long, random, and not `CHANGE_ME`.
-- `APP_PUBLIC_URL` matches the public HTTPS domain.
-- Resend domain is verified and password reset email works.
-- S3 bucket write/delete works.
-- `npm run db:migrate` has completed successfully.
-- `/api/health` returns 200.
-- Owner health page works for a platform owner.
-- Latest CI passed lint, tests, coverage, typecheck, build, and E2E.
-- Latest Postgres backup restore was tested.
+- The PM has populated the GitHub `production` Environment secret `VPS_SSH_KNOWN_HOSTS` from an
+  independently trusted public host-key source; the value is never stored in this runbook.
+- Exact full SHA is integrated into `origin/main`, manually selected, and approved at the PM
+  checkpoint.
+- Required frontend quality checks and all four static contracts pass before SSH setup.
+- Preflight confirms the known Pawtech runtime and exits before deploy mutations.
+- Exact-SHA archive build completes before the CocinaCore-only backup.
+- Backup artifact and sidecar pass mode, ownership, checksum, and archive validation.
+- Read-only migration verification passes with `MIGRATION_EXPECTATION=NO_OP` and
+  `DATABASE_CHANGED=NO`.
+- Internal-only candidate passes app/database/Redis health before cutover.
+- Internal/public health and independent GitHub public smoke pass; rollback evidence is retained.

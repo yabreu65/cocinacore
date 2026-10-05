@@ -14,6 +14,39 @@ fail() {
   exit 1
 }
 
+for helper in test-bootstrap-migrator-integration.sh test-canonical-email-integration.sh; do
+  helper_path="$ROOT/scripts/$helper"
+  grep -Fq 'until docker exec "$CONTAINER" pg_isready -h 127.0.0.1 -U cocinacore -d "$DB"' "$helper_path" \
+    || fail "$helper TCP readiness probe is missing"
+  ! grep -Fq 'pg_isready -U cocinacore -d "$DB"' "$helper_path" \
+    || fail "$helper retains socket-only readiness"
+  grep -Fq '[ "$attempt" -lt 60 ]' "$helper_path" \
+    || fail "$helper bounded readiness loop is missing"
+  awk '/start_container fresh / { startup = NR } /provision >"\$LOG"/ { provision = NR } END { exit !(startup && provision && startup < provision) }' "$helper_path" \
+    || fail "$helper provisions before container startup readiness"
+  grep -Fq 'stop_container() {
+  docker rm -fv "$CONTAINER" >/dev/null' "$helper_path" \
+    || fail "$helper normal stop does not remove anonymous volumes"
+  grep -Fq 'docker rm -fv "$CONTAINER" >/dev/null 2>&1 || true' "$helper_path" \
+    || fail "$helper EXIT cleanup does not remove anonymous volumes"
+  grep -Fq 'grep "^$PREFIX"' "$helper_path" \
+    || fail "$helper leftover cleanup is not PREFIX-scoped"
+  grep -Fq 'docker rm -fv "$leftover"' "$helper_path" \
+    || fail "$helper PREFIX-scoped cleanup does not remove anonymous volumes"
+  ! grep -Eq 'docker rm -f([[:space:]]|$)' "$helper_path" \
+    || fail "$helper retains volume-unaware docker rm -f cleanup"
+done
+
+CANONICAL_HELPER="$ROOT/scripts/test-canonical-email-integration.sh"
+! grep -Eq 'select count\(\*\) from schema_migrations.*=[[:space:]]*11' "$CANONICAL_HELPER" \
+  || fail 'canonical fresh ledger count is hardcoded to 11'
+grep -Fq 'EXPECTED_MIGRATION_COUNT=$(node -e "const m=require('\''$ROOT/db/migrations/manifest.json'\''); console.log(m.migrations.length)")' "$CANONICAL_HELPER" \
+  || fail 'canonical expected migration count is not manifest-derived'
+grep -Fq '[ "$(admin_sql "select count(*) from schema_migrations")" = "$EXPECTED_MIGRATION_COUNT" ]' "$CANONICAL_HELPER" \
+  || fail 'canonical fresh ledger count does not use manifest-derived expectation'
+grep -Fq "grep -q 'DONE 011_canonical_email_invariant.sql' \"\$LOG\"" "$CANONICAL_HELPER" \
+  || fail 'canonical fresh migration completion assertion for 011 is missing'
+
 node --check "$PROVISIONER"
 node --check "$RUNNER"
 node - "$MANIFEST" "$ROOT/db/migrations" "$BASE" <<'NODE'
@@ -97,10 +130,12 @@ grep -q 'COCINACORE_SEPARATED_DB_LANES_ENABLED' "$RUNNER" || fail 'runner gate m
 ! grep -qi 'reassign owned' "$PROVISIONER" || fail 'REASSIGN OWNED is forbidden'
 ! grep -q 'process.env.DATABASE_URL.*MIGRATION_DATABASE_URL\|MIGRATION_DATABASE_URL.*process.env.DATABASE_URL' "$RUNNER" || fail 'migration secret fallback detected'
 ! grep -Eq 'alter (index|type|constraint).*owner' "$PROVISIONER" || fail 'dependent object direct ownership transfer detected'
-! grep -q 'provisioner npm run db:provision' "$ROOT/.github/workflows/deploy.yml" || fail 'ordinary deploy invokes bootstrap'
-grep -q 'app npm run db:migrate' "$ROOT/.github/workflows/deploy.yml" || fail 'disabled legacy deploy path missing'
-grep -q 'migrator npm run db:migrate' "$ROOT/.github/workflows/deploy.yml" || fail 'enabled restricted deploy path missing'
-grep -q 'Invalid COCINACORE_SEPARATED_DB_LANES_ENABLED' "$ROOT/.github/workflows/deploy.yml" || fail 'deploy strict gate validation missing'
+PAWTECH_DEPLOY="$ROOT/scripts/deploy-pawtech-production.sh"
+! grep -Eq 'db:provision|\.env\.migration|MIGRATION_ENV_FILE|MIGRATION_DATABASE_URL|BOOTSTRAP_DATABASE_URL|migration_admin' "$PAWTECH_DEPLOY" || fail 'PawTech deploy contains forbidden provisioning or migration-env behavior'
+grep -Fq 'RUNTIME_ENV_FILE=${2:-$EXPECTED_RUNTIME_ENV_FILE}' "$PAWTECH_DEPLOY" || fail 'PawTech deploy does not use the shared runtime env'
+grep -Fq -- '--env-file "$RUNTIME_ENV_FILE"' "$PAWTECH_DEPLOY" || fail 'PawTech deploy does not pass the shared runtime env'
+grep -Fq 'npm run db:migrate:verify' "$PAWTECH_DEPLOY" || fail 'read-only runtime migration verification missing'
+! grep -Eq 'npm run db:migrate([[:space:]]|$)' "$PAWTECH_DEPLOY" || fail 'mutating runtime migration command is forbidden'
 grep -Fq "$IMAGE" "$ROOT/.github/workflows/ci.yml" || fail 'CI PostgreSQL image policy is missing'
 grep -q 'COCINACORE_SEPARATED_DB_LANES_ENABLED: "true"' "$ROOT/.github/workflows/ci.yml" || fail 'CI separated test gate missing'
 grep -Fq "$IMAGE" "$ROOT/docker-compose.prod.yml" || fail 'production PostgreSQL image policy is missing'
@@ -111,8 +146,9 @@ node -e "const p=require(process.argv[1]); if(p.scripts['db:provision']!=='node 
 
 TMP_ENV=$(mktemp)
 TMP_MIGRATION=$(mktemp)
+TMP_NO_AUTH=$(mktemp)
 TMP_CONFIG=$(mktemp)
-cleanup() { rm -f "$TMP_ENV" "$TMP_MIGRATION" "$TMP_CONFIG"; }
+cleanup() { rm -f "$TMP_ENV" "$TMP_MIGRATION" "$TMP_NO_AUTH" "$TMP_CONFIG"; }
 trap cleanup EXIT INT TERM
 umask 077
 cat >"$TMP_ENV" <<'ENV'
@@ -121,8 +157,6 @@ POSTGRES_PASSWORD=placeholder-postgres
 APP_PUBLIC_URL=https://example.invalid
 AUTH_SECRET=placeholder-auth
 GEMINI_API_KEY=placeholder-gemini
-RESEND_API_KEY=placeholder-resend
-EMAIL_FROM=placeholder@example.invalid
 S3_ENDPOINT=https://storage.invalid
 S3_BUCKET=placeholder
 S3_ACCESS_KEY_ID=placeholder
@@ -135,7 +169,7 @@ MIGRATION_DATABASE_URL=postgresql://migration_admin:placeholder@postgres:5432/co
 MIGRATION_ADMIN_PASSWORD=placeholder-placeholder-placeholder
 ENV
 
-docker compose -f "$ROOT/docker-compose.prod.yml" --project-directory "$ROOT" \
+env -u RESEND_API_KEY -u EMAIL_FROM docker compose -f "$ROOT/docker-compose.prod.yml" --project-directory "$ROOT" \
   --env-file "$TMP_ENV" config --format json >"$TMP_CONFIG"
 node - "$TMP_CONFIG" <<'NODE'
 const fs = require('fs');
@@ -144,10 +178,18 @@ const app = config.services.app.environment;
 for (const secret of ['MIGRATION_DATABASE_URL','BOOTSTRAP_DATABASE_URL','MIGRATION_ADMIN_PASSWORD']) {
   if (Object.prototype.hasOwnProperty.call(app, secret)) process.exit(1);
 }
+if (!app.AUTH_SECRET) process.exit(1);
+if (app.RESEND_API_KEY !== '' || app.EMAIL_FROM !== '') process.exit(1);
 if (app.COCINACORE_SEPARATED_DB_LANES_ENABLED !== 'false') process.exit(1);
 NODE
 
-docker compose -f "$ROOT/docker-compose.prod.yml" --project-directory "$ROOT" \
+grep -v '^AUTH_SECRET=' "$TMP_ENV" >"$TMP_NO_AUTH"
+if env -u AUTH_SECRET -u RESEND_API_KEY -u EMAIL_FROM docker compose -f "$ROOT/docker-compose.prod.yml" --project-directory "$ROOT" \
+  --env-file "$TMP_NO_AUTH" config --format json >"$TMP_CONFIG" 2>/dev/null; then
+  fail 'Compose must reject a runtime env file without required AUTH_SECRET'
+fi
+
+env -u RESEND_API_KEY -u EMAIL_FROM docker compose -f "$ROOT/docker-compose.prod.yml" --project-directory "$ROOT" \
   --env-file "$TMP_ENV" --env-file "$TMP_MIGRATION" --profile operations config --format json >"$TMP_CONFIG"
 node - "$TMP_CONFIG" <<'NODE'
 const fs = require('fs');

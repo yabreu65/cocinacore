@@ -2,6 +2,7 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+EXPECTED_MIGRATION_COUNT=$(node -e "const m=require('$ROOT/db/migrations/manifest.json'); console.log(m.migrations.length)")
 IMAGE='pgvector/pgvector:pg16'
 PREFIX="cocinacore-pr0b-canonical-$$"
 TMP_ROOT=$(mktemp -d)
@@ -17,9 +18,9 @@ MIGRATION_URL=
 cleanup() {
   status=$?
   if [ "$status" -ne 0 ] && [ -s "$LOG" ]; then tail -n 200 "$LOG" >&2; fi
-  if [ -n "$CONTAINER" ]; then docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; fi
+  if [ -n "$CONTAINER" ]; then docker rm -fv "$CONTAINER" >/dev/null 2>&1 || true; fi
   for leftover in $(docker ps -a --format '{{.Names}}' | grep "^$PREFIX" || true); do
-    docker rm -f "$leftover" >/dev/null 2>&1 || true
+    docker rm -fv "$leftover" >/dev/null 2>&1 || true
   done
   rm -rf "$TMP_ROOT"
   return "$status"
@@ -41,7 +42,7 @@ start_container() {
     -e POSTGRES_DB="$DB" -e POSTGRES_USER=cocinacore -e POSTGRES_PASSWORD="$ADMIN_PASSWORD" \
     -p 127.0.0.1::5432 "$IMAGE" >/dev/null
   attempt=0
-  until docker exec "$CONTAINER" pg_isready -U cocinacore -d "$DB" >/dev/null 2>&1; do
+  until docker exec "$CONTAINER" pg_isready -h 127.0.0.1 -U cocinacore -d "$DB" >/dev/null 2>&1; do
     attempt=$((attempt + 1))
     [ "$attempt" -lt 60 ] || fail 'PostgreSQL did not become ready'
     sleep 1
@@ -52,7 +53,7 @@ start_container() {
 }
 
 stop_container() {
-  docker rm -f "$CONTAINER" >/dev/null
+  docker rm -fv "$CONTAINER" >/dev/null
   CONTAINER=
 }
 
@@ -129,7 +130,7 @@ start_container fresh cocinacore_canonical_fresh
 provision >"$LOG" 2>&1
 migrate >"$LOG" 2>&1
 grep -q 'DONE 011_canonical_email_invariant.sql' "$LOG" || fail 'fresh 001-011 did not complete'
-[ "$(admin_sql "select count(*) from schema_migrations")" = 11 ] || fail 'fresh ledger count is not 11'
+[ "$(admin_sql "select count(*) from schema_migrations")" = "$EXPECTED_MIGRATION_COUNT" ] || fail 'fresh ledger count does not match migration manifest'
 [ "$(admin_sql "select count(*) from pg_constraint where conrelid='public.users'::regclass and conname='users_email_canonical_check'")" = 1 ] || fail 'canonical check is absent'
 [ "$(admin_sql "select count(*) from pg_constraint where conrelid='public.users'::regclass and conname='users_email_key' and contype='u'")" = 1 ] || fail 'users_email_key is absent'
 [ "$(admin_sql "select count(*) from pg_indexes where schemaname='public' and tablename='users' and indexname='idx_users_email'")" = 1 ] || fail 'idx_users_email is absent'

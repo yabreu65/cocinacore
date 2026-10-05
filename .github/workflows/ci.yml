@@ -22,7 +22,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.22.3
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -31,6 +31,15 @@ jobs:
 
       - name: Validate bootstrap and migrator configuration
         run: sh ../scripts/tests/test-bootstrap-migrator-config.sh
+
+      - name: Validate PawTech production deploy contract
+        run: sh ../scripts/tests/test-pawtech-production-deploy-contract.sh
+
+      - name: Validate PawTech Step 4 contract
+        run: sh ../scripts/tests/test-pawtech-step4-contract.sh
+
+      - name: Validate PawTech Step 5 workflow contract
+        run: sh ../scripts/tests/test-pawtech-step5-workflow-contract.sh
 
       - name: Test bootstrap and migrator PostgreSQL boundary
         run: sh ../scripts/test-bootstrap-migrator-integration.sh
@@ -103,7 +112,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.22.3
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 

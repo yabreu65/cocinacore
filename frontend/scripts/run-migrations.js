@@ -1235,13 +1235,39 @@ async function main() {
   const client = await pool.connect();
   let lockKey;
   try {
-    if (separated) {
+    if (separated && !options.verifyComplete) {
       if (options.lane === 'bootstrap') await assertBootstrapIdentity(client);
       else await assertAndAssumeMigrationIdentity(client, manifest);
     }
-    lockKey = await acquireDatabaseChangeLock(client);
+    if (!options.verifyComplete) {
+      lockKey = await acquireDatabaseChangeLock(client);
+    }
 
-    const hadLedger = await migrationLedgerExists(client);
+    let hadLedger;
+    if (options.verifyComplete) {
+      await client.query('begin read only');
+      try {
+        if (separated) await assertAndAssumeMigrationIdentity(client, manifest);
+        hadLedger = await migrationLedgerExists(client);
+        if (!hadLedger) throw new Error('Migration ledger is missing.');
+        await assertLedgerShape(client, separated);
+        const applied = await getAppliedMigrations(client, migrations, separated);
+        assertGlobalOrder(migrations, applied);
+        const pending = firstPendingMigration(migrations, applied);
+        if (pending) {
+          throw new Error(`Pending migration: ${pending.filename} (${pending.lane} lane).`);
+        }
+        await client.query('commit');
+        console.log('Migration ledger is complete.');
+      } catch (error) {
+        await client.query('rollback');
+        throw error;
+      }
+      if (separated) await assertRunnerExtensionState(client, manifest, { pgcryptoRequired: true });
+      return;
+    }
+
+    hadLedger = await migrationLedgerExists(client);
     if (separated) {
       await assertRunnerExtensionState(client, manifest, { pgcryptoRequired: hadLedger });
     }
@@ -1256,15 +1282,6 @@ async function main() {
     else await ensureLegacyLedger(client);
     const applied = await getAppliedMigrations(client, migrations, separated);
     assertGlobalOrder(migrations, applied);
-
-    if (options.verifyComplete) {
-      const pending = firstPendingMigration(migrations, applied);
-      if (pending)
-        throw new Error(`Pending migration: ${pending.filename} (${pending.lane} lane).`);
-      if (separated) await assertRunnerExtensionState(client, manifest, { pgcryptoRequired: true });
-      console.log('Migration ledger is complete.');
-      return;
-    }
 
     for (const migration of migrations) {
       if (applied.has(migration.filename)) {

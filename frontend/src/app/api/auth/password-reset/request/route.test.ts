@@ -69,13 +69,24 @@ describe('POST /api/auth/password-reset/request', () => {
 
 
 
-  it('returns a generic success when email delivery is not configured', async () => {
-    vi.stubEnv('RESEND_API_KEY', 'CHANGE_ME');
-    findUserByEmailMock.mockResolvedValue({ id: 'user-1', email: 'user@example.test' });
+  it.each([
+    { label: 'both values absent', apiKey: undefined, sender: undefined },
+    { label: 'API key absent', apiKey: undefined, sender: 'CocinaCore <no-reply@example.test>' },
+    { label: 'sender absent', apiKey: 're_test', sender: undefined },
+  ])('returns generic success without lookup when email config is incomplete ($label)', async ({ apiKey, sender }) => {
+    if (apiKey === undefined) delete process.env.RESEND_API_KEY;
+    else vi.stubEnv('RESEND_API_KEY', apiKey);
+    if (sender === undefined) delete process.env.EMAIL_FROM;
+    else vi.stubEnv('EMAIL_FROM', sender);
 
     const response = await POST(request({ email: 'user@example.test' }) as unknown as NextRequest);
 
     expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      ok: true,
+      message: 'Si el correo existe en CocinaCore, te enviaremos instrucciones para restablecer la contraseña.',
+    });
+    expect(findUserByEmailMock).not.toHaveBeenCalled();
     expect(createPasswordResetTokenMock).not.toHaveBeenCalled();
     expect(sendPasswordResetEmailMock).not.toHaveBeenCalled();
   });
