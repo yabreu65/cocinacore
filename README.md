@@ -13,16 +13,29 @@ SaaS multitenant de recetas asistido por IA.
 - `frontend/` — aplicación Next.js
 - `db/migrations/` — migraciones PostgreSQL directas usadas por el runtime actual
 
+## Development runtime
+
+El runtime local de referencia es Node `22.22.3`, alineado con CI y la imagen de producción.
+Desde la raíz del repo:
+
+```bash
+nvm use
+node --version
+```
+
+`node --version` debe devolver `v22.22.3`. La referencia está fijada en `.nvmrc`.
+
 ## Engineering gates
 Antes de considerar un cambio merge-ready, corré desde la raíz del repo:
 
 ```bash
 cd frontend && npm run lint
-cd frontend && npx tsc --noEmit
+cd frontend && ./node_modules/.bin/tsc --noEmit
 cd frontend && npm test
 cd frontend && npm run build
 ```
 
+No uses `npx` para estos gates: las herramientas deben provenir del `node_modules` fijado por el lockfile.
 Si falla cualquiera, el cambio NO está listo.
 
 ## Type safety standard
