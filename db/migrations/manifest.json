@@ -233,6 +233,27 @@
       "byteLength": 310,
       "transactional": "required",
       "legacyChecksumBackfillAllowed": false
+    },
+    {
+      "id": "013",
+      "filename": "013_culinary_profile_context.sql",
+      "lane": "migration",
+      "sha256": "0c6d6e8dc67d2e0b0ebb8128562db1ec8b81a44f82c5e0601c38ba5fb608dfe5",
+      "byteLength": 548,
+      "transactional": "required",
+      "legacyChecksumBackfillAllowed": false,
+      "catalogAdditions": [
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "user_culinary_profiles.user_culinary_profiles_available_time_minutes_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "user_culinary_profiles.user_culinary_profiles_household_members_check"
+        }
+      ]
     }
   ],
   "baselineObjects": {
