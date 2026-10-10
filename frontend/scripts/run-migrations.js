@@ -6,10 +6,12 @@ const fs = require('fs');
 const path = require('path');
 const { Pool } = require('pg');
 
-try {
-  require('dotenv').config({ path: path.resolve(__dirname, '../.env.local'), quiet: true });
-} catch {
-  // dotenv is a devDependency; deployment environments inject variables explicitly.
+if (process.env.COCINACORE_SKIP_DOTENV !== '1') {
+  try {
+    require('dotenv').config({ path: path.resolve(__dirname, '../.env.local'), quiet: true });
+  } catch {
+    // dotenv is a devDependency; deployment environments inject variables explicitly.
+  }
 }
 
 const MANIFEST_VERSION = 1;

@@ -42,6 +42,10 @@ function profile(overrides: Partial<UserCulinaryProfileRow> = {}): UserCulinaryP
     user_id: 'user-1',
     tenant_id: 'tenant-1',
     level: 'Intermedio',
+    available_time_minutes: null,
+    disliked_ingredients: [],
+    allergies: [],
+    household_members: [],
     created_at: '2026-01-01T00:00:00.000Z',
     updated_at: '2026-01-01T00:00:00.000Z',
     ...overrides,
@@ -128,6 +132,44 @@ describe('loadPersistedRecipeContext', () => {
       level: 'Intermedio',
     });
     expect(context.profileContext).not.toContain('Dato de otro usuario');
+  });
+
+  it('formats persisted profile context with household aggregates and no member names', async () => {
+    interface PersistedHouseholdMember {
+      name: string;
+      ageGroup: 'adult' | 'teen' | 'child';
+    }
+    interface PersistedProfileFixture extends UserCulinaryProfileRow {
+      available_time_minutes: number;
+      allergies: string[];
+      disliked_ingredients: string[];
+      household_members: PersistedHouseholdMember[];
+    }
+
+    const persistedProfile: PersistedProfileFixture = {
+      ...profile(),
+      available_time_minutes: 45,
+      allergies: ['Maní'],
+      disliked_ingredients: ['Cilantro'],
+      household_members: [
+        { name: 'Ana Persistida', ageGroup: 'adult' },
+        { name: 'Luis Persistido', ageGroup: 'adult' },
+        { name: 'Nora Persistida', ageGroup: 'teen' },
+        { name: 'Eva Persistida', ageGroup: 'child' },
+      ],
+    };
+    findCulinaryProfileByUserIdMock.mockResolvedValue(persistedProfile);
+    findCulinaryProfileTermsByUserIdMock.mockResolvedValue([]);
+
+    const context = await loadPersistedRecipeContext('user-1', 'tenant-1');
+
+    expect(context.profileContext).toContain('Hogar: 2 adultos, 1 adolescente, 1 niño');
+    expect(context.profileContext).toMatch(/(?:tiempo habitual|tiempo disponible)[^\n]*45/i);
+    expect(context.profileContext).toMatch(/(?:alergias?|restricciones específicas)[^\n]*Maní/i);
+    expect(context.profileContext).toMatch(/(?:no me gusta|disgustos?)[^\n]*Cilantro/i);
+    for (const memberName of persistedProfile.household_members.map(({ name }) => name)) {
+      expect(context.profileContext).not.toContain(memberName);
+    }
   });
 
   it('returns neutral markers when inventory or an exact user/tenant profile is missing', async () => {

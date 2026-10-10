@@ -55,13 +55,21 @@ export async function transaction<T>(
   callback: (client: PoolClient) => T | Promise<T>
 ): Promise<T> {
   const client = await getPool().connect();
-  await client.query('begin');
+  let began = false;
   try {
+    await client.query('begin');
+    began = true;
     const result = await callback(client);
     await client.query('commit');
     return result;
   } catch (error) {
-    await client.query('rollback');
+    if (began) {
+      try {
+        await client.query('rollback');
+      } catch {
+        // Preserve the original callback or commit error.
+      }
+    }
     throw error;
   } finally {
     client.release();

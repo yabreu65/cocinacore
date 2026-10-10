@@ -1,5 +1,5 @@
 import { PoolClient } from 'pg';
-import { query, mapSingleRow } from '@/lib/db';
+import { query, mapSingleRow, transaction } from '@/lib/db';
 import { UserRow, TenantRole } from '@/lib/db/types';
 
 interface CreateUserInput {
@@ -61,6 +61,28 @@ export async function createUser(input: CreateUserInput): Promise<UserRow> {
 }
 
 export async function updateUser(id: string, input: UpdateUserInput): Promise<UserRow | null> {
+  return transaction((client) => updateUserInTransaction(client, id, input));
+}
+
+export interface UserUpdateQueryClient {
+  queryUser(queryText: string, values?: unknown[]): Promise<{ rows: UserRow[] }>;
+}
+
+function userUpdateQueryClient(
+  client: PoolClient | UserUpdateQueryClient
+): UserUpdateQueryClient {
+  if ('queryUser' in client) return client;
+  return {
+    queryUser: (queryText, values) => client.query<UserRow>(queryText, values),
+  };
+}
+
+export async function updateUserInTransaction(
+  client: PoolClient | UserUpdateQueryClient,
+  id: string,
+  input: UpdateUserInput
+): Promise<UserRow | null> {
+  const typedClient = userUpdateQueryClient(client);
   const fields: string[] = [];
   const values: unknown[] = [];
   let paramIndex = 1;
@@ -95,18 +117,19 @@ export async function updateUser(id: string, input: UpdateUserInput): Promise<Us
   }
 
   if (fields.length === 0) {
-    return findUserById(id);
+    const result = await typedClient.queryUser('select * from public.users where id = $1', [id]);
+    return result.rows[0] ?? null;
   }
 
   fields.push(`updated_at = now()`);
   values.push(id);
 
-  const result = await query<UserRow>(
+  const result = await typedClient.queryUser(
     `update public.users set ${fields.join(', ')} where id = $${paramIndex} returning *`,
     values
   );
 
-  return mapSingleRow(result);
+  return result.rows[0] ?? null;
 }
 
 export async function updatePassword(id: string, passwordHash: string): Promise<void> {

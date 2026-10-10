@@ -1,102 +1,215 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AnimatePresence, motion } from 'framer-motion';
+import { safeFetch } from '@/lib/api';
 import { humanCopy } from '@/lib/copy';
+import {
+  EMPTY_CULINARY_SELECTIONS,
+  termsForDimension,
+  type CulinaryProfileApiData,
+  type CulinaryProfileTerm,
+  type CulinarySelections,
+} from '@/lib/profile/culinary-profile-contract';
 
-type StepKey = 'usage' | 'cuisine' | 'avoid' | 'goals';
+type StepKey = 'level' | 'cuisine' | 'dietary' | 'goal';
 
-type OnboardingData = {
-  usage: string[];
-  cuisine: string[];
-  avoid: string[];
-  goals: string[];
-};
-
-const steps: Array<{
+type Step = {
   key: StepKey;
   title: string;
   subtitle: string;
-  options: string[];
+  options: Array<{ id: string; label: string }>;
+  max: number;
   single?: boolean;
-}> = [
-  {
-    key: 'usage',
-    title: '¿Cómo quieres usar CocinaCore?',
-    subtitle: 'Elegí el perfil principal para personalizar la experiencia.',
-    options: ['Hogar', 'Chef', 'Familia', 'Estudiante culinario', 'Creador de recetas'],
-    single: true,
-  },
-  {
-    key: 'cuisine',
-    title: '¿Qué cocina disfrutas más?',
-    subtitle: 'Podés elegir varias.',
-    options: ['Italiana', 'Latina', 'Asiática', 'Parrilla', 'Postres', 'Vegana'],
-  },
-  {
-    key: 'avoid',
-    title: '¿Hay algo que debamos evitar?',
-    subtitle: 'Restricciones o ingredientes a evitar.',
-    options: ['Sin gluten', 'Sin lactosa', 'Vegano', 'Keto', 'Frutos secos', 'Mariscos'],
-  },
-  {
-    key: 'goals',
-    title: '¿Qué quieres lograr?',
-    subtitle: 'Esto nos ayuda a orientar la experiencia inicial.',
-    options: ['Aprender cocina', 'Organizar recetas', 'Cocinar para mi familia', 'Usar asistencia culinaria'],
-  },
-];
-
-const initialData: OnboardingData = {
-  usage: [],
-  cuisine: [],
-  avoid: [],
-  goals: [],
 };
 
-function toggleValue(values: string[], option: string, single = false): string[] {
+const LEVEL_OPTIONS = [
+  { id: 'Principiante', label: 'Principiante' },
+  { id: 'Intermedio', label: 'Intermedio' },
+  { id: 'Chef', label: 'Chef' },
+];
+
+function toggleValue(values: string[], option: string, max: number, single = false): string[] {
   if (single) return [option];
-  return values.includes(option) ? values.filter((value) => value !== option) : [...values, option];
+  if (values.includes(option)) return values.filter((value) => value !== option);
+  if (values.length >= max) return values;
+  return [...values, option];
 }
 
 export default function OnboardingPage() {
   const router = useRouter();
+  const [profileData, setProfileData] = useState<CulinaryProfileApiData | null>(null);
   const [currentStep, setCurrentStep] = useState(0);
-  const [data, setData] = useState<OnboardingData>(initialData);
+  const [level, setLevel] = useState('');
+  const [selections, setSelections] = useState<CulinarySelections>(EMPTY_CULINARY_SELECTIONS);
+  const [loading, setLoading] = useState(true);
   const [finishing, setFinishing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  const isFinal = currentStep === steps.length;
-  const progress = useMemo(() => ((currentStep + 1) / (steps.length + 1)) * 100, [currentStep]);
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true);
+      setLoadError(null);
+      try {
+        const result = await safeFetch<CulinaryProfileApiData>('/api/profile', {
+          credentials: 'same-origin',
+        });
+        if (!result.ok) throw new Error(result.error);
+
+        setProfileData(result.data);
+        setLevel(result.data.profile?.level ?? '');
+        setSelections(result.data.selections);
+      } catch (error) {
+        setLoadError(
+          error instanceof Error ? error.message : 'No pudimos cargar tu perfil culinario.'
+        );
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    void load();
+  }, []);
+
+  const steps = useMemo<Step[]>(() => {
+    if (!profileData) return [];
+
+    return [
+      {
+        key: 'level',
+        title: '¿Cómo te sientes cocinando?',
+        subtitle: 'Esto ajusta la complejidad y el nivel de detalle de las recetas.',
+        options: LEVEL_OPTIONS,
+        max: 1,
+        single: true,
+      },
+      {
+        key: 'cuisine',
+        title: '¿Qué cocinas disfrutas más?',
+        subtitle: 'Elegí hasta seis. Las priorizaremos cuando encajen con tu inventario.',
+        options: termsForDimension(profileData, 'cuisine').map((term) => ({
+          id: term.id,
+          label: term.label,
+        })),
+        max: 6,
+      },
+      {
+        key: 'dietary',
+        title: '¿Qué debemos evitar o respetar?',
+        subtitle: 'Estas restricciones quedan guardadas y forman parte de tu contexto culinario.',
+        options: termsForDimension(profileData, 'dietary').map((term) => ({
+          id: term.id,
+          label: term.label,
+        })),
+        max: 12,
+      },
+      {
+        key: 'goal',
+        title: '¿Qué quieres optimizar?',
+        subtitle: 'Tus objetivos ayudan a CocinaCore a decidir qué propuestas tienen más sentido.',
+        options: termsForDimension(profileData, 'goal').map((term) => ({
+          id: term.id,
+          label: term.label,
+        })),
+        max: 6,
+      },
+    ];
+  }, [profileData]);
+
+  const isFinal = currentStep === steps.length && steps.length > 0;
   const step = steps[currentStep];
-  const selected = step ? data[step.key] : [];
-  const canContinue = isFinal || selected.length > 0;
+
+  const selectedForStep = useMemo(() => {
+    if (!step) return [];
+    if (step.key === 'level') return level ? [level] : [];
+    if (step.key === 'cuisine') return selections.favoriteCuisineTermIds;
+    if (step.key === 'dietary') return selections.dietaryAvoidTermIds;
+    return selections.goalTermIds;
+  }, [level, selections, step]);
+
+  const canContinue = isFinal || selectedForStep.length > 0;
+  const progress =
+    steps.length > 0 ? ((Math.min(currentStep, steps.length) + 1) / (steps.length + 1)) * 100 : 0;
+
+  const selectOption = (optionId: string) => {
+    if (!step) return;
+
+    if (step.key === 'level') {
+      setLevel(optionId);
+      return;
+    }
+
+    const key =
+      step.key === 'cuisine'
+        ? 'favoriteCuisineTermIds'
+        : step.key === 'dietary'
+          ? 'dietaryAvoidTermIds'
+          : 'goalTermIds';
+
+    setSelections((current) => ({
+      ...current,
+      [key]: toggleValue(current[key], optionId, step.max, step.single),
+    }));
+  };
+
+  const termLabel = (termId: string): string => {
+    return profileData?.taxonomy.terms.find((term: CulinaryProfileTerm) => term.id === termId)?.label ?? termId;
+  };
 
   const finishOnboarding = async () => {
     setFinishing(true);
     setMessage(null);
 
     try {
-      const response = await fetch('/api/auth/session', { cache: 'no-store' });
-      const payload = (await response.json().catch(() => null)) as { user?: { id: string } | null } | null;
+      const result = await safeFetch<{
+        profile: CulinaryProfileApiData['profile'];
+        selections: CulinarySelections;
+      }>('/api/profile', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          level: level || null,
+          selections,
+          onboardingCompleted: true,
+        }),
+      });
 
-      if (!response.ok || !payload?.user?.id) {
-        setMessage('Necesitás una sesión activa para terminar onboarding.');
-        return;
-      }
+      if (!result.ok) throw new Error(result.error);
 
-      setMessage('Preferencias guardadas temporalmente en esta fase. Redirigiendo...');
+      setMessage('Perfil culinario guardado. CocinaCore ya puede usarlo para ayudarte.');
       window.setTimeout(() => {
-        router.push('/app');
+        router.replace('/app');
         router.refresh();
-      }, 700);
-    } catch {
-      setMessage('No pudimos finalizar onboarding. Intentá nuevamente.');
+      }, 600);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'No pudimos finalizar onboarding.');
     } finally {
       setFinishing(false);
     }
   };
+
+  if (loading) {
+    return (
+      <main className="texture-paper min-h-screen bg-[#FAF6F1] px-4 py-6 text-[#241A14]">
+        <div className="mx-auto max-w-3xl rounded-3xl border border-[#E8DDD2] bg-white/70 p-6">
+          Cargando tu perfil culinario...
+        </div>
+      </main>
+    );
+  }
+
+  if (loadError || !profileData) {
+    return (
+      <main className="texture-paper min-h-screen bg-[#FAF6F1] px-4 py-6 text-[#241A14]">
+        <div className="mx-auto max-w-3xl rounded-3xl border border-red-200 bg-red-50 p-6 text-red-700">
+          {loadError ?? 'No pudimos cargar tu perfil culinario.'}
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="texture-paper min-h-screen bg-[#FAF6F1] px-4 py-6 md:px-6 md:py-8">
@@ -106,10 +219,10 @@ export default function OnboardingPage() {
           <div className="pointer-events-none absolute right-6 top-1/3 h-52 w-52 rounded-full bg-[#6D4AFF]/10 blur-3xl" />
           <p className="text-xs font-bold tracking-[0.15em] text-[#C56A1A]">COCINACORE • ONBOARDING</p>
           <h1 className="mt-4 text-5xl font-semibold leading-[1.08] text-[#241A14]">
-            CocinaCore está entendiendo cómo cocinas para ayudarte mejor.
+            CocinaCore aprende cómo cocinas para decidir mejor contigo.
           </h1>
           <p className="mt-4 max-w-lg text-lg text-[#6B5A50]">
-            Esta versión guarda lo esencial mientras terminamos la migración de preferencias.
+            Lo que elijas se guarda en tu perfil real y se reutiliza en recetas y planificación.
           </p>
 
           <div className="dark-panel-shadow mt-8 rounded-3xl border border-white/10 bg-[#16110D] p-5 text-[#F5ECE2]">
@@ -117,11 +230,11 @@ export default function OnboardingPage() {
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
               <div className="rounded-xl border border-white/10 bg-white/5 p-3">
                 <p className="text-xs text-[#D6C3B2]">{humanCopy.suggestedRecipesForYou}</p>
-                <p className="text-sm font-semibold">Lasagna ligera para 4</p>
+                <p className="text-sm font-semibold">Ideas según inventario + perfil</p>
               </div>
               <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-                <p className="text-xs text-[#D6C3B2]">Inventario</p>
-                <p className="text-sm font-semibold">Tomate · Pollo · Albahaca</p>
+                <p className="text-xs text-[#D6C3B2]">Contexto persistido</p>
+                <p className="text-sm font-semibold">Gustos · restricciones · objetivos</p>
               </div>
             </div>
           </div>
@@ -159,25 +272,22 @@ export default function OnboardingPage() {
 
                   <div className="mt-6 grid gap-3 sm:grid-cols-2">
                     {step.options.map((option) => {
-                      const active = selected.includes(option);
+                      const active = selectedForStep.includes(option.id);
+                      const disabled = !active && selectedForStep.length >= step.max;
                       return (
                         <button
                           type="button"
-                          key={option}
-                          onClick={() => {
-                            setData((prev) => ({
-                              ...prev,
-                              [step.key]: toggleValue(prev[step.key], option, step.single),
-                            }));
-                          }}
+                          key={option.id}
+                          disabled={disabled}
+                          onClick={() => selectOption(option.id)}
                           className={`rounded-2xl border px-4 py-3 text-left transition ${
                             active
                               ? 'border-[#C56A1A] bg-[#C56A1A]/10 text-[#7F4314]'
-                              : 'border-[#E8DDD2] bg-white/80 text-[#3B2F26] hover:border-[#C56A1A]/50'
+                              : 'border-[#E8DDD2] bg-white/80 text-[#3B2F26] hover:border-[#C56A1A]/50 disabled:opacity-40'
                           }`}
                           aria-pressed={active}
                         >
-                          <span className="font-semibold">{option}</span>
+                          <span className="font-semibold">{option.label}</span>
                         </button>
                       );
                     })}
@@ -191,17 +301,23 @@ export default function OnboardingPage() {
                   exit={{ opacity: 0, y: -12 }}
                   transition={{ duration: 0.2 }}
                 >
-                  <h2 className="text-3xl font-semibold text-[#241A14]">Tu cocina inteligente está lista</h2>
+                  <h2 className="text-3xl font-semibold text-[#241A14]">Tu perfil culinario está listo</h2>
                   <p className="mt-2 text-[#6B5A50]">
-                    La persistencia avanzada de preferencias está en reconstrucción, pero podés seguir.
+                    Lo guardaremos como contexto persistente para recetas y planificación.
                   </p>
 
                   <div className="mt-6 rounded-2xl border border-[#E8DDD2] bg-white/80 p-4 text-sm text-[#6B5A50]">
-                    <p className="font-semibold text-[#241A14]">Resumen de tu perfil</p>
-                    <p className="mt-2">Uso: {data.usage.join(', ') || 'No definido'}</p>
-                    <p>Cocinas favoritas: {data.cuisine.join(', ') || 'No definido'}</p>
-                    <p>Evitar: {data.avoid.join(', ') || 'No definido'}</p>
-                    <p>Objetivos: {data.goals.join(', ') || 'No definido'}</p>
+                    <p className="font-semibold text-[#241A14]">Resumen</p>
+                    <p className="mt-2">Nivel: {level || 'No definido'}</p>
+                    <p>
+                      Cocinas: {selections.favoriteCuisineTermIds.map(termLabel).join(', ') || 'No definido'}
+                    </p>
+                    <p>
+                      Restricciones: {selections.dietaryAvoidTermIds.map(termLabel).join(', ') || 'No definido'}
+                    </p>
+                    <p>
+                      Objetivos: {selections.goalTermIds.map(termLabel).join(', ') || 'No definido'}
+                    </p>
                   </div>
 
                   {message ? (
@@ -216,8 +332,8 @@ export default function OnboardingPage() {
             <div className="mt-8 flex items-center justify-between gap-3">
               <button
                 type="button"
-                onClick={() => setCurrentStep((prev) => Math.max(prev - 1, 0))}
-                disabled={currentStep === 0}
+                onClick={() => setCurrentStep((current) => Math.max(current - 1, 0))}
+                disabled={currentStep === 0 || finishing}
                 className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-5 font-semibold text-[#6B5A50] transition hover:border-[#C56A1A] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Volver
@@ -227,7 +343,7 @@ export default function OnboardingPage() {
                 <button
                   type="button"
                   disabled={!canContinue}
-                  onClick={() => setCurrentStep((prev) => Math.min(prev + 1, steps.length))}
+                  onClick={() => setCurrentStep((current) => Math.min(current + 1, steps.length))}
                   className="h-11 rounded-xl bg-[#C56A1A] px-5 font-semibold text-white transition hover:bg-[#A55412] disabled:opacity-50"
                 >
                   Continuar
@@ -239,7 +355,7 @@ export default function OnboardingPage() {
                   disabled={finishing}
                   className="h-11 rounded-xl bg-[#C56A1A] px-5 font-semibold text-white transition hover:bg-[#A55412] disabled:opacity-50"
                 >
-                  {finishing ? 'Finalizando...' : 'Ir al panel'}
+                  {finishing ? 'Guardando...' : 'Guardar e ir al panel'}
                 </button>
               )}
             </div>
