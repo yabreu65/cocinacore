@@ -234,7 +234,7 @@ function assertCatalogAdditions(entry, historical, seen) {
     assertPlainObject(addition, `Catalog addition for ${entry.filename}`);
     if (
       Object.keys(addition).sort().join(',') !== 'identity,kind,schema' ||
-      addition.kind !== 'constraint' ||
+      !['constraint', 'function', 'trigger'].includes(addition.kind) ||
       !['internal', 'public'].includes(addition.schema) ||
       !/^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$/.test(addition.identity)
     ) {
