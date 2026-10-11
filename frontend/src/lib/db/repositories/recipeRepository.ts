@@ -1,6 +1,30 @@
 import { query, mapSingleRow } from '@/lib/db';
 import { RecipeAiHistoryRow } from '@/lib/db/types';
 
+export type TodayRecipeHistoryRow = Pick<RecipeAiHistoryRow, 'recipe_title' | 'recipe_payload' | 'created_at'>;
+
+const MAX_TODAY_HISTORY_LIMIT = 20;
+
+export async function listTodayRecipeHistoryByUserAndTenant(
+  userId: string,
+  tenantId: string,
+  since: string,
+  limit: number
+): Promise<TodayRecipeHistoryRow[]> {
+  const boundedLimit = Number.isFinite(limit)
+    ? Math.min(MAX_TODAY_HISTORY_LIMIT, Math.max(1, Math.floor(limit)))
+    : MAX_TODAY_HISTORY_LIMIT;
+  const result = await query<TodayRecipeHistoryRow>(
+    `select recipe_title, recipe_payload, created_at
+     from public.recipe_ai_history
+     where user_id = $1 and tenant_id = $2 and created_at >= $3
+     order by created_at desc
+     limit $4`,
+    [userId, tenantId, since, boundedLimit]
+  );
+  return result.rows;
+}
+
 export interface CreateRecipeHistoryInput {
   tenantId: string;
   userId: string;

@@ -17,6 +17,8 @@ import {
 } from 'lucide-react';
 import { humanCopy } from '@/lib/copy';
 import { safeFetch } from '@/lib/api';
+import { serializeTodayHandoff } from '@/lib/recipes/today-handoff';
+import TodayRecommendations, { type TodayOptionIntent } from './today-recommendations';
 
 type DashboardData = {
   userId: string | null;
@@ -85,6 +87,10 @@ export default function DashboardPage() {
     router.replace('/login');
   };
 
+  const handleChooseTodayOption = (option: TodayOptionIntent) => {
+    router.push(serializeTodayHandoff(option));
+  };
+
   return (
     <div className="flex min-h-screen bg-[#FAF6F1]">
       <aside className="hidden w-64 flex-col border-r border-[#E8DDD2] bg-white p-4 md:flex">
@@ -127,6 +133,8 @@ export default function DashboardPage() {
               {error}
             </p>
           ) : null}
+
+          <TodayRecommendations onChoose={handleChooseTodayOption} />
 
           {data ? (
             <div className="mt-6 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
