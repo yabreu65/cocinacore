@@ -10,8 +10,9 @@ import {
   type ConnectedRecipeSeed,
 } from '../fixtures/database';
 
-const PROVIDER_INSPECTION_URL = 'http://127.0.0.1:4319/__e2e/requests';
-const PROVIDER_RESET_URL = 'http://127.0.0.1:4319/__e2e/reset';
+const PROVIDER_BASE_URL = `http://127.0.0.1:${process.env.E2E_PROVIDER_PORT ?? '4319'}`;
+const PROVIDER_INSPECTION_URL = `${PROVIDER_BASE_URL}/__e2e/requests`;
+const PROVIDER_RESET_URL = `${PROVIDER_BASE_URL}/__e2e/reset`;
 
 type ProviderInspection = { generationCallCount: number };
 
@@ -40,6 +41,7 @@ test.describe('Connected meal planner', () => {
       identity,
       runId: `meal-planner-connected-${testInfo.title}`,
       includeRagChunks: false,
+      availableTimeMinutes: 35,
     });
   });
 
@@ -126,13 +128,41 @@ test.describe('Connected meal planner', () => {
       },
       calendar_payload: expect.objectContaining({ period: 'week', dayCount: 7 }),
     });
+    expect(stored?.calendar_payload).toHaveProperty('availableTimeMinutesSnapshot', 35);
     expect(stored?.calendar_payload.days).toHaveLength(7);
+    const generatedDays = stored?.calendar_payload.days as
+      | Array<{ meals: Array<{ prepMinutes: number }> }>
+      | undefined;
+    for (const day of generatedDays ?? []) {
+      for (const meal of day.meals) {
+        expect(Number.isInteger(meal.prepMinutes)).toBeTruthy();
+        expect(meal.prepMinutes).toBeGreaterThanOrEqual(1);
+        expect(meal.prepMinutes).toBeLessThanOrEqual(240);
+        expect(meal.prepMinutes).toBeLessThanOrEqual(35);
+      }
+    }
     expect(stored?.ai_content).toContain('Lunes');
     expect(stored?.ai_content).toContain('Avena conectada');
 
     await resetProvider(page);
+    await page.route('**/api/meal-plan', async (route) => {
+      if (route.request().method() !== 'GET') {
+        await route.continue();
+        return;
+      }
+      const response = await route.fetch();
+      const body = (await response.json()) as {
+        plan: { availableTimeMinutesSnapshot?: number | null; days: Array<{ meals: Array<{ prepMinutes?: number | null }> }> };
+      };
+      delete body.plan.availableTimeMinutesSnapshot;
+      for (const day of body.plan.days) {
+        for (const meal of day.meals) delete meal.prepMinutes;
+      }
+      await route.fulfill({ response, json: body });
+    });
     await page.reload();
     await expect(page.getByRole('heading', { name: 'Menú generado' })).toBeVisible();
+    await expect(page.getByText('tiempo no estimado').first()).toBeVisible();
     await expect(page.getByLabel('Comensales')).toHaveValue('2');
     await expect(page.getByLabel('Período')).toHaveValue('week');
     await expect(page.getByLabel('Cocina base')).toHaveValue('Italiana');

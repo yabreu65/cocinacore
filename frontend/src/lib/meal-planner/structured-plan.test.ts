@@ -10,6 +10,7 @@ function candidate(period: MealPlanPeriod, dayCount: number) {
   const meal = (mealType: StructuredMealType) => ({
     mealType,
     title: `  ${mealType} del día  `,
+    prepMinutes: 20,
     description: '  Preparación simple  ',
     ingredients: [{ name: '  Arroz integral  ', quantity: 1 as number | null, unit: ' taza '}],
   });
@@ -43,6 +44,33 @@ describe('parseStructuredMealPlanResponse', () => {
       'lunch',
       'dinner',
     ]);
+  });
+
+  it('requires prepMinutes on every meal', () => {
+    const plan = candidate('week', 7);
+    delete (plan.days[0].meals[0] as { prepMinutes?: number }).prepMinutes;
+
+    expect(parseStructuredMealPlanResponse(JSON.stringify(plan), 'week')).toEqual({
+      success: false,
+      reason: 'schema_invalid',
+    });
+  });
+
+  it.each([0, 241, 1.5])('rejects invalid prepMinutes %s', (prepMinutes) => {
+    const plan = candidate('week', 7);
+    plan.days[0].meals[0].prepMinutes = prepMinutes;
+
+    expect(parseStructuredMealPlanResponse(JSON.stringify(plan), 'week')).toEqual({
+      success: false,
+      reason: 'schema_invalid',
+    });
+  });
+
+  it.each([1, 240])('accepts prepMinutes boundary %i', (prepMinutes) => {
+    const plan = candidate('week', 7);
+    plan.days[0].meals[0].prepMinutes = prepMinutes;
+
+    expect(parseStructuredMealPlanResponse(JSON.stringify(plan), 'week').success).toBe(true);
   });
 
   it('rejects a wrong day count', () => {
@@ -95,6 +123,7 @@ describe('parseStructuredMealPlanResponse', () => {
     if (!result.success) return;
     expect(result.plan.days[0].meals[0]).toMatchObject({
       title: 'breakfast del día',
+      prepMinutes: 20,
       description: null,
       ingredients: [{ name: 'Arroz integral', quantity: null, unit: null }],
     });
@@ -151,6 +180,18 @@ describe('parseStructuredMealPlanValue', () => {
     if (!result.success) return;
     expect(result.plan.days[0].label).toBe('Lunes');
     expect(result.plan.days.at(-1)?.label).toBe('Domingo');
+  });
+
+  it('accepts historical plans without estimates or a cap snapshot', () => {
+    const historical = candidate('week', 7);
+    for (const day of historical.days) {
+      for (const meal of day.meals) delete (meal as { prepMinutes?: number }).prepMinutes;
+    }
+
+    const result = parseStructuredMealPlanValue(historical, 'week');
+
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.plan.days[0].meals[0].prepMinutes).toBeNull();
   });
 
   it('rejects wrong periods and malformed JSONB values', () => {

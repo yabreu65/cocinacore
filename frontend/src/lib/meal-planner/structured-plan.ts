@@ -18,6 +18,7 @@ export interface StructuredMealPlanIngredient {
 export interface StructuredMeal {
   mealType: StructuredMealType;
   title: string;
+  prepMinutes?: number | null;
   description: string | null;
   ingredients: StructuredMealPlanIngredient[];
 }
@@ -31,6 +32,7 @@ export interface StructuredMealPlanDay {
 export interface StructuredMealPlan {
   period: MealPlanPeriod;
   dayCount: number;
+  availableTimeMinutesSnapshot?: number | null;
   days: StructuredMealPlanDay[];
 }
 
@@ -73,6 +75,7 @@ const structuredMealCandidateSchema = z
   .object({
     mealType: z.enum(MEAL_TYPES),
     title: boundedRequiredText(160),
+    prepMinutes: z.number().int().min(1).max(240),
     description: nullableBoundedText(300),
     ingredients: z.array(structuredMealPlanIngredientCandidateSchema).min(1).max(30),
   })
@@ -119,10 +122,11 @@ export const structuredMealPlanResponseJsonSchema = {
             items: {
               type: 'object',
               additionalProperties: false,
-              required: ['mealType', 'title', 'description', 'ingredients'],
+              required: ['mealType', 'title', 'prepMinutes', 'description', 'ingredients'],
               properties: {
                 mealType: { type: 'string', enum: [...MEAL_TYPES] },
                 title: { type: 'string', minLength: 1, maxLength: 160 },
+                prepMinutes: { type: 'integer', minimum: 1, maximum: 240 },
                 description: { type: ['string', 'null'], maxLength: 300 },
                 ingredients: {
                   type: 'array',
@@ -148,13 +152,22 @@ export const structuredMealPlanResponseJsonSchema = {
   },
 } as const;
 
-export function buildStructuredMealPlanInstructions(period: MealPlanPeriod): string {
+export function buildStructuredMealPlanInstructions(
+  period: MealPlanPeriod,
+  availableTimeMinutes: number | null = null
+): string {
   const dayCount = getMealPlanDayCount(period);
+  const capInstruction =
+    availableTimeMinutes === null
+      ? ''
+      : `Cada comida individual debe estimarse en no más de ${availableTimeMinutes} minutos.`;
 
   return `Devuelve únicamente un objeto JSON válido, sin markdown ni texto adicional.
 El JSON debe respetar exactamente el esquema de respuesta configurado.
 Usa period como "${period}", dayCount ${dayCount}, y días con dayIndex consecutivos de 1 a ${dayCount}.
 Cada día debe incluir exactamente un mealType breakfast, lunch y dinner.
+Cada comida debe incluir prepMinutes como estimación entera de minutos entre 1 y 240; no es una garantía de duración real.
+${capInstruction}
 Para cantidades desconocidas usa quantity: null y unit: null; no inventes cantidades.`;
 }
 
@@ -178,9 +191,25 @@ function withoutPersistedDayLabel(day: unknown): unknown {
 
 function parseStructuredMealPlanCandidate(
   candidate: unknown,
-  requestedPeriod: MealPlanPeriod
+  requestedPeriod: MealPlanPeriod,
+  historical = false
 ): StructuredMealPlanParseResult {
-  const parsed = structuredMealPlanCandidateSchema.safeParse(candidate);
+  const parsedCandidate = historical && isRecord(candidate) && isUnknownArray(candidate.days)
+    ? {
+        ...candidate,
+        days: candidate.days.map((day) =>
+          isRecord(day) && isUnknownArray(day.meals)
+            ? { ...day, meals: day.meals.map((meal) => isRecord(meal) ? { prepMinutes: null, ...meal } : meal) }
+            : day
+        ),
+      }
+    : candidate;
+  const historicalSchema = structuredMealPlanCandidateSchema.extend({
+    days: z.array(structuredMealPlanDayCandidateSchema.extend({
+      meals: z.array(structuredMealCandidateSchema.extend({ prepMinutes: z.number().int().min(1).max(240).nullable() })).length(3),
+    })).min(1).max(30),
+  });
+  const parsed = (historical ? historicalSchema : structuredMealPlanCandidateSchema).safeParse(parsedCandidate);
   if (!parsed.success) {
     return { success: false, reason: 'schema_invalid' };
   }
@@ -254,8 +283,17 @@ export function parseStructuredMealPlanValue(
     ...valueRecord,
     days: valueRecord.days.map(withoutPersistedDayLabel),
   };
+  const snapshot = valueRecord.availableTimeMinutesSnapshot;
+  if (
+    snapshot !== undefined &&
+    snapshot !== null &&
+    (typeof snapshot !== 'number' || !Number.isInteger(snapshot) || snapshot < 0)
+  ) {
+    return { success: false, reason: 'schema_invalid' };
+  }
+  delete (candidate as Record<string, unknown>).availableTimeMinutesSnapshot;
 
-  const parsedPlan = parseStructuredMealPlanCandidate(candidate, requestedPeriod);
+  const parsedPlan = parseStructuredMealPlanCandidate(candidate, requestedPeriod, true);
   if (!parsedPlan.success) return parsedPlan;
 
   for (let index = 0; index < valueRecord.days.length; index += 1) {
@@ -266,6 +304,9 @@ export function parseStructuredMealPlanValue(
     }
   }
 
+  if (parsedPlan.success && snapshot !== undefined) {
+    parsedPlan.plan.availableTimeMinutesSnapshot = snapshot as number | null;
+  }
   return parsedPlan;
 }
 
@@ -283,7 +324,10 @@ export function renderStructuredMealPlan(plan: StructuredMealPlan): string {
           })
           .join(', ');
         const description = meal.description ? ` — ${meal.description}` : '';
-        return `${meal.title}${description}${ingredients ? ` (${ingredients})` : ''}`;
+        const prepTime = meal.prepMinutes === null || meal.prepMinutes === undefined
+          ? 'tiempo no estimado'
+          : `${meal.prepMinutes} min estimados`;
+        return `${meal.title} (${prepTime})${description}${ingredients ? ` (${ingredients})` : ''}`;
       });
       return `${day.label}\nDesayuno: ${meals[0]}\nAlmuerzo: ${meals[1]}\nCena: ${meals[2]}`;
     })

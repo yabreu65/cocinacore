@@ -496,6 +496,9 @@ export default function MealPlannerPage() {
         {plan ? (
           <div className="mt-6 rounded-xl border border-[#E8DDD2] bg-[#faf7f3] p-4">
             <h2 className="font-semibold">Menú generado</h2>
+            <p className="mt-1 text-sm text-[#6B5A50]">
+              Los tiempos son estimaciones de IA, no una garantía de duración real.
+            </p>
             {isLoadingConsumptions ? (
               <p className="mt-2 text-sm text-[#6B5A50]">Cargando comidas cocinadas...</p>
             ) : null}
@@ -529,6 +532,11 @@ export default function MealPlannerPage() {
                           <p className="font-semibold text-[#6B5A50]">
                             {mealTypeLabels[meal.mealType]}: {meal.title}
                           </p>
+                          {meal.prepMinutes === null || meal.prepMinutes === undefined ? (
+                            <p className="text-[#6B5A50]">tiempo no estimado</p>
+                          ) : (
+                            <p className="text-[#6B5A50]">{meal.prepMinutes} min estimados</p>
+                          )}
                           {meal.description ? (
                             <p className="text-[#6B5A50]">{meal.description}</p>
                           ) : null}

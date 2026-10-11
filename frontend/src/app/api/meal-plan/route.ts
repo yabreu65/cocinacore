@@ -173,9 +173,13 @@ export async function POST(request: NextRequest) {
   const inventoryLines = buildMealPlanInventoryContext(inventoryItems, tenantId);
   const inventoryContext =
     inventoryLines.join('\n') || 'Sin inventario persistido para este hogar.';
-  const persistedProfileContext = formatPersistedMealPlanProfileContext(
-    buildPersistedMealPlanProfileContext(persistedProfile, persistedProfileTerms, user.id, tenantId)
+  const persistedProfileContextData = buildPersistedMealPlanProfileContext(
+    persistedProfile,
+    persistedProfileTerms,
+    user.id,
+    tenantId
   );
+  const persistedProfileContext = formatPersistedMealPlanProfileContext(persistedProfileContextData);
   const peopleCount =
     typeof body.peopleCount === 'number' &&
     Number.isFinite(body.peopleCount) &&
@@ -207,7 +211,8 @@ export async function POST(request: NextRequest) {
     fusionCount: fusionCuisines.length,
   });
 
-  const structuredOutputInstructions = buildStructuredMealPlanInstructions(period);
+  const availableTimeMinutes = persistedProfileContextData?.availableTimeMinutes ?? null;
+  const structuredOutputInstructions = buildStructuredMealPlanInstructions(period, availableTimeMinutes);
 
   const prompt =
     mode === 'inventory_to_menu'
@@ -326,6 +331,24 @@ Reglas:
       });
       return NextResponse.json({ error: 'El proveedor IA devolvió un plan inválido.' }, { status: 502 });
     }
+
+    const exceedsAvailableTime =
+      availableTimeMinutes !== null &&
+      parsedPlan.plan.days.some((day) =>
+        day.meals.some((meal) => meal.prepMinutes === null ||
+          meal.prepMinutes === undefined ||
+          meal.prepMinutes > availableTimeMinutes)
+      );
+    if (exceedsAvailableTime) {
+      serverLogger.warn('meal_plan.invalid_provider_response', {
+        requestId,
+        model,
+        period,
+        reason: 'available_time_exceeded',
+      });
+      return NextResponse.json({ error: 'El proveedor IA devolvió un plan inválido.' }, { status: 502 });
+    }
+    parsedPlan.plan.availableTimeMinutesSnapshot = availableTimeMinutes;
 
     let persistedPlan;
     try {
