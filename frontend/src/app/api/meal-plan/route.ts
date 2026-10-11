@@ -15,6 +15,7 @@ import {
   findLatestMealPlanByUserAndTenant,
 } from '@/lib/db/repositories/mealPlanRepository';
 import { buildMealPlanInventoryContext } from '@/lib/meal-planner/inventory-context';
+import { containsRestrictedIngredientName } from '@/lib/recipes/structured-ingredients';
 import {
   buildPersistedMealPlanProfileContext,
   formatPersistedMealPlanProfileContext,
@@ -349,6 +350,24 @@ Reglas:
       return NextResponse.json({ error: 'El proveedor IA devolvió un plan inválido.' }, { status: 502 });
     }
     parsedPlan.plan.availableTimeMinutesSnapshot = availableTimeMinutes;
+
+    const hardRestrictions = [
+      ...(persistedProfileContextData?.allergies ?? []),
+      ...(persistedProfileContextData?.avoid ?? []),
+      ...restrictions,
+    ];
+    const generatedIngredientNames = parsedPlan.plan.days.flatMap((day) =>
+      day.meals.flatMap((meal) => meal.ingredients.map((ingredient) => ingredient.name))
+    );
+    if (containsRestrictedIngredientName(generatedIngredientNames, hardRestrictions)) {
+      serverLogger.warn('meal_plan.invalid_provider_response', {
+        requestId,
+        model,
+        period,
+        reason: 'restricted_ingredient',
+      });
+      return NextResponse.json({ error: 'El proveedor IA devolvió un plan inválido.' }, { status: 502 });
+    }
 
     let persistedPlan;
     try {

@@ -155,6 +155,14 @@ function structuredPlanJson(period: 'week' | 'fortnight' | 'month' = 'week'): st
   });
 }
 
+function structuredPlanWithIngredient(name: string): string {
+  const plan = JSON.parse(structuredPlanJson()) as {
+    days: Array<{ meals: Array<{ ingredients: Array<{ name: string }> }> }>;
+  };
+  plan.days[0].meals[0].ingredients[0].name = name;
+  return JSON.stringify(plan);
+}
+
 function canonicalStructuredPlan(period: 'week' | 'fortnight' | 'month' = 'week'): StructuredMealPlan {
   const parsed = parseStructuredMealPlanResponse(structuredPlanJson(period), period);
   if (!parsed.success) throw new Error('Expected structured plan fixture to be valid');
@@ -436,6 +444,92 @@ describe('POST /api/meal-plan', () => {
     expect(tooLongResponse.status).toBe(400);
     expect(createMealPlanMock).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: 'persisted allergy',
+      setup: () => findCulinaryProfileByUserIdMock.mockResolvedValue(profile({ allergies: ['Lácteos'] })),
+      restrictions: undefined,
+      ingredient: 'LACTEOS',
+    },
+    {
+      label: 'canonical persisted allergy alias',
+      setup: () => findCulinaryProfileByUserIdMock.mockResolvedValue(profile({ allergies: ['jitomates'] })),
+      restrictions: undefined,
+      ingredient: 'Tomates',
+    },
+    {
+      label: 'singular persisted allergy against plural ingredient',
+      setup: () => findCulinaryProfileByUserIdMock.mockResolvedValue(profile({ allergies: ['nuez'] })),
+      restrictions: undefined,
+      ingredient: 'nueces',
+    },
+    {
+      label: 'persisted avoid term',
+      setup: () => {
+        findCulinaryProfileByUserIdMock.mockResolvedValue(profile());
+        findCulinaryProfileTermsByUserIdMock.mockResolvedValue([profileTerm('avoid', 'Maní')]);
+      },
+      restrictions: undefined,
+      ingredient: 'mani tostado',
+    },
+    {
+      label: 'explicit request restriction',
+      setup: () => undefined,
+      restrictions: ['Sésamo'],
+      ingredient: 'sesamo negro',
+    },
+  ])('rejects a generated plan containing a $label before persistence', async ({ setup, restrictions, ingredient }) => {
+    setup();
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ candidates: [{ content: { parts: [{ text: structuredPlanWithIngredient(ingredient) }] } }] }),
+        { status: 200 }
+      )
+    );
+
+    const response = await POST(
+      request({ mode: 'balanced_ai', ...(restrictions ? { restrictions } : {}) }) as unknown as NextRequest
+    );
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({ error: 'El proveedor IA devolvió un plan inválido.' });
+    expect(createMealPlanMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { allergy: 'cacahuate', ingredient: 'maní' },
+    { allergy: 'cacahuete', ingredient: 'peanut' },
+    { allergy: 'maní', ingredient: 'cacahuates' },
+  ])('rejects generated peanut synonym $ingredient for hard allergy $allergy', async ({ allergy, ingredient }) => {
+    findCulinaryProfileByUserIdMock.mockResolvedValue(profile({ allergies: [allergy] }));
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ candidates: [{ content: { parts: [{ text: structuredPlanWithIngredient(ingredient) }] } }] }),
+        { status: 200 }
+      )
+    );
+
+    const response = await POST(request({ mode: 'balanced_ai' }) as unknown as NextRequest);
+
+    expect(response.status).toBe(502);
+    expect(createMealPlanMock).not.toHaveBeenCalled();
+  });
+
+  it('does not treat disliked ingredients as hard restrictions', async () => {
+    findCulinaryProfileByUserIdMock.mockResolvedValue(profile({ disliked_ingredients: ['Cilantro'] }));
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ candidates: [{ content: { parts: [{ text: structuredPlanWithIngredient('cilantro') }] } }] }),
+        { status: 200 }
+      )
+    );
+
+    const response = await POST(request({ mode: 'balanced_ai' }) as unknown as NextRequest);
+
+    expect(response.status).toBe(200);
+    expect(createMealPlanMock).toHaveBeenCalledTimes(1);
   });
 
   it('does not persist malformed Gemini output', async () => {
