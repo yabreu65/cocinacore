@@ -1,3 +1,6 @@
+import type { RecipeGenerateSchema } from '../validation';
+import type { z } from 'zod';
+
 export type TodayHandoffSlot = 'breakfast' | 'lunch' | 'snack' | 'dinner';
 
 export interface TodayHandoff {
@@ -20,7 +23,9 @@ export interface RecipeGenerationRequestInput {
   todayFields: TodayRecipeRequestFields | null;
 }
 
-export function buildRecipeGenerationRequestPayload(input: RecipeGenerationRequestInput) {
+export function buildRecipeGenerationRequestPayload(
+  input: RecipeGenerationRequestInput,
+): z.input<typeof RecipeGenerateSchema> {
   const dietaryRules = input.restrictions.split(',').map((rule) => rule.trim()).filter(Boolean);
 
   return {
@@ -29,7 +34,6 @@ export function buildRecipeGenerationRequestPayload(input: RecipeGenerationReque
     ...(input.todayFields
       ? { recipeName: input.recipeName.trim(), mealType: input.todayFields.mealType }
       : {}),
-    restrictions: { allergies: [], dietaryRules },
     peopleCount: 4,
     culinaryProfile: {
       level: 'Intermedio',

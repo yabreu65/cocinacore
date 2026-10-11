@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { RecipeGenerateSchema } from '../validation';
 import {
   buildRecipeGenerationRequestPayload,
   buildTodayRecipeRequestFields,
@@ -49,18 +50,20 @@ describe('Today recipe handoff', () => {
       new URLSearchParams('slot=snack&title=Tostadas+con+tomate&ingredient=pan&ingredient=tomate'),
     );
 
-    expect(buildRecipeGenerationRequestPayload({
+    const payload = buildRecipeGenerationRequestPayload({
       mode: 'rag',
       ingredients: 'pan\ntomate\naceite',
       recipeName: 'Tostadas con tomate editadas',
       restrictions: 'sin gluten, sin nueces',
       todayFields,
-    })).toEqual({
+    });
+
+    expect(payload).not.toHaveProperty('restrictions');
+    expect(payload).toEqual({
       mode: 'rag',
       ingredients: ['pan', 'tomate', 'aceite'],
       recipeName: 'Tostadas con tomate editadas',
       mealType: 'Merienda',
-      restrictions: { allergies: [], dietaryRules: ['sin gluten', 'sin nueces'] },
       peopleCount: 4,
       culinaryProfile: {
         level: 'Intermedio',
@@ -70,6 +73,7 @@ describe('Today recipe handoff', () => {
         goals: [],
       },
     });
+    expect(RecipeGenerateSchema.parse(payload)).toEqual({ ...payload, chunks: [], provider: 'auto' });
   });
 
   it('omits Today-only fields when building a request without a handoff', () => {
@@ -81,10 +85,10 @@ describe('Today recipe handoff', () => {
       todayFields: null,
     });
 
+    expect(payload).not.toHaveProperty('restrictions');
     expect(payload).toEqual({
       mode: 'free',
       ingredients: ['lentejas', 'zanahoria'],
-      restrictions: { allergies: [], dietaryRules: [] },
       peopleCount: 4,
       culinaryProfile: {
         level: 'Intermedio',
@@ -94,6 +98,7 @@ describe('Today recipe handoff', () => {
         goals: [],
       },
     });
+    expect(RecipeGenerateSchema.parse(payload)).toEqual({ ...payload, chunks: [], provider: 'auto' });
     expect(payload).not.toHaveProperty('recipeName');
     expect(payload).not.toHaveProperty('mealType');
   });
