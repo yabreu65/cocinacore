@@ -47,6 +47,17 @@ function structuredPlan(): StructuredMealPlan {
   };
 }
 
+function expectedStoredContent(plan: StructuredMealPlan): string {
+  return plan.days
+    .map((day) => [
+      day.label,
+      'Desayuno: Avena (tiempo no estimado) (1 taza Avena)',
+      'Almuerzo: Arroz (tiempo no estimado) (Arroz)',
+      'Cena: Sopa (tiempo no estimado) (Calabaza)',
+    ].join('\n'))
+    .join('\n\n');
+}
+
 function mealPlanRow(overrides: Partial<UserMealPlanRow> = {}): UserMealPlanRow {
   return {
     id: 'meal-plan-1',
@@ -113,7 +124,7 @@ describe('mealPlanRepository', () => {
       ['Gluten'],
       JSON.stringify({ inventoryLines: ['- arroz: 1 taza'] }),
       JSON.stringify(plan),
-      'Lunes\nDesayuno: Avena (1 taza Avena)\nAlmuerzo: Arroz (Arroz)\nCena: Sopa (Calabaza)\n\nDía 2\nDesayuno: Avena (1 taza Avena)\nAlmuerzo: Arroz (Arroz)\nCena: Sopa (Calabaza)\n\nDía 3\nDesayuno: Avena (1 taza Avena)\nAlmuerzo: Arroz (Arroz)\nCena: Sopa (Calabaza)\n\nDía 4\nDesayuno: Avena (1 taza Avena)\nAlmuerzo: Arroz (Arroz)\nCena: Sopa (Calabaza)\n\nDía 5\nDesayuno: Avena (1 taza Avena)\nAlmuerzo: Arroz (Arroz)\nCena: Sopa (Calabaza)\n\nDía 6\nDesayuno: Avena (1 taza Avena)\nAlmuerzo: Arroz (Arroz)\nCena: Sopa (Calabaza)\n\nDomingo\nDesayuno: Avena (1 taza Avena)\nAlmuerzo: Arroz (Arroz)\nCena: Sopa (Calabaza)',
+      expectedStoredContent(plan),
     ]);
   });
 
