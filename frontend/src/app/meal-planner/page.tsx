@@ -10,6 +10,7 @@ import {
   type MealPlanPublicResponse,
 } from '@/lib/meal-planner/rehydration';
 import type { StructuredMealPlan, StructuredMealType } from '@/lib/meal-planner/structured-plan';
+import { mapMealPlanLoadError } from '@/lib/meal-planner/meal-plan-load-error';
 import { normalizeInventoryName } from '@/lib/inventory/normalize-inventory';
 import {
   mealConsumptionKey,
@@ -17,6 +18,7 @@ import {
   type MealConsumptionRecord,
 } from '@/lib/meal-planner/consumption';
 import { shouldApplyConsumptionResponse, withConsumptionRecord } from './consumptionState';
+import LoadErrorNotice from './load-error-notice';
 
 type ShoppingSuggestion = {
   normalizedName: string;
@@ -165,7 +167,7 @@ export default function MealPlannerPage() {
           credentials: 'same-origin',
         });
         if (!result.ok) {
-          throw new Error(result.error ?? 'No se pudo cargar el menú guardado.');
+          throw new Error(mapMealPlanLoadError(result.error));
         }
         if (
           !shouldApplyMealPlannerRehydration({
@@ -416,11 +418,7 @@ export default function MealPlannerPage() {
         {isInitialLoading ? (
           <p className="mb-3 text-sm text-[#6B5A50]">Cargando menú guardado...</p>
         ) : null}
-        {loadError ? (
-          <p className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-            No pudimos cargar el menú guardado. Podés generar uno nuevo.
-          </p>
-        ) : null}
+        {loadError ? <LoadErrorNotice message={loadError} /> : null}
 
         <form onSubmit={onSubmit} className="grid gap-3">
           <label className="grid gap-1 text-sm font-semibold text-[#6B5A50]">

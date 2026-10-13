@@ -464,6 +464,45 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'No se pudo recuperar el menú guardado.' }, { status: 500 });
   }
 
+  let currentProfile: Awaited<ReturnType<typeof findCulinaryProfileByUserId>>;
+  let currentProfileTerms: Awaited<ReturnType<typeof findCulinaryProfileTermsByUserId>>;
+  try {
+    [currentProfile, currentProfileTerms] = await Promise.all([
+      findCulinaryProfileByUserId(user.id),
+      findCulinaryProfileTermsByUserId(user.id),
+    ]);
+  } catch {
+    serverLogger.warn('meal_plan.profile_retrieval_failed', { requestId });
+    return NextResponse.json({ error: 'No se pudo recuperar el menú guardado.' }, { status: 500 });
+  }
+
+  const profileContext = buildPersistedMealPlanProfileContext(
+    currentProfile,
+    currentProfileTerms,
+    user.id,
+    tenantId
+  );
+  const currentHardRestrictions = [
+    ...(profileContext?.allergies ?? []),
+    ...(profileContext?.avoid ?? []),
+  ];
+  const storedIngredientNames = parsedPlan.plan.days.flatMap((day) =>
+    day.meals.flatMap((meal) => meal.ingredients.map((ingredient) => ingredient.name))
+  );
+  if (containsRestrictedIngredientName(storedIngredientNames, currentHardRestrictions)) {
+    serverLogger.warn('meal_plan.stale_restrictions', {
+      requestId,
+      mealPlanId: persistedPlan.id,
+    });
+    return NextResponse.json(
+      {
+        error: 'MEAL_PLAN_RESTRICTIONS_CHANGED',
+        code: 'MEAL_PLAN_RESTRICTIONS_CHANGED',
+      },
+      { status: 409 }
+    );
+  }
+
   return NextResponse.json({
     plan: parsedPlan.plan,
     content: renderStructuredMealPlan(parsedPlan.plan),
