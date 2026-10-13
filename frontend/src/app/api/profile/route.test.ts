@@ -128,6 +128,28 @@ describe('/api/profile culinary contract', () => {
     saveProfileMock.mockResolvedValue(profile);
   });
 
+  it('returns 401 for unauthenticated GET and PUT before repository access or mutation', async () => {
+    requireUserMock.mockRejectedValue(new Error('no auth'));
+
+    const getResponse = await GET();
+    const putResponse = await PUT(request({ level: 'Chef' }));
+
+    expect(getResponse.status).toBe(401);
+    expect(putResponse.status).toBe(401);
+    expect(findProfileMock).not.toHaveBeenCalled();
+    expect(findTermsMock).not.toHaveBeenCalled();
+    expect(listDimensionsMock).not.toHaveBeenCalled();
+    expect(listTermsMock).not.toHaveBeenCalled();
+    expect(updateUserMock).not.toHaveBeenCalled();
+    expect(saveProfileMock).not.toHaveBeenCalled();
+    expect(transactionMock).not.toHaveBeenCalled();
+    expect(lockProfileUpdateMock).not.toHaveBeenCalled();
+    expect(findProfileInTransactionMock).not.toHaveBeenCalled();
+    expect(findTermsInTransactionMock).not.toHaveBeenCalled();
+    expect(updateUserInTransactionMock).not.toHaveBeenCalled();
+    expect(saveProfileInTransactionMock).not.toHaveBeenCalled();
+  });
+
   it('GET exposes active taxonomy and canonical selected term groups for the authenticated user', async () => {
     const response = await GET();
 
@@ -179,6 +201,30 @@ describe('/api/profile culinary contract', () => {
     });
   });
 
+  it('GET requests user B data and does not expose a returned user A profile in the same tenant', async () => {
+    const userB = { ...user, id: 'user-2' };
+    requireUserMock.mockResolvedValueOnce(userB);
+    findProfileMock.mockResolvedValueOnce(profile);
+    findTermsMock.mockResolvedValueOnce([]);
+
+    const response = await GET();
+
+    expect(response.status).toBe(200);
+    expect(findProfileMock).toHaveBeenCalledWith('user-2');
+    expect(findTermsMock).toHaveBeenCalledWith('user-2');
+    await expect(response.json()).resolves.toMatchObject({
+      user: userB,
+      profile: null,
+      selections: {
+        favoriteCuisineTermIds: [],
+        dietaryAvoidTermIds: [],
+        techniqueTermIds: [],
+        ingredientTypeTermIds: [],
+        goalTermIds: [],
+      },
+    });
+  });
+
   it('PUT derives preference types server-side from trusted taxonomy dimensions', async () => {
     const response = await PUT(
       request({
@@ -214,6 +260,41 @@ describe('/api/profile culinary contract', () => {
         { termId: terms[4].id, preferenceType: 'goal' },
       ],
     });
+  });
+
+  it.each([
+    ['same tenant', 'tenant-1'],
+    ['different tenant', 'tenant-2'],
+  ])('PUT uses session identity for user B in the %s despite forged body identities', async (_case, tenantId) => {
+    const userB = { ...user, id: 'user-2', tenant: { ...user.tenant, tenantId } };
+    requireUserMock.mockResolvedValueOnce(userB);
+    findProfileInTransactionMock.mockResolvedValueOnce(null);
+    findTermsInTransactionMock.mockResolvedValueOnce([]);
+
+    const response = await PUT(request({
+      fullName: 'User B',
+      level: 'Chef',
+      userId: 'user-1',
+      tenantId: 'tenant-forged',
+    }));
+
+    expect(response.status).toBe(200);
+    expect(lockProfileUpdateMock).toHaveBeenCalledWith(transactionClient, 'user-2');
+    expect(findProfileInTransactionMock).toHaveBeenCalledWith(transactionClient, 'user-2');
+    expect(findTermsInTransactionMock).toHaveBeenCalledWith(transactionClient, 'user-2');
+    expect(updateUserInTransactionMock).toHaveBeenCalledWith(transactionClient, 'user-2', { fullName: 'User B' });
+    expect(saveProfileInTransactionMock).toHaveBeenCalledWith(transactionClient, {
+      userId: 'user-2',
+      tenantId,
+      level: 'Chef',
+    });
+    expect(updateUserInTransactionMock).not.toHaveBeenCalledWith(transactionClient, 'user-1', expect.anything());
+    expect(saveProfileInTransactionMock).not.toHaveBeenCalledWith(transactionClient, expect.objectContaining({
+      userId: 'user-1',
+    }));
+    expect(saveProfileInTransactionMock).not.toHaveBeenCalledWith(transactionClient, expect.objectContaining({
+      tenantId: 'tenant-forged',
+    }));
   });
 
   it('rejects a term submitted under the wrong semantic group before any mutation', async () => {

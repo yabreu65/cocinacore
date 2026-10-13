@@ -219,6 +219,26 @@ describe('POST /api/today', () => {
     expect(new Headers(fetchInit().headers).get('x-goog-api-key')).toBe('test-server-key');
   });
 
+  it.each([
+    ['same tenant', 'tenant-1'],
+    ['different tenant', 'tenant-2'],
+  ])('scopes every Today read for user B in the %s to session identity and tenant', async (_case, tenantId) => {
+    const { POST } = await import('./route');
+    const userB = { id: 'user-2', tenant: { tenantId } };
+    const profileB = { ...profile, user_id: 'user-2', tenant_id: tenantId };
+    requireUserMock.mockResolvedValueOnce(userB);
+    profileMock.mockResolvedValueOnce(profileB);
+
+    const response = await POST(request({ slot: 'lunch' }));
+
+    expect(response.status).toBe(200);
+    expect(profileMock).toHaveBeenCalledWith('user-2');
+    expect(termsMock).toHaveBeenCalledWith('user-2');
+    expect(inventoryMock).toHaveBeenCalledWith(tenantId, expect.any(String), expect.any(Number));
+    expect(historyMock).toHaveBeenCalledWith('user-2', tenantId, expect.any(String), expect.any(Number));
+    expect(planMock).toHaveBeenCalledWith('user-2', tenantId);
+  });
+
   it('ranks validated persisted fallback candidates and computes truthful source/reason/ingredient details', async () => {
     const { POST } = await import('./route');
     historyMock.mockResolvedValueOnce([{

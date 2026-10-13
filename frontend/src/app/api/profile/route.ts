@@ -75,13 +75,15 @@ type CanonicalSelections = Required<SubmittedSelections>;
 
 class InvalidCulinarySelectionsError extends Error {}
 
-const EMPTY_SELECTIONS: CanonicalSelections = {
-  favoriteCuisineTermIds: [],
-  dietaryAvoidTermIds: [],
-  techniqueTermIds: [],
-  ingredientTypeTermIds: [],
-  goalTermIds: [],
-};
+function createEmptySelections(): CanonicalSelections {
+  return {
+    favoriteCuisineTermIds: [],
+    dietaryAvoidTermIds: [],
+    techniqueTermIds: [],
+    ingredientTypeTermIds: [],
+    goalTermIds: [],
+  };
+}
 
 const GROUP_CONTRACT = {
   favoriteCuisineTermIds: { dimensionKey: 'cuisine', preferenceType: 'identity' },
@@ -114,7 +116,7 @@ function buildSelections(
 ): CanonicalSelections {
   const dimensionById = new Map(dimensions.map((dimension) => [dimension.id, dimension.key]));
   const termById = new Map(terms.filter((term) => term.is_active).map((term) => [term.id, term]));
-  const selections: CanonicalSelections = { ...EMPTY_SELECTIONS };
+  const selections = createEmptySelections();
 
   for (const selected of selectedTerms) {
     const term = termById.get(selected.term_id);
@@ -185,7 +187,7 @@ export async function GET() {
       user,
       profile: safeProfile,
       taxonomy: publicTaxonomy(taxonomy.dimensions, taxonomy.terms),
-      selections: safeProfile ? buildSelections(taxonomy.dimensions, taxonomy.terms, selectedTerms) : { ...EMPTY_SELECTIONS },
+      selections: safeProfile ? buildSelections(taxonomy.dimensions, taxonomy.terms, selectedTerms) : createEmptySelections(),
     });
   } catch {
     return NextResponse.json({ error: 'Unable to retrieve profile' }, { status: 500 });
