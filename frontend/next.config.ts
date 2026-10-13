@@ -66,6 +66,8 @@ const sentryWrapped = withSentryConfig(nextConfig, {
   sourcemaps: {
     deleteSourcemapsAfterUpload: true,
   },
+
+  telemetry: false,
 });
 
 // Bundle analyzer wrapper: only active when ANALYZE=true
