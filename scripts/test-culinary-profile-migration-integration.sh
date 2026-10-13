@@ -44,6 +44,28 @@ container_list_name_id() {
   return 1
 }
 
+# PORT_INSPECTION_PARSER_BEGIN
+parse_published_postgres_port() {
+  node - "$1" <<'NODE'
+const raw = process.argv[2];
+try {
+  const ports = JSON.parse(raw);
+  const bindings = ports?.['5432/tcp'];
+  if (!Array.isArray(bindings) || bindings.length !== 1) process.exit(1);
+  const binding = bindings[0];
+  if (binding?.HostIp !== '127.0.0.1' || typeof binding.HostPort !== 'string' || !/^[0-9]+$/.test(binding.HostPort)) {
+    process.exit(1);
+  }
+  const port = Number(binding.HostPort);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) process.exit(1);
+  process.stdout.write(String(port));
+} catch {
+  process.exit(1);
+}
+NODE
+}
+# PORT_INSPECTION_PARSER_END
+
 cleanup() {
   local status=$?
   local cleanup_failed=0
@@ -160,11 +182,17 @@ DB_PASSWORD='local_ephemeral_only_7c1e'
 LEGACY_DB='culinary_legacy_test'
 FRESH_DB='culinary_fresh_test'
 
+if [[ -n "${MIGRATION_NETWORK:-}" ]]; then
+  MIGRATION_NETWORK_ARGS=(--network "$MIGRATION_NETWORK")
+else
+  MIGRATION_NETWORK_ARGS=()
+fi
+
 CONTAINER_CREATED=1
 # Arm cleanup before docker run; a failed start is discovered by exact name only if no ID was returned.
 if ! CONTAINER_ID=$("${DOCKER[@]}" run --pull=never --rm --detach --name "$CONTAINER" --label "$LABEL_KEY=$RUN_ID" \
   --env "POSTGRES_USER=$DB_ADMIN" --env "POSTGRES_PASSWORD=$DB_PASSWORD" --env "POSTGRES_DB=$LEGACY_DB" \
-  --publish '127.0.0.1::5432' --tmpfs '/var/lib/postgresql/data:rw,noexec,nosuid,size=1g' \
+  "${MIGRATION_NETWORK_ARGS[@]}" --publish '127.0.0.1::5432' --tmpfs '/var/lib/postgresql/data:rw,noexec,nosuid,size=1g' \
   "$IMAGE"); then
   CONTAINER_ID=''
   fail 'docker run failed before returning a container ID.'
@@ -201,9 +229,12 @@ if [[ "$data_mount_count" != 1 || "$data_mount_type" != 'tmpfs' ]]; then
   fi
   fail 'container must have exactly one tmpfs mount at /var/lib/postgresql/data.'
 fi
-published=$("${DOCKER[@]}" container inspect --format '{{(index (index .NetworkSettings.Ports "5432/tcp") 0).HostIp}}:{{(index (index .NetworkSettings.Ports "5432/tcp") 0).HostPort}}' "$CONTAINER_ID")
-if [[ "$published" != 127.0.0.1:* ]]; then fail 'PostgreSQL is not published exclusively on loopback.'; fi
-HOST_PORT=${published##*:}
+if ! published_ports=$("${DOCKER[@]}" container inspect --format '{{json .NetworkSettings.Ports}}' "$CONTAINER_ID" 2>/dev/null); then
+  fail 'could not inspect PostgreSQL published-port data.'
+fi
+if ! HOST_PORT=$(parse_published_postgres_port "$published_ports"); then
+  fail 'Docker inspect returned invalid or missing PostgreSQL published-port data.'
+fi
 
 ready=0
 for attempt in $(seq 1 60); do
@@ -214,6 +245,11 @@ for attempt in $(seq 1 60); do
   sleep 1
 done
 [[ "$ready" == 1 ]] || fail 'temporary PostgreSQL did not become ready.'
+
+if ! PGCONNECT_TIMEOUT=5 PGPASSWORD="$DB_PASSWORD" psql -h 127.0.0.1 -p "$HOST_PORT" -U "$DB_ADMIN" -d "$LEGACY_DB" \
+  -w -t -A -c 'SELECT 1' >/dev/null 2>&1; then
+  fail 'host-loopback PostgreSQL connectivity probe failed.'
+fi
 
 legacy_url="postgresql://${DB_ADMIN}:${DB_PASSWORD}@127.0.0.1:${HOST_PORT}/${LEGACY_DB}"
 fresh_url="postgresql://${DB_ADMIN}:${DB_PASSWORD}@127.0.0.1:${HOST_PORT}/${FRESH_DB}"

@@ -4,6 +4,7 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 node - "$ROOT" <<'NODE'
 const crypto = require('node:crypto');
+const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const root = process.argv[2];
@@ -105,6 +106,38 @@ if (!runbook.includes('npm run db:migrate:verify') ||
   fail('production M1 runbook must remain verify-only');
 }
 const harness = fs.readFileSync(path.join(root, 'scripts/test-culinary-profile-migration-integration.sh'), 'utf8');
+const parserBegin = '# PORT_INSPECTION_PARSER_BEGIN';
+const parserEnd = '# PORT_INSPECTION_PARSER_END';
+const parserStart = harness.indexOf(parserBegin);
+const parserStop = harness.indexOf(parserEnd, parserStart + parserBegin.length);
+if (parserStart < 0 || parserStop < 0) {
+  fail('guarded port parser region is absent; synthetic 5432/tcp empty-list fixture [] captures the slice-index failure assumption');
+}
+const parserSource = harness.slice(parserStart + parserBegin.length, parserStop).trim();
+const parserRuntime = harness.slice(parserStop + parserEnd.length);
+if (!/container inspect --format '\{\{json \.NetworkSettings\.Ports\}\}'/.test(harness) ||
+    !/\bparse_published_postgres_port\b/.test(parserRuntime) ||
+    /index\s+\(index\s+\.NetworkSettings\.Ports\s+['"]5432\/tcp['"]\)\s+0/.test(harness)) {
+  fail('runtime must inspect published ports as JSON, use parse_published_postgres_port, and avoid the unsafe unguarded [0] index');
+}
+const parserFixtures = [
+  { name: 'missing 5432/tcp key', json: '{}', accepted: false },
+  { name: 'null binding', json: '{"5432/tcp":null}', accepted: false },
+  { name: 'empty binding list (slice-index failure shape)', json: '{"5432/tcp":[]}', accepted: false },
+  { name: 'unexpected binding shape', json: '{"5432/tcp":{"HostIp":"127.0.0.1","HostPort":"54321"}}', accepted: false },
+  { name: 'invalid host port', json: '{"5432/tcp":[{"HostIp":"127.0.0.1","HostPort":"not-a-port"}]}', accepted: false },
+  { name: 'non-loopback host', json: '{"5432/tcp":[{"HostIp":"0.0.0.0","HostPort":"54321"}]}', accepted: false },
+  { name: 'valid loopback binding', json: '{"5432/tcp":[{"HostIp":"127.0.0.1","HostPort":"54321"}]}', accepted: true, output: '54321' },
+];
+for (const fixture of parserFixtures) {
+  const result = spawnSync('bash', ['-c', `${parserSource}\nparse_published_postgres_port "$1"`, 'port-parser-contract', fixture.json], {
+    encoding: 'utf8',
+  });
+  const accepted = result.status === 0;
+  if (accepted !== fixture.accepted || (fixture.accepted && result.stdout.trim() !== fixture.output)) {
+    fail(`port parser ${fixture.name} expected ${fixture.accepted ? `success with ${fixture.output}` : 'rejection'}; observed status ${result.status}, stdout ${JSON.stringify(result.stdout)}, stderr ${JSON.stringify(result.stderr)}`);
+  }
+}
 if (!/CONTAINER_ID=\$\("\$\{DOCKER\[@\]\}" run[\s\S]*?--label "\$LABEL_KEY=\$RUN_ID"[\s\S]*?"\$IMAGE"\)/.test(harness)) {
   fail('integration harness must capture the immutable ID returned by docker run');
 }
@@ -124,6 +157,10 @@ const runStart = harness.indexOf('if ! CONTAINER_ID=$(');
 const runEnd = harness.indexOf('\nfi', runStart);
 const runBlock = harness.slice(runStart, runEnd);
 if (!runBlock.includes('--pull=never')) fail('docker run must use --pull=never');
+if (!/if\s+\[\[\s+-n\s+"\$\{MIGRATION_NETWORK:-\}"\s+\]\]; then[\s\S]*?MIGRATION_NETWORK_ARGS=\(\s*--network\s+"\$MIGRATION_NETWORK"\s*\)[\s\S]*?else[\s\S]*?MIGRATION_NETWORK_ARGS=\(\s*\)[\s\S]*?fi/.test(harness) ||
+    !runBlock.includes('"${MIGRATION_NETWORK_ARGS[@]}"')) {
+  fail('optional MIGRATION_NETWORK must be forwarded to docker run only when set; unset must add no --network option');
+}
 if (!runBlock.includes("--publish '127.0.0.1::5432'")) fail('docker run must publish a dynamic loopback-only port');
 if (!runBlock.includes("--tmpfs '/var/lib/postgresql/data:rw,noexec,nosuid,size=1g'") ||
     /--(?:mount|volume)\b|(?:^|\s)-v\s/.test(runBlock) ||
@@ -147,6 +184,15 @@ const endpointGate = harness.indexOf('== unix://?*');
 const imageInspect = harness.indexOf('image inspect');
 if (endpointGate < 0 || imageInspect < 0 || endpointGate > imageInspect) {
   fail('local Unix endpoint gate must precede Docker resource operations');
+}
+const firstMigration = harness.indexOf('node "$ROOT/frontend/scripts/run-migrations.js"');
+const hostLoopbackProbe = harness.search(/psql[\s\S]{0,300}-h\s+127\.0\.0\.1[\s\S]{0,200}-p\s+"\$HOST_PORT"[\s\S]{0,300}-c\s+'(?:SELECT|select)\s+1'/);
+if (hostLoopbackProbe < 0 || firstMigration < 0 || hostLoopbackProbe > firstMigration) {
+  fail('a PostgreSQL SELECT 1 connection to 127.0.0.1:$HOST_PORT must succeed before the first migration invocation');
+}
+if (!/if ! PGCONNECT_TIMEOUT=5 PGPASSWORD="\$DB_PASSWORD" psql -h 127\.0\.0\.1 -p "\$HOST_PORT" -U "\$DB_ADMIN" -d "\$LEGACY_DB" \\\s*-w -t -A -c 'SELECT 1'/.test(harness) ||
+    /psql[\s\S]{0,300}--connect-timeout=5/.test(harness)) {
+  fail('host-loopback PostgreSQL probe must set PGCONNECT_TIMEOUT=5 and must not pass the unsupported --connect-timeout=5 option');
 }
 const armedHarness = harness.slice(harness.indexOf('CONTAINER_CREATED=1'));
 if (/container inspect[^\n]*"\$CONTAINER"/.test(armedHarness) ||
