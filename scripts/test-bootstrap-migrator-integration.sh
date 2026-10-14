@@ -16,18 +16,139 @@ DB=
 ADMIN_URL=
 MIGRATION_URL=
 
+expect_vector_error_classification() {
+  VECTOR_EXPECTED_CLASS=$1
+  VECTOR_TEST_FIXTURE=$2
+  printf '%s\n' "$VECTOR_TEST_FIXTURE" > "$VECTOR_DIAGNOSTIC_TEST_LOG"
+  VECTOR_ACTUAL_CLASS=$(classify_provisioner_error "$VECTOR_DIAGNOSTIC_TEST_LOG")
+  [ "$VECTOR_ACTUAL_CLASS" = "$VECTOR_EXPECTED_CLASS" ] || {
+    printf '%s\n' 'vector-unavailable diagnostic self-test failed: error classification' >&2
+    return 1
+  }
+  case "$VECTOR_ACTUAL_CLASS" in
+    *REDACTION_SENTINEL*)
+      printf '%s\n' 'vector-unavailable diagnostic self-test failed: captured text leaked' >&2
+      return 1
+      ;;
+  esac
+}
+
+expect_vector_availability_state() {
+  VECTOR_EXPECTED_AVAILABILITY=$2
+  VECTOR_ACTUAL_AVAILABILITY=$(normalize_vector_availability "$1")
+  [ "$VECTOR_ACTUAL_AVAILABILITY" = "$VECTOR_EXPECTED_AVAILABILITY" ] || {
+    printf '%s\n' 'vector-unavailable diagnostic self-test failed: availability mapping' >&2
+    return 1
+  }
+}
+
 vector_unavailable_diagnostics_self_test() {
+  VECTOR_DIAGNOSTIC_TEST_TMP=$(mktemp -d)
+  trap 'rm -rf "$VECTOR_DIAGNOSTIC_TEST_TMP"' EXIT
+  VECTOR_DIAGNOSTIC_TEST_LOG="$VECTOR_DIAGNOSTIC_TEST_TMP/provisioner.log"
+  expect_vector_availability_state t yes
+  expect_vector_availability_state f no
+  expect_vector_availability_state unexpected query_failed
+  expect_vector_error_classification manifest_config:before_connect 'Trusted migration manifest metadata is invalid. REDACTION_SENTINEL'
+  expect_vector_error_classification manifest_config:before_connect 'BOOTSTRAP_DATABASE_URL environment variable is required. REDACTION_SENTINEL'
+  expect_vector_error_classification manifest_config:before_connect 'MIGRATION_CHECKSUM_MISMATCH: trusted file 001_test.sql REDACTION_SENTINEL'
+  expect_vector_error_classification unknown:unknown 'MIGRATION_CHECKSUM_MISMATCH: 001_test.sql REDACTION_SENTINEL'
+  expect_vector_error_classification unknown:unknown 'connect ECONNREFUSED REDACTION_SENTINEL'
+  expect_vector_error_classification identity_or_lock:connected_preflight 'MIGRATION_IDENTITY_MISMATCH: REDACTION_SENTINEL'
+  expect_vector_error_classification identity_or_lock:connected_preflight 'LOCK_TIMEOUT: REDACTION_SENTINEL'
+  expect_vector_error_classification role_state:connected_validation 'ROLE_STATE_MISMATCH: REDACTION_SENTINEL'
+  expect_vector_error_classification lock_release:connected_cleanup 'Database-change lock release failure. REDACTION_SENTINEL'
+  expect_vector_error_classification vector_unavailable:preflight_or_provision_guard 'VECTOR_NOT_AVAILABLE: REDACTION_SENTINEL'
+  expect_vector_error_classification unknown:unknown 'unrecognized REDACTION_SENTINEL'
+
   rename_diagnostic=$(report_vector_control_rename failed 17)
   [ "$rename_diagnostic" = 'integration diagnostic: vector-unavailable control_file_rename=failed exit_code=17' ] || {
     printf '%s\n' 'vector-unavailable diagnostic self-test failed: rename' >&2
     return 1
   }
-  result_diagnostic=$(report_vector_provisioner_result 1 yes clear none absent)
-  [ "$result_diagnostic" = 'integration diagnostic: vector-unavailable provisioner_exit_code=1 VECTOR_NOT_AVAILABLE=yes sensitive_output=clear roles=none ledger=absent' ] || {
+  result_diagnostic=$(report_vector_provisioner_result 1 yes clear none absent yes vector_unavailable:preflight_or_provision_guard)
+  [ "$result_diagnostic" = 'integration diagnostic: vector-unavailable provisioner_exit_code=1 VECTOR_NOT_AVAILABLE=yes sensitive_output=clear roles=none ledger=absent postgres_vector_available=yes error_class_phase=vector_unavailable:preflight_or_provision_guard' ] || {
     printf '%s\n' 'vector-unavailable diagnostic self-test failed: provisioner result' >&2
     return 1
   }
+  result_diagnostic=$(report_vector_provisioner_result 1 no clear none absent query_failed unknown:unknown)
+  [ "$result_diagnostic" = 'integration diagnostic: vector-unavailable provisioner_exit_code=1 VECTOR_NOT_AVAILABLE=no sensitive_output=clear roles=none ledger=absent postgres_vector_available=query_failed error_class_phase=unknown:unknown' ] || {
+    printf '%s\n' 'vector-unavailable diagnostic self-test failed: query-failed result' >&2
+    return 1
+  }
+  result_diagnostic=$(report_vector_provisioner_result 1 no clear none absent no unknown:unknown)
+  [ "$result_diagnostic" = 'integration diagnostic: vector-unavailable provisioner_exit_code=1 VECTOR_NOT_AVAILABLE=no sensitive_output=clear roles=none ledger=absent postgres_vector_available=no error_class_phase=unknown:unknown' ] || {
+    printf '%s\n' 'vector-unavailable diagnostic self-test failed: unavailable result' >&2
+    return 1
+  }
   printf '%s\n' 'vector-unavailable diagnostic self-test passed'
+}
+
+vector_log_matches_markers() {
+  VECTOR_MARKER_LOG=$1
+  shift
+  for VECTOR_STATIC_MARKER do
+    if grep -Fq "$VECTOR_STATIC_MARKER" "$VECTOR_MARKER_LOG"; then return 0; fi
+  done
+  return 1
+}
+
+classify_provisioner_error() {
+  VECTOR_CLASSIFY_LOG=$1
+  if vector_log_matches_markers "$VECTOR_CLASSIFY_LOG" 'VECTOR_NOT_AVAILABLE:'; then
+    printf '%s\n' 'vector_unavailable:preflight_or_provision_guard'
+  elif vector_log_matches_markers "$VECTOR_CLASSIFY_LOG" \
+    'MIGRATION_IDENTITY_MISMATCH:' \
+    'LOCK_TIMEOUT:' \
+    'MIGRATION_LOCK_TIMEOUT_MS must be an integer between'; then
+    printf '%s\n' 'identity_or_lock:connected_preflight'
+  elif vector_log_matches_markers "$VECTOR_CLASSIFY_LOG" 'Database-change lock release failure.'; then
+    printf '%s\n' 'lock_release:connected_cleanup'
+  elif vector_log_matches_markers "$VECTOR_CLASSIFY_LOG" 'ROLE_STATE_MISMATCH:'; then
+    printf '%s\n' 'role_state:connected_validation'
+  elif vector_log_matches_markers "$VECTOR_CLASSIFY_LOG" \
+    'COCINACORE_SEPARATED_DB_LANES_ENABLED must be an explicit true or false value.' \
+    'BOOTSTRAP_DATABASE_URL environment variable is required.' \
+    'MIGRATION_ADMIN_PASSWORD environment variable is required.' \
+    'MIGRATION_ADMIN_PASSWORD must contain at least 24 characters.' \
+    'Trusted migration manifest is unreadable:' \
+    'Trusted migration manifest metadata is invalid.' \
+    'Trusted migration lock contract is invalid.' \
+    'Trusted migration manifest structure is invalid.' \
+    'Trusted managed-schema/bootstrap declaration is invalid.' \
+    'Trusted ownership allowlist must contain exactly' \
+    'Trusted manifest migration ordering is invalid at' \
+    'Trusted manifest contains a duplicate migration:' \
+    'Trusted manifest migration metadata is invalid:' \
+    'Trusted historical migration metadata is invalid:' \
+    'Historical migration cannot declare catalog additions:' \
+    'Trusted catalog additions are invalid:' \
+    'Trusted catalog addition is unsupported:' \
+    'Duplicate trusted catalog addition:' \
+    'MIGRATION_CHECKSUM_MISMATCH: trusted file' \
+    'Trusted historical migration baseline is incomplete.' \
+    'Migration manifest and SQL files are not an exact bijection.' \
+    'Trusted ownership target is malformed.' \
+    'Duplicate trusted ownership target:' \
+    'Trusted legacy owner policy is invalid:' \
+    'Trusted catalog inventory counts are invalid.' \
+    'Trusted role or schema ACL contract is invalid.' \
+    'Trusted role declaration is invalid:' \
+    'Trusted role membership/privilege declaration is invalid.' \
+    'Trusted extension declaration is invalid:' \
+    'Trusted vector capability declaration is invalid.'; then
+    printf '%s\n' 'manifest_config:before_connect'
+  else
+    printf '%s\n' 'unknown:unknown'
+  fi
+}
+
+normalize_vector_availability() {
+  case "$1" in
+    t) printf '%s\n' yes ;;
+    f) printf '%s\n' no ;;
+    *) printf '%s\n' query_failed ;;
+  esac
 }
 
 report_vector_control_rename() {
@@ -35,7 +156,7 @@ report_vector_control_rename() {
 }
 
 report_vector_provisioner_result() {
-  printf 'integration diagnostic: vector-unavailable provisioner_exit_code=%s VECTOR_NOT_AVAILABLE=%s sensitive_output=%s roles=%s ledger=%s\n' "$1" "$2" "$3" "$4" "$5"
+  printf 'integration diagnostic: vector-unavailable provisioner_exit_code=%s VECTOR_NOT_AVAILABLE=%s sensitive_output=%s roles=%s ledger=%s postgres_vector_available=%s error_class_phase=%s\n' "$1" "$2" "$3" "$4" "$5" "$6" "$7"
 }
 
 if [ "${VECTOR_UNAVAILABLE_DIAGNOSTICS_SELF_TEST:-}" = yes ]; then
@@ -143,6 +264,7 @@ expect_provision_failure() {
     else
       VECTOR_SENSITIVE_OUTPUT=clear
     fi
+    VECTOR_ERROR_CLASS_PHASE=$(classify_provisioner_error "$LOG")
     return 0
   fi
   [ "$provisioner_exit_code" -ne 0 ] || fail "provisioner accepted failure case $expected"
@@ -198,6 +320,12 @@ else
   report_vector_control_rename failed "$rename_exit_code" >&2
   fail 'could not rename vector.control for unavailable-vector check'
 fi
+if vector_available_query=$(admin_sql "$DB" "select exists (select 1 from pg_available_extension_versions where name = 'vector')" 2>/dev/null); then
+  POSTGRES_VECTOR_AVAILABLE=$(normalize_vector_availability "$vector_available_query")
+else
+  POSTGRES_VECTOR_AVAILABLE=query_failed
+fi
+printf 'integration diagnostic: vector-unavailable postgres_vector_available_after_rename=%s\n' "$POSTGRES_VECTOR_AVAILABLE" >&2
 expect_provision_failure VECTOR_NOT_AVAILABLE vector-unavailable-diagnostic
 if reserved_roles_count=$(admin_sql "$DB" "select count(*) from pg_roles where rolname in ('migration_admin','cocinacore_schema_owner')" 2>/dev/null); then
   if [ "$reserved_roles_count" = 0 ]; then VECTOR_ROLES_STATE=none; else VECTOR_ROLES_STATE=unexpected; fi
@@ -213,7 +341,7 @@ if ledger_is_null=$(admin_sql "$DB" "select to_regclass('public.schema_migration
 else
   VECTOR_LEDGER_STATE=query_failed
 fi
-report_vector_provisioner_result "$VECTOR_PROVISIONER_EXIT_CODE" "$VECTOR_NOT_AVAILABLE_DETECTED" "$VECTOR_SENSITIVE_OUTPUT" "$VECTOR_ROLES_STATE" "$VECTOR_LEDGER_STATE" >&2
+report_vector_provisioner_result "$VECTOR_PROVISIONER_EXIT_CODE" "$VECTOR_NOT_AVAILABLE_DETECTED" "$VECTOR_SENSITIVE_OUTPUT" "$VECTOR_ROLES_STATE" "$VECTOR_LEDGER_STATE" "$POSTGRES_VECTOR_AVAILABLE" "$VECTOR_ERROR_CLASS_PHASE" >&2
 [ "$VECTOR_PROVISIONER_EXIT_CODE" -ne 0 ] || fail 'provisioner accepted failure case VECTOR_NOT_AVAILABLE'
 [ "$VECTOR_NOT_AVAILABLE_DETECTED" = yes ] || fail 'provisioner did not report VECTOR_NOT_AVAILABLE'
 [ "$VECTOR_SENSITIVE_OUTPUT" = clear ] || fail 'provisioner logged a secret'
