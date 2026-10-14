@@ -16,6 +16,33 @@ DB=
 ADMIN_URL=
 MIGRATION_URL=
 
+vector_unavailable_diagnostics_self_test() {
+  rename_diagnostic=$(report_vector_control_rename failed 17)
+  [ "$rename_diagnostic" = 'integration diagnostic: vector-unavailable control_file_rename=failed exit_code=17' ] || {
+    printf '%s\n' 'vector-unavailable diagnostic self-test failed: rename' >&2
+    return 1
+  }
+  result_diagnostic=$(report_vector_provisioner_result 1 yes clear none absent)
+  [ "$result_diagnostic" = 'integration diagnostic: vector-unavailable provisioner_exit_code=1 VECTOR_NOT_AVAILABLE=yes sensitive_output=clear roles=none ledger=absent' ] || {
+    printf '%s\n' 'vector-unavailable diagnostic self-test failed: provisioner result' >&2
+    return 1
+  }
+  printf '%s\n' 'vector-unavailable diagnostic self-test passed'
+}
+
+report_vector_control_rename() {
+  printf 'integration diagnostic: vector-unavailable control_file_rename=%s exit_code=%s\n' "$1" "$2"
+}
+
+report_vector_provisioner_result() {
+  printf 'integration diagnostic: vector-unavailable provisioner_exit_code=%s VECTOR_NOT_AVAILABLE=%s sensitive_output=%s roles=%s ledger=%s\n' "$1" "$2" "$3" "$4" "$5"
+}
+
+if [ "${VECTOR_UNAVAILABLE_DIAGNOSTICS_SELF_TEST:-}" = yes ]; then
+  vector_unavailable_diagnostics_self_test
+  exit $?
+fi
+
 set_check() {
   if [ "$CHECK" != "$1" ]; then
     CHECK=$1
@@ -104,8 +131,21 @@ expect_provision_failure() {
   if COCINACORE_SEPARATED_DB_LANES_ENABLED=true \
      BOOTSTRAP_DATABASE_URL="$ADMIN_URL" MIGRATION_ADMIN_PASSWORD="$MIGRATION_PASSWORD" \
      node "$ROOT/frontend/scripts/provision-database.js" >"$LOG" 2>&1; then
-    fail "provisioner accepted failure case $expected"
+    provisioner_exit_code=0
+  else
+    provisioner_exit_code=$?
   fi
+  if [ "${2:-}" = vector-unavailable-diagnostic ]; then
+    VECTOR_PROVISIONER_EXIT_CODE=$provisioner_exit_code
+    if grep -Fq -- "$expected" "$LOG"; then VECTOR_NOT_AVAILABLE_DETECTED=yes; else VECTOR_NOT_AVAILABLE_DETECTED=no; fi
+    if grep -Fq "$ADMIN_PASSWORD" "$LOG" || grep -Fq "$MIGRATION_PASSWORD" "$LOG"; then
+      VECTOR_SENSITIVE_OUTPUT=detected
+    else
+      VECTOR_SENSITIVE_OUTPUT=clear
+    fi
+    return 0
+  fi
+  [ "$provisioner_exit_code" -ne 0 ] || fail "provisioner accepted failure case $expected"
   grep -q "$expected" "$LOG" || fail "provisioner did not report $expected"
   grep -Fq "$ADMIN_PASSWORD" "$LOG" && fail 'administrator secret was logged'
   grep -Fq "$MIGRATION_PASSWORD" "$LOG" && fail 'migration secret was logged'
@@ -141,12 +181,51 @@ start_container fresh cocinacore_fresh
 
 # Unavailable vector fails before roles, ledger, or migrations exist.
 set_check vector-unavailable
-SHARE_DIR=$(docker exec "$CONTAINER" pg_config --sharedir)
-docker exec "$CONTAINER" mv "$SHARE_DIR/extension/vector.control" "$SHARE_DIR/extension/vector.control.cp21"
-expect_provision_failure VECTOR_NOT_AVAILABLE
-[ "$(admin_sql "$DB" "select count(*) from pg_roles where rolname in ('migration_admin','cocinacore_schema_owner')")" = 0 ] || fail 'unavailable vector created roles'
-[ "$(admin_sql "$DB" "select to_regclass('public.schema_migrations') is null")" = t ] || fail 'unavailable vector created ledger'
-docker exec "$CONTAINER" mv "$SHARE_DIR/extension/vector.control.cp21" "$SHARE_DIR/extension/vector.control"
+if SHARE_DIR=$(docker exec "$CONTAINER" pg_config --sharedir 2>/dev/null); then
+  if [ -z "$SHARE_DIR" ]; then
+    printf '%s\n' 'integration diagnostic: vector-unavailable sharedir_lookup=empty' >&2
+    fail 'could not determine PostgreSQL shared directory'
+  fi
+else
+  sharedir_exit_code=$?
+  printf 'integration diagnostic: vector-unavailable sharedir_lookup=failed exit_code=%s\n' "$sharedir_exit_code" >&2
+  fail 'could not determine PostgreSQL shared directory'
+fi
+if docker exec "$CONTAINER" mv "$SHARE_DIR/extension/vector.control" "$SHARE_DIR/extension/vector.control.cp21" >/dev/null 2>&1; then
+  report_vector_control_rename ok 0 >&2
+else
+  rename_exit_code=$?
+  report_vector_control_rename failed "$rename_exit_code" >&2
+  fail 'could not rename vector.control for unavailable-vector check'
+fi
+expect_provision_failure VECTOR_NOT_AVAILABLE vector-unavailable-diagnostic
+if reserved_roles_count=$(admin_sql "$DB" "select count(*) from pg_roles where rolname in ('migration_admin','cocinacore_schema_owner')" 2>/dev/null); then
+  if [ "$reserved_roles_count" = 0 ]; then VECTOR_ROLES_STATE=none; else VECTOR_ROLES_STATE=unexpected; fi
+else
+  VECTOR_ROLES_STATE=query_failed
+fi
+if ledger_is_null=$(admin_sql "$DB" "select to_regclass('public.schema_migrations') is null" 2>/dev/null); then
+  case "$ledger_is_null" in
+    t) VECTOR_LEDGER_STATE=absent ;;
+    f) VECTOR_LEDGER_STATE=unexpected ;;
+    *) VECTOR_LEDGER_STATE=query_failed ;;
+  esac
+else
+  VECTOR_LEDGER_STATE=query_failed
+fi
+report_vector_provisioner_result "$VECTOR_PROVISIONER_EXIT_CODE" "$VECTOR_NOT_AVAILABLE_DETECTED" "$VECTOR_SENSITIVE_OUTPUT" "$VECTOR_ROLES_STATE" "$VECTOR_LEDGER_STATE" >&2
+[ "$VECTOR_PROVISIONER_EXIT_CODE" -ne 0 ] || fail 'provisioner accepted failure case VECTOR_NOT_AVAILABLE'
+[ "$VECTOR_NOT_AVAILABLE_DETECTED" = yes ] || fail 'provisioner did not report VECTOR_NOT_AVAILABLE'
+[ "$VECTOR_SENSITIVE_OUTPUT" = clear ] || fail 'provisioner logged a secret'
+[ "$VECTOR_ROLES_STATE" = none ] || fail 'unavailable vector created roles'
+[ "$VECTOR_LEDGER_STATE" = absent ] || fail 'unavailable vector created ledger'
+if docker exec "$CONTAINER" mv "$SHARE_DIR/extension/vector.control.cp21" "$SHARE_DIR/extension/vector.control" >/dev/null 2>&1; then
+  printf '%s\n' 'integration diagnostic: vector-unavailable control_file_restore=ok' >&2
+else
+  restore_exit_code=$?
+  printf 'integration diagnostic: vector-unavailable control_file_restore=failed exit_code=%s\n' "$restore_exit_code" >&2
+  fail 'could not restore vector.control after unavailable-vector check'
+fi
 
 # Wrong installed vector state fails closed and is not repaired.
 set_check vector-mismatch
