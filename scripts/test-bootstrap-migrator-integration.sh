@@ -81,7 +81,101 @@ vector_unavailable_diagnostics_self_test() {
     printf '%s\n' 'vector-unavailable diagnostic self-test failed: unavailable result' >&2
     return 1
   }
+  bootstrap_migrator_regression_self_test
   printf '%s\n' 'vector-unavailable diagnostic self-test passed'
+}
+
+# Regression-test interfaces for the PM-authorized manifest and verify-complete
+# follow-up:
+#   manifest_migration_count MANIFEST_PATH -> total manifest migration count
+#   classify_verify_error LOG_PATH -> one closed error_class:phase value
+#   report_verify_failure LOG_PATH EXIT_CODE -> safe diagnostic; returns EXIT_CODE
+bootstrap_migrator_regression_self_test() {
+  REGRESSION_TEST_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+  REGRESSION_TEST_SCRIPT="$REGRESSION_TEST_ROOT/scripts/test-bootstrap-migrator-integration.sh"
+  REGRESSION_TEST_MANIFEST="$REGRESSION_TEST_ROOT/db/migrations/manifest.json"
+  REGRESSION_TEST_TMP=$(mktemp -d)
+  trap 'rm -rf "$REGRESSION_TEST_TMP"' EXIT
+  REGRESSION_TEST_FAILURES=0
+
+  regression_assert() {
+    if [ "$1" = yes ]; then return 0; fi
+    printf 'bootstrap/migrator regression self-test failed: %s\n' "$2" >&2
+    REGRESSION_TEST_FAILURES=$((REGRESSION_TEST_FAILURES + 1))
+  }
+
+  if command -v manifest_migration_count >/dev/null 2>&1; then
+    REGRESSION_MANIFEST_COUNT=$(manifest_migration_count "$REGRESSION_TEST_MANIFEST")
+    regression_assert "$( [ "$REGRESSION_MANIFEST_COUNT" = 14 ] && printf yes || printf no )" 'manifest count is 14'
+  else
+    regression_assert no 'manifest_migration_count interface is defined'
+  fi
+
+  REGRESSION_TOTAL_COUNT_LINES=$(awk '
+    /^STAGE=initialization$/ { in_main=1 }
+    in_main && /select count\(\*\) from/ && /schema_migrations/ && /EXPECTED_MIGRATION_COUNT/ { count++ }
+    END { print count+0 }
+  ' "$REGRESSION_TEST_SCRIPT")
+  regression_assert "$( [ "$REGRESSION_TOTAL_COUNT_LINES" = 2 ] && printf yes || printf no )" 'both total ledger assertions use the manifest count'
+  if awk '
+    /^STAGE=initialization$/ { in_main=1 }
+    in_main && /select count\(\*\) from/ && /schema_migrations/ && / = 12/ { stale=1 }
+    END { exit !stale }
+  ' "$REGRESSION_TEST_SCRIPT"; then
+    regression_assert no 'total ledger assertions are not hardcoded to 12'
+  else
+    regression_assert yes 'total ledger assertions are not hardcoded to 12'
+  fi
+  REGRESSION_BACKFILL_CHECKS=$(grep -Fc 'checksum is not null")" = 10' "$REGRESSION_TEST_SCRIPT" || true)
+  regression_assert "$( [ "$REGRESSION_BACKFILL_CHECKS" -gt 1 ] && printf yes || printf no )" 'historical checksum backfill expectation remains 10'
+  REGRESSION_DONE_012_CHECKS=$(grep -Fc 'DONE 012_meal_plan_consumption.sql' "$REGRESSION_TEST_SCRIPT" || true)
+  regression_assert "$( [ "$REGRESSION_DONE_012_CHECKS" -gt 1 ] && printf yes || printf no )" 'DONE 012 milestone checks remain'
+  REGRESSION_DONE_014_CHECKS=$(grep -Fc 'DONE 014' "$REGRESSION_TEST_SCRIPT" || true)
+  regression_assert "$( [ "$REGRESSION_DONE_014_CHECKS" -gt 1 ] && printf yes || printf no )" 'DONE 014 full-completion markers are present'
+
+  if command -v classify_verify_error >/dev/null 2>&1; then
+    printf '%s\n' 'MIGRATION_IDENTITY_MISMATCH: REDACTION_SENTINEL' >"$REGRESSION_TEST_TMP/known.log"
+    REGRESSION_KNOWN_CLASS=$(classify_verify_error "$REGRESSION_TEST_TMP/known.log")
+    regression_assert "$( [ "$REGRESSION_KNOWN_CLASS" = 'identity_state:verify_complete' ] && printf yes || printf no )" 'known verify marker maps to its closed class'
+    printf '%s\n' 'unknown secret=REGRESSION_SECRET postgresql://private.example/db' >"$REGRESSION_TEST_TMP/unknown.log"
+    REGRESSION_UNKNOWN_CLASS=$(classify_verify_error "$REGRESSION_TEST_TMP/unknown.log")
+    regression_assert "$( [ "$REGRESSION_UNKNOWN_CLASS" = 'unknown:unknown' ] && printf yes || printf no )" 'unknown verify log maps to unknown'
+    case "$REGRESSION_UNKNOWN_CLASS" in
+      *REGRESSION_SECRET*|*private.example*|*secret=*) regression_assert no 'verify classifier does not echo sensitive log content' ;;
+      *) regression_assert yes 'verify classifier does not echo sensitive log content' ;;
+    esac
+  else
+    regression_assert no 'classify_verify_error interface is defined'
+    regression_assert no 'known verify marker maps to its closed class'
+    regression_assert no 'unknown verify log maps to unknown'
+    regression_assert no 'verify classifier does not echo sensitive log content'
+  fi
+
+  if command -v report_verify_failure >/dev/null 2>&1; then
+    if report_verify_failure "$REGRESSION_TEST_TMP/unknown.log" 23 >"$REGRESSION_TEST_TMP/report.out"; then
+      REGRESSION_REPORT_STATUS=0
+    else
+      REGRESSION_REPORT_STATUS=$?
+    fi
+    REGRESSION_REPORT_OUTPUT=$(cat "$REGRESSION_TEST_TMP/report.out")
+    regression_assert "$( [ "$REGRESSION_REPORT_STATUS" = 23 ] && printf yes || printf no )" 'safe verify reporter retains the original nonzero status'
+    case "$REGRESSION_REPORT_OUTPUT" in
+      *unknown*exit_code=23*) regression_assert yes 'verify reporter emits closed class and exit code' ;;
+      *) regression_assert no 'verify reporter emits closed class and exit code' ;;
+    esac
+    case "$REGRESSION_REPORT_OUTPUT" in
+      *REGRESSION_SECRET*|*private.example*|*secret=*|*postgresql://*) regression_assert no 'verify reporter never echoes log contents' ;;
+      *) regression_assert yes 'verify reporter never echoes log contents' ;;
+    esac
+  else
+    regression_assert no 'report_verify_failure interface is defined'
+    regression_assert no 'safe verify reporter retains the original nonzero status'
+    regression_assert no 'verify reporter emits closed class and exit code'
+    regression_assert no 'verify reporter never echoes log contents'
+  fi
+
+  [ "$REGRESSION_TEST_FAILURES" -eq 0 ] || return 1
+  printf '%s\n' 'bootstrap/migrator regression self-test passed'
 }
 
 vector_log_matches_markers() {
@@ -91,6 +185,46 @@ vector_log_matches_markers() {
     if grep -Fq "$VECTOR_STATIC_MARKER" "$VECTOR_MARKER_LOG"; then return 0; fi
   done
   return 1
+}
+
+manifest_migration_count() {
+  node -e '
+    const fs = require("fs");
+    const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    if (!manifest || typeof manifest !== "object" || !Array.isArray(manifest.migrations)) {
+      process.exit(1);
+    }
+    process.stdout.write(String(manifest.migrations.length) + "\n");
+  ' "$1"
+}
+
+classify_verify_error() {
+  VERIFY_CLASSIFY_LOG=$1
+  if grep -Fq 'MIGRATION_IDENTITY_MISMATCH:' "$VERIFY_CLASSIFY_LOG" 2>/dev/null; then
+    printf '%s\n' 'identity_state:verify_complete'
+  elif grep -Fq 'ROLE_STATE_MISMATCH:' "$VERIFY_CLASSIFY_LOG" 2>/dev/null; then
+    printf '%s\n' 'role_state:verify_complete'
+  elif grep -Fq 'MIGRATION_CHECKSUM_MISMATCH:' "$VERIFY_CLASSIFY_LOG" 2>/dev/null; then
+    printf '%s\n' 'checksum_state:verify_complete'
+  elif grep -Fq 'BASELINE_MISMATCH:' "$VERIFY_CLASSIFY_LOG" 2>/dev/null; then
+    printf '%s\n' 'baseline_state:verify_complete'
+  elif grep -Fq 'VECTOR_STATE_MISMATCH:' "$VERIFY_CLASSIFY_LOG" 2>/dev/null; then
+    printf '%s\n' 'vector_state:verify_complete'
+  elif grep -Fq 'Pending migration:' "$VERIFY_CLASSIFY_LOG" 2>/dev/null; then
+    printf '%s\n' 'pending_migrations:verify_complete'
+  elif grep -Fq 'Migration ledger is missing.' "$VERIFY_CLASSIFY_LOG" 2>/dev/null; then
+    printf '%s\n' 'ledger_missing:verify_complete'
+  elif grep -Fq 'schema_migrations has an unexpected shape.' "$VERIFY_CLASSIFY_LOG" 2>/dev/null; then
+    printf '%s\n' 'ledger_shape:verify_complete'
+  else
+    printf '%s\n' 'unknown:unknown'
+  fi
+}
+
+report_verify_failure() {
+  VERIFY_FAILURE_CLASS=$(classify_verify_error "$1")
+  printf 'integration diagnostic: verify-complete error_class_phase=%s exit_code=%s\n' "$VERIFY_FAILURE_CLASS" "$2"
+  return "$2"
 }
 
 classify_provisioner_error() {
@@ -194,6 +328,7 @@ CHECK=initialization
 printf '%s\n' 'integration stage: initialization' >&2
 printf '%s\n' 'integration check: initialization' >&2
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+EXPECTED_MIGRATION_COUNT=$(manifest_migration_count "$ROOT/db/migrations/manifest.json")
 PREFIX="cocinacore-pr0a-cp21-$$"
 TMP_ROOT=$(mktemp -d)
 LOG="$TMP_ROOT/operation.log"
@@ -392,13 +527,20 @@ admin_sql "$DB" 'drop database vector_denied'
 set_check migration-apply
 migrate >"$LOG" 2>&1
 set_check migration-marker
-grep -q 'DONE 012_meal_plan_consumption.sql' "$LOG" || fail 'fresh 001-012 did not complete'
+grep -q 'DONE 012_meal_plan_consumption.sql' "$LOG" || fail 'fresh migration did not reach milestone 012'
+grep -q 'DONE 014_culinary_profile_field_constraints.sql' "$LOG" || fail 'fresh migration did not complete manifest migration 014'
 set_check verify-complete
-migrate --verify-complete >"$LOG" 2>&1
+if migrate --verify-complete >"$LOG" 2>&1; then
+  :
+else
+  VERIFY_EXIT_CODE=$?
+  report_verify_failure "$LOG" "$VERIFY_EXIT_CODE" >&2 || true
+  exit "$VERIFY_EXIT_CODE"
+fi
 set_check verify-marker
 grep -q 'Migration ledger is complete' "$LOG" || fail 'fresh completeness verification failed'
 set_check ledger-count
-[ "$(admin_sql "$DB" "select count(*) from public.schema_migrations")" = 12 ] || fail 'fresh ledger count is not 12'
+[ "$(admin_sql "$DB" "select count(*) from public.schema_migrations")" = "$EXPECTED_MIGRATION_COUNT" ] || fail 'fresh ledger count does not match manifest'
 set_check schema-ownership
 [ "$(admin_sql "$DB" "select count(*) from pg_constraint where conrelid='public.users'::regclass and conname='users_email_canonical_check'")" = 1 ] || fail 'forward canonical constraint is missing'
 [ "$(admin_sql "$DB" "select pg_get_userbyid(extowner) from pg_extension where extname='pgcrypto'")" = cocinacore_schema_owner ] || fail 'pgcrypto was not created by schema owner'
@@ -486,7 +628,8 @@ migrate --verify-complete >"$LOG" 2>&1
 admin_sql "$DB" 'create database legacy_disabled'
 DISABLED_URL="postgresql://cocinacore:$ADMIN_PASSWORD@127.0.0.1:$PORT/legacy_disabled"
 DATABASE_URL="$DISABLED_URL" node "$ROOT/frontend/scripts/run-migrations.js" --lane migration >"$LOG" 2>&1
-grep -q 'DONE 012_meal_plan_consumption.sql' "$LOG" || fail 'missing-gate legacy mode failed'
+grep -q 'DONE 012_meal_plan_consumption.sql' "$LOG" || fail 'missing-gate legacy mode did not reach milestone 012'
+grep -q 'DONE 014_culinary_profile_field_constraints.sql' "$LOG" || fail 'missing-gate legacy mode did not complete manifest migration 014'
 COCINACORE_SEPARATED_DB_LANES_ENABLED=false DATABASE_URL="$DISABLED_URL" \
 node "$ROOT/frontend/scripts/run-migrations.js" --lane migration --verify-complete >"$LOG" 2>&1
 grep -q 'Migration ledger is complete' "$LOG" || fail 'false-gate legacy mode failed'
@@ -701,8 +844,9 @@ ACTUAL_LEDGER=$(admin_sql "$DB" "select string_agg(filename||'='||checksum,',' o
 [ "$EXPECTED_LEDGER" = "$ACTUAL_LEDGER" ] || fail 'legacy backfill does not equal trusted manifest'
 
 migrate >"$LOG" 2>&1
-grep -q 'DONE 012_meal_plan_consumption.sql' "$LOG" || fail 'legacy upgrade did not apply forward migration 012'
-[ "$(admin_sql "$DB" "select count(*) from schema_migrations")" = 12 ] || fail 'legacy upgrade ledger count is not 12'
+grep -q 'DONE 012_meal_plan_consumption.sql' "$LOG" || fail 'legacy upgrade did not reach milestone 012'
+grep -q 'DONE 014_culinary_profile_field_constraints.sql' "$LOG" || fail 'legacy upgrade did not complete manifest migration 014'
+[ "$(admin_sql "$DB" "select count(*) from schema_migrations")" = "$EXPECTED_MIGRATION_COUNT" ] || fail 'legacy upgrade ledger count does not match manifest'
 [ "$(admin_sql "$DB" "select count(*) from pg_constraint where conrelid='public.users'::regclass and conname='users_email_canonical_check'")" = 1 ] || fail 'legacy upgrade canonical constraint is missing'
 TRANSFERRED=$(admin_sql "$DB" "select
   (select count(*) from pg_namespace where nspname in ('public','internal') and pg_get_userbyid(nspowner)='cocinacore_schema_owner') +
