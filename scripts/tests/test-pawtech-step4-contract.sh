@@ -164,9 +164,9 @@ const originalReadFileSync = fs.readFileSync.bind(fs);
 const originalReaddirSync = fs.readdirSync.bind(fs);
 const manifest = JSON.parse(originalReadFileSync(process.env.MANIFEST_PATH, 'utf8'));
 const futureSql = Buffer.from('select 1;');
-if (process.env.FUTURE_013 === 'yes') {
+if (process.env.FUTURE_015 === 'yes') {
   manifest.migrations.push({
-    id: '013', filename: '013_future.sql', lane: 'migration',
+    id: '015', filename: '015_future.sql', lane: 'migration',
     sha256: crypto.createHash('sha256').update(futureSql).digest('hex'),
     byteLength: futureSql.length, transactional: 'required', legacyChecksumBackfillAllowed: false,
   });
@@ -176,13 +176,13 @@ fs.readFileSync = (file, options) => {
     const contents = Buffer.from(JSON.stringify(manifest));
     return options && typeof options === 'object' && options.encoding ? contents.toString(options.encoding) : contents;
   }
-  if (String(file).endsWith('/013_future.sql')) return futureSql;
+  if (String(file).endsWith('/015_future.sql')) return futureSql;
   return originalReadFileSync(file, options);
 };
 fs.readdirSync = (directory, options) => {
   const files = originalReaddirSync(directory, options);
-  return process.env.FUTURE_013 === 'yes' && String(directory) === path.dirname(process.env.MANIFEST_PATH)
-    ? [...files, '013_future.sql']
+  return process.env.FUTURE_015 === 'yes' && String(directory) === path.dirname(process.env.MANIFEST_PATH)
+    ? [...files, '015_future.sql']
     : files;
 };
 const queries = [];
@@ -234,7 +234,7 @@ class Pool {
         ] };
         if (text.includes('from public.schema_migrations')) {
           let entries = manifest.migrations.map((entry) => ({ filename: entry.filename, checksum: entry.sha256 }));
-          if (process.env.LEDGER === 'pending' || process.env.LEDGER === 'pending-013') entries = entries.slice(0, -1);
+          if (process.env.LEDGER === 'pending' || process.env.LEDGER === 'pending-015') entries = entries.slice(0, -1);
           if (process.env.LEDGER === 'unknown') entries = [...entries, { filename: '999_unexpected.sql', checksum: 'f'.repeat(64) }];
           if (process.env.LEDGER === 'out-of-order') entries = [entries[1]];
           return { rows: entries };
@@ -272,10 +272,10 @@ setTimeout(() => {
   if (!hasShapeCheck || !hasSecurityCheck) process.exitCode = 5;
 }, 0);
 `;
-function run(mode, ledger, future013 = false, separated = false) {
+function run(mode, ledger, future015 = false, separated = false) {
   return spawnSync(process.execPath, ['-e', harness], {
     encoding: 'utf8',
-    env: { RUNNER_PATH: runner, MANIFEST_PATH: path.join(root, 'db/migrations/manifest.json'), RUNNER_MODE: mode, LEDGER: ledger, FUTURE_013: future013 ? 'yes' : 'no', SEPARATED: separated ? 'yes' : 'no', COCINACORE_SEPARATED_DB_LANES_ENABLED: separated ? 'true' : 'false', DATABASE_URL: 'postgresql://offline.invalid/test', MIGRATION_DATABASE_URL: 'postgresql://offline.invalid/test' },
+    env: { RUNNER_PATH: runner, MANIFEST_PATH: path.join(root, 'db/migrations/manifest.json'), RUNNER_MODE: mode, LEDGER: ledger, FUTURE_015: future015 ? 'yes' : 'no', SEPARATED: separated ? 'yes' : 'no', COCINACORE_SEPARATED_DB_LANES_ENABLED: separated ? 'true' : 'false', DATABASE_URL: 'postgresql://offline.invalid/test', MIGRATION_DATABASE_URL: 'postgresql://offline.invalid/test' },
   });
 }
 for (const [ledger, expectedStatus, marker] of [
@@ -297,8 +297,8 @@ if (separatedIdentityResult.status !== 1 || !`${separatedIdentityResult.stdout}$
   console.error(`offline separated identity contract failed: status=${separatedIdentityResult.status} stdout=${separatedIdentityResult.stdout} stderr=${separatedIdentityResult.stderr}`);
   process.exit(1);
 }
-const futureResult = run('--verify-complete', 'pending-013', true);
-if (futureResult.status !== 1 || !`${futureResult.stdout}${futureResult.stderr}`.includes('Pending migration: 013_future.sql')) {
+const futureResult = run('--verify-complete', 'pending-015', true);
+if (futureResult.status !== 1 || !`${futureResult.stdout}${futureResult.stderr}`.includes('Pending migration: 015_future.sql')) {
   console.error(`offline future migration contract failed: ${futureResult.stderr}`);
   process.exit(1);
 }
