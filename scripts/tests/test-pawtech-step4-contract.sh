@@ -138,13 +138,13 @@ for expected in \
   'if (options.verifyComplete)' \
   'Migration ledger is complete.' \
   'begin read only' \
-  'if (separated) await assertAndAssumeMigrationIdentity(client, manifest);' \
+  'if (separated) await assertAndAssumeMigrationIdentity(client, manifest, migrations, separated);' \
   'Migration ledger is missing.'; do
   grep -Fq -- "$expected" "$RUNNER" || fail "missing migration runner contract: $expected"
 done
 
 verify_begin_line=$(grep -nF "await client.query('begin read only')" "$RUNNER" | cut -d: -f1)
-verify_identity_line=$(grep -nF 'if (separated) await assertAndAssumeMigrationIdentity(client, manifest);' "$RUNNER" | cut -d: -f1)
+verify_identity_line=$(grep -nF 'if (separated) await assertAndAssumeMigrationIdentity(client, manifest, migrations, separated);' "$RUNNER" | cut -d: -f1)
 verify_ledger_line=$(grep -nF 'hadLedger = await migrationLedgerExists(client);' "$RUNNER" | head -n 1 | cut -d: -f1)
 [ "$verify_begin_line" -lt "$verify_identity_line" ] && [ "$verify_identity_line" -lt "$verify_ledger_line" ] ||
   fail 'separated verification must assume migration identity read-only before reading the ledger'
@@ -163,6 +163,17 @@ const originalLoad = Module._load;
 const originalReadFileSync = fs.readFileSync.bind(fs);
 const originalReaddirSync = fs.readdirSync.bind(fs);
 const manifest = JSON.parse(originalReadFileSync(process.env.MANIFEST_PATH, 'utf8'));
+if (manifest.baselineObjects.transferable.length !== 38) {
+  throw new Error('trusted baseline must contain exactly 38 transferable targets');
+}
+const ownerFunctions = [
+  { schema: 'public', name: 'is_valid_culinary_profile_text_list', arguments: 'text[], integer' },
+  { schema: 'public', name: 'is_valid_culinary_household_members', arguments: 'jsonb' },
+  { schema: 'public', name: 'enforce_culinary_profile_term_group_limit', arguments: '' },
+  { schema: 'public', name: 'prevent_culinary_profile_taxonomy_reclassification', arguments: '' },
+];
+const functionIdentity = ({ schema, name, arguments: args }) => schema + '.' + name + '(' + args + ')';
+const schemaOwner = 'cocinacore_schema_owner';
 const futureSql = Buffer.from('select 1;');
 if (process.env.FUTURE_015 === 'yes') {
   manifest.migrations.push({
@@ -189,7 +200,7 @@ const queries = [];
 class Pool {
   async connect() {
     return {
-      async query(sql) {
+      async query(sql, params = []) {
         const text = String(sql).trim().toLowerCase();
         queries.push(text);
         if (/^set role cocinacore_schema_owner$/.test(text)) return { rows: [] };
@@ -208,12 +219,38 @@ class Pool {
         }
         if (text.includes('as database_settings')) return { rows: [{ database_settings: 0, tablespace_authority: 0, database_authority: 0 }] };
         if (text.includes('select count(*)::integer as count from authority')) return { rows: [{ count: 0 }] };
-        if (text.includes('select kind, identity from (')) return { rows: manifest.baselineObjects.transferable.map((object) => ({
-          kind: object.kind,
-          identity: object.kind === 'schema' ? object.schema : object.kind === 'function'
-            ? object.schema + '.' + object.name + '(' + object.arguments + ')'
-            : object.schema + '.' + object.name,
-        })) };
+        if (text.includes('from pg_catalog.pg_proc p') && /p\.prokind\s*=\s*'f'/.test(text)) {
+          const fixture = process.env.OWNER_FUNCTIONS;
+          if (!fixture || fixture === 'none' || process.env.LEDGER === '014-unapplied') return { rows: [] };
+          const functions = ownerFunctions
+            .filter((fn) => fn.schema === params[0] && fn.name === params[1])
+            .map((fn) => ({ ...fn, owner: schemaOwner }));
+          if (fixture === 'wrong-owner' && params[1] === 'is_valid_culinary_profile_text_list') {
+            functions[0].owner = 'cocinacore';
+          }
+          if (fixture === 'overload' && params[1] === 'is_valid_culinary_profile_text_list') functions.push({
+            schema: params[0], name: params[1],
+            arguments: 'text[], integer, boolean', owner: schemaOwner,
+          });
+          return { rows: functions };
+        }
+        if (text.includes('select kind, identity from (')) {
+          const rows = manifest.baselineObjects.transferable.map((object) => ({
+            kind: object.kind,
+            identity: object.kind === 'schema' ? object.schema : object.kind === 'function'
+              ? object.schema + '.' + object.name + '(' + object.arguments + ')'
+              : object.schema + '.' + object.name,
+          }));
+          const fixture = process.env.OWNER_FUNCTIONS;
+          if (fixture && fixture !== 'none') {
+            let functions = ownerFunctions.map(functionIdentity);
+            if (fixture === 'wrong-owner') functions = functions.slice(1);
+            if (fixture === 'overload') functions.push('public.is_valid_culinary_profile_text_list(text[], integer, boolean)');
+            if (fixture === 'undeclared') functions.push('public.untrusted_owner_function()');
+            rows.push(...functions.map((identity) => ({ kind: 'function', identity })));
+          }
+          return { rows };
+        }
         if (text.includes('select count(*)::integer as count from grants')) return { rows: [{ count: 0 }] };
         if (text.includes('from pg_catalog.pg_auth_members')) return { rowCount: 1, rows: [{
           granted_role: 'cocinacore_schema_owner', member_role: 'migration_admin',
@@ -235,6 +272,7 @@ class Pool {
         if (text.includes('from public.schema_migrations')) {
           let entries = manifest.migrations.map((entry) => ({ filename: entry.filename, checksum: entry.sha256 }));
           if (process.env.LEDGER === 'pending' || process.env.LEDGER === 'pending-015') entries = entries.slice(0, -1);
+          if (process.env.LEDGER === '014-unapplied') entries = entries.filter((entry) => !entry.filename.startsWith('014_'));
           if (process.env.LEDGER === 'unknown') entries = [...entries, { filename: '999_unexpected.sql', checksum: 'f'.repeat(64) }];
           if (process.env.LEDGER === 'out-of-order') entries = [entries[1]];
           return { rows: entries };
@@ -272,10 +310,10 @@ setTimeout(() => {
   if (!hasShapeCheck || !hasSecurityCheck) process.exitCode = 5;
 }, 0);
 `;
-function run(mode, ledger, future015 = false, separated = false) {
+function run(mode, ledger, future015 = false, separated = false, ownerFunctions = 'none') {
   return spawnSync(process.execPath, ['-e', harness], {
     encoding: 'utf8',
-    env: { RUNNER_PATH: runner, MANIFEST_PATH: path.join(root, 'db/migrations/manifest.json'), RUNNER_MODE: mode, LEDGER: ledger, FUTURE_015: future015 ? 'yes' : 'no', SEPARATED: separated ? 'yes' : 'no', COCINACORE_SEPARATED_DB_LANES_ENABLED: separated ? 'true' : 'false', DATABASE_URL: 'postgresql://offline.invalid/test', MIGRATION_DATABASE_URL: 'postgresql://offline.invalid/test' },
+    env: { RUNNER_PATH: runner, MANIFEST_PATH: path.join(root, 'db/migrations/manifest.json'), RUNNER_MODE: mode, LEDGER: ledger, FUTURE_015: future015 ? 'yes' : 'no', SEPARATED: separated ? 'yes' : 'no', OWNER_FUNCTIONS: ownerFunctions, COCINACORE_SEPARATED_DB_LANES_ENABLED: separated ? 'true' : 'false', DATABASE_URL: 'postgresql://offline.invalid/test', MIGRATION_DATABASE_URL: 'postgresql://offline.invalid/test' },
   });
 }
 for (const [ledger, expectedStatus, marker] of [
@@ -296,6 +334,29 @@ const separatedIdentityResult = run('--verify-complete', 'pending', false, true)
 if (separatedIdentityResult.status !== 1 || !`${separatedIdentityResult.stdout}${separatedIdentityResult.stderr}`.includes('Pending migration:')) {
   console.error(`offline separated identity contract failed: status=${separatedIdentityResult.status} stdout=${separatedIdentityResult.stdout} stderr=${separatedIdentityResult.stderr}`);
   process.exit(1);
+}
+const appliedCatalogAdditions = run('--verify-complete', 'complete', false, true, 'valid');
+const appliedCatalogOutput = `${appliedCatalogAdditions.stdout}${appliedCatalogAdditions.stderr}`;
+const expectedUnmockedExtensionFailure = appliedCatalogOutput.includes('BASELINE_MISMATCH: required extension pgcrypto is absent');
+if (
+  !appliedCatalogAdditions.stdout.includes('Migration ledger is complete.') ||
+  appliedCatalogOutput.includes('ROLE_STATE_MISMATCH') ||
+  (appliedCatalogAdditions.status !== 0 && !expectedUnmockedExtensionFailure)
+) {
+  console.error(`offline applied catalog additions contract failed (owner check must pass before any expected unmocked extension failure): status=${appliedCatalogAdditions.status} stdout=${appliedCatalogAdditions.stdout} stderr=${appliedCatalogAdditions.stderr}`);
+  process.exit(1);
+}
+for (const [ledger, fixture, label] of [
+  ['014-unapplied', 'valid', 'unapplied migration functions'],
+  ['complete', 'overload', 'function overload'],
+  ['complete', 'wrong-owner', 'wrong-owner function'],
+  ['complete', 'undeclared', 'undeclared owner function'],
+]) {
+  const result = run('--verify-complete', ledger, false, true, fixture);
+  if (result.status === 0 || !`${result.stdout}${result.stderr}`.includes('ROLE_STATE_MISMATCH')) {
+    console.error(`offline schema-owner rejection contract failed for ${label}: status=${result.status} stdout=${result.stdout} stderr=${result.stderr}`);
+    process.exit(1);
+  }
 }
 const futureResult = run('--verify-complete', 'pending-015', true);
 if (futureResult.status !== 1 || !`${futureResult.stdout}${futureResult.stderr}`.includes('Pending migration: 015_future.sql')) {
