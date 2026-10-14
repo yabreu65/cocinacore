@@ -286,7 +286,7 @@ manifest_path, migration_path, filename = map(pathlib.Path, sys.argv[1:])
 manifest=json.loads(manifest_path.read_text())
 data=migration_path.read_bytes()
 manifest['migrations'].append({
-  'id':'013','filename':str(filename),'lane':'migration','sha256':hashlib.sha256(data).hexdigest(),
+  'id':'015','filename':str(filename),'lane':'migration','sha256':hashlib.sha256(data).hexdigest(),
   'byteLength':len(data),'transactional':'required','legacyChecksumBackfillAllowed':False
 })
 manifest_path.write_text(json.dumps(manifest,indent=2)+'\n')
@@ -543,7 +543,7 @@ for spec in 'begin:BEGIN:prohibited top-level' 'commit:COMMIT:prohibited top-lev
             'release:RELEASE:prohibited top-level' 'cr_comment:CR_COMMENT:prohibited top-level' \
             'backslash:BACKSLASH:prohibited top-level'; do
   name=${spec%%:*}; rest=${spec#*:}; label=${rest%%:*}; expected=${rest#*:}
-  dir="$TMP_ROOT/fixture-$name"; make_fixture "$dir" "013_${name}_fixture.sql" "$TMP_ROOT/$name.sql"
+  dir="$TMP_ROOT/fixture-$name"; make_fixture "$dir" "015_${name}_fixture.sql" "$TMP_ROOT/$name.sql"
   if MIGRATIONS_DIR="$dir" node "$ROOT/frontend/scripts/run-migrations.js" --lane migration --dry-run >"$LOG" 2>&1; then
     fail "$label fixture was accepted"
   fi
@@ -559,9 +559,9 @@ end
 $$;
 SQL
 FALSE_DIR="$TMP_ROOT/fixture-false-positive"
-make_fixture "$FALSE_DIR" 013_false_positive_fixture.sql "$TMP_ROOT/false-positive.sql"
+make_fixture "$FALSE_DIR" 015_false_positive_fixture.sql "$TMP_ROOT/false-positive.sql"
 MIGRATIONS_DIR="$FALSE_DIR" node "$ROOT/frontend/scripts/run-migrations.js" --lane migration --dry-run >"$LOG" 2>&1
-grep -q '013_false_positive_fixture.sql' "$LOG" || fail 'lexer false-positive fixture was rejected'
+grep -q '015_false_positive_fixture.sql' "$LOG" || fail 'lexer false-positive fixture was rejected'
 
 # A changed historical file can never certify itself.
 MUTATED_DIR="$TMP_ROOT/mutated-history"
@@ -578,13 +578,13 @@ create table public.cp21_must_roll_back(id integer primary key);
 select public.cp21_missing_function();
 SQL
 FAILURE_DIR="$TMP_ROOT/fixture-failure"
-make_fixture "$FAILURE_DIR" 013_atomic_failure.sql "$TMP_ROOT/failure.sql"
+make_fixture "$FAILURE_DIR" 015_atomic_failure.sql "$TMP_ROOT/failure.sql"
 if COCINACORE_SEPARATED_DB_LANES_ENABLED=true MIGRATION_DATABASE_URL="$MIGRATION_URL" \
    MIGRATIONS_DIR="$FAILURE_DIR" node "$ROOT/frontend/scripts/run-migrations.js" --lane migration >"$LOG" 2>&1; then
   fail 'failed migration succeeded'
 fi
 [ "$(admin_sql "$DB" "select to_regclass('public.cp21_must_roll_back') is null")" = t ] || fail 'failed migration left an object'
-[ "$(admin_sql "$DB" "select count(*) from schema_migrations where filename='013_atomic_failure.sql'")" = 0 ] || fail 'failed migration left a ledger row'
+[ "$(admin_sql "$DB" "select count(*) from schema_migrations where filename='015_atomic_failure.sql'")" = 0 ] || fail 'failed migration left a ledger row'
 
 # Shared advisory-lock matrix. A real first actor holds the exact key while the second executable times out.
 STAGE=advisory-locks

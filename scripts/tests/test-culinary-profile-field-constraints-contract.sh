@@ -2,6 +2,33 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+if [ "${M2_CONTRACT_FOCUS:-}" = catalog ]; then
+  node - "$ROOT" <<'NODE'
+const fs = require('node:fs');
+const path = require('node:path');
+const root = process.argv[2];
+const provisioner = fs.readFileSync(path.join(root, 'frontend/scripts/provision-database.js'), 'utf8');
+const fail = (message) => { console.error(`catalog contract RED: ${message}`); process.exit(1); };
+if (!/\['constraint',\s*'function',\s*'trigger'\]\.includes\(addition\.kind\)/.test(provisioner)) fail('provisioner rejects declared function/trigger additions');
+if (!/addition\.kind === 'function'[\s\S]*?expected\.functions/.test(provisioner)) fail('applied function additions are absent from exact catalog expectations');
+if (!/addition\.kind === 'trigger'[\s\S]*?expected\.triggers/.test(provisioner)) fail('applied trigger additions are absent from exact catalog expectations');
+if (!/const appliedFunctionNames = new Set\([\s\S]*?addition\.kind === 'function'/.test(provisioner)) fail('no separate applied-function owner allowlist exists');
+NODE
+  exit $?
+fi
+if [ "${M2_CONTRACT_FOCUS:-}" = fixture ]; then
+  node - "$ROOT" <<'NODE'
+const fs = require('node:fs');
+const path = require('node:path');
+const root = process.argv[2];
+const integration = fs.readFileSync(path.join(root, 'scripts/test-bootstrap-migrator-integration.sh'), 'utf8');
+const fail = (message) => { console.error(`fixture sequence RED: ${message}`); process.exit(1); };
+const fixtureBuilder = integration.match(/make_fixture\(\) \{([\s\S]*?)\n\}/)?.[1] || '';
+if (!fixtureBuilder.includes("'id':'015'")) fail('synthetic fixture manifest still appends discontinued ID 013');
+if (fixtureBuilder.includes("'id':'013'")) fail('synthetic fixture ID is not next after manifest 014');
+NODE
+  exit $?
+fi
 node - "$ROOT" <<'NODE'
 const fs = require('node:fs');
 const crypto = require('node:crypto');
@@ -57,6 +84,16 @@ const declared = migration.catalogAdditions.map(key);
 if (new Set(declared).size !== declared.length) fail('migration 014 catalog additions contain duplicate identities');
 if (JSON.stringify([...declared].sort()) !== JSON.stringify(expected.map(key).sort())) {
   fail('migration 014 catalog additions do not exactly match the twelve required identities');
+}
+const provisioner = fs.readFileSync(path.join(root, 'frontend/scripts/provision-database.js'), 'utf8');
+if (!/\['constraint',\s*'function',\s*'trigger'\]\.includes\(addition\.kind\)/.test(provisioner) ||
+    !/Object\.keys\(addition\)\.sort\(\)\.join\(','\) !== 'identity,kind,schema'/.test(provisioner) ||
+    !/!\['internal', 'public'\]\.includes\(addition\.schema\)/.test(provisioner) ||
+    !/SHA256\.test\(entry\.sha256 \|\| ''\)[\s\S]*?bytes\.length !== entry\.byteLength \|\| checksum !== entry\.sha256/.test(provisioner) ||
+    !/catalogAdditions\.has\(key\)[\s\S]*?Duplicate trusted catalog addition/.test(provisioner) ||
+    !/Number\(entry\.id\) !== previous \+ 1/.test(provisioner) ||
+    !/transferable\.length !== 38/.test(provisioner)) {
+  fail('provisioner must retain exact metadata, sequence, checksum, duplicate, and 38-target validation');
 }
 const runner = fs.readFileSync(path.join(root, 'frontend/scripts/run-migrations.js'), 'utf8');
 if (!/!\s*\[['"]constraint['"],\s*['"]function['"],\s*['"]trigger['"]\]\.includes\(addition\.kind\)/.test(runner) ||
@@ -129,5 +166,56 @@ if (!taxonomyFunction ||
 if (sql.indexOf('Existing culinary profile term group violates limit') > sql.indexOf('create trigger user_culinary_profile_terms_group_limit_trigger')) {
   fail('legacy aggregate violations must be checked before installing the enforcement trigger');
 }
+const vm = require('node:vm');
+const provisionerPath = path.join(root, 'frontend/scripts/provision-database.js');
+const provisionerSource = fs.readFileSync(provisionerPath, 'utf8');
+const executable = provisionerSource.replace(
+  /\nmain\(\)\.catch\(\(error\) => \{[\s\S]*?\n\}\);\s*$/,
+  '\nmodule.exports = { loadTrustedManifest };'
+);
+if (executable === provisionerSource) fail('could not isolate provisioner manifest loader for no-Docker validation tests');
+const manifestPath = path.join(root, 'db/migrations/manifest.json');
+const trustedManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+function loadWithManifest(mutator) {
+  const manifestFixture = JSON.parse(JSON.stringify(trustedManifest));
+  mutator(manifestFixture);
+  const fixtureFs = {
+    ...fs,
+    readFileSync(file, ...args) {
+      if (path.resolve(String(file)) === manifestPath) return JSON.stringify(manifestFixture);
+      return fs.readFileSync(file, ...args);
+    },
+  };
+  const module = { exports: {} };
+  const localRequire = (name) => {
+    if (name === 'fs') return fixtureFs;
+    if (name === 'pg') return { Client: class Client {} };
+    if (name === 'dotenv') return { config() {} };
+    return require(name);
+  };
+  vm.runInNewContext(executable, {
+    require: localRequire,
+    module,
+    exports: module.exports,
+    __dirname: path.dirname(provisionerPath),
+    process: { env: { MIGRATIONS_DIR: path.dirname(manifestPath) } },
+    console,
+  }, { filename: provisionerPath });
+  return module.exports.loadTrustedManifest();
+}
+const invalidManifestFixtures = [
+  ['unknown kind', (fixture) => { fixture.migrations[13].catalogAdditions[0].kind = 'operator'; }, /catalog addition is unsupported/],
+  ['malformed identity', (fixture) => { fixture.migrations[13].catalogAdditions[0].identity = 'public.BadName'; }, /catalog addition is unsupported/],
+  ['duplicate identity', (fixture) => { fixture.migrations[13].catalogAdditions.push({ ...fixture.migrations[13].catalogAdditions[0] }); }, /Duplicate trusted catalog addition/],
+  ['discontinuous sequence', (fixture) => { fixture.migrations[13].id = '015'; }, /migration ordering is invalid/],
+];
+for (const [name, mutate, expectedError] of invalidManifestFixtures) {
+  let observedError;
+  try { loadWithManifest(mutate); } catch (error) { observedError = error; }
+  if (!observedError || !expectedError.test(observedError.message)) {
+    fail(`${name} negative fixture did not fail with ${expectedError}; observed ${observedError?.message || 'success'}`);
+  }
+}
+loadWithManifest(() => {});
 console.log('culinary profile field constraints migration 014 static contract passed');
 NODE
