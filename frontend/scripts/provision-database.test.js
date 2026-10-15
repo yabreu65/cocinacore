@@ -1,7 +1,10 @@
 'use strict';
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- Keep this test's Node harness in CommonJS.
 const assert = require('node:assert/strict');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- Keep this test's Node harness in CommonJS.
 const test = require('node:test');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- Load the provisioner's CommonJS exports directly.
 const { attestBaselineCatalog } = require('./provision-database');
 
 const appliedFilename = '014_culinary_profile_field_constraints.sql';
