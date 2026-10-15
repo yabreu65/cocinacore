@@ -259,8 +259,8 @@
       "id": "014",
       "filename": "014_culinary_profile_field_constraints.sql",
       "lane": "migration",
-      "sha256": "0e4141129842b991fb792090a4530d9e608f3215c45476f68ff0ee4fbb7be119",
-      "byteLength": 7888,
+      "sha256": "c7989e3250c4a066e266d4f0eed7271200c1ee8e09026266ea7c450956163df4",
+      "byteLength": 7756,
       "transactional": "required",
       "legacyChecksumBackfillAllowed": false,
       "catalogAdditions": [
@@ -268,11 +268,6 @@
           "kind": "constraint",
           "schema": "public",
           "identity": "users.users_full_name_length_check"
-        },
-        {
-          "kind": "constraint",
-          "schema": "public",
-          "identity": "user_culinary_profiles.user_culinary_profiles_level_check"
         },
         {
           "kind": "constraint",

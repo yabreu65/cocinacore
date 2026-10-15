@@ -116,9 +116,13 @@ describe('PostgreSQL culinary profile field constraints integration', () => {
       await expect(
         query('update public.users set full_name = $2 where id = $1', [userId, 'x'.repeat(121)])
       ).rejects.toThrow();
-      await expect(
-        query('update public.user_culinary_profiles set level = $2 where user_id = $1', [userId, 'Avanzado'])
-      ).rejects.toThrow();
+      const legacyLevel = 'Avanzado (importación histórica)';
+      await query('update public.user_culinary_profiles set level = $2 where user_id = $1', [userId, legacyLevel]);
+      const storedLegacyLevel = await query<{ level: string | null }>(
+        'select level from public.user_culinary_profiles where user_id = $1',
+        [userId]
+      );
+      expect(storedLegacyLevel.rows[0]?.level).toBe(legacyLevel);
       await expect(
         query('update public.user_culinary_profiles set available_time_minutes = $2 where user_id = $1', [userId, 4])
       ).rejects.toThrow();

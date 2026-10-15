@@ -5,7 +5,7 @@ import {
   retrieveRecipeContext,
   toCitation,
 } from '@/services/ragEngine';
-import type { Citation, RecipeBookChunk, RecipeSearchInput, RestrictionProfile } from '@/services/types';
+import type { Citation, EmbeddingService, RecipeBookChunk, RecipeSearchInput, RestrictionProfile } from '@/services/types';
 
 export interface ServerRagContextInput {
   apiKey: string;
@@ -15,6 +15,7 @@ export interface ServerRagContextInput {
   mealType?: string;
   day?: string;
   restrictions: RestrictionProfile;
+  signal?: AbortSignal;
 }
 
 export interface ServerRagContext {
@@ -138,10 +139,14 @@ export async function retrieveServerRagContext(input: ServerRagContextInput): Pr
     restrictionProfile: input.restrictions,
   };
   const embedder = new GeminiEmbeddingService(input.apiKey);
+  const cancellableEmbedder: EmbeddingService = {
+    generateEmbedding: (text) => embedder.generateEmbedding(text, input.signal),
+    generateEmbeddings: (texts) => embedder.generateEmbeddings(texts),
+  };
   const retrievedContext = await retrieveRecipeContext(
     searchInput,
     {
-      embedder,
+      embedder: cancellableEmbedder,
       dbAdapter: {
         async searchChunks(embedding, options) {
           const rows = await searchChunks({

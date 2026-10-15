@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 IMAGE='pgvector/pgvector:pg16'
 RUN_ID="$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
 CONTAINER="cocinacore-culinary-migration-${RUN_ID}"
@@ -9,6 +9,7 @@ LABEL_KEY='com.cocinacore.culinary-migration.run'
 WORKSPACE=''
 CONTAINER_CREATED=0
 CONTAINER_ID=''
+WORKSPACE_MARKER=''
 DOCKER_ENDPOINT=''
 DOCKER=()
 CONTAINER_LIST=''
@@ -114,14 +115,53 @@ cleanup() {
     fi
   fi
   if [[ -n "$WORKSPACE" ]]; then
-    if ! rm -rf -- "$WORKSPACE"; then
-      printf 'cleanup failure: could not remove exact temporary workspace\n' >&2
-      cleanup_failed=1
+    local workspace_marker_identity=''
+    if [[ -d "$WORKSPACE" && ! -L "$WORKSPACE" && -n "$WORKSPACE_MARKER" && -f "$WORKSPACE_MARKER" && ! -L "$WORKSPACE_MARKER" ]]; then
+      if IFS= read -r workspace_marker_identity < "$WORKSPACE_MARKER" && [[ "$workspace_marker_identity" == "$RUN_ID" ]]; then
+        if ! python3 - "$WORKSPACE" "$WORKSPACE_MARKER" "$RUN_ID" <<'PY'
+from pathlib import Path
+import os
+import shutil
+import stat
+import sys
+
+workspace = Path(os.path.abspath(sys.argv[1]))
+marker = Path(os.path.abspath(sys.argv[2]))
+run_id = sys.argv[3]
+if marker != workspace / '.cocinacore-migration-run-id':
+    raise SystemExit('workspace ownership marker path mismatch')
+try:
+    workspace_stat = os.lstat(workspace)
+    marker_stat = os.lstat(marker)
+except FileNotFoundError:
+    raise SystemExit('workspace or ownership marker disappeared before cleanup')
+if stat.S_ISLNK(workspace_stat.st_mode) or not stat.S_ISDIR(workspace_stat.st_mode):
+    raise SystemExit('workspace is not the expected ordinary directory')
+if stat.S_ISLNK(marker_stat.st_mode) or not stat.S_ISREG(marker_stat.st_mode):
+    raise SystemExit('workspace marker is not the expected ordinary file')
+if not workspace.name.startswith('cocinacore-culinary-migration.'):
+    raise SystemExit('workspace name does not match the test prefix')
+if marker.read_bytes() != (run_id + '\n').encode():
+    raise SystemExit('workspace run marker does not match this execution')
+shutil.rmtree(workspace)
+if os.path.lexists(workspace):
+    raise SystemExit('workspace remains after identity-verified removal')
+PY
+        then
+          printf 'cleanup failure: identity-verified temporary workspace removal failed; left untouched when identity did not match\n' >&2
+          cleanup_failed=1
+        else
+          printf 'removed and verified absent: identity-verified temporary workspace\n'
+        fi
+      else
+        printf 'cleanup failure: temporary workspace ownership marker mismatch; left untouched\n' >&2
+        cleanup_failed=1
+      fi
     elif [[ -e "$WORKSPACE" || -L "$WORKSPACE" ]]; then
-      printf 'cleanup failure: temporary workspace remains after removal\n' >&2
+      printf 'cleanup failure: temporary workspace identity unavailable; left untouched\n' >&2
       cleanup_failed=1
     else
-      printf 'removed and verified absent: temporary workspace\n'
+      printf 'verified absent: temporary workspace\n'
     fi
   fi
   if [[ "$cleanup_failed" == 1 ]]; then status=1; fi
@@ -155,6 +195,9 @@ if [[ -n "$(container_list_name_id "$CONTAINER" || true)" ]]; then
 fi
 
 WORKSPACE=$(mktemp -d "${TMPDIR:-/tmp}/cocinacore-culinary-migration.XXXXXX")
+WORKSPACE_MARKER="$WORKSPACE/.cocinacore-migration-run-id"
+[[ ! -e "$WORKSPACE_MARKER" && ! -L "$WORKSPACE_MARKER" ]] || fail 'temporary workspace ownership marker already exists.'
+printf '%s\n' "$RUN_ID" > "$WORKSPACE_MARKER"
 MIGRATION_COPY="$WORKSPACE/migrations"
 mkdir -p "$MIGRATION_COPY"
 node - "$ROOT" "$MIGRATION_COPY" <<'NODE'
@@ -182,18 +225,16 @@ DB_PASSWORD='local_ephemeral_only_7c1e'
 LEGACY_DB='culinary_legacy_test'
 FRESH_DB='culinary_fresh_test'
 
+MIGRATION_NETWORK_ARGS=(--publish '127.0.0.1::5432' --tmpfs '/var/lib/postgresql/data:rw,noexec,nosuid,size=1g')
 if [[ -n "${MIGRATION_NETWORK:-}" ]]; then
-  MIGRATION_NETWORK_ARGS=(--network "$MIGRATION_NETWORK")
-else
-  MIGRATION_NETWORK_ARGS=()
+  MIGRATION_NETWORK_ARGS+=(--network "$MIGRATION_NETWORK")
 fi
 
 CONTAINER_CREATED=1
 # Arm cleanup before docker run; a failed start is discovered by exact name only if no ID was returned.
 if ! CONTAINER_ID=$("${DOCKER[@]}" run --pull=never --rm --detach --name "$CONTAINER" --label "$LABEL_KEY=$RUN_ID" \
   --env "POSTGRES_USER=$DB_ADMIN" --env "POSTGRES_PASSWORD=$DB_PASSWORD" --env "POSTGRES_DB=$LEGACY_DB" \
-  "${MIGRATION_NETWORK_ARGS[@]}" --publish '127.0.0.1::5432' --tmpfs '/var/lib/postgresql/data:rw,noexec,nosuid,size=1g' \
-  "$IMAGE"); then
+  "${MIGRATION_NETWORK_ARGS[@]}" "$IMAGE"); then
   CONTAINER_ID=''
   fail 'docker run failed before returning a container ID.'
 fi
@@ -201,6 +242,8 @@ fi
 identity=$("${DOCKER[@]}" container inspect --format '{{.Config.Image}}|{{index .Config.Labels "com.cocinacore.culinary-migration.run"}}' "$CONTAINER_ID")
 [[ "$identity" == "$IMAGE|$RUN_ID" ]] || fail 'started container ID does not match the expected image and unique run label.'
 
+# Single quotes keep this remote script from expanding variables on the host.
+# shellcheck disable=SC2016
 mounts=$("${DOCKER[@]}" exec "$CONTAINER_ID" sh -c 'while read -r device destination filesystem options dump pass; do
   if [ "$destination" = "/var/lib/postgresql/data" ]; then
     printf "%s %s\n" "$filesystem" "$destination"
@@ -237,7 +280,7 @@ if ! HOST_PORT=$(parse_published_postgres_port "$published_ports"); then
 fi
 
 ready=0
-for attempt in $(seq 1 60); do
+for ((attempt = 0; attempt < 60; attempt++)); do
   if "${DOCKER[@]}" exec -e "PGPASSWORD=$DB_PASSWORD" "$CONTAINER_ID" pg_isready -U "$DB_ADMIN" -d "$LEGACY_DB" >/dev/null 2>&1; then
     ready=1
     break
@@ -266,6 +309,18 @@ legacy_count=$("${DOCKER[@]}" exec -e "PGPASSWORD=$DB_PASSWORD" "$CONTAINER_ID" 
   -c 'SELECT count(*) FROM public.schema_migrations;')
 [[ "$legacy_count" == 12 ]] || fail "legacy ledger should contain exactly 12 entries (observed $legacy_count)."
 
+IFS=' ' read -r legacy_profile_tenant_id legacy_profile_user_id <<< "$(node -e "const { randomUUID } = require('node:crypto'); console.log(randomUUID(), randomUUID())")"
+legacy_profile_level='Nivel heredado M2'
+"${DOCKER[@]}" exec -i -e "PGPASSWORD=$DB_PASSWORD" "$CONTAINER_ID" psql -v ON_ERROR_STOP=1 -U "$DB_ADMIN" -d "$LEGACY_DB" \
+  -v tenant_id="$legacy_profile_tenant_id" -v user_id="$legacy_profile_user_id" -v legacy_level="$legacy_profile_level" <<'SQL'
+insert into public.tenants (id, tenant_type, name)
+values (:'tenant_id'::uuid, 'home', 'Legacy profile level migration fixture');
+insert into public.users (id, email, password_hash, full_name, tenant_id, role, onboarding_completed)
+values (:'user_id'::uuid, 'legacy-level-' || :'user_id' || '@integration.invalid', 'integration-only', 'Legacy level fixture', :'tenant_id'::uuid, 'owner', false);
+insert into public.user_culinary_profiles (user_id, tenant_id, level)
+values (:'user_id'::uuid, :'tenant_id'::uuid, :'legacy_level');
+SQL
+
 verify_output="$WORKSPACE/verify-pending.log"
 set +e
 env -u MIGRATIONS_DIR DATABASE_URL="$legacy_url" COCINACORE_SEPARATED_DB_LANES_ENABLED=false COCINACORE_SKIP_DOTENV=1 \
@@ -282,6 +337,12 @@ fi
 printf 'Applying migrations 013 and 014 to legacy ledger...\n'
 env -u MIGRATIONS_DIR DATABASE_URL="$legacy_url" COCINACORE_SEPARATED_DB_LANES_ENABLED=false COCINACORE_SKIP_DOTENV=1 \
   node "$ROOT/frontend/scripts/run-migrations.js"
+legacy_level_after_migrations=$("${DOCKER[@]}" exec -i -e "PGPASSWORD=$DB_PASSWORD" "$CONTAINER_ID" psql -At -v ON_ERROR_STOP=1 -U "$DB_ADMIN" -d "$LEGACY_DB" \
+  -v user_id="$legacy_profile_user_id" <<'SQL'
+select level from public.user_culinary_profiles where user_id = :'user_id'::uuid;
+SQL
+)
+[[ "$legacy_level_after_migrations" == "$legacy_profile_level" ]] || fail "013/014 changed or rejected legacy profile level '$legacy_profile_level' (observed '$legacy_level_after_migrations')."
 env -u MIGRATIONS_DIR DATABASE_URL="$legacy_url" COCINACORE_SEPARATED_DB_LANES_ENABLED=false COCINACORE_SKIP_DOTENV=1 \
   node "$ROOT/frontend/scripts/run-migrations.js" --verify-complete
 env -u MIGRATIONS_DIR DATABASE_URL="$legacy_url" COCINACORE_SEPARATED_DB_LANES_ENABLED=false COCINACORE_SKIP_DOTENV=1 \

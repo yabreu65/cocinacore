@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/auth/server';
 import { getGeminiApiKey, getGeminiBaseUrl, getGeminiModel } from '@/lib/ai/gemini-config';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { findCulinaryProfileByUserId, findCulinaryProfileTermsByUserId } from '@/lib/db/repositories/culinaryProfileRepository';
 import { listTodayInventoryContextByTenant } from '@/lib/db/repositories/inventoryRepository';
 import { listTodayRecipeHistoryByUserAndTenant } from '@/lib/db/repositories/recipeRepository';
@@ -11,6 +12,7 @@ import { buildTodayContext, type TodayProviderContext } from '@/lib/today/contex
 import { rankOneSlotOptions, TODAY_SLOT_VALUES, type TodaySlot, type TodayOptionSource } from '@/lib/today/one-slot';
 
 const MAX_PREP_MINUTES = 240;
+const PROVIDER_TIMEOUT_MS = 60_000;
 const RESPONSE_SCHEMA = {
   type: 'OBJECT',
   properties: {
@@ -78,13 +80,29 @@ function userReason(candidate: Candidate, context: TodayProviderContext) {
   return { ...candidate, reason, availableIngredients, missingIngredients };
 }
 
+async function withProviderTimeout<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error('Provider request timed out'));
+    }, PROVIDER_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([operation(controller.signal), timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 async function loadProviderOptions(context: TodayProviderContext, apiKey: string, tenantId: string): Promise<Candidate[] | null> {
   let ragText = '';
   try {
-    const rag = await retrieveServerRagContext({
+    const rag = await withProviderTimeout((signal) => retrieveServerRagContext({
       apiKey, tenantId, ingredients: context.inventory.map(({ name }) => name).slice(0, 20),
-      mealType: context.slot, restrictions: { allergies: context.allergies, dietaryRules: context.hardAvoid },
-    });
+      mealType: context.slot, restrictions: { allergies: context.allergies, dietaryRules: context.hardAvoid }, signal,
+    }));
     ragText = typeof rag.context === 'string'
       ? rag.context.replace(/--- CONTEXTO DE RECETARIO CONFIABLE[^\n]*---\s*/gi, '')
         .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ').slice(0, 4000)
@@ -93,20 +111,23 @@ async function loadProviderOptions(context: TodayProviderContext, apiKey: string
     // Retrieval is optional; it cannot weaken restrictions or fail the request.
   }
   try {
-    const response = await fetch(`${getGeminiBaseUrl()}/models/${encodeURIComponent(getGeminiModel())}:generateContent`, {
-      method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: promptFor(context, ragText) }] }],
-        generationConfig: { responseMimeType: 'application/json', responseSchema: RESPONSE_SCHEMA },
-      }),
+    return await withProviderTimeout(async (signal) => {
+      const response = await fetch(`${getGeminiBaseUrl()}/models/${encodeURIComponent(getGeminiModel())}:generateContent`, {
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: promptFor(context, ragText) }] }],
+          generationConfig: { responseMimeType: 'application/json', responseSchema: RESPONSE_SCHEMA },
+        }),
+        signal,
+      });
+      if (!response.ok) return null;
+      const result: unknown = await response.json();
+      if (!isRecord(result) || !Array.isArray(result.candidates) || !isRecord(result.candidates[0]) ||
+        !isRecord(result.candidates[0].content) || !Array.isArray(result.candidates[0].content.parts) ||
+        !isRecord(result.candidates[0].content.parts[0]) || typeof result.candidates[0].content.parts[0].text !== 'string') return null;
+      const parsed: unknown = JSON.parse(result.candidates[0].content.parts[0].text);
+      return parseProviderOptions(parsed, context.slot);
     });
-    if (!response.ok) return null;
-    const result: unknown = await response.json();
-    if (!isRecord(result) || !Array.isArray(result.candidates) || !isRecord(result.candidates[0]) ||
-      !isRecord(result.candidates[0].content) || !Array.isArray(result.candidates[0].content.parts) ||
-      !isRecord(result.candidates[0].content.parts[0]) || typeof result.candidates[0].content.parts[0].text !== 'string') return null;
-    const parsed: unknown = JSON.parse(result.candidates[0].content.parts[0].text);
-    return parseProviderOptions(parsed, context.slot);
   } catch {
     return null;
   }
@@ -126,6 +147,25 @@ export async function POST(request: NextRequest) {
   try { rawBody = await request.json(); } catch { return NextResponse.json({ error: 'Invalid request' }, { status: 400 }); }
   const slot = parseBody(rawBody);
   if (!slot) return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
+
+  const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
+  const rateLimit = await checkRateLimit('today', ip, user.id);
+  if (!rateLimit.success) {
+    const nowSeconds = Date.now() / 1000;
+    const retryAfter = Math.max(0, Math.ceil(rateLimit.resetAt - nowSeconds));
+    return NextResponse.json(
+      { error: 'Rate limit exceeded', retryAfter },
+      {
+        status: 429,
+        headers: {
+          'Retry-After': String(retryAfter),
+          'X-RateLimit-Limit': String(rateLimit.limit),
+          'X-RateLimit-Remaining': String(rateLimit.remaining),
+          'X-RateLimit-Reset': String(rateLimit.resetAt),
+        },
+      }
+    );
+  }
 
   const now = new Date();
   const asOf = now.toISOString().slice(0, 10);
