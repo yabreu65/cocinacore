@@ -140,7 +140,10 @@ export async function retrieveServerRagContext(input: ServerRagContextInput): Pr
   };
   const embedder = new GeminiEmbeddingService(input.apiKey);
   const cancellableEmbedder: EmbeddingService = {
-    generateEmbedding: (text) => embedder.generateEmbedding(text, input.signal),
+    generateEmbedding: (text) =>
+      input.signal === undefined
+        ? embedder.generateEmbedding(text)
+        : embedder.generateEmbedding(text, input.signal),
     generateEmbeddings: (texts) => embedder.generateEmbeddings(texts),
   };
   const retrievedContext = await retrieveRecipeContext(
