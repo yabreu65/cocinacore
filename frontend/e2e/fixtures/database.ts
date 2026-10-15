@@ -18,6 +18,7 @@ export interface AuthenticatedE2EIdentity {
 interface ProfileSnapshot {
   tenantId: string;
   level: string | null;
+  availableTimeMinutes: number | null;
 }
 
 interface ProfileTermSnapshot {
@@ -131,10 +132,12 @@ export async function seedConnectedRecipeData({
   identity,
   runId,
   includeRagChunks = true,
+  availableTimeMinutes,
 }: {
   identity: AuthenticatedE2EIdentity;
   runId: string;
   includeRagChunks?: boolean;
+  availableTimeMinutes?: number;
 }): Promise<ConnectedRecipeSeed> {
   const db = getPool();
   const safeRunId = sanitizeRunId(runId);
@@ -145,7 +148,9 @@ export async function seedConnectedRecipeData({
 
   const [profileResult, profileTermsResult, historyResult, mealPlanResult] = await Promise.all([
     db.query<ProfileSnapshot>(
-      'select tenant_id as "tenantId", level from public.user_culinary_profiles where user_id = $1',
+      `select tenant_id as "tenantId", level,
+              available_time_minutes as "availableTimeMinutes"
+       from public.user_culinary_profiles where user_id = $1`,
       [identity.userId]
     ),
     db.query<ProfileTermSnapshot>(
@@ -175,10 +180,10 @@ export async function seedConnectedRecipeData({
     identity.userId,
   ]);
   await db.query(
-    `insert into public.user_culinary_profiles (user_id, tenant_id, level)
-     values ($1, $2, 'Intermedio')
+    `insert into public.user_culinary_profiles (user_id, tenant_id, level, available_time_minutes)
+     values ($1, $2, 'Intermedio', $3)
      on conflict (user_id) do update set tenant_id = excluded.tenant_id, level = excluded.level, updated_at = now()`,
-    [identity.userId, identity.tenantId]
+    [identity.userId, identity.tenantId, profileResult.rows[0]?.availableTimeMinutes ?? null]
   );
 
   const termRows = await db.query<{ id: string; label: string }>(
@@ -223,7 +228,15 @@ export async function seedConnectedRecipeData({
     originalMealPlanIds: mealPlanResult.rows.map((row) => row.id),
   };
 
-  if (!includeRagChunks) return seed;
+  if (!includeRagChunks) {
+    if (availableTimeMinutes !== undefined) {
+      await db.query(
+        'update public.user_culinary_profiles set available_time_minutes = $2 where user_id = $1',
+        [identity.userId, availableTimeMinutes]
+      );
+    }
+    return seed;
+  }
 
   const globalBook = await db.query<{ id: string }>(
     `insert into public.global_books (title, author, description, cuisine_region, tags)
@@ -279,6 +292,12 @@ export async function seedConnectedRecipeData({
   seed.globalBookId = globalBookId;
   seed.tenantBookId = tenantBookId;
   seed.tenantBId = tenantBId;
+  if (availableTimeMinutes !== undefined) {
+    await db.query(
+      'update public.user_culinary_profiles set available_time_minutes = $2 where user_id = $1',
+      [identity.userId, availableTimeMinutes]
+    );
+  }
   return seed;
 }
 
@@ -320,10 +339,17 @@ export async function cleanupConnectedRecipeData(seed: ConnectedRecipeSeed): Pro
 
   if (seed.originalProfile) {
     await db.query(
-      `insert into public.user_culinary_profiles (user_id, tenant_id, level)
-       values ($1, $2, $3)
-       on conflict (user_id) do update set tenant_id = excluded.tenant_id, level = excluded.level, updated_at = now()`,
-      [seed.identity.userId, seed.originalProfile.tenantId, seed.originalProfile.level]
+      `insert into public.user_culinary_profiles
+         (user_id, tenant_id, level, available_time_minutes)
+       values ($1, $2, $3, $4)
+       on conflict (user_id) do update set tenant_id = excluded.tenant_id, level = excluded.level,
+         available_time_minutes = excluded.available_time_minutes, updated_at = now()`,
+      [
+        seed.identity.userId,
+        seed.originalProfile.tenantId,
+        seed.originalProfile.level,
+        seed.originalProfile.availableTimeMinutes,
+      ]
     );
   } else {
     await db.query('delete from public.user_culinary_profiles where user_id = $1', [

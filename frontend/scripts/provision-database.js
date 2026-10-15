@@ -135,7 +135,7 @@ function loadTrustedManifest() {
           typeof addition !== 'object' ||
           Array.isArray(addition) ||
           Object.keys(addition).sort().join(',') !== 'identity,kind,schema' ||
-          addition.kind !== 'constraint' ||
+          !['constraint', 'function', 'trigger'].includes(addition.kind) ||
           !['internal', 'public'].includes(addition.schema) ||
           !/^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$/.test(addition.identity)
         ) {
@@ -853,7 +853,7 @@ async function getCatalog(client) {
   };
 }
 
-function expectedCatalog(manifest, appliedMigrations) {
+function expectedCatalog(manifest, appliedMigrations, catalogFunctions) {
   const transferable = manifest.baselineObjects.transferable;
   const expected = {
     schemas: transferable.filter((o) => o.kind === 'schema').map((o) => o.schema),
@@ -867,12 +867,22 @@ function expectedCatalog(manifest, appliedMigrations) {
     ),
     types: manifest.baselineObjects.dependent.types.map((o) => `${o.schema}.${o.name}`),
     extensions: manifest.extensions.map((o) => `${o.name}@${o.expectedSchema}`),
+    triggers: [],
   };
   for (const migration of manifest.migrations) {
     if (!appliedMigrations.has(migration.filename)) continue;
     for (const addition of migration.catalogAdditions || []) {
       if (addition.kind === 'constraint') {
         expected.constraints.push(`${addition.schema}.${addition.identity}`);
+      } else if (addition.kind === 'function') {
+        const functionName = `${addition.schema}.${addition.identity.split('.')[1]}`;
+        const matches = catalogFunctions.filter((identity) => identity.startsWith(`${functionName}(`));
+        if (matches.length !== 1) {
+          throw new Error(`BASELINE_MISMATCH: applied function ${functionName} must exist exactly once.`);
+        }
+        expected.functions.push(matches[0]);
+      } else if (addition.kind === 'trigger') {
+        expected.triggers.push(`${addition.schema}.${addition.identity}`);
       }
     }
   }
@@ -963,7 +973,11 @@ async function attestLedger(client, manifest, established) {
 
 async function attestBaselineCatalog(client, manifest, ownerState, appliedMigrations) {
   const catalog = await getCatalog(client);
-  const expected = expectedCatalog(manifest, appliedMigrations);
+  const expected = expectedCatalog(
+    manifest,
+    appliedMigrations,
+    catalog.functions.rows.map((row) => row.identity)
+  );
   compareExact(
     catalog.schemas.rows.map((row) => row.identity),
     expected.schemas,
@@ -1001,7 +1015,7 @@ async function attestBaselineCatalog(client, manifest, ownerState, appliedMigrat
   );
   compareExact(
     catalog.triggers.rows.map((row) => row.identity),
-    [],
+    expected.triggers,
     'Managed trigger set'
   );
   compareExact(
@@ -1011,6 +1025,28 @@ async function attestBaselineCatalog(client, manifest, ownerState, appliedMigrat
   );
   if (catalog.functions.rows.some((row) => row.security_definer)) {
     throw new Error('Managed function security mode differs from the trusted baseline.');
+  }
+
+  const appliedFunctionAdditions = manifest.migrations
+    .filter((migration) => appliedMigrations.has(migration.filename))
+    .flatMap((migration) => migration.catalogAdditions || [])
+    .filter((addition) => addition.kind === 'function');
+  const expectedAdditionOwner = ownerState === 'legacy' ? 'cocinacore' : SCHEMA_OWNER;
+  const appliedFunctionOwnerEntries = new Map();
+  for (const addition of appliedFunctionAdditions) {
+    const functionName = `${addition.schema}.${addition.identity.split('.')[1]}`;
+    const matches = catalog.functions.rows.filter((row) => row.identity.startsWith(`${functionName}(`));
+    if (matches.length !== 1 || matches[0].owner !== expectedAdditionOwner) {
+      throw new Error(`BASELINE_MISMATCH: applied function owner differs for ${functionName}.`);
+    }
+    const key = `function|${matches[0].identity}`;
+    if (appliedFunctionOwnerEntries.has(key)) {
+      throw new Error(`BASELINE_MISMATCH: duplicate applied function owner policy for ${matches[0].identity}.`);
+    }
+    appliedFunctionOwnerEntries.set(key, {
+      expectedLegacyOwner: 'cocinacore',
+      targetOwner: SCHEMA_OWNER,
+    });
   }
 
   const byKey = new Map(
@@ -1023,6 +1059,12 @@ async function attestBaselineCatalog(client, manifest, ownerState, appliedMigrat
       object,
     ])
   );
+  for (const [key, ownerPolicy] of appliedFunctionOwnerEntries) {
+    if (byKey.has(key)) {
+      throw new Error(`BASELINE_MISMATCH: conflicting owner policy for ${key.slice('function|'.length)}.`);
+    }
+    byKey.set(key, ownerPolicy);
+  }
   for (const [kind, rows] of [
     ['schema', catalog.schemas.rows],
     ['table', catalog.tables.rows],
@@ -1030,6 +1072,9 @@ async function attestBaselineCatalog(client, manifest, ownerState, appliedMigrat
   ]) {
     for (const row of rows) {
       const object = byKey.get(`${kind}|${row.identity}`);
+      if (!object) {
+        throw new Error(`BASELINE_MISMATCH: missing owner policy for ${kind} ${row.identity}.`);
+      }
       const expectedOwner =
         ownerState === 'legacy' ? object.expectedLegacyOwner : object.targetOwner;
       if (row.owner !== expectedOwner) {
@@ -1098,7 +1143,7 @@ async function attestFreshCatalog(client, manifest, ownerState) {
     throw new Error('BASELINE_MISMATCH: unexpected owner for schema public.');
 }
 
-async function assertReservedRoleOwnership(client, manifest) {
+async function assertReservedRoleOwnership(client, manifest, appliedMigrations) {
   const ordinary = await client.query(
     `select owner, kind, identity from (
        select pg_catalog.pg_get_userbyid(n.nspowner)::text as owner, 'schema'::text as kind, n.nspname::text as identity
@@ -1209,8 +1254,18 @@ async function assertReservedRoleOwnership(client, manifest) {
           : `${object.kind}|${object.schema}.${object.name}`
     )
   );
+  const appliedFunctionNames = new Set(
+    manifest.migrations
+      .filter((migration) => appliedMigrations.has(migration.filename))
+      .flatMap((migration) => migration.catalogAdditions || [])
+      .filter((addition) => addition.kind === 'function')
+      .map((addition) => `${addition.schema}.${addition.identity.split('.')[1]}`)
+  );
   for (const row of ordinary.rows.filter((entry) => entry.owner === SCHEMA_OWNER)) {
-    if (!allowed.has(`${row.kind}|${row.identity}`)) {
+    const isAppliedFunction = row.kind === 'function' && [...appliedFunctionNames].some(
+      (name) => row.identity.startsWith(`${name}(`)
+    );
+    if (!allowed.has(`${row.kind}|${row.identity}`) && !isAppliedFunction) {
       throw new Error(
         `ROLE_STATE_MISMATCH: schema owner owns unexpected object ${row.kind} ${row.identity}.`
       );
@@ -1398,7 +1453,7 @@ async function main() {
     }
     if (roleState === 'established') {
       await assertReservedRoleAclState(client);
-      await assertReservedRoleOwnership(client, manifest);
+      await assertReservedRoleOwnership(client, manifest, appliedMigrations);
     }
 
     await client.query('begin');
@@ -1425,7 +1480,7 @@ async function main() {
 
       await inspectReservedRoles(client);
       await assertReservedRoleAclState(client);
-      await assertReservedRoleOwnership(client, manifest);
+      await assertReservedRoleOwnership(client, manifest, appliedMigrations);
       if (hasLedger) {
         appliedMigrations = await attestLedger(client, manifest, true);
         await attestBaselineCatalog(client, manifest, 'target', appliedMigrations);
@@ -1448,11 +1503,15 @@ async function main() {
   console.log('Database migration roles and trusted ownership are provisioned.');
 }
 
-main().catch((error) => {
-  const message = String(error.message || error).replace(
-    /postgres(?:ql)?:\/\/[^\s]+/gi,
-    'postgresql://[redacted]'
-  );
-  console.error('Database provisioning failed:', message);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    const message = String(error.message || error).replace(
+      /postgres(?:ql)?:\/\/[^\s]+/gi,
+      'postgresql://[redacted]'
+    );
+    console.error('Database provisioning failed:', message);
+    process.exit(1);
+  });
+}
+
+module.exports = { attestBaselineCatalog };

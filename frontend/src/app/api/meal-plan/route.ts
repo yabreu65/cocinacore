@@ -15,6 +15,7 @@ import {
   findLatestMealPlanByUserAndTenant,
 } from '@/lib/db/repositories/mealPlanRepository';
 import { buildMealPlanInventoryContext } from '@/lib/meal-planner/inventory-context';
+import { containsRestrictedIngredientName } from '@/lib/recipes/structured-ingredients';
 import {
   buildPersistedMealPlanProfileContext,
   formatPersistedMealPlanProfileContext,
@@ -173,9 +174,13 @@ export async function POST(request: NextRequest) {
   const inventoryLines = buildMealPlanInventoryContext(inventoryItems, tenantId);
   const inventoryContext =
     inventoryLines.join('\n') || 'Sin inventario persistido para este hogar.';
-  const persistedProfileContext = formatPersistedMealPlanProfileContext(
-    buildPersistedMealPlanProfileContext(persistedProfile, persistedProfileTerms, user.id, tenantId)
+  const persistedProfileContextData = buildPersistedMealPlanProfileContext(
+    persistedProfile,
+    persistedProfileTerms,
+    user.id,
+    tenantId
   );
+  const persistedProfileContext = formatPersistedMealPlanProfileContext(persistedProfileContextData);
   const peopleCount =
     typeof body.peopleCount === 'number' &&
     Number.isFinite(body.peopleCount) &&
@@ -207,7 +212,8 @@ export async function POST(request: NextRequest) {
     fusionCount: fusionCuisines.length,
   });
 
-  const structuredOutputInstructions = buildStructuredMealPlanInstructions(period);
+  const availableTimeMinutes = persistedProfileContextData?.availableTimeMinutes ?? null;
+  const structuredOutputInstructions = buildStructuredMealPlanInstructions(period, availableTimeMinutes);
 
   const prompt =
     mode === 'inventory_to_menu'
@@ -327,6 +333,42 @@ Reglas:
       return NextResponse.json({ error: 'El proveedor IA devolvió un plan inválido.' }, { status: 502 });
     }
 
+    const exceedsAvailableTime =
+      availableTimeMinutes !== null &&
+      parsedPlan.plan.days.some((day) =>
+        day.meals.some((meal) => meal.prepMinutes === null ||
+          meal.prepMinutes === undefined ||
+          meal.prepMinutes > availableTimeMinutes)
+      );
+    if (exceedsAvailableTime) {
+      serverLogger.warn('meal_plan.invalid_provider_response', {
+        requestId,
+        model,
+        period,
+        reason: 'available_time_exceeded',
+      });
+      return NextResponse.json({ error: 'El proveedor IA devolvió un plan inválido.' }, { status: 502 });
+    }
+    parsedPlan.plan.availableTimeMinutesSnapshot = availableTimeMinutes;
+
+    const hardRestrictions = [
+      ...(persistedProfileContextData?.allergies ?? []),
+      ...(persistedProfileContextData?.avoid ?? []),
+      ...restrictions,
+    ];
+    const generatedIngredientNames = parsedPlan.plan.days.flatMap((day) =>
+      day.meals.flatMap((meal) => meal.ingredients.map((ingredient) => ingredient.name))
+    );
+    if (containsRestrictedIngredientName(generatedIngredientNames, hardRestrictions)) {
+      serverLogger.warn('meal_plan.invalid_provider_response', {
+        requestId,
+        model,
+        period,
+        reason: 'restricted_ingredient',
+      });
+      return NextResponse.json({ error: 'El proveedor IA devolvió un plan inválido.' }, { status: 502 });
+    }
+
     let persistedPlan;
     try {
       persistedPlan = await createMealPlan({
@@ -420,6 +462,45 @@ export async function GET(request: NextRequest) {
       reason: parsedPlan.reason,
     });
     return NextResponse.json({ error: 'No se pudo recuperar el menú guardado.' }, { status: 500 });
+  }
+
+  let currentProfile: Awaited<ReturnType<typeof findCulinaryProfileByUserId>>;
+  let currentProfileTerms: Awaited<ReturnType<typeof findCulinaryProfileTermsByUserId>>;
+  try {
+    [currentProfile, currentProfileTerms] = await Promise.all([
+      findCulinaryProfileByUserId(user.id),
+      findCulinaryProfileTermsByUserId(user.id),
+    ]);
+  } catch {
+    serverLogger.warn('meal_plan.profile_retrieval_failed', { requestId });
+    return NextResponse.json({ error: 'No se pudo recuperar el menú guardado.' }, { status: 500 });
+  }
+
+  const profileContext = buildPersistedMealPlanProfileContext(
+    currentProfile,
+    currentProfileTerms,
+    user.id,
+    tenantId
+  );
+  const currentHardRestrictions = [
+    ...(profileContext?.allergies ?? []),
+    ...(profileContext?.avoid ?? []),
+  ];
+  const storedIngredientNames = parsedPlan.plan.days.flatMap((day) =>
+    day.meals.flatMap((meal) => meal.ingredients.map((ingredient) => ingredient.name))
+  );
+  if (containsRestrictedIngredientName(storedIngredientNames, currentHardRestrictions)) {
+    serverLogger.warn('meal_plan.stale_restrictions', {
+      requestId,
+      mealPlanId: persistedPlan.id,
+    });
+    return NextResponse.json(
+      {
+        error: 'MEAL_PLAN_RESTRICTIONS_CHANGED',
+        code: 'MEAL_PLAN_RESTRICTIONS_CHANGED',
+      },
+      { status: 409 }
+    );
   }
 
   return NextResponse.json({

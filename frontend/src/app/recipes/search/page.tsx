@@ -2,9 +2,14 @@
 
 import { FormEvent, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import type { StructuredRecipeIngredient } from '@/components/recipe-view/types';
 import { safeFetch } from '@/lib/api';
 import { getVisibleRecipeSources, type VisibleRecipeSource } from '@/lib/recipes/source-citations';
+import {
+  buildRecipeGenerationRequestPayload,
+  buildTodayRecipeRequestFields,
+} from '@/lib/recipes/today-handoff';
 import type { Citation } from '@/services/types';
 
 type RecipeGenerationResponse = {
@@ -25,7 +30,10 @@ interface RecipeSearchResult {
 }
 
 export default function RecipeSearchPage() {
-  const [ingredients, setIngredients] = useState('');
+  const searchParams = useSearchParams();
+  const todayFields = buildTodayRecipeRequestFields(new URLSearchParams(searchParams.toString()));
+  const [ingredients, setIngredients] = useState(todayFields?.ingredients.join('\n') ?? '');
+  const [recipeName, setRecipeName] = useState(todayFields?.recipeName ?? '');
   const [restrictions, setRestrictions] = useState('');
   const [mode, setMode] = useState<'free' | 'rag'>('free');
   const [loading, setLoading] = useState(false);
@@ -43,22 +51,13 @@ export default function RecipeSearchPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
-        body: JSON.stringify({
+        body: JSON.stringify(buildRecipeGenerationRequestPayload({
           mode,
-          ingredients: ingredients.split('\n').map((i) => i.trim()).filter(Boolean),
-          restrictions: {
-            allergies: [],
-            dietaryRules: restrictions.split(',').map((r) => r.trim()).filter(Boolean),
-          },
-          peopleCount: 4,
-          culinaryProfile: {
-            level: 'Intermedio',
-            identity: [],
-            preferred: [],
-            avoid: restrictions.split(',').map((r) => r.trim()).filter(Boolean),
-            goals: [],
-          },
-        }),
+          ingredients,
+          recipeName,
+          restrictions,
+          todayFields,
+        })),
       });
 
       if (!result.ok) {
@@ -98,6 +97,18 @@ export default function RecipeSearchPage() {
         </div>
 
         <form onSubmit={onSubmit} className="grid gap-3">
+          {todayFields ? (
+            <label className="grid gap-1 text-sm font-semibold text-[#6B5A50]">
+              Nombre de receta (opcional)
+              <input
+                name="recipeName"
+                value={recipeName}
+                onChange={(e) => setRecipeName(e.target.value)}
+                className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 outline-none"
+              />
+            </label>
+          ) : null}
+
           <label className="grid gap-1 text-sm font-semibold text-[#6B5A50]">
             Quiero cocinar con (opcional; enfoca la solicitud, uno por línea)
             <textarea
@@ -106,6 +117,9 @@ export default function RecipeSearchPage() {
               rows={4}
               className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-2 outline-none"
             />
+            {todayFields ? (
+              <span className="font-normal">Estos ingredientes son sugerencias, no inventario confirmado.</span>
+            ) : null}
           </label>
 
           <label className="grid gap-1 text-sm font-semibold text-[#6B5A50]">

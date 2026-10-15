@@ -6,10 +6,12 @@ const fs = require('fs');
 const path = require('path');
 const { Pool } = require('pg');
 
-try {
-  require('dotenv').config({ path: path.resolve(__dirname, '../.env.local'), quiet: true });
-} catch {
-  // dotenv is a devDependency; deployment environments inject variables explicitly.
+if (process.env.COCINACORE_SKIP_DOTENV !== '1') {
+  try {
+    require('dotenv').config({ path: path.resolve(__dirname, '../.env.local'), quiet: true });
+  } catch {
+    // dotenv is a devDependency; deployment environments inject variables explicitly.
+  }
 }
 
 const MANIFEST_VERSION = 1;
@@ -232,7 +234,7 @@ function assertCatalogAdditions(entry, historical, seen) {
     assertPlainObject(addition, `Catalog addition for ${entry.filename}`);
     if (
       Object.keys(addition).sort().join(',') !== 'identity,kind,schema' ||
-      addition.kind !== 'constraint' ||
+      !['constraint', 'function', 'trigger'].includes(addition.kind) ||
       !['internal', 'public'].includes(addition.schema) ||
       !/^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$/.test(addition.identity)
     ) {
@@ -654,7 +656,7 @@ async function assertMigrationRoleDatabaseAuthority(client) {
   }
 }
 
-async function assertSchemaOwnerDatabaseAuthority(client, manifest) {
+async function assertSchemaOwnerDatabaseAuthority(client, manifest, applied) {
   const actual = await client.query(
     `select kind, identity from (
        select 'schema'::text as kind, n.nspname::text as identity
@@ -723,7 +725,7 @@ async function assertSchemaOwnerDatabaseAuthority(client, manifest) {
      ) objects order by kind, identity`,
     [SCHEMA_OWNER]
   );
-  const hasLedger = await migrationLedgerExists(client);
+  const hasLedger = applied !== null;
   const allowedObjects = hasLedger
     ? manifest.baselineObjects.transferable
     : manifest.baselineObjects.transferable.filter(
@@ -741,6 +743,44 @@ async function assertSchemaOwnerDatabaseAuthority(client, manifest) {
         }`
     )
   );
+  if (hasLedger) {
+    const declarations = new Set();
+    for (const migration of manifest.migrations) {
+      if (!applied.has(migration.filename)) continue;
+      for (const addition of migration.catalogAdditions || []) {
+        if (addition.kind !== 'function') continue;
+        const [schema, name] = addition.identity.split('.');
+        const declaration = `${schema}.${name}`;
+        if (schema !== addition.schema || declarations.has(declaration)) {
+          throw new Error(
+            `ROLE_STATE_MISMATCH: duplicate or invalid applied function declaration ${declaration}.`
+          );
+        }
+        declarations.add(declaration);
+        const functions = await client.query(
+          `select n.nspname::text as schema, p.proname::text as name,
+                  pg_catalog.pg_get_function_identity_arguments(p.oid) as arguments,
+                  pg_catalog.pg_get_userbyid(p.proowner) as owner
+             from pg_catalog.pg_proc p
+             join pg_catalog.pg_namespace n on n.oid=p.pronamespace
+            where p.prokind='f' and n.nspname=$1 and p.proname=$2`,
+          [schema, name]
+        );
+        if (functions.rows.length !== 1 || functions.rows[0].owner !== SCHEMA_OWNER) {
+          throw new Error(
+            `ROLE_STATE_MISMATCH: applied function ${declaration} is missing, ambiguous, or has an unexpected owner.`
+          );
+        }
+        const identity = `function,${schema}.${name}(${functions.rows[0].arguments})`;
+        if (allowed.has(identity)) {
+          throw new Error(
+            `ROLE_STATE_MISMATCH: applied function ${declaration} duplicates a baseline owner target.`
+          );
+        }
+        allowed.add(identity);
+      }
+    }
+  }
   const actualSet = new Set(actual.rows.map((row) => `${row.kind},${row.identity}`));
   if (
     actualSet.size !== allowed.size ||
@@ -789,7 +829,7 @@ async function assertSchemaOwnerDatabaseAuthority(client, manifest) {
   }
 }
 
-async function assertAndAssumeMigrationIdentity(client, manifest) {
+async function assertAndAssumeMigrationIdentity(client, manifest, migrations, separated) {
   const identity = await client.query(`
     select session_user, current_user, r.rolname, r.rolcanlogin, r.rolinherit, r.rolsuper,
            r.rolcreatedb, r.rolcreaterole, r.rolreplication, r.rolbypassrls,
@@ -851,7 +891,6 @@ async function assertAndAssumeMigrationIdentity(client, manifest) {
     throw new Error('ROLE_STATE_MISMATCH: reserved roles have unexpected cluster authority.');
   }
   await assertMigrationRoleDatabaseAuthority(client);
-  await assertSchemaOwnerDatabaseAuthority(client, manifest);
 
   const memberships = await client.query(
     `select parent.rolname as granted_role, member.rolname as member_role,
@@ -889,6 +928,16 @@ async function assertAndAssumeMigrationIdentity(client, manifest) {
     throw new Error('Failed to assume cocinacore_schema_owner.');
   }
   assertRole(assumed.rows[0], false);
+
+  const hasLedger = await migrationLedgerExists(client);
+  let applied = null;
+  if (hasLedger) {
+    await assertLedgerShape(client, separated);
+    applied = await getAppliedMigrations(client, migrations, separated);
+    assertGlobalOrder(migrations, applied);
+  }
+
+  await assertSchemaOwnerDatabaseAuthority(client, manifest, applied);
 }
 
 function lockTimeout() {
@@ -1237,7 +1286,7 @@ async function main() {
   try {
     if (separated && !options.verifyComplete) {
       if (options.lane === 'bootstrap') await assertBootstrapIdentity(client);
-      else await assertAndAssumeMigrationIdentity(client, manifest);
+      else await assertAndAssumeMigrationIdentity(client, manifest, migrations, separated);
     }
     if (!options.verifyComplete) {
       lockKey = await acquireDatabaseChangeLock(client);
@@ -1247,7 +1296,7 @@ async function main() {
     if (options.verifyComplete) {
       await client.query('begin read only');
       try {
-        if (separated) await assertAndAssumeMigrationIdentity(client, manifest);
+        if (separated) await assertAndAssumeMigrationIdentity(client, manifest, migrations, separated);
         hadLedger = await migrationLedgerExists(client);
         if (!hadLedger) throw new Error('Migration ledger is missing.');
         await assertLedgerShape(client, separated);

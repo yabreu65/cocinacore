@@ -5,6 +5,17 @@ const port = Number(process.env.E2E_PROVIDER_PORT ?? 4319);
 const embedding = Array.from({ length: 1536 }, () => 1);
 const requests = [];
 
+function structuredTodayText() {
+  return JSON.stringify({
+    options: [
+      { title: 'Tomato rice bowl', slot: 'lunch', ingredients: ['rice', 'tomato', 'olive oil'], prepMinutes: 25 },
+      { title: 'Bean and corn tacos', slot: 'lunch', ingredients: ['beans', 'corn', 'tortillas'], prepMinutes: 30 },
+      { title: 'Spinach pasta', slot: 'lunch', ingredients: ['pasta', 'spinach', 'garlic'], prepMinutes: 20 },
+      { title: 'Peanut bowl', slot: 'lunch', ingredients: ['rice', 'peanut', 'carrot'], prepMinutes: 25 },
+    ],
+  });
+}
+
 function structuredMealPlanText() {
   return JSON.stringify({
     period: 'week',
@@ -16,18 +27,21 @@ function structuredMealPlanText() {
           mealType: 'breakfast',
           title: 'Avena conectada',
           description: null,
+          prepMinutes: 20,
           ingredients: [{ name: 'avena', quantity: 1, unit: 'taza' }],
         },
         {
           mealType: 'lunch',
           title: 'Arroz conectado',
           description: 'Menú determinista',
+          prepMinutes: 25,
           ingredients: [{ name: 'arroz', quantity: 1, unit: 'taza' }],
         },
         {
           mealType: 'dinner',
           title: 'Pollo conectado',
           description: null,
+          prepMinutes: 30,
           ingredients: [{ name: 'pollo', quantity: 200, unit: 'g' }],
         },
       ],
@@ -116,12 +130,18 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (url.pathname.endsWith(':generateContent')) {
+      const responseSchema = body.generationConfig?.responseSchema;
       const responseJsonSchema = body.generationConfig?.responseJsonSchema;
+      const text = responseSchema?.properties?.options
+        ? structuredTodayText()
+        : responseJsonSchema
+          ? structuredMealPlanText()
+          : recipeText;
       return json(response, 200, {
         candidates: [
           {
             content: {
-              parts: [{ text: responseJsonSchema ? structuredMealPlanText() : recipeText }],
+              parts: [{ text }],
             },
           },
         ],

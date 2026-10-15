@@ -3,7 +3,19 @@ import type { NextRequest } from 'next/server';
 
 const requireUserMock = vi.fn();
 const loadPersistedRecipeContextMock = vi.fn();
-const retrieveServerRagContextMock = vi.fn();
+interface RagRetrievalInput {
+  restrictions: { allergies: string[]; dietaryRules: string[] };
+}
+
+interface RagRetrievalResult {
+  context: string;
+  citations: typeof sources;
+  ragContextUsed: boolean;
+}
+
+const retrieveServerRagContextMock = vi.fn<
+  (input: RagRetrievalInput) => Promise<RagRetrievalResult>
+>();
 const buildRecipeCacheKeyMock = vi.fn((input: unknown) => JSON.stringify(input));
 const hashRecipeContextMock = vi.fn(() => 'sha256-private-context');
 const getCachedRecipeMock = vi.fn();
@@ -81,6 +93,14 @@ function request(body: unknown): Request {
   });
 }
 
+async function responseError(response: Response): Promise<string> {
+  const body: unknown = await response.json();
+  if (typeof body !== 'object' || body === null || !('error' in body) || typeof body.error !== 'string') {
+    throw new Error('Expected response to contain an error message.');
+  }
+  return body.error;
+}
+
 function geminiResponse(recipe = 'Sopa de tomate\n\nINGREDIENTES\n- 2 unidades tomate'): Response {
   return new Response(
     JSON.stringify({ candidates: [{ content: { parts: [{ text: recipe }] } }] }),
@@ -107,6 +127,8 @@ function persistedContext(overrides: Record<string, unknown> = {}) {
       avoid: ['Maní'],
       goals: ['Comidas rápidas'],
       level: 'Intermedio',
+      allergies: ['Maní'],
+      dislikedIngredients: [],
     },
     profileContext:
       'Identidad/contexto: Mediterránea\n' +
@@ -272,6 +294,84 @@ describe('POST /api/recipe-generate', () => {
       sources,
       mode: 'rag',
     });
+  });
+
+  it('passes persisted allergies and taxonomy avoidance as hard RAG restrictions, never dislikes', async () => {
+    loadPersistedRecipeContextMock.mockResolvedValue(
+      persistedContext({
+        profile: {
+          identity: [],
+          preferred: [],
+          avoid: [' Maní ', 'Huevo'],
+          goals: [],
+          level: 'Intermedio',
+          allergies: ['Maní', ' Lácteos '],
+          disliked_ingredients: ['Cilantro'],
+        },
+      })
+    );
+
+    const response = await POST(request({ mode: 'rag' }) as unknown as NextRequest);
+
+    expect(response.status).toBe(200);
+    expect(retrieveServerRagContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        restrictions: { allergies: ['Maní', 'Lácteos', 'Huevo'], dietaryRules: [] },
+      })
+    );
+    expect(retrieveServerRagContextMock.mock.calls[0]?.[0].restrictions.allergies).not.toContain(
+      'Cilantro'
+    );
+  });
+
+  it('rejects a generated ingredient matching the last of 32 hard restrictions', async () => {
+    const allergies = Array.from({ length: 20 }, (_, index) => `Alergia personalizada ${index + 1}`);
+    const avoid = [
+      'Huevo',
+      'Lácteos',
+      'Gluten',
+      'Maní',
+      'Nueces',
+      'Pescado',
+      'Mariscos',
+      'Soya',
+      'Sésamo',
+      'Mostaza',
+      'Apio',
+      'Cilantro',
+    ];
+    const allRestrictions = [...allergies, ...avoid];
+    loadPersistedRecipeContextMock.mockResolvedValue(
+      persistedContext({
+        profile: {
+          identity: [],
+          preferred: [],
+          avoid,
+          goals: [],
+          level: 'Intermedio',
+          allergies,
+          dislikedIngredients: ['Perejil'],
+        },
+        profileContext: `Restricciones del perfil: ${allRestrictions.join(', ')}`,
+      })
+    );
+    fetchMock.mockResolvedValueOnce(
+      geminiResponse('Sopa de tomate\n\nINGREDIENTES\n- 2 unidades cilantro')
+    );
+
+    const response = await POST(request({ mode: 'rag' }) as unknown as NextRequest);
+
+    expect(retrieveServerRagContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        restrictions: { allergies: allRestrictions, dietaryRules: [] },
+      })
+    );
+    expect(geminiPrompt()).toContain(`Restricciones duras: ${allRestrictions.join(', ')}`);
+    expect(geminiPrompt()).not.toContain('Perejil');
+    expect(response.status).toBe(502);
+    expect(await responseError(response)).toContain('ingrediente restringido');
+    expect(createRecipeHistoryMock).not.toHaveBeenCalled();
+    expect(setCachedRecipeMock).not.toHaveBeenCalled();
   });
 
   it('uses persisted inventory names as RAG retrieval fallback when no ingredients are requested', async () => {
@@ -495,7 +595,176 @@ describe('POST /api/recipe-generate', () => {
     expect(setCachedRecipeMock).not.toHaveBeenCalled();
   });
 
-  it('persists a cache hit once without calling Gemini', async () => {
+  it('rejects a persisted hard allergy in provider recipe text outside safe structured ingredients', async () => {
+    fetchMock.mockResolvedValueOnce(
+      geminiResponse(
+        'Sopa de tomate\n\nINGREDIENTES\n- 2 unidades tomate\n\nPREPARACIÓN\nAñadir maní al gusto.\n\nTIPS\nServir con maní.'
+      )
+    );
+
+    const response = await POST(
+      request({ mode: 'free', culinaryProfile: { avoid: [] } }) as unknown as NextRequest
+    );
+
+    expect(response.status).toBe(502);
+    expect(createRecipeHistoryMock).not.toHaveBeenCalled();
+    expect(setCachedRecipeMock).not.toHaveBeenCalled();
+  });
+
+  it('does not reject a partial-word collision between an allergen and ingredient', async () => {
+    loadPersistedRecipeContextMock.mockResolvedValue(
+      persistedContext({
+        profile: {
+          identity: [],
+          preferred: [],
+          avoid: [],
+          goals: [],
+          level: 'Intermedio',
+          allergies: ['egg'],
+          dislikedIngredients: [],
+        },
+      })
+    );
+    fetchMock.mockResolvedValueOnce(geminiResponse('Salteado\n\nINGREDIENTES\n- 2 unidades eggplant'));
+
+    const response = await POST(request({ mode: 'free' }) as unknown as NextRequest);
+
+    expect(response.status).toBe(200);
+    expect(createRecipeHistoryMock).toHaveBeenCalledTimes(1);
+    expect(setCachedRecipeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an allergen in parsed ingredients without persisting or caching', async () => {
+    fetchMock.mockResolvedValueOnce(
+      geminiResponse('Sopa de tomate\n\nINGREDIENTES\n- 2 cucharadas de maní')
+    );
+
+    const response = await POST(request({ mode: 'free' }) as unknown as NextRequest);
+
+    expect(response.status).toBe(502);
+    expect(createRecipeHistoryMock).not.toHaveBeenCalled();
+    expect(setCachedRecipeMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { allergy: 'cacahuate', ingredient: 'peanut' },
+    { allergy: 'cacahuete', ingredient: 'groundnuts' },
+    { allergy: 'peanuts', ingredient: 'cacahuetes' },
+  ])('rejects generated peanut synonym $ingredient for hard allergy $allergy', async ({ allergy, ingredient }) => {
+    loadPersistedRecipeContextMock.mockResolvedValue(
+      persistedContext({
+        profile: {
+          identity: [],
+          preferred: [],
+          avoid: [],
+          goals: [],
+          level: 'Intermedio',
+          allergies: [allergy],
+          dislikedIngredients: [],
+        },
+      })
+    );
+    fetchMock.mockResolvedValueOnce(
+      geminiResponse(`Receta\n\nINGREDIENTES\n- 2 unidades ${ingredient}`)
+    );
+
+    const response = await POST(request({ mode: 'free' }) as unknown as NextRequest);
+
+    expect(response.status).toBe(502);
+    expect(createRecipeHistoryMock).not.toHaveBeenCalled();
+    expect(setCachedRecipeMock).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when hard allergies are active but ingredients cannot be parsed', async () => {
+    fetchMock.mockResolvedValueOnce(geminiResponse('Sopa de tomate\n\nPREPARACIÓN\nCocinar el tomate.'));
+
+    const response = await POST(request({ mode: 'free' }) as unknown as NextRequest);
+
+    expect(response.status).toBe(502);
+    expect(createRecipeHistoryMock).not.toHaveBeenCalled();
+    expect(setCachedRecipeMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects cached recipe text with a persisted hard allergy outside safe structured ingredients', async () => {
+    getCachedRecipeMock.mockResolvedValueOnce({
+      recipe:
+        'Sopa de tomate\n\nINGREDIENTES\n- 2 unidades tomate\n\nPREPARACIÓN\nAñadir maní al gusto.\n\nTIPS\nServir con maní.',
+      title: 'Sopa de tomate',
+      provider: 'gemini',
+      model: 'gemini-test-model',
+      mode: 'free',
+      structuredIngredients: [
+        {
+          name: 'tomate',
+          normalized_name: 'tomate',
+          quantity: 2,
+          unit: 'unidad',
+          optional_quantity_text: null,
+          category: 'Verduras',
+          estimated_cost_optional: null,
+          structured: true,
+        },
+      ],
+      createdAt: Date.now(),
+    });
+
+    const response = await POST(
+      request({ mode: 'free', ingredients: ['tomate'], culinaryProfile: { avoid: [] } }) as unknown as NextRequest
+    );
+
+    expect(response.status).toBe(502);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(createRecipeHistoryMock).not.toHaveBeenCalled();
+    expect(setCachedRecipeMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { allergy: 'cacahuate', ingredient: 'peanut' },
+    { allergy: 'cacahuetes', ingredient: 'groundnut' },
+  ])('rejects cached $ingredient for hard allergy $allergy', async ({ allergy, ingredient }) => {
+    loadPersistedRecipeContextMock.mockResolvedValue(
+      persistedContext({
+        profile: {
+          identity: [],
+          preferred: [],
+          avoid: [],
+          goals: [],
+          level: 'Intermedio',
+          allergies: [allergy],
+          dislikedIngredients: [],
+        },
+      })
+    );
+    getCachedRecipeMock.mockResolvedValueOnce({
+      recipe: `Receta de ${ingredient}`,
+      title: 'Receta cacheada',
+      provider: 'gemini',
+      model: 'gemini-test-model',
+      mode: 'free',
+      structuredIngredients: [
+        {
+          name: ingredient,
+          normalized_name: ingredient,
+          quantity: 2,
+          unit: 'unidad',
+          optional_quantity_text: null,
+          category: null,
+          estimated_cost_optional: null,
+          structured: true,
+        },
+      ],
+      createdAt: Date.now(),
+    });
+
+    const response = await POST(request({ mode: 'free', ingredients: ['tomate'] }) as unknown as NextRequest);
+
+    expect(response.status).toBe(502);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(createRecipeHistoryMock).not.toHaveBeenCalled();
+    expect(setCachedRecipeMock).not.toHaveBeenCalled();
+  });
+
+  it('fails closed for cached recipes without usable ingredients when hard allergies are active', async () => {
     getCachedRecipeMock.mockResolvedValueOnce({
       recipe: 'Receta cacheada',
       title: 'Receta cacheada',
@@ -503,6 +772,37 @@ describe('POST /api/recipe-generate', () => {
       model: 'gemini-test-model',
       mode: 'free',
       structuredIngredients: [],
+      createdAt: Date.now(),
+    });
+
+    const response = await POST(request({ mode: 'free', ingredients: ['tomate'] }) as unknown as NextRequest);
+
+    expect(response.status).toBe(502);
+    expect(await responseError(response)).toContain('validar los ingredientes');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(createRecipeHistoryMock).not.toHaveBeenCalled();
+    expect(setCachedRecipeMock).not.toHaveBeenCalled();
+  });
+
+  it('persists a cache hit once without calling Gemini', async () => {
+    getCachedRecipeMock.mockResolvedValueOnce({
+      recipe: 'Receta cacheada',
+      title: 'Receta cacheada',
+      provider: 'gemini',
+      model: 'gemini-test-model',
+      mode: 'free',
+      structuredIngredients: [
+        {
+          name: 'tomate',
+          normalized_name: 'tomate',
+          quantity: 2,
+          unit: 'unidad',
+          optional_quantity_text: null,
+          category: 'Verduras',
+          estimated_cost_optional: null,
+          structured: true,
+        },
+      ],
       createdAt: Date.now(),
     });
 

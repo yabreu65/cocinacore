@@ -1,0 +1,3 @@
+#!/bin/sh
+# Project-local wrapper; intentionally inactive until explicitly configured by an owner.
+exec node "$(dirname "$0")/../scripts/cocina-quality-gate.mjs"

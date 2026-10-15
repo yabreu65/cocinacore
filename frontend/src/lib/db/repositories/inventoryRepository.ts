@@ -17,6 +17,35 @@ export interface CreateInventoryItemInput {
   notes?: string | null;
 }
 
+export interface TodayInventoryContextRow {
+  tenant_id: string;
+  ingredient_name: string;
+  quantity: string | null;
+  unit: string | null;
+  expiration_date: string | null;
+}
+
+const MAX_TODAY_INVENTORY_LIMIT = 50;
+
+export async function listTodayInventoryContextByTenant(
+  tenantId: string,
+  asOf: string,
+  limit: number
+): Promise<TodayInventoryContextRow[]> {
+  const boundedLimit = Number.isFinite(limit)
+    ? Math.min(MAX_TODAY_INVENTORY_LIMIT, Math.max(1, Math.floor(limit)))
+    : MAX_TODAY_INVENTORY_LIMIT;
+  const result = await query<TodayInventoryContextRow>(
+    `select tenant_id, ingredient_name, quantity, unit, expiration_date
+     from public.recipe_inventory_items
+     where tenant_id = $1 and (expiration_date is null or expiration_date >= $2)
+     order by expiration_date asc nulls last
+     limit $3`,
+    [tenantId, asOf, boundedLimit]
+  );
+  return result.rows;
+}
+
 export async function listInventoryItemsByTenant(
   tenantId: string
 ): Promise<RecipeInventoryItemRow[]> {

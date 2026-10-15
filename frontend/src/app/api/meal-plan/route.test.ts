@@ -8,6 +8,7 @@ import type {
 import type { UserCulinaryProfileTermWithLabel } from '@/lib/db/repositories/culinaryProfileRepository';
 import {
   parseStructuredMealPlanResponse,
+  parseStructuredMealPlanValue,
   type StructuredMealPlan,
 } from '@/lib/meal-planner/structured-plan';
 
@@ -83,6 +84,10 @@ function profile(overrides: Partial<UserCulinaryProfileRow> = {}): UserCulinaryP
     user_id: 'user-1',
     tenant_id: 'tenant-1',
     level: 'Intermedio',
+    available_time_minutes: null,
+    disliked_ingredients: [],
+    allergies: [],
+    household_members: [],
     created_at: '2026-01-01T00:00:00.000Z',
     updated_at: '2026-01-01T00:00:00.000Z',
     ...overrides,
@@ -128,24 +133,35 @@ function structuredPlanJson(period: 'week' | 'fortnight' | 'month' = 'week'): st
         {
           mealType: 'breakfast',
           title: 'Avena con fruta',
+          prepMinutes: 20,
           description: null,
           ingredients: [{ name: 'Avena', quantity: 1, unit: 'taza' }],
         },
         {
           mealType: 'lunch',
           title: 'Arroz con verduras',
+          prepMinutes: 30,
           description: 'Plato principal',
           ingredients: [{ name: 'Arroz real', quantity: null, unit: null }],
         },
         {
           mealType: 'dinner',
           title: 'Sopa liviana',
+          prepMinutes: 25,
           description: null,
           ingredients: [{ name: 'Calabaza', quantity: null, unit: null }],
         },
       ],
     })),
   });
+}
+
+function structuredPlanWithIngredient(name: string): string {
+  const plan = JSON.parse(structuredPlanJson()) as {
+    days: Array<{ meals: Array<{ ingredients: Array<{ name: string }> }> }>;
+  };
+  plan.days[0].meals[0].ingredients[0].name = name;
+  return JSON.stringify(plan);
 }
 
 function canonicalStructuredPlan(period: 'week' | 'fortnight' | 'month' = 'week'): StructuredMealPlan {
@@ -294,6 +310,45 @@ describe('POST /api/meal-plan', () => {
     );
   });
 
+  it('uses the persisted profile cap as prompt context and snapshots it without accepting a request override', async () => {
+    findCulinaryProfileByUserIdMock.mockResolvedValue(profile({ available_time_minutes: 30 }));
+
+    const response = await POST(
+      request({ mode: 'balanced_ai', availableTimeMinutes: 240 }) as unknown as NextRequest
+    );
+
+    expect(response.status).toBe(200);
+    expect(geminiPrompt()).toContain('Cada comida individual debe estimarse en no más de 30 minutos');
+    expect(geminiPrompt()).not.toContain('240 minutos');
+    expect(JSON.stringify(geminiRequest().generationConfig.responseJsonSchema)).toContain('prepMinutes');
+    expect(JSON.stringify(geminiRequest().generationConfig.responseJsonSchema)).toContain('"minimum":1');
+    expect(createMealPlanMock.mock.calls[0]?.[0]).toMatchObject({
+      structuredPlan: { availableTimeMinutesSnapshot: 30 },
+    });
+  });
+
+  it.each([
+    { label: 'over-cap individual meal', change: (plan: StructuredMealPlan) => { plan.days[0].meals[0].prepMinutes = 31; } },
+    { label: 'mixed valid and over-cap meals', change: (plan: StructuredMealPlan) => { plan.days[6].meals[2].prepMinutes = 31; } },
+  ])('rejects a $label before persistence', async ({ change }) => {
+    findCulinaryProfileByUserIdMock.mockResolvedValue(profile({ available_time_minutes: 30 }));
+    const plan = canonicalStructuredPlan();
+    change(plan);
+    const candidate = {
+      period: plan.period,
+      dayCount: plan.dayCount,
+      days: plan.days.map(({ dayIndex, meals }) => ({ dayIndex, meals })),
+    };
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify(candidate) }] } }] }), { status: 200 })
+    );
+
+    const response = await POST(request({ mode: 'balanced_ai' }) as unknown as NextRequest);
+
+    expect(response.status).toBe(502);
+    expect(createMealPlanMock).not.toHaveBeenCalled();
+  });
+
   it('persists the canonical plan once with authenticated user and tenant scope', async () => {
     const response = await POST(
       request({
@@ -321,7 +376,7 @@ describe('POST /api/meal-plan', () => {
       fusionIntensity: 'alta',
       restrictions: [],
       inventorySnapshot: { inventoryLines: ['- arroz real: 2 kg'] },
-      structuredPlan: canonicalStructuredPlan(),
+      structuredPlan: { ...canonicalStructuredPlan(), availableTimeMinutesSnapshot: null },
     });
   });
 
@@ -342,7 +397,7 @@ describe('POST /api/meal-plan', () => {
       expect.objectContaining({
         restrictions: ['Gluten', 'Lácteos'],
         inventorySnapshot: { inventoryLines: ['- arroz real: 2 kg'] },
-        structuredPlan: canonicalStructuredPlan(),
+        structuredPlan: { ...canonicalStructuredPlan(), availableTimeMinutesSnapshot: null },
       })
     );
   });
@@ -390,6 +445,92 @@ describe('POST /api/meal-plan', () => {
     expect(tooLongResponse.status).toBe(400);
     expect(createMealPlanMock).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: 'persisted allergy',
+      setup: () => findCulinaryProfileByUserIdMock.mockResolvedValue(profile({ allergies: ['Lácteos'] })),
+      restrictions: undefined,
+      ingredient: 'LACTEOS',
+    },
+    {
+      label: 'canonical persisted allergy alias',
+      setup: () => findCulinaryProfileByUserIdMock.mockResolvedValue(profile({ allergies: ['jitomates'] })),
+      restrictions: undefined,
+      ingredient: 'Tomates',
+    },
+    {
+      label: 'singular persisted allergy against plural ingredient',
+      setup: () => findCulinaryProfileByUserIdMock.mockResolvedValue(profile({ allergies: ['nuez'] })),
+      restrictions: undefined,
+      ingredient: 'nueces',
+    },
+    {
+      label: 'persisted avoid term',
+      setup: () => {
+        findCulinaryProfileByUserIdMock.mockResolvedValue(profile());
+        findCulinaryProfileTermsByUserIdMock.mockResolvedValue([profileTerm('avoid', 'Maní')]);
+      },
+      restrictions: undefined,
+      ingredient: 'mani tostado',
+    },
+    {
+      label: 'explicit request restriction',
+      setup: () => undefined,
+      restrictions: ['Sésamo'],
+      ingredient: 'sesamo negro',
+    },
+  ])('rejects a generated plan containing a $label before persistence', async ({ setup, restrictions, ingredient }) => {
+    setup();
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ candidates: [{ content: { parts: [{ text: structuredPlanWithIngredient(ingredient) }] } }] }),
+        { status: 200 }
+      )
+    );
+
+    const response = await POST(
+      request({ mode: 'balanced_ai', ...(restrictions ? { restrictions } : {}) }) as unknown as NextRequest
+    );
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({ error: 'El proveedor IA devolvió un plan inválido.' });
+    expect(createMealPlanMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { allergy: 'cacahuate', ingredient: 'maní' },
+    { allergy: 'cacahuete', ingredient: 'peanut' },
+    { allergy: 'maní', ingredient: 'cacahuates' },
+  ])('rejects generated peanut synonym $ingredient for hard allergy $allergy', async ({ allergy, ingredient }) => {
+    findCulinaryProfileByUserIdMock.mockResolvedValue(profile({ allergies: [allergy] }));
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ candidates: [{ content: { parts: [{ text: structuredPlanWithIngredient(ingredient) }] } }] }),
+        { status: 200 }
+      )
+    );
+
+    const response = await POST(request({ mode: 'balanced_ai' }) as unknown as NextRequest);
+
+    expect(response.status).toBe(502);
+    expect(createMealPlanMock).not.toHaveBeenCalled();
+  });
+
+  it('does not treat disliked ingredients as hard restrictions', async () => {
+    findCulinaryProfileByUserIdMock.mockResolvedValue(profile({ disliked_ingredients: ['Cilantro'] }));
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ candidates: [{ content: { parts: [{ text: structuredPlanWithIngredient('cilantro') }] } }] }),
+        { status: 200 }
+      )
+    );
+
+    const response = await POST(request({ mode: 'balanced_ai' }) as unknown as NextRequest);
+
+    expect(response.status).toBe(200);
+    expect(createMealPlanMock).toHaveBeenCalledTimes(1);
   });
 
   it('does not persist malformed Gemini output', async () => {
@@ -485,6 +626,10 @@ describe('GET /api/meal-plan', () => {
   beforeEach(() => {
     requireUserMock.mockReset();
     findLatestMealPlanByUserAndTenantMock.mockReset();
+    findCulinaryProfileByUserIdMock.mockReset();
+    findCulinaryProfileTermsByUserIdMock.mockReset();
+    findCulinaryProfileByUserIdMock.mockResolvedValue(null);
+    findCulinaryProfileTermsByUserIdMock.mockResolvedValue([]);
     requireUserMock.mockResolvedValue({
       id: 'user-1',
       email: 'user@example.test',
@@ -515,13 +660,13 @@ describe('GET /api/meal-plan', () => {
     expect(await response.json()).toEqual({
       plan: storedPlan,
       content:
-        'Lunes\nDesayuno: Avena con fruta (1 taza Avena)\nAlmuerzo: Arroz con verduras — Plato principal (Arroz real)\nCena: Sopa liviana (Calabaza)\n\n' +
-        'Martes\nDesayuno: Avena con fruta (1 taza Avena)\nAlmuerzo: Arroz con verduras — Plato principal (Arroz real)\nCena: Sopa liviana (Calabaza)\n\n' +
-        'Miércoles\nDesayuno: Avena con fruta (1 taza Avena)\nAlmuerzo: Arroz con verduras — Plato principal (Arroz real)\nCena: Sopa liviana (Calabaza)\n\n' +
-        'Jueves\nDesayuno: Avena con fruta (1 taza Avena)\nAlmuerzo: Arroz con verduras — Plato principal (Arroz real)\nCena: Sopa liviana (Calabaza)\n\n' +
-        'Viernes\nDesayuno: Avena con fruta (1 taza Avena)\nAlmuerzo: Arroz con verduras — Plato principal (Arroz real)\nCena: Sopa liviana (Calabaza)\n\n' +
-        'Sábado\nDesayuno: Avena con fruta (1 taza Avena)\nAlmuerzo: Arroz con verduras — Plato principal (Arroz real)\nCena: Sopa liviana (Calabaza)\n\n' +
-        'Domingo\nDesayuno: Avena con fruta (1 taza Avena)\nAlmuerzo: Arroz con verduras — Plato principal (Arroz real)\nCena: Sopa liviana (Calabaza)',
+        'Lunes\nDesayuno: Avena con fruta (20 min estimados) (1 taza Avena)\nAlmuerzo: Arroz con verduras (30 min estimados) — Plato principal (Arroz real)\nCena: Sopa liviana (25 min estimados) (Calabaza)\n\n' +
+        'Martes\nDesayuno: Avena con fruta (20 min estimados) (1 taza Avena)\nAlmuerzo: Arroz con verduras (30 min estimados) — Plato principal (Arroz real)\nCena: Sopa liviana (25 min estimados) (Calabaza)\n\n' +
+        'Miércoles\nDesayuno: Avena con fruta (20 min estimados) (1 taza Avena)\nAlmuerzo: Arroz con verduras (30 min estimados) — Plato principal (Arroz real)\nCena: Sopa liviana (25 min estimados) (Calabaza)\n\n' +
+        'Jueves\nDesayuno: Avena con fruta (20 min estimados) (1 taza Avena)\nAlmuerzo: Arroz con verduras (30 min estimados) — Plato principal (Arroz real)\nCena: Sopa liviana (25 min estimados) (Calabaza)\n\n' +
+        'Viernes\nDesayuno: Avena con fruta (20 min estimados) (1 taza Avena)\nAlmuerzo: Arroz con verduras (30 min estimados) — Plato principal (Arroz real)\nCena: Sopa liviana (25 min estimados) (Calabaza)\n\n' +
+        'Sábado\nDesayuno: Avena con fruta (20 min estimados) (1 taza Avena)\nAlmuerzo: Arroz con verduras (30 min estimados) — Plato principal (Arroz real)\nCena: Sopa liviana (25 min estimados) (Calabaza)\n\n' +
+        'Domingo\nDesayuno: Avena con fruta (20 min estimados) (1 taza Avena)\nAlmuerzo: Arroz con verduras (30 min estimados) — Plato principal (Arroz real)\nCena: Sopa liviana (25 min estimados) (Calabaza)',
       id: 'meal-plan-1',
       createdAt: '2026-01-01T00:00:00.000Z',
       peopleCount: 4,
@@ -532,6 +677,57 @@ describe('GET /api/meal-plan', () => {
       fusionIntensity: 'media',
       restrictions: [],
     });
+  });
+
+  it('keeps historical plans without estimates readable despite a changed current time cap', async () => {
+    const legacy = JSON.parse(structuredPlanJson()) as {
+      days: Array<{ meals: Array<{ prepMinutes?: number }> }>;
+    };
+    for (const day of legacy.days) {
+      for (const meal of day.meals) delete meal.prepMinutes;
+    }
+    findCulinaryProfileByUserIdMock.mockResolvedValue(profile({ available_time_minutes: 1 }));
+    findLatestMealPlanByUserAndTenantMock.mockResolvedValue(mealPlanRow({ calendar_payload: legacy }));
+
+    const response = await GET(getRequest() as unknown as NextRequest);
+    const body = (await response.json()) as { content: string; plan: StructuredMealPlan };
+
+    expect(response.status).toBe(200);
+    expect(body.plan.days[0].meals[0].prepMinutes).toBeNull();
+    expect(body.content).toContain('tiempo no estimado');
+  });
+
+  it('does not invalidate a saved plan when only taste preferences change', async () => {
+    const storedPlan = canonicalStructuredPlan();
+    const saved = mealPlanRow({ calendar_payload: storedPlan });
+    findCulinaryProfileTermsByUserIdMock.mockResolvedValue([profileTerm('prefer', 'Picante')]);
+    findLatestMealPlanByUserAndTenantMock.mockResolvedValue(saved);
+
+    const response = await GET(getRequest() as unknown as NextRequest);
+    const body = (await response.json()) as { plan: StructuredMealPlan };
+
+    expect(response.status).toBe(200);
+    expect(body.plan).toEqual(storedPlan);
+    expect(saved.calendar_payload).toEqual(storedPlan);
+    expect(createMealPlanMock).not.toHaveBeenCalled();
+    expect(findLatestMealPlanByUserAndTenantMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not invalidate an estimated saved plan when available time decreases', async () => {
+    const storedPlan = canonicalStructuredPlan();
+    const saved = mealPlanRow({ calendar_payload: storedPlan });
+    findCulinaryProfileByUserIdMock.mockResolvedValue(profile({ available_time_minutes: 1 }));
+    findLatestMealPlanByUserAndTenantMock.mockResolvedValue(saved);
+
+    const response = await GET(getRequest() as unknown as NextRequest);
+    const body = (await response.json()) as { plan: StructuredMealPlan };
+
+    expect(response.status).toBe(200);
+    expect(body.plan).toEqual(storedPlan);
+    expect(body.plan.days[0].meals[0].prepMinutes).toBe(storedPlan.days[0].meals[0].prepMinutes);
+    expect(saved.calendar_payload).toEqual(storedPlan);
+    expect(createMealPlanMock).not.toHaveBeenCalled();
+    expect(findLatestMealPlanByUserAndTenantMock).toHaveBeenCalledTimes(1);
   });
 
   it('uses safe defaults for missing legacy metadata without exposing the database row', async () => {
@@ -559,6 +755,60 @@ describe('GET /api/meal-plan', () => {
       fusionIntensity: 'media',
       restrictions: [],
     });
+  });
+
+  it.each([
+    {
+      label: 'current profile allergy',
+      setup: () => findCulinaryProfileByUserIdMock.mockResolvedValue(profile({ allergies: ['Maní'] })),
+      ingredient: 'Manis tostados',
+    },
+    {
+      label: 'current profile avoid term',
+      setup: () => {
+        findCulinaryProfileByUserIdMock.mockResolvedValue(profile());
+        findCulinaryProfileTermsByUserIdMock.mockResolvedValue([profileTerm('avoid', 'Sésamo')]);
+      },
+      ingredient: 'Sésamo negro',
+    },
+  ])('rejects a saved plan conflicting with $label without exposing or mutating history', async ({ setup, ingredient }) => {
+    setup();
+    const storedPlan = parseStructuredMealPlanValue(
+      JSON.parse(structuredPlanWithIngredient(ingredient)) as unknown,
+      'week'
+    );
+    if (!storedPlan.success) throw new Error('Expected valid stored plan fixture');
+    const saved = mealPlanRow({ calendar_payload: storedPlan.plan });
+    findLatestMealPlanByUserAndTenantMock.mockResolvedValue(saved);
+
+    const response = await GET(getRequest() as unknown as NextRequest);
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: 'MEAL_PLAN_RESTRICTIONS_CHANGED',
+      code: 'MEAL_PLAN_RESTRICTIONS_CHANGED',
+    });
+    expect(findLatestMealPlanByUserAndTenantMock).toHaveBeenCalledWith('user-1', 'tenant-1');
+    expect(findCulinaryProfileByUserIdMock).toHaveBeenCalledWith('user-1');
+    expect(findCulinaryProfileTermsByUserIdMock).toHaveBeenCalledWith('user-1');
+    expect(response.headers.get('content-type')).toContain('application/json');
+    expect(createMealPlanMock).not.toHaveBeenCalled();
+    expect(findLatestMealPlanByUserAndTenantMock).toHaveBeenCalledTimes(1);
+    expect(saved.calendar_payload).toEqual(storedPlan.plan);
+  });
+
+  it('returns a saved plan that does not conflict with current profile restrictions', async () => {
+    const storedPlan = canonicalStructuredPlan();
+    findCulinaryProfileByUserIdMock.mockResolvedValue(profile({ allergies: ['Maní'] }));
+    findCulinaryProfileTermsByUserIdMock.mockResolvedValue([profileTerm('avoid', 'Sésamo')]);
+    findLatestMealPlanByUserAndTenantMock.mockResolvedValue(mealPlanRow({ calendar_payload: storedPlan }));
+
+    const response = await GET(getRequest() as unknown as NextRequest);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(expect.objectContaining({ plan: storedPlan }));
+    expect(findCulinaryProfileByUserIdMock).toHaveBeenCalledWith('user-1');
+    expect(findCulinaryProfileTermsByUserIdMock).toHaveBeenCalledWith('user-1');
   });
 
   it('returns null content and plan when no persisted meal plan exists', async () => {

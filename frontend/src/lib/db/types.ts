@@ -133,10 +133,21 @@ export interface CulinaryTermRow {
   is_active: boolean;
 }
 
+export type HouseholdAgeGroup = 'adult' | 'teen' | 'child';
+
+export interface HouseholdMember {
+  name: string;
+  ageGroup: HouseholdAgeGroup;
+}
+
 export interface UserCulinaryProfileRow {
   user_id: string;
   tenant_id: string;
   level: string | null;
+  available_time_minutes: number | null;
+  disliked_ingredients: string[];
+  allergies: string[];
+  household_members: HouseholdMember[];
   created_at: string;
   updated_at: string;
 }

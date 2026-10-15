@@ -138,16 +138,26 @@ for expected in \
   'if (options.verifyComplete)' \
   'Migration ledger is complete.' \
   'begin read only' \
-  'if (separated) await assertAndAssumeMigrationIdentity(client, manifest);' \
+  'if (separated) await assertAndAssumeMigrationIdentity(client, manifest, migrations, separated);' \
   'Migration ledger is missing.'; do
   grep -Fq -- "$expected" "$RUNNER" || fail "missing migration runner contract: $expected"
 done
 
 verify_begin_line=$(grep -nF "await client.query('begin read only')" "$RUNNER" | cut -d: -f1)
-verify_identity_line=$(grep -nF 'if (separated) await assertAndAssumeMigrationIdentity(client, manifest);' "$RUNNER" | cut -d: -f1)
-verify_ledger_line=$(grep -nF 'hadLedger = await migrationLedgerExists(client);' "$RUNNER" | head -n 1 | cut -d: -f1)
-[ "$verify_begin_line" -lt "$verify_identity_line" ] && [ "$verify_identity_line" -lt "$verify_ledger_line" ] ||
-  fail 'separated verification must assume migration identity read-only before reading the ledger'
+verify_call_line=$(grep -nF 'if (separated) await assertAndAssumeMigrationIdentity(client, manifest, migrations, separated);' "$RUNNER" | tail -n 1 | cut -d: -f1)
+verify_identity_line=$(grep -nF 'const identity = await client.query(`' "$RUNNER" | cut -d: -f1)
+verify_authority_line=$(grep -nF 'const authority = await client.query(' "$RUNNER" | cut -d: -f1)
+verify_membership_line=$(grep -nF 'const memberships = await client.query(' "$RUNNER" | cut -d: -f1)
+verify_set_role_line=$(grep -nF 'await client.query(`set role ${SCHEMA_OWNER}`)' "$RUNNER" | cut -d: -f1)
+verify_assumed_line=$(grep -nF 'const assumed = await client.query(`' "$RUNNER" | cut -d: -f1)
+verify_ledger_line=$(grep -nF 'const hasLedger = await migrationLedgerExists(client);' "$RUNNER" | cut -d: -f1)
+[ "$verify_begin_line" -lt "$verify_call_line" ] &&
+  [ "$verify_identity_line" -lt "$verify_authority_line" ] &&
+  [ "$verify_authority_line" -lt "$verify_membership_line" ] &&
+  [ "$verify_membership_line" -lt "$verify_set_role_line" ] &&
+  [ "$verify_set_role_line" -lt "$verify_assumed_line" ] &&
+  [ "$verify_assumed_line" -lt "$verify_ledger_line" ] ||
+  fail 'separated verification must validate and assume the migration role before reading the ledger'
 
 node - "$ROOT" <<'NODE'
 const { spawnSync } = require('node:child_process');
@@ -163,10 +173,21 @@ const originalLoad = Module._load;
 const originalReadFileSync = fs.readFileSync.bind(fs);
 const originalReaddirSync = fs.readdirSync.bind(fs);
 const manifest = JSON.parse(originalReadFileSync(process.env.MANIFEST_PATH, 'utf8'));
+if (manifest.baselineObjects.transferable.length !== 38) {
+  throw new Error('trusted baseline must contain exactly 38 transferable targets');
+}
+const ownerFunctions = [
+  { schema: 'public', name: 'is_valid_culinary_profile_text_list', arguments: 'text[], integer' },
+  { schema: 'public', name: 'is_valid_culinary_household_members', arguments: 'jsonb' },
+  { schema: 'public', name: 'enforce_culinary_profile_term_group_limit', arguments: '' },
+  { schema: 'public', name: 'prevent_culinary_profile_taxonomy_reclassification', arguments: '' },
+];
+const functionIdentity = ({ schema, name, arguments: args }) => schema + '.' + name + '(' + args + ')';
+const schemaOwner = 'cocinacore_schema_owner';
 const futureSql = Buffer.from('select 1;');
-if (process.env.FUTURE_013 === 'yes') {
+if (process.env.FUTURE_015 === 'yes') {
   manifest.migrations.push({
-    id: '013', filename: '013_future.sql', lane: 'migration',
+    id: '015', filename: '015_future.sql', lane: 'migration',
     sha256: crypto.createHash('sha256').update(futureSql).digest('hex'),
     byteLength: futureSql.length, transactional: 'required', legacyChecksumBackfillAllowed: false,
   });
@@ -176,31 +197,50 @@ fs.readFileSync = (file, options) => {
     const contents = Buffer.from(JSON.stringify(manifest));
     return options && typeof options === 'object' && options.encoding ? contents.toString(options.encoding) : contents;
   }
-  if (String(file).endsWith('/013_future.sql')) return futureSql;
+  if (String(file).endsWith('/015_future.sql')) return futureSql;
   return originalReadFileSync(file, options);
 };
 fs.readdirSync = (directory, options) => {
   const files = originalReaddirSync(directory, options);
-  return process.env.FUTURE_013 === 'yes' && String(directory) === path.dirname(process.env.MANIFEST_PATH)
-    ? [...files, '013_future.sql']
+  return process.env.FUTURE_015 === 'yes' && String(directory) === path.dirname(process.env.MANIFEST_PATH)
+    ? [...files, '015_future.sql']
     : files;
 };
 const queries = [];
+let currentRole = 'migration_admin';
+const provisionedMembership = {
+  granted_role: 'cocinacore_schema_owner', member_role: 'migration_admin',
+  admin_option: false, inherit_option: false, set_option: process.env.MEMBERSHIP !== 'invalid',
+};
+const ledgerProvisioning = {
+  owner: 'cocinacore_schema_owner', rowLevelSecurity: true, publicGrants: 0,
+  directSelectGrantToMigrationAdmin: false,
+};
 class Pool {
   async connect() {
     return {
-      async query(sql) {
+      async query(sql, params = []) {
         const text = String(sql).trim().toLowerCase();
         queries.push(text);
-        if (/^set role cocinacore_schema_owner$/.test(text)) return { rows: [] };
+        if (/^set role cocinacore_schema_owner$/.test(text)) {
+          if (provisionedMembership.granted_role !== 'cocinacore_schema_owner' ||
+              provisionedMembership.member_role !== 'migration_admin' ||
+              provisionedMembership.admin_option || provisionedMembership.inherit_option ||
+              !provisionedMembership.set_option) {
+            throw new Error('permission denied to set role cocinacore_schema_owner');
+          }
+          currentRole = 'cocinacore_schema_owner';
+          return { rows: [] };
+        }
         if (/^(create|alter|drop|revoke|grant|insert|update|delete|set|reset)\\b/.test(text)) {
           throw new Error('unexpected mutation in read-only guard');
         }
         if (text.includes('select session_user, current_user, r.rolname')) {
           const schemaOwner = text.includes('where r.rolname = current_user');
+          const sessionUser = process.env.IDENTITY === 'wrong' ? 'unexpected_role' : 'migration_admin';
           return { rows: [{
-            session_user: 'migration_admin', current_user: schemaOwner ? 'cocinacore_schema_owner' : 'migration_admin',
-            rolname: schemaOwner ? 'cocinacore_schema_owner' : 'migration_admin',
+            session_user: sessionUser, current_user: currentRole,
+            rolname: schemaOwner ? 'cocinacore_schema_owner' : sessionUser,
             rolcanlogin: !schemaOwner, rolinherit: false, rolsuper: false, rolcreatedb: false,
             rolcreaterole: false, rolreplication: false, rolbypassrls: false, rolconnlimit: -1,
             rolvaliduntil: null, rolconfig: null,
@@ -208,17 +248,41 @@ class Pool {
         }
         if (text.includes('as database_settings')) return { rows: [{ database_settings: 0, tablespace_authority: 0, database_authority: 0 }] };
         if (text.includes('select count(*)::integer as count from authority')) return { rows: [{ count: 0 }] };
-        if (text.includes('select kind, identity from (')) return { rows: manifest.baselineObjects.transferable.map((object) => ({
-          kind: object.kind,
-          identity: object.kind === 'schema' ? object.schema : object.kind === 'function'
-            ? object.schema + '.' + object.name + '(' + object.arguments + ')'
-            : object.schema + '.' + object.name,
-        })) };
+        if (text.includes('from pg_catalog.pg_proc p') && /p\.prokind\s*=\s*'f'/.test(text)) {
+          const fixture = process.env.OWNER_FUNCTIONS;
+          if (!fixture || fixture === 'none' || process.env.LEDGER === '014-unapplied') return { rows: [] };
+          const functions = ownerFunctions
+            .filter((fn) => fn.schema === params[0] && fn.name === params[1])
+            .map((fn) => ({ ...fn, owner: schemaOwner }));
+          if (fixture === 'wrong-owner' && params[1] === 'is_valid_culinary_profile_text_list') {
+            functions[0].owner = 'cocinacore';
+          }
+          if (fixture === 'overload' && params[1] === 'is_valid_culinary_profile_text_list') functions.push({
+            schema: params[0], name: params[1],
+            arguments: 'text[], integer, boolean', owner: schemaOwner,
+          });
+          return { rows: functions };
+        }
+        if (text.includes('select kind, identity from (')) {
+          const rows = manifest.baselineObjects.transferable.map((object) => ({
+            kind: object.kind,
+            identity: object.kind === 'schema' ? object.schema : object.kind === 'function'
+              ? object.schema + '.' + object.name + '(' + object.arguments + ')'
+              : object.schema + '.' + object.name,
+          }));
+          const fixture = process.env.OWNER_FUNCTIONS;
+          if (fixture && fixture !== 'none') {
+            let functions = ownerFunctions.map(functionIdentity);
+            if (fixture === 'wrong-owner') functions = functions.slice(1);
+            if (fixture === 'overload') functions.push('public.is_valid_culinary_profile_text_list(text[], integer, boolean)');
+            if (fixture === 'undeclared') functions.push('public.untrusted_owner_function()');
+            rows.push(...functions.map((identity) => ({ kind: 'function', identity })));
+          }
+          return { rows };
+        }
         if (text.includes('select count(*)::integer as count from grants')) return { rows: [{ count: 0 }] };
-        if (text.includes('from pg_catalog.pg_auth_members')) return { rowCount: 1, rows: [{
-          granted_role: 'cocinacore_schema_owner', member_role: 'migration_admin',
-          admin_option: false, inherit_option: false, set_option: true,
-        }] };
+        if (text.includes('pg_get_userbyid(c.relowner)')) return { rows: [{ owner: ledgerProvisioning.owner }] };
+        if (text.includes('from pg_catalog.pg_auth_members')) return { rowCount: 1, rows: [provisionedMembership] };
         if (text.includes('select rolname')) return { rows: [{ rolname: 'cocinacore_schema_owner' }] };
         if (text.includes('to_regclass')) return { rows: [{ exists: process.env.LEDGER !== 'missing' }] };
         if (text.includes('from pg_catalog.pg_attribute')) {
@@ -230,11 +294,21 @@ class Pool {
           return { rowCount: rows.length, rows };
         }
         if (text.includes('from pg_catalog.pg_class c') && text.includes('relrowsecurity')) return { rows: [
-          { relrowsecurity: true, primary_keys: 1, public_grants: 0 },
+          {
+            relrowsecurity: ledgerProvisioning.rowLevelSecurity,
+            primary_keys: 1,
+            public_grants: ledgerProvisioning.publicGrants,
+          },
         ] };
         if (text.includes('from public.schema_migrations')) {
+          if (process.env.SEPARATED === 'yes' && currentRole === 'migration_admin' &&
+              !ledgerProvisioning.directSelectGrantToMigrationAdmin) {
+            throw new Error('permission denied for table schema_migrations');
+          }
           let entries = manifest.migrations.map((entry) => ({ filename: entry.filename, checksum: entry.sha256 }));
-          if (process.env.LEDGER === 'pending' || process.env.LEDGER === 'pending-013') entries = entries.slice(0, -1);
+          if (process.env.LEDGER === 'altered') entries[0].checksum = 'f'.repeat(64);
+          if (process.env.LEDGER === 'pending' || process.env.LEDGER === 'pending-015') entries = entries.slice(0, -1);
+          if (process.env.LEDGER === '014-unapplied') entries = entries.filter((entry) => !entry.filename.startsWith('014_'));
           if (process.env.LEDGER === 'unknown') entries = [...entries, { filename: '999_unexpected.sql', checksum: 'f'.repeat(64) }];
           if (process.env.LEDGER === 'out-of-order') entries = [entries[1]];
           return { rows: entries };
@@ -258,10 +332,13 @@ setTimeout(() => {
   if (!queries.includes('begin read only')) process.exitCode = 2;
   if (queries.some((sql) => /^(create|alter|drop|revoke|grant|insert|update|delete|set|reset)\\b/.test(sql) && sql !== 'set role cocinacore_schema_owner')) process.exitCode = 3;
   const roleAssumptions = queries.filter((sql) => sql === 'set role cocinacore_schema_owner');
+  const roleVerification = queries.findIndex((sql) =>
+    sql.includes('select session_user, current_user, r.rolname') && sql.includes('where r.rolname = current_user'));
   const ledgerRead = queries.findIndex((sql) => sql.includes('from public.schema_migrations'));
   const expectedAssumptions = process.env.SEPARATED === 'yes' ? 1 : 0;
-  if (roleAssumptions.length !== expectedAssumptions || ledgerRead === -1 || (roleAssumptions.length === 1 && queries.indexOf(roleAssumptions[0]) > ledgerRead)) {
-    console.error('read-only role ordering failed: assumptions=' + roleAssumptions.length + ' roleIndex=' + queries.indexOf(roleAssumptions[0]) + ' ledgerIndex=' + ledgerRead);
+  if (roleAssumptions.length !== expectedAssumptions || ledgerRead === -1 ||
+      (roleAssumptions.length === 1 && (queries.indexOf(roleAssumptions[0]) > roleVerification || roleVerification > ledgerRead))) {
+    console.error('read-only role ordering failed: assumptions=' + roleAssumptions.length + ' roleIndex=' + queries.indexOf(roleAssumptions[0]) + ' verificationIndex=' + roleVerification + ' ledgerIndex=' + ledgerRead);
     process.exitCode = 6;
   }
   const hasAcquire = queries.some((sql) => sql.includes('pg_try_advisory_lock'));
@@ -272,10 +349,10 @@ setTimeout(() => {
   if (!hasShapeCheck || !hasSecurityCheck) process.exitCode = 5;
 }, 0);
 `;
-function run(mode, ledger, future013 = false, separated = false) {
+function run(mode, ledger, future015 = false, separated = false, ownerFunctions = 'none', identity = 'valid', membership = 'valid') {
   return spawnSync(process.execPath, ['-e', harness], {
     encoding: 'utf8',
-    env: { RUNNER_PATH: runner, MANIFEST_PATH: path.join(root, 'db/migrations/manifest.json'), RUNNER_MODE: mode, LEDGER: ledger, FUTURE_013: future013 ? 'yes' : 'no', SEPARATED: separated ? 'yes' : 'no', COCINACORE_SEPARATED_DB_LANES_ENABLED: separated ? 'true' : 'false', DATABASE_URL: 'postgresql://offline.invalid/test', MIGRATION_DATABASE_URL: 'postgresql://offline.invalid/test' },
+    env: { RUNNER_PATH: runner, MANIFEST_PATH: path.join(root, 'db/migrations/manifest.json'), RUNNER_MODE: mode, LEDGER: ledger, FUTURE_015: future015 ? 'yes' : 'no', SEPARATED: separated ? 'yes' : 'no', OWNER_FUNCTIONS: ownerFunctions, IDENTITY: identity, MEMBERSHIP: membership, COCINACORE_SEPARATED_DB_LANES_ENABLED: separated ? 'true' : 'false', DATABASE_URL: 'postgresql://offline.invalid/test', MIGRATION_DATABASE_URL: 'postgresql://offline.invalid/test' },
   });
 }
 for (const [ledger, expectedStatus, marker] of [
@@ -297,8 +374,46 @@ if (separatedIdentityResult.status !== 1 || !`${separatedIdentityResult.stdout}$
   console.error(`offline separated identity contract failed: status=${separatedIdentityResult.status} stdout=${separatedIdentityResult.stdout} stderr=${separatedIdentityResult.stderr}`);
   process.exit(1);
 }
-const futureResult = run('--verify-complete', 'pending-013', true);
-if (futureResult.status !== 1 || !`${futureResult.stdout}${futureResult.stderr}`.includes('Pending migration: 013_future.sql')) {
+const wrongIdentityResult = run('--verify-complete', 'complete', false, true, 'none', 'wrong');
+if (wrongIdentityResult.status !== 1 || !`${wrongIdentityResult.stdout}${wrongIdentityResult.stderr}`.includes('MIGRATION_IDENTITY_MISMATCH')) {
+  console.error(`offline wrong migration identity contract failed: status=${wrongIdentityResult.status} stdout=${wrongIdentityResult.stdout} stderr=${wrongIdentityResult.stderr}`);
+  process.exit(1);
+}
+const invalidMembershipResult = run('--verify-complete', 'complete', false, true, 'none', 'valid', 'invalid');
+if (invalidMembershipResult.status !== 1 || !`${invalidMembershipResult.stdout}${invalidMembershipResult.stderr}`.includes('ROLE_STATE_MISMATCH: migration role membership')) {
+  console.error(`offline invalid membership contract failed: status=${invalidMembershipResult.status} stdout=${invalidMembershipResult.stdout} stderr=${invalidMembershipResult.stderr}`);
+  process.exit(1);
+}
+const alteredLedgerResult = run('--verify-complete', 'altered', false, true);
+if (alteredLedgerResult.status !== 1 || !`${alteredLedgerResult.stdout}${alteredLedgerResult.stderr}`.includes('MIGRATION_CHECKSUM_MISMATCH')) {
+  console.error(`offline altered ledger contract failed: status=${alteredLedgerResult.status} stdout=${alteredLedgerResult.stdout} stderr=${alteredLedgerResult.stderr}`);
+  process.exit(1);
+}
+const appliedCatalogAdditions = run('--verify-complete', 'complete', false, true, 'valid');
+const appliedCatalogOutput = `${appliedCatalogAdditions.stdout}${appliedCatalogAdditions.stderr}`;
+const expectedUnmockedExtensionFailure = appliedCatalogOutput.includes('BASELINE_MISMATCH: required extension pgcrypto is absent');
+if (
+  !appliedCatalogAdditions.stdout.includes('Migration ledger is complete.') ||
+  appliedCatalogOutput.includes('ROLE_STATE_MISMATCH') ||
+  (appliedCatalogAdditions.status !== 0 && !expectedUnmockedExtensionFailure)
+) {
+  console.error(`offline applied catalog additions contract failed (owner check must pass before any expected unmocked extension failure): status=${appliedCatalogAdditions.status} stdout=${appliedCatalogAdditions.stdout} stderr=${appliedCatalogAdditions.stderr}`);
+  process.exit(1);
+}
+for (const [ledger, fixture, label] of [
+  ['014-unapplied', 'valid', 'unapplied migration functions'],
+  ['complete', 'overload', 'function overload'],
+  ['complete', 'wrong-owner', 'wrong-owner function'],
+  ['complete', 'undeclared', 'undeclared owner function'],
+]) {
+  const result = run('--verify-complete', ledger, false, true, fixture);
+  if (result.status === 0 || !`${result.stdout}${result.stderr}`.includes('ROLE_STATE_MISMATCH')) {
+    console.error(`offline schema-owner rejection contract failed for ${label}: status=${result.status} stdout=${result.stdout} stderr=${result.stderr}`);
+    process.exit(1);
+  }
+}
+const futureResult = run('--verify-complete', 'pending-015', true);
+if (futureResult.status !== 1 || !`${futureResult.stdout}${futureResult.stderr}`.includes('Pending migration: 015_future.sql')) {
   console.error(`offline future migration contract failed: ${futureResult.stderr}`);
   process.exit(1);
 }

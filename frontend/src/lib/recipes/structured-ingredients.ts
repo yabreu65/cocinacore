@@ -52,6 +52,27 @@ function normalizeMarkdownLine(value: string): string {
     .trim();
 }
 
+function normalizeIngredientTokens(value: string): string[] {
+  return normalizeIngredientName(value).match(/[\p{L}\p{N}]+/gu) ?? [];
+}
+
+export function containsRestrictedIngredientName(
+  ingredientNames: readonly string[],
+  restrictions: readonly string[]
+): boolean {
+  const ingredientTokens = ingredientNames.map(normalizeIngredientTokens);
+  return restrictions.some((restriction) => {
+    const restrictedTokens = normalizeIngredientTokens(restriction);
+    if (restrictedTokens.length === 0) return false;
+
+    return ingredientTokens.some((tokens) =>
+      tokens.some((_, start) =>
+        restrictedTokens.every((token, offset) => tokens[start + offset] === token)
+      )
+    );
+  });
+}
+
 export function normalizeIngredientName(name: string): string {
   return name
     .normalize('NFD')
@@ -62,7 +83,11 @@ export function normalizeIngredientName(name: string): string {
     .trim()
     .replace(/\b(tomates|jitomates)\b/g, 'tomate')
     .replace(/\bcebollas\b/g, 'cebolla')
-    .replace(/\bajos\b/g, 'ajo');
+    .replace(/\bajos\b/g, 'ajo')
+    .replace(/\b(almendra|almendras)\b/g, 'almendra')
+    .replace(/\b(huevo|huevos)\b/g, 'huevo')
+    .replace(/\b(nuez|nueces)\b/g, 'nuez')
+    .replace(/\b(manis?|cacahuates?|cacahuetes?|peanuts?|groundnuts?)\b/g, 'mani');
 }
 
 function normalizeUnit(rawUnit: string | null): string | null {

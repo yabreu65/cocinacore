@@ -9,6 +9,7 @@ import {
   type RecipeCacheKeyInput,
 } from '@/lib/cache/recipe-cache';
 import {
+  containsRestrictedIngredientName,
   extractStructuredIngredients,
   validateStructuredIngredients,
   type StructuredRecipeIngredient,
@@ -33,6 +34,7 @@ interface RecipeProfileFields {
   avoid: string[];
   goals: string[];
   level: string;
+  allergies: string[];
 }
 
 function inferTitleFromRecipe(recipe: string): string {
@@ -70,7 +72,25 @@ function buildRequestProfile(profile: RequestProfile | undefined): RecipeProfile
     avoid: normalizeRequestValues(profile?.avoid, 10),
     goals: normalizeRequestValues(profile?.goals, 10),
     level: profile?.level?.trim() || 'No especificado',
+    allergies: [],
   };
+}
+
+function normalizeHardAllergies(values: readonly string[]): string[] {
+  const allergies: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const normalized = value
+      .replace(/[\u0000-\u001f\u007f]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 100);
+    const key = normalized.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    if (!normalized || seen.has(key) || allergies.length >= 32) continue;
+    seen.add(key);
+    allergies.push(normalized);
+  }
+  return allergies;
 }
 
 function formatRequestProfile(profile: RecipeProfileFields): string {
@@ -220,6 +240,7 @@ export async function POST(request: NextRequest) {
         avoid: persistedContext.profile?.avoid ?? [],
         goals: persistedContext.profile?.goals ?? [],
         level: persistedContext.profile?.level ?? 'No especificado',
+        allergies: persistedContext.profile?.allergies ?? [],
       }
     : requestProfile;
   let ragContext: { context: string; citations: Citation[]; ragContextUsed: boolean } = {
@@ -251,7 +272,10 @@ export async function POST(request: NextRequest) {
         recipeName: requestedRecipeName || undefined,
         mealType: requestedMealType || undefined,
         day: requestedDay || undefined,
-        restrictions: { allergies: profileFields.avoid, dietaryRules: [] },
+        restrictions: {
+          allergies: normalizeHardAllergies([...profileFields.allergies, ...profileFields.avoid]),
+          dietaryRules: [],
+        },
       });
     } catch (error) {
       serverLogger.error('recipe_generate.rag_retrieval_failed', {
@@ -304,6 +328,7 @@ ${slotContextInstruction}
 - Ingredientes solicitados explícitamente: ${requestedIngredients.join('; ') || 'No especificados'}
 - Estos ingredientes son solo el foco de la receta actual; no prueban disponibilidad en el inventario del hogar.
 - Comensales: ${peopleCount}
+- Restricciones duras: ${normalizeHardAllergies([...profileFields.allergies, ...profileFields.avoid]).join(', ') || 'Ninguna'}
 
 Inventario real del hogar:
 ${inventoryContext}
@@ -398,8 +423,34 @@ Reglas:
   };
   const recipeCacheKey = buildRecipeCacheKey(recipeCacheKeyInput);
 
+  const hardAllergies = normalizeHardAllergies([
+    ...profileFields.allergies,
+    ...profileFields.avoid,
+  ]);
   const cached = await getCachedRecipe(recipeCacheKey);
   if (cached) {
+    const hasUsableCachedIngredientNames =
+      validateStructuredIngredients(cached.structuredIngredients) &&
+      cached.structuredIngredients.some((ingredient) => ingredient.name.trim().length > 0);
+    if (hardAllergies.length > 0 && !hasUsableCachedIngredientNames) {
+      return NextResponse.json(
+        { error: 'No se pudieron validar los ingredientes de la receta generada.' },
+        { status: 502 }
+      );
+    }
+    if (
+      hasUsableCachedIngredientNames &&
+      containsRestrictedIngredientName(
+        [...cached.structuredIngredients.map((ingredient) => ingredient.name), cached.recipe],
+        hardAllergies
+      )
+    ) {
+      return NextResponse.json(
+        { error: 'La receta generada contiene un ingrediente restringido.' },
+        { status: 502 }
+      );
+    }
+
     try {
       await persistAuthenticatedRecipeHistory({
         user,
@@ -477,9 +528,22 @@ Reglas:
 
     const title = inferTitleFromRecipe(recipe);
     const structuredIngredients = extractStructuredIngredients(recipe);
-    const safeStructuredIngredients: StructuredRecipeIngredient[] = validateStructuredIngredients(
-      structuredIngredients
-    )
+    const hasUsableIngredientNames =
+      validateStructuredIngredients(structuredIngredients) &&
+      structuredIngredients.some((ingredient) => ingredient.name.trim().length > 0);
+    if (hardAllergies.length > 0 && !hasUsableIngredientNames) {
+      throw new Error('No se pudieron validar los ingredientes de la receta generada.');
+    }
+    if (
+      containsRestrictedIngredientName(
+        [...structuredIngredients.map((ingredient) => ingredient.name), recipe],
+        hardAllergies
+      )
+    ) {
+      throw new Error('La receta generada contiene un ingrediente restringido.');
+    }
+
+    const safeStructuredIngredients: StructuredRecipeIngredient[] = hasUsableIngredientNames
       ? structuredIngredients
       : [];
     const result: CanonicalRecipeResult = {

@@ -233,6 +233,98 @@
       "byteLength": 310,
       "transactional": "required",
       "legacyChecksumBackfillAllowed": false
+    },
+    {
+      "id": "013",
+      "filename": "013_culinary_profile_context.sql",
+      "lane": "migration",
+      "sha256": "0c6d6e8dc67d2e0b0ebb8128562db1ec8b81a44f82c5e0601c38ba5fb608dfe5",
+      "byteLength": 548,
+      "transactional": "required",
+      "legacyChecksumBackfillAllowed": false,
+      "catalogAdditions": [
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "user_culinary_profiles.user_culinary_profiles_available_time_minutes_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "user_culinary_profiles.user_culinary_profiles_household_members_check"
+        }
+      ]
+    },
+    {
+      "id": "014",
+      "filename": "014_culinary_profile_field_constraints.sql",
+      "lane": "migration",
+      "sha256": "0e4141129842b991fb792090a4530d9e608f3215c45476f68ff0ee4fbb7be119",
+      "byteLength": 7888,
+      "transactional": "required",
+      "legacyChecksumBackfillAllowed": false,
+      "catalogAdditions": [
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "users.users_full_name_length_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "user_culinary_profiles.user_culinary_profiles_level_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "user_culinary_profiles.user_culinary_profiles_allergies_bounds_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "user_culinary_profiles.user_culinary_profiles_disliked_ingredients_bounds_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "user_culinary_profiles.user_culinary_profiles_household_members_shape_check"
+        },
+        {
+          "kind": "function",
+          "schema": "public",
+          "identity": "public.is_valid_culinary_profile_text_list"
+        },
+        {
+          "kind": "function",
+          "schema": "public",
+          "identity": "public.is_valid_culinary_household_members"
+        },
+        {
+          "kind": "function",
+          "schema": "public",
+          "identity": "public.enforce_culinary_profile_term_group_limit"
+        },
+        {
+          "kind": "trigger",
+          "schema": "public",
+          "identity": "user_culinary_profile_terms.user_culinary_profile_terms_group_limit_trigger"
+        },
+        {
+          "kind": "function",
+          "schema": "public",
+          "identity": "public.prevent_culinary_profile_taxonomy_reclassification"
+        },
+        {
+          "kind": "trigger",
+          "schema": "public",
+          "identity": "culinary_terms.culinary_terms_profile_dimension_immutable_trigger"
+        },
+        {
+          "kind": "trigger",
+          "schema": "public",
+          "identity": "culinary_dimensions.culinary_dimensions_profile_key_immutable_trigger"
+        }
+      ]
     }
   ],
   "baselineObjects": {

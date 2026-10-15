@@ -11,6 +11,10 @@ function profile(overrides: Partial<UserCulinaryProfileRow> = {}): UserCulinaryP
     user_id: 'user-1',
     tenant_id: 'tenant-1',
     level: 'Intermedio',
+    available_time_minutes: null,
+    disliked_ingredients: [],
+    allergies: [],
+    household_members: [],
     created_at: '2026-01-01T00:00:00.000Z',
     updated_at: '2026-01-01T00:00:00.000Z',
     ...overrides,
@@ -80,6 +84,49 @@ describe('persisted meal planner profile context', () => {
       goals: [],
       level: 'n'.repeat(50),
     });
+  });
+
+  it('formats bounded safety and household context without exposing member names', () => {
+    const context = buildPersistedMealPlanProfileContext(
+      profile({
+        available_time_minutes: 45,
+        allergies: ['  Maní  ', 'Maní', ' Lácteos '],
+        disliked_ingredients: ['  Cilantro  '],
+        household_members: [
+          { name: 'Nombre privado', ageGroup: 'adult' },
+          { name: 'Otro nombre privado', ageGroup: 'teen' },
+          { name: 'Niño privado', ageGroup: 'child' },
+        ],
+      }),
+      [],
+      'user-1',
+      'tenant-1'
+    );
+
+    expect(formatPersistedMealPlanProfileContext(context)).toContain('Tiempo disponible: 45 minutos');
+    expect(formatPersistedMealPlanProfileContext(context)).toContain('Alergias: Maní, Lácteos');
+    expect(formatPersistedMealPlanProfileContext(context)).toContain('No me gusta: Cilantro');
+    expect(formatPersistedMealPlanProfileContext(context)).toContain(
+      'Hogar: 1 adulto, 1 adolescente, 1 niño'
+    );
+    expect(formatPersistedMealPlanProfileContext(context)).not.toContain('privado');
+  });
+
+  it('preserves all 20 accepted allergy and dislike values in formatted generation context', () => {
+    const allergies = Array.from({ length: 20 }, (_, index) => `Allergy ${index + 1}`);
+    const dislikes = Array.from({ length: 20 }, (_, index) => `Dislike ${index + 1}`);
+    const context = buildPersistedMealPlanProfileContext(
+      profile({ allergies, disliked_ingredients: dislikes }),
+      [],
+      'user-1',
+      'tenant-1'
+    );
+    const formatted = formatPersistedMealPlanProfileContext(context);
+
+    expect(context?.allergies).toEqual(allergies);
+    expect(context?.dislikedIngredients).toEqual(dislikes);
+    expect(formatted).toContain(`Alergias: ${allergies.join(', ')}`);
+    expect(formatted).toContain(`No me gusta: ${dislikes.join(', ')}`);
   });
 
   it('masks profile data unless both authenticated user and tenant exactly match', () => {
