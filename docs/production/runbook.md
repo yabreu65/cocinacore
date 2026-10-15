@@ -4,8 +4,10 @@
 
 This is the authoritative Pawtech production path. Read [Production Reality First](production-reality-first.md)
 for the mandatory `DISCOVER → DEMONSTRATE → COMPARE → DESIGN → TEST → REHEARSAL → APPROVE →
-DEPLOY → VERIFY` sequence and PM approval checkpoint. The standalone `docker-compose.prod.yml` is a
-reference only and is **not** the Pawtech live topology.
+DEPLOY → VERIFY` sequence and PM approval checkpoint. The [M1 Production Closure Record](m1-production-closure.md)
+summarizes dated production evidence and outstanding approval/traceability items; it is not an
+operational procedure. The standalone `docker-compose.prod.yml` is a reference only and is **not** the
+Pawtech live topology.
 
 - App: `cocinacore-web`, built from the manually selected exact release SHA.
 - App directory: `/opt/pawtech/apps/cocinacore`; runtime environment:
