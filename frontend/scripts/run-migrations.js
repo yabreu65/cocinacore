@@ -892,14 +892,6 @@ async function assertAndAssumeMigrationIdentity(client, manifest, migrations, se
   }
   await assertMigrationRoleDatabaseAuthority(client);
 
-  const hasLedger = await migrationLedgerExists(client);
-  let applied = null;
-  if (hasLedger) {
-    await assertLedgerShape(client, separated);
-    applied = await getAppliedMigrations(client, migrations, separated);
-    assertGlobalOrder(migrations, applied);
-  }
-
   const memberships = await client.query(
     `select parent.rolname as granted_role, member.rolname as member_role,
             m.admin_option, m.inherit_option, m.set_option
@@ -921,8 +913,6 @@ async function assertAndAssumeMigrationIdentity(client, manifest, migrations, se
     throw new Error('ROLE_STATE_MISMATCH: migration role membership does not match the contract.');
   }
 
-  await assertSchemaOwnerDatabaseAuthority(client, manifest, applied);
-
   await client.query(`set role ${SCHEMA_OWNER}`);
   const assumed = await client.query(`
     select session_user, current_user, r.rolname, r.rolcanlogin, r.rolinherit, r.rolsuper,
@@ -938,6 +928,16 @@ async function assertAndAssumeMigrationIdentity(client, manifest, migrations, se
     throw new Error('Failed to assume cocinacore_schema_owner.');
   }
   assertRole(assumed.rows[0], false);
+
+  const hasLedger = await migrationLedgerExists(client);
+  let applied = null;
+  if (hasLedger) {
+    await assertLedgerShape(client, separated);
+    applied = await getAppliedMigrations(client, migrations, separated);
+    assertGlobalOrder(migrations, applied);
+  }
+
+  await assertSchemaOwnerDatabaseAuthority(client, manifest, applied);
 }
 
 function lockTimeout() {

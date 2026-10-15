@@ -144,10 +144,20 @@ for expected in \
 done
 
 verify_begin_line=$(grep -nF "await client.query('begin read only')" "$RUNNER" | cut -d: -f1)
-verify_identity_line=$(grep -nF 'if (separated) await assertAndAssumeMigrationIdentity(client, manifest, migrations, separated);' "$RUNNER" | cut -d: -f1)
-verify_ledger_line=$(grep -nF 'hadLedger = await migrationLedgerExists(client);' "$RUNNER" | head -n 1 | cut -d: -f1)
-[ "$verify_begin_line" -lt "$verify_identity_line" ] && [ "$verify_identity_line" -lt "$verify_ledger_line" ] ||
-  fail 'separated verification must assume migration identity read-only before reading the ledger'
+verify_call_line=$(grep -nF 'if (separated) await assertAndAssumeMigrationIdentity(client, manifest, migrations, separated);' "$RUNNER" | tail -n 1 | cut -d: -f1)
+verify_identity_line=$(grep -nF 'const identity = await client.query(`' "$RUNNER" | cut -d: -f1)
+verify_authority_line=$(grep -nF 'const authority = await client.query(' "$RUNNER" | cut -d: -f1)
+verify_membership_line=$(grep -nF 'const memberships = await client.query(' "$RUNNER" | cut -d: -f1)
+verify_set_role_line=$(grep -nF 'await client.query(`set role ${SCHEMA_OWNER}`)' "$RUNNER" | cut -d: -f1)
+verify_assumed_line=$(grep -nF 'const assumed = await client.query(`' "$RUNNER" | cut -d: -f1)
+verify_ledger_line=$(grep -nF 'const hasLedger = await migrationLedgerExists(client);' "$RUNNER" | cut -d: -f1)
+[ "$verify_begin_line" -lt "$verify_call_line" ] &&
+  [ "$verify_identity_line" -lt "$verify_authority_line" ] &&
+  [ "$verify_authority_line" -lt "$verify_membership_line" ] &&
+  [ "$verify_membership_line" -lt "$verify_set_role_line" ] &&
+  [ "$verify_set_role_line" -lt "$verify_assumed_line" ] &&
+  [ "$verify_assumed_line" -lt "$verify_ledger_line" ] ||
+  fail 'separated verification must validate and assume the migration role before reading the ledger'
 
 node - "$ROOT" <<'NODE'
 const { spawnSync } = require('node:child_process');
@@ -197,21 +207,40 @@ fs.readdirSync = (directory, options) => {
     : files;
 };
 const queries = [];
+let currentRole = 'migration_admin';
+const provisionedMembership = {
+  granted_role: 'cocinacore_schema_owner', member_role: 'migration_admin',
+  admin_option: false, inherit_option: false, set_option: process.env.MEMBERSHIP !== 'invalid',
+};
+const ledgerProvisioning = {
+  owner: 'cocinacore_schema_owner', rowLevelSecurity: true, publicGrants: 0,
+  directSelectGrantToMigrationAdmin: false,
+};
 class Pool {
   async connect() {
     return {
       async query(sql, params = []) {
         const text = String(sql).trim().toLowerCase();
         queries.push(text);
-        if (/^set role cocinacore_schema_owner$/.test(text)) return { rows: [] };
+        if (/^set role cocinacore_schema_owner$/.test(text)) {
+          if (provisionedMembership.granted_role !== 'cocinacore_schema_owner' ||
+              provisionedMembership.member_role !== 'migration_admin' ||
+              provisionedMembership.admin_option || provisionedMembership.inherit_option ||
+              !provisionedMembership.set_option) {
+            throw new Error('permission denied to set role cocinacore_schema_owner');
+          }
+          currentRole = 'cocinacore_schema_owner';
+          return { rows: [] };
+        }
         if (/^(create|alter|drop|revoke|grant|insert|update|delete|set|reset)\\b/.test(text)) {
           throw new Error('unexpected mutation in read-only guard');
         }
         if (text.includes('select session_user, current_user, r.rolname')) {
           const schemaOwner = text.includes('where r.rolname = current_user');
+          const sessionUser = process.env.IDENTITY === 'wrong' ? 'unexpected_role' : 'migration_admin';
           return { rows: [{
-            session_user: 'migration_admin', current_user: schemaOwner ? 'cocinacore_schema_owner' : 'migration_admin',
-            rolname: schemaOwner ? 'cocinacore_schema_owner' : 'migration_admin',
+            session_user: sessionUser, current_user: currentRole,
+            rolname: schemaOwner ? 'cocinacore_schema_owner' : sessionUser,
             rolcanlogin: !schemaOwner, rolinherit: false, rolsuper: false, rolcreatedb: false,
             rolcreaterole: false, rolreplication: false, rolbypassrls: false, rolconnlimit: -1,
             rolvaliduntil: null, rolconfig: null,
@@ -252,10 +281,8 @@ class Pool {
           return { rows };
         }
         if (text.includes('select count(*)::integer as count from grants')) return { rows: [{ count: 0 }] };
-        if (text.includes('from pg_catalog.pg_auth_members')) return { rowCount: 1, rows: [{
-          granted_role: 'cocinacore_schema_owner', member_role: 'migration_admin',
-          admin_option: false, inherit_option: false, set_option: true,
-        }] };
+        if (text.includes('pg_get_userbyid(c.relowner)')) return { rows: [{ owner: ledgerProvisioning.owner }] };
+        if (text.includes('from pg_catalog.pg_auth_members')) return { rowCount: 1, rows: [provisionedMembership] };
         if (text.includes('select rolname')) return { rows: [{ rolname: 'cocinacore_schema_owner' }] };
         if (text.includes('to_regclass')) return { rows: [{ exists: process.env.LEDGER !== 'missing' }] };
         if (text.includes('from pg_catalog.pg_attribute')) {
@@ -267,10 +294,19 @@ class Pool {
           return { rowCount: rows.length, rows };
         }
         if (text.includes('from pg_catalog.pg_class c') && text.includes('relrowsecurity')) return { rows: [
-          { relrowsecurity: true, primary_keys: 1, public_grants: 0 },
+          {
+            relrowsecurity: ledgerProvisioning.rowLevelSecurity,
+            primary_keys: 1,
+            public_grants: ledgerProvisioning.publicGrants,
+          },
         ] };
         if (text.includes('from public.schema_migrations')) {
+          if (process.env.SEPARATED === 'yes' && currentRole === 'migration_admin' &&
+              !ledgerProvisioning.directSelectGrantToMigrationAdmin) {
+            throw new Error('permission denied for table schema_migrations');
+          }
           let entries = manifest.migrations.map((entry) => ({ filename: entry.filename, checksum: entry.sha256 }));
+          if (process.env.LEDGER === 'altered') entries[0].checksum = 'f'.repeat(64);
           if (process.env.LEDGER === 'pending' || process.env.LEDGER === 'pending-015') entries = entries.slice(0, -1);
           if (process.env.LEDGER === '014-unapplied') entries = entries.filter((entry) => !entry.filename.startsWith('014_'));
           if (process.env.LEDGER === 'unknown') entries = [...entries, { filename: '999_unexpected.sql', checksum: 'f'.repeat(64) }];
@@ -296,10 +332,13 @@ setTimeout(() => {
   if (!queries.includes('begin read only')) process.exitCode = 2;
   if (queries.some((sql) => /^(create|alter|drop|revoke|grant|insert|update|delete|set|reset)\\b/.test(sql) && sql !== 'set role cocinacore_schema_owner')) process.exitCode = 3;
   const roleAssumptions = queries.filter((sql) => sql === 'set role cocinacore_schema_owner');
+  const roleVerification = queries.findIndex((sql) =>
+    sql.includes('select session_user, current_user, r.rolname') && sql.includes('where r.rolname = current_user'));
   const ledgerRead = queries.findIndex((sql) => sql.includes('from public.schema_migrations'));
   const expectedAssumptions = process.env.SEPARATED === 'yes' ? 1 : 0;
-  if (roleAssumptions.length !== expectedAssumptions || ledgerRead === -1 || (roleAssumptions.length === 1 && queries.indexOf(roleAssumptions[0]) > ledgerRead)) {
-    console.error('read-only role ordering failed: assumptions=' + roleAssumptions.length + ' roleIndex=' + queries.indexOf(roleAssumptions[0]) + ' ledgerIndex=' + ledgerRead);
+  if (roleAssumptions.length !== expectedAssumptions || ledgerRead === -1 ||
+      (roleAssumptions.length === 1 && (queries.indexOf(roleAssumptions[0]) > roleVerification || roleVerification > ledgerRead))) {
+    console.error('read-only role ordering failed: assumptions=' + roleAssumptions.length + ' roleIndex=' + queries.indexOf(roleAssumptions[0]) + ' verificationIndex=' + roleVerification + ' ledgerIndex=' + ledgerRead);
     process.exitCode = 6;
   }
   const hasAcquire = queries.some((sql) => sql.includes('pg_try_advisory_lock'));
@@ -310,10 +349,10 @@ setTimeout(() => {
   if (!hasShapeCheck || !hasSecurityCheck) process.exitCode = 5;
 }, 0);
 `;
-function run(mode, ledger, future015 = false, separated = false, ownerFunctions = 'none') {
+function run(mode, ledger, future015 = false, separated = false, ownerFunctions = 'none', identity = 'valid', membership = 'valid') {
   return spawnSync(process.execPath, ['-e', harness], {
     encoding: 'utf8',
-    env: { RUNNER_PATH: runner, MANIFEST_PATH: path.join(root, 'db/migrations/manifest.json'), RUNNER_MODE: mode, LEDGER: ledger, FUTURE_015: future015 ? 'yes' : 'no', SEPARATED: separated ? 'yes' : 'no', OWNER_FUNCTIONS: ownerFunctions, COCINACORE_SEPARATED_DB_LANES_ENABLED: separated ? 'true' : 'false', DATABASE_URL: 'postgresql://offline.invalid/test', MIGRATION_DATABASE_URL: 'postgresql://offline.invalid/test' },
+    env: { RUNNER_PATH: runner, MANIFEST_PATH: path.join(root, 'db/migrations/manifest.json'), RUNNER_MODE: mode, LEDGER: ledger, FUTURE_015: future015 ? 'yes' : 'no', SEPARATED: separated ? 'yes' : 'no', OWNER_FUNCTIONS: ownerFunctions, IDENTITY: identity, MEMBERSHIP: membership, COCINACORE_SEPARATED_DB_LANES_ENABLED: separated ? 'true' : 'false', DATABASE_URL: 'postgresql://offline.invalid/test', MIGRATION_DATABASE_URL: 'postgresql://offline.invalid/test' },
   });
 }
 for (const [ledger, expectedStatus, marker] of [
@@ -333,6 +372,21 @@ for (const [ledger, expectedStatus, marker] of [
 const separatedIdentityResult = run('--verify-complete', 'pending', false, true);
 if (separatedIdentityResult.status !== 1 || !`${separatedIdentityResult.stdout}${separatedIdentityResult.stderr}`.includes('Pending migration:')) {
   console.error(`offline separated identity contract failed: status=${separatedIdentityResult.status} stdout=${separatedIdentityResult.stdout} stderr=${separatedIdentityResult.stderr}`);
+  process.exit(1);
+}
+const wrongIdentityResult = run('--verify-complete', 'complete', false, true, 'none', 'wrong');
+if (wrongIdentityResult.status !== 1 || !`${wrongIdentityResult.stdout}${wrongIdentityResult.stderr}`.includes('MIGRATION_IDENTITY_MISMATCH')) {
+  console.error(`offline wrong migration identity contract failed: status=${wrongIdentityResult.status} stdout=${wrongIdentityResult.stdout} stderr=${wrongIdentityResult.stderr}`);
+  process.exit(1);
+}
+const invalidMembershipResult = run('--verify-complete', 'complete', false, true, 'none', 'valid', 'invalid');
+if (invalidMembershipResult.status !== 1 || !`${invalidMembershipResult.stdout}${invalidMembershipResult.stderr}`.includes('ROLE_STATE_MISMATCH: migration role membership')) {
+  console.error(`offline invalid membership contract failed: status=${invalidMembershipResult.status} stdout=${invalidMembershipResult.stdout} stderr=${invalidMembershipResult.stderr}`);
+  process.exit(1);
+}
+const alteredLedgerResult = run('--verify-complete', 'altered', false, true);
+if (alteredLedgerResult.status !== 1 || !`${alteredLedgerResult.stdout}${alteredLedgerResult.stderr}`.includes('MIGRATION_CHECKSUM_MISMATCH')) {
+  console.error(`offline altered ledger contract failed: status=${alteredLedgerResult.status} stdout=${alteredLedgerResult.stdout} stderr=${alteredLedgerResult.stderr}`);
   process.exit(1);
 }
 const appliedCatalogAdditions = run('--verify-complete', 'complete', false, true, 'valid');

@@ -1032,12 +1032,21 @@ async function attestBaselineCatalog(client, manifest, ownerState, appliedMigrat
     .flatMap((migration) => migration.catalogAdditions || [])
     .filter((addition) => addition.kind === 'function');
   const expectedAdditionOwner = ownerState === 'legacy' ? 'cocinacore' : SCHEMA_OWNER;
+  const appliedFunctionOwnerEntries = new Map();
   for (const addition of appliedFunctionAdditions) {
     const functionName = `${addition.schema}.${addition.identity.split('.')[1]}`;
     const matches = catalog.functions.rows.filter((row) => row.identity.startsWith(`${functionName}(`));
     if (matches.length !== 1 || matches[0].owner !== expectedAdditionOwner) {
       throw new Error(`BASELINE_MISMATCH: applied function owner differs for ${functionName}.`);
     }
+    const key = `function|${matches[0].identity}`;
+    if (appliedFunctionOwnerEntries.has(key)) {
+      throw new Error(`BASELINE_MISMATCH: duplicate applied function owner policy for ${matches[0].identity}.`);
+    }
+    appliedFunctionOwnerEntries.set(key, {
+      expectedLegacyOwner: 'cocinacore',
+      targetOwner: SCHEMA_OWNER,
+    });
   }
 
   const byKey = new Map(
@@ -1050,6 +1059,12 @@ async function attestBaselineCatalog(client, manifest, ownerState, appliedMigrat
       object,
     ])
   );
+  for (const [key, ownerPolicy] of appliedFunctionOwnerEntries) {
+    if (byKey.has(key)) {
+      throw new Error(`BASELINE_MISMATCH: conflicting owner policy for ${key.slice('function|'.length)}.`);
+    }
+    byKey.set(key, ownerPolicy);
+  }
   for (const [kind, rows] of [
     ['schema', catalog.schemas.rows],
     ['table', catalog.tables.rows],
@@ -1057,6 +1072,9 @@ async function attestBaselineCatalog(client, manifest, ownerState, appliedMigrat
   ]) {
     for (const row of rows) {
       const object = byKey.get(`${kind}|${row.identity}`);
+      if (!object) {
+        throw new Error(`BASELINE_MISMATCH: missing owner policy for ${kind} ${row.identity}.`);
+      }
       const expectedOwner =
         ownerState === 'legacy' ? object.expectedLegacyOwner : object.targetOwner;
       if (row.owner !== expectedOwner) {
@@ -1485,11 +1503,15 @@ async function main() {
   console.log('Database migration roles and trusted ownership are provisioned.');
 }
 
-main().catch((error) => {
-  const message = String(error.message || error).replace(
-    /postgres(?:ql)?:\/\/[^\s]+/gi,
-    'postgresql://[redacted]'
-  );
-  console.error('Database provisioning failed:', message);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    const message = String(error.message || error).replace(
+      /postgres(?:ql)?:\/\/[^\s]+/gi,
+      'postgresql://[redacted]'
+    );
+    console.error('Database provisioning failed:', message);
+    process.exit(1);
+  });
+}
+
+module.exports = { attestBaselineCatalog };

@@ -791,79 +791,168 @@ stop_container
 # Existing trusted legacy upgrade, exact backfill, ownership, and compatibility.
 # ---------------------------------------------------------------------------
 STAGE=legacy-upgrade
-set_check startup
+set_check legacy_stage_begin
 printf '%s\n' 'integration stage: legacy-upgrade' >&2
+set_check harness_legacy_admin_password
 ADMIN_PASSWORD=$(openssl rand -hex 18)
+set_check harness_legacy_migration_password
 MIGRATION_PASSWORD=$(openssl rand -hex 18)
+set_check harness_legacy_container_start
 start_container legacy cocinacore_legacy
+set_check harness_legacy_container_started
+set_check harness_legacy_migration_selection
 LEGACY_MIGRATIONS=$(node -e "const m=require(process.argv[1]); console.log(m.migrations.filter(x=>x.legacyChecksumBackfillAllowed).map(x=>x.filename).join('\\n'))" "$ROOT/db/migrations/manifest.json")
+set_check harness_legacy_migrations_selected
 for filename in $LEGACY_MIGRATIONS; do
   migration="$ROOT/db/migrations/$filename"
+  migration_id=${filename%%_*}
+  set_check harness_legacy_migration_id_validation
+  case "$migration_id" in
+    [0-9][0-9][0-9]) ;;
+    *) fail 'invalid legacy migration identifier' ;;
+  esac
+  set_check "product_legacy_historical_migration_${migration_id}"
   docker exec -i "$CONTAINER" psql -X -v ON_ERROR_STOP=1 -U cocinacore -d "$DB" >/dev/null <"$migration"
+  set_check "product_legacy_historical_migration_${migration_id}_applied"
 done
+set_check harness_legacy_ledger_create
 admin_sql "$DB" "create schema internal;
   create table public.schema_migrations(filename text primary key, applied_at timestamptz not null default now());
   alter table public.schema_migrations enable row level security;
   revoke all on public.schema_migrations from public;"
+set_check harness_legacy_ledger_created
 for filename in $LEGACY_MIGRATIONS; do
+  migration_id=${filename%%_*}
+  set_check harness_legacy_ledger_seed_id_validation
+  case "$migration_id" in
+    [0-9][0-9][0-9]) ;;
+    *) fail 'invalid legacy migration identifier' ;;
+  esac
+  set_check "harness_legacy_ledger_seed_${migration_id}"
   admin_sql "$DB" "insert into public.schema_migrations(filename) values ('$filename')"
+  set_check "harness_legacy_ledger_seed_${migration_id}_done"
 done
+set_check harness_legacy_tenant_insert
 LEGACY_TENANT=$(admin_sql "$DB" "insert into public.tenants(name) values ('legacy-before') returning id")
+set_check harness_legacy_reader_role_grant
 admin_sql "$DB" 'create role legacy_reader nologin; grant usage on schema public to legacy_reader; grant select on public.tenants to legacy_reader'
+set_check harness_legacy_data_ready
 
 # Complete ledger/catalog attestation happens before any adoption.
+set_check harness_negative_unknown_ledger_fixture
 admin_sql "$DB" "insert into public.schema_migrations(filename) values ('999_unknown.sql')"
+set_check product_legacy_negative_unknown_ledger
 expect_provision_failure BASELINE_MISMATCH
+set_check assert_negative_unknown_ledger
 [ "$(admin_sql "$DB" "select count(*) from pg_roles where rolname in ('migration_admin','cocinacore_schema_owner')")" = 0 ] || fail 'unknown ledger row created roles'
+set_check harness_negative_unknown_ledger_restore
 admin_sql "$DB" "delete from public.schema_migrations where filename='999_unknown.sql'"
+set_check harness_negative_missing_ledger_fixture
 admin_sql "$DB" "delete from public.schema_migrations where filename='010_password_reset_tokens.sql'"
+set_check product_legacy_negative_missing_ledger
 expect_provision_failure 'Legacy ledger migration set mismatch'
+set_check assert_negative_missing_ledger
 [ "$(admin_sql "$DB" "select pg_get_userbyid(relowner) from pg_class where oid='public.tenants'::regclass")" = cocinacore ] || fail 'missing ledger row started ownership adoption'
+set_check harness_negative_missing_ledger_restore
 admin_sql "$DB" "insert into public.schema_migrations(filename) values ('010_password_reset_tokens.sql')"
+set_check harness_negative_unexpected_table_fixture
 admin_sql "$DB" 'create table public.unexpected_legacy_table(id integer)'
+set_check product_legacy_negative_unexpected_table
 expect_provision_failure 'Managed table set mismatch'
+set_check assert_negative_unexpected_table
 [ "$(admin_sql "$DB" "select pg_get_userbyid(relowner) from pg_class where oid='public.tenants'::regclass")" = cocinacore ] || fail 'unexpected table started ownership adoption'
+set_check harness_negative_unexpected_table_restore
 admin_sql "$DB" 'drop table public.unexpected_legacy_table'
+set_check harness_negative_unexpected_function_fixture
 admin_sql "$DB" "create function public.unexpected_legacy_function() returns integer language sql as 'select 1'"
+set_check product_legacy_negative_unexpected_function
 expect_provision_failure 'Managed function set mismatch'
+set_check harness_negative_unexpected_function_restore
 admin_sql "$DB" 'drop function public.unexpected_legacy_function()'
+set_check harness_negative_foreign_owner_fixture
 admin_sql "$DB" 'create role foreign_owner; alter table public.tenants owner to foreign_owner'
+set_check product_legacy_negative_foreign_owner
 expect_provision_failure 'unexpected owner'
+set_check assert_negative_foreign_owner
 [ "$(admin_sql "$DB" "select pg_get_userbyid(relowner) from pg_class where oid='public.tenants'::regclass")" = foreign_owner ] || fail 'unexpected owner was rewritten'
+set_check harness_negative_foreign_owner_restore
 admin_sql "$DB" 'alter table public.tenants owner to cocinacore; drop role foreign_owner'
 
+set_check assert_legacy_owner_baseline
 OWNER_BEFORE=$(admin_sql "$DB" "select pg_get_userbyid(relowner) from pg_class where oid='public.tenants'::regclass")
 ACL_BEFORE=$(admin_sql "$DB" "select has_schema_privilege('legacy_reader','public','USAGE')||','||has_table_privilege('legacy_reader','public.tenants','SELECT')")
 [ "$OWNER_BEFORE" = cocinacore ] || fail 'legacy owner baseline is wrong'
 [ "$ACL_BEFORE" = 'true,true' ] || fail 'legacy explicit grant baseline is wrong'
 
+set_check product_legacy_provisioner_adoption
 provision >"$LOG" 2>&1
+set_check assert_legacy_checksum_backfill
 [ "$(admin_sql "$DB" "select count(*) from schema_migrations where checksum is not null")" = 10 ] || fail 'trusted legacy checksum backfill did not cover 10 rows'
+set_check harness_legacy_expected_ledger
 EXPECTED_LEDGER=$(node -e "const m=require(process.argv[1]); console.log(m.migrations.filter(x=>x.legacyChecksumBackfillAllowed).map(x=>x.filename+'='+x.sha256).sort().join(','))" "$ROOT/db/migrations/manifest.json")
+set_check harness_legacy_actual_ledger
 ACTUAL_LEDGER=$(admin_sql "$DB" "select string_agg(filename||'='||checksum,',' order by filename) from schema_migrations")
+set_check assert_legacy_ledger_matches_manifest
 [ "$EXPECTED_LEDGER" = "$ACTUAL_LEDGER" ] || fail 'legacy backfill does not equal trusted manifest'
 
+set_check product_legacy_remaining_migrations
 migrate >"$LOG" 2>&1
+set_check assert_legacy_migration_milestones
 grep -q 'DONE 012_meal_plan_consumption.sql' "$LOG" || fail 'legacy upgrade did not reach milestone 012'
 grep -q 'DONE 014_culinary_profile_field_constraints.sql' "$LOG" || fail 'legacy upgrade did not complete manifest migration 014'
+set_check assert_legacy_migration_ledger_count
 [ "$(admin_sql "$DB" "select count(*) from schema_migrations")" = "$EXPECTED_MIGRATION_COUNT" ] || fail 'legacy upgrade ledger count does not match manifest'
+set_check assert_legacy_canonical_constraint
 [ "$(admin_sql "$DB" "select count(*) from pg_constraint where conrelid='public.users'::regclass and conname='users_email_canonical_check'")" = 1 ] || fail 'legacy upgrade canonical constraint is missing'
+set_check product_legacy_transfer_count_query
 TRANSFERRED=$(admin_sql "$DB" "select
   (select count(*) from pg_namespace where nspname in ('public','internal') and pg_get_userbyid(nspowner)='cocinacore_schema_owner') +
   (select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname in ('public','internal') and c.relkind in ('r','p') and pg_get_userbyid(c.relowner)='cocinacore_schema_owner') +
   (select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname in ('public','internal') and pg_get_userbyid(p.proowner)='cocinacore_schema_owner' and not exists(select 1 from pg_depend d where d.classid='pg_proc'::regclass and d.objid=p.oid and d.deptype='e'))")
-[ "$TRANSFERRED" = 38 ] || fail 'ownership transfer target count is not 38'
+set_check assert_legacy_transfer_count_numeric
+case "$TRANSFERRED" in
+  ''|*[!0-9]*) fail 'ownership transfer count is not numeric' ;;
+esac
+printf 'integration diagnostic: legacy_TRANSFERRED=%s\n' "$TRANSFERRED" >&2
+set_check harness_legacy_applied_migrations_snapshot
+APPLIED_MIGRATIONS=$(admin_sql "$DB" "select string_agg(filename, E'\\n' order by filename) from public.schema_migrations")
+set_check harness_legacy_manifest_expected_count
+EXPECTED_TRANSFERRED=$(node - "$ROOT/db/migrations/manifest.json" "$APPLIED_MIGRATIONS" <<'NODE'
+const fs = require('node:fs');
+const manifest = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const applied = new Set(process.argv[3].split('\n').filter(Boolean));
+const functionAdditions = manifest.migrations
+  .filter((migration) => applied.has(migration.filename))
+  .flatMap((migration) => migration.catalogAdditions || [])
+  .filter((addition) => addition.kind === 'function').length;
+console.log(manifest.baselineObjects.transferable.length + functionAdditions);
+NODE
+)
+case "$EXPECTED_TRANSFERRED" in
+  ''|*[!0-9]*) fail 'expected ownership transfer count is not numeric' ;;
+esac
+printf 'integration diagnostic: legacy_EXPECTED_TRANSFERRED=%s\n' "$EXPECTED_TRANSFERRED" >&2
+set_check assert_legacy_transfer_count
+[ "$TRANSFERRED" = "$EXPECTED_TRANSFERRED" ] || fail 'ownership transfer count does not match manifest and applied migration functions'
+set_check assert_legacy_extension_dependencies
 [ "$(admin_sql "$DB" "select count(*) from pg_depend d where d.deptype='e' and ((d.classid='pg_proc'::regclass and exists(select 1 from pg_proc p where p.oid=d.objid and pg_get_userbyid(p.proowner)='cocinacore_schema_owner')) or (d.classid='pg_type'::regclass and exists(select 1 from pg_type t where t.oid=d.objid and pg_get_userbyid(t.typowner)='cocinacore_schema_owner')))")" = 0 ] || fail 'legacy extension-managed objects were transferred'
+set_check assert_legacy_extension_owners
 [ "$(admin_sql "$DB" "select pg_get_userbyid(extowner) from pg_extension where extname='vector'")" = cocinacore ] || fail 'legacy vector owner changed'
 [ "$(admin_sql "$DB" "select pg_get_userbyid(extowner) from pg_extension where extname='pgcrypto'")" = cocinacore ] || fail 'legacy pgcrypto owner changed'
+set_check assert_legacy_acl_preservation
 [ "$(admin_sql "$DB" "select has_schema_privilege('legacy_reader','public','USAGE')||','||has_table_privilege('legacy_reader','public.tenants','SELECT')")" = "$ACL_BEFORE" ] || fail 'legacy explicit grants changed'
 [ "$(admin_sql "$DB" "select has_schema_privilege('public','public','USAGE')||','||has_schema_privilege('public','public','CREATE')")" = 'true,false' ] || fail 'public schema ACL target is wrong'
+set_check assert_legacy_data_preservation
 [ "$(admin_sql "$DB" "select count(*) from tenants where id='$LEGACY_TENANT'")" = 1 ] || fail 'legacy data was lost'
+set_check harness_legacy_data_write
 admin_sql "$DB" "insert into tenants(name) values ('legacy-after')" >/dev/null
+set_check assert_legacy_read_write_compatibility
 [ "$(admin_sql "$DB" "select count(*) from tenants where name in ('legacy-before','legacy-after')")" = 2 ] || fail 'legacy read/write compatibility failed'
 
 # Exact-state provisioner rerun remains safe.
+set_check product_legacy_provisioner_rerun
 provision >"$LOG" 2>&1
+set_check assert_legacy_idempotent_data
 [ "$(admin_sql "$DB" "select count(*) from tenants where name in ('legacy-before','legacy-after')")" = 2 ] || fail 'reprovision changed application data'
 
 STAGE=final-cleanup
