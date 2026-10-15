@@ -1,7 +1,7 @@
 # M1 Production Closure Record
 
 **Evidence date:** 2026-10-15
-**Record status:** Technical closure reviewed and accepted by the ChatGPT PM on 2026-10-15; Git integration and any separate human sign-off remain pending.
+**Record status:** Technical closure reviewed and accepted by the ChatGPT PM on 2026-10-15; PR #12 is published and open, and the PM reports CI green. Merge/integration into `main` and separate human sign-off remain pending.
 **Evidence basis:** Production facts below were verified by the PM and supplied for this record. The executor did not access production or independently recheck live state.
 
 This acta records the reported M1 production state and separates it from unresolved recovery and traceability evidence. It does not authorize a deployment, database operation, restore, or production access.
@@ -66,7 +66,7 @@ M1's documented release path is exact-SHA deployment with read-only migration ve
 
 The release-chain item is resolved by the historical GitHub certificate and workflow evidence above. The PM accepts the existing M1 production certification and current health evidence as sufficient for **technical M1 closure**. The following items remain open or deferred, without being misrepresented as completed:
 
-1. **Separate human sign-off and Git integration:** this technical review is recorded by the ChatGPT PM under the user's request to complete M1 documentation. It is not a new human authorization to deploy or modify production; the documentation changes are still local and uncommitted.
+1. **Separate human sign-off and merge/integration:** PR #12 is published and open, and the PM reports CI green; merge/integration into `main` remains pending. Separate human sign-off also remains pending. The PM's technical review is not a new human authorization to deploy or modify production.
 2. **SSH host-trust traceability:** the historical Step 7 record said the required GitHub `production` Environment secret `VPS_SSH_KNOWN_HOSTS` had not been verified at that time. The supplied certificate and successful workflow status do not establish whether the secret and strict host-key check were in place for this deployment. Reconcile against the protected deployment record without copying the secret value into the repository.
 3. **Backup audit trail and recovery:** identify the protected backup artifact and retain its checksum-verification receipt in the approved restricted record; separately decide whether and when to authorize a restore drill. No restoration has been proven.
 4. **Migration audit detail:** the PM evidence confirms applied IDs 001–012, not per-migration checksum verification or an attached ledger export. Historical records describe an older ledger without a checksum column; do not treat that older schema observation as current without verification. If stronger provenance is required, PM should identify an approved read-only evidence source; do not modify production as part of this acta.
@@ -74,4 +74,4 @@ The release-chain item is resolved by the historical GitHub certificate and work
 
 ## Closure decision
 
-**PM technical decision (2026-10-15): M1_PRODUCTION=YES; technical M1 closure ACCEPTED.** The production state was directly checked by the PM on this date, and the historical release chain is certified by Issue #6 and the successful workflow cited above. This acceptance does not certify database restorability or resolve the explicitly deferred operational items. The acta is a local, uncommitted documentation change; separate human sign-off and Git integration are not claimed. M2 and migrations 013/014 remain outside this production state and are not approved by this acta.
+**PM technical decision (2026-10-15): M1_PRODUCTION=YES; technical M1 closure ACCEPTED.** The production state was directly checked by the PM on this date, and the historical release chain is certified by Issue #6 and the successful workflow cited above. This acceptance does not certify database restorability or resolve the explicitly deferred operational items. PR #12 is published and open, and the PM reports CI green; merge/integration into `main` and separate human sign-off remain pending. M2 and migrations 013/014 remain outside this production state and are not approved by this acta.

@@ -38,5 +38,5 @@ Create a verifiable, evidence-qualified M1 production closure record from PM-pro
 2. [x] Create the isolated branch/worktree from `origin/main` without changing the open M2 worktree.
 3. [x] Transfer the approved acta/task record and add only the acta reference to the `origin/main` runbook.
 4. [x] Verify content, references, exact three-file scope, and whitespace.
-5. [ ] Create one conventional documentation commit.
-6. [ ] Push the branch and open a `type:docs` PR against `main`; do not merge or deploy.
+5. [x] Create one conventional documentation commit.
+6. [x] Push the branch and open a `type:docs` PR against `main`; do not merge or deploy.
