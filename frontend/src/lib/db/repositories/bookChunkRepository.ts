@@ -1,4 +1,4 @@
-import { query } from '@/lib/db';
+import { query, queryWithStatementTimeout } from '@/lib/db';
 import { BookChunkRow } from '@/lib/db/types';
 
 export interface SearchChunksInput {
@@ -6,6 +6,7 @@ export interface SearchChunksInput {
   tenantId?: string | null;
   matchThreshold?: number;
   matchCount?: number;
+  statementTimeoutMs: number;
 }
 
 export interface MatchChunkResult {
@@ -23,10 +24,9 @@ export async function searchChunks(input: SearchChunksInput): Promise<MatchChunk
   const threshold = input.matchThreshold ?? 0.35;
   const count = input.matchCount ?? 5;
 
-  const result = await query<MatchChunkResult>(
-    'select * from public.match_chunks($1::vector(1536), $2, $3, $4)',
-    [JSON.stringify(input.embedding), threshold, count, input.tenantId ?? null]
-  );
+  const sql = 'select * from public.match_chunks($1::vector(1536), $2, $3, $4)';
+  const params = [JSON.stringify(input.embedding), threshold, count, input.tenantId ?? null];
+  const result = await queryWithStatementTimeout<MatchChunkResult>(sql, params, input.statementTimeoutMs);
 
   return result.rows;
 }

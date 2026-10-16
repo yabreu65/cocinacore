@@ -88,6 +88,7 @@ describe('retrieveServerRagContext', () => {
       tenantId: 'tenant-1',
       matchThreshold: 0.35,
       matchCount: 6,
+      statementTimeoutMs: 10_000,
     });
     expect(result.ragContextUsed).toBe(true);
     expect(result.context).toContain('Libro: Global Cookbook · Página: 12');
