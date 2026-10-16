@@ -32,10 +32,10 @@ const profile = {
   disliked_ingredients: [], allergies: ['peanuts'], household_members: [], created_at: '', updated_at: '',
 };
 
-function request(body: unknown): NextRequest {
+function request(body: unknown, headers: Record<string, string> = {}): NextRequest {
   return new NextRequest('http://localhost/api/today', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...headers },
     body: JSON.stringify(body),
   });
 }
@@ -152,7 +152,7 @@ describe('POST /api/today', () => {
       expect(response.headers.get('X-RateLimit-Remaining')).toBe('0');
       expect(response.headers.get('X-RateLimit-Reset')).toBe('1800000060');
       expect(await response.json()).toMatchObject({ retryAfter: 5 });
-      expect(rateLimitMock).toHaveBeenCalledWith('today', 'unknown', 'user-1');
+      expect(rateLimitMock).toHaveBeenCalledWith('today', 'authenticated-user', 'user-1');
       expect(profileMock).not.toHaveBeenCalled();
       expect(termsMock).not.toHaveBeenCalled();
       expect(inventoryMock).not.toHaveBeenCalled();
@@ -163,6 +163,17 @@ describe('POST /api/today', () => {
     } finally {
       dateNowSpy.mockRestore();
     }
+  });
+
+  it('keys the rate limit by authenticated user rather than forwarded client addresses', async () => {
+    const { POST } = await import('./route');
+
+    expect((await POST(request({ slot: 'lunch' }, { 'x-forwarded-for': '198.51.100.10' }))).status).toBe(200);
+    expect((await POST(request({ slot: 'lunch' }, { 'x-forwarded-for': '203.0.113.77, 10.0.0.2' }))).status).toBe(200);
+
+    expect(rateLimitMock).toHaveBeenCalledTimes(2);
+    expect(rateLimitMock).toHaveBeenNthCalledWith(1, 'today', 'authenticated-user', 'user-1');
+    expect(rateLimitMock).toHaveBeenNthCalledWith(2, 'today', 'authenticated-user', 'user-1');
   });
 
   it('authenticates before reads and requires a tenant', async () => {
