@@ -22,8 +22,8 @@ Read-only SSH inspection via alias `pawtech` on 2026-10-16:
 
 ## Migration and backup evidence
 
-- Prior operator execution reports official migrations 013 and 014 applied, migrator verification complete, and predeployment PostgreSQL backup checksum plus `pg_restore --list` verification passed.
-- **Evidence limitation:** this closure inspection did not independently rerun a read-only migration ledger/checksum query, did not capture a backup artifact identifier/checksum receipt, and did not perform a restore drill. These are not represented as newly verified.
+- The official successful deployment job [38914224895](https://github.com/yabreu65/cocinacore/actions/runs/38914224895) logs `Migration ledger is complete.`, `MIGRATION_EXPECTATION=NO_OP`, `DATABASE_CHANGED=NO`, and backup markers `BACKUP_CHECKSUM_OK`, `BACKUP_DUMP_VALID`, `BACKUP_OK`. The predeploy backup was created at 14:18 UTC and checked before cutover. The prior operator reports migrations 013/014 were applied; the deploy verifier confirmed no pending migration.
+- **Evidence limitation:** this closure inspection did not independently export each ledger row and checksum; backup verification receipts exist in the protected GitHub deployment job logs, but no restore test was performed, and did not perform a restore drill. These are not represented as newly verified.
 - Never publish secrets, database dumps, backup paths or credentials in this document.
 
 ## Acceptance decision
