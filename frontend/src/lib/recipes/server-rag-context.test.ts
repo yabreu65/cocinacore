@@ -81,7 +81,8 @@ describe('retrieveServerRagContext', () => {
     });
 
     expect(generateEmbeddingMock).toHaveBeenCalledWith(
-      expect.stringContaining('Requested recipe: Sopa de tomate.')
+      expect.stringContaining('Requested recipe: Sopa de tomate.'),
+      undefined
     );
     expect(searchChunksMock).toHaveBeenCalledWith({
       embedding: [0.1, 0.2, 0.3],
