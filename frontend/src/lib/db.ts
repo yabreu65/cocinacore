@@ -33,6 +33,21 @@ export function getPool(): Pool {
   return pool;
 }
 
+export async function queryWithStatementTimeout<T extends QueryResultRow = QueryResultRow>(
+  sql: string,
+  params: unknown[] | undefined,
+  timeoutMs: number
+): Promise<QueryResult<T>> {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new Error('Statement timeout must be a positive safe integer.');
+  }
+
+  return transaction(async (client) => {
+    await client.query("select set_config('statement_timeout', $1, true)", [`${timeoutMs}ms`]);
+    return client.query<T>(sql, params);
+  });
+}
+
 export async function query<T extends QueryResultRow = QueryResultRow>(
   sql: string,
   params?: unknown[]
@@ -56,6 +71,7 @@ export async function transaction<T>(
 ): Promise<T> {
   const client = await getPool().connect();
   let began = false;
+  let releaseError: Error | undefined;
   try {
     await client.query('begin');
     began = true;
@@ -66,13 +82,17 @@ export async function transaction<T>(
     if (began) {
       try {
         await client.query('rollback');
-      } catch {
-        // Preserve the original callback or commit error.
+      } catch (rollbackError) {
+        // Preserve the original callback or commit error and discard this client.
+        releaseError = rollbackError instanceof Error
+          ? rollbackError
+          : new Error('Transaction rollback failed.');
       }
     }
     throw error;
   } finally {
-    client.release();
+    if (releaseError) client.release(releaseError);
+    else client.release();
   }
 }
 

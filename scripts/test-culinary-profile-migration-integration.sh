@@ -355,6 +355,14 @@ env -u MIGRATIONS_DIR DATABASE_URL="$fresh_url" COCINACORE_SEPARATED_DB_LANES_EN
 env -u MIGRATIONS_DIR DATABASE_URL="$fresh_url" COCINACORE_SEPARATED_DB_LANES_ENABLED=false COCINACORE_SKIP_DOTENV=1 \
   node "$ROOT/frontend/scripts/run-migrations.js" --verify-complete
 
+printf 'Testing PostgreSQL statement timeout integration...\n'
+(
+  cd "$ROOT/frontend"
+  env DATABASE_URL="$fresh_url" COCINACORE_SEPARATED_DB_LANES_ENABLED=false COCINACORE_SKIP_DOTENV=1 \
+    COCINACORE_RUN_STATEMENT_TIMEOUT_DB_TEST=1 \
+    ./node_modules/.bin/vitest run src/lib/db/statement-timeout.integration.test.ts
+)
+
 PREFLIGHT_DB="culinary_preflight_${RUN_ID//-/_}"
 PREFLIGHT_COPY="$WORKSPACE/preflight-migrations"
 mkdir -p "$PREFLIGHT_COPY"

@@ -7,6 +7,8 @@ import {
 } from '@/services/ragEngine';
 import type { Citation, EmbeddingService, RecipeBookChunk, RecipeSearchInput, RestrictionProfile } from '@/services/types';
 
+const RAG_SQL_STATEMENT_TIMEOUT_MS = 10_000;
+
 export interface ServerRagContextInput {
   apiKey: string;
   tenantId: string;
@@ -157,6 +159,7 @@ export async function retrieveServerRagContext(input: ServerRagContextInput): Pr
             tenantId: input.tenantId,
             matchThreshold: options?.matchThreshold,
             matchCount: options?.matchCount,
+            statementTimeoutMs: RAG_SQL_STATEMENT_TIMEOUT_MS,
           });
           return rows
             .map((row) => adaptMatchChunk(row, input.tenantId))
