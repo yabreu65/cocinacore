@@ -342,7 +342,11 @@ describe('/api/profile culinary contract', () => {
     expect(saveProfileMock).not.toHaveBeenCalled();
   });
 
-  it('rejects invalid level and over-bounded selection arrays', async () => {
+  it('explicitly rejects Avanzado and other invalid levels plus over-bounded selection arrays', async () => {
+    const advancedLevel = await PUT(request({ level: 'Avanzado' }));
+    expect(advancedLevel.status).toBe(400);
+    expect(saveProfileInTransactionMock).not.toHaveBeenCalled();
+
     const badLevel = await PUT(request({ level: 'Dios de la cocina' }));
     expect(badLevel.status).toBe(400);
 

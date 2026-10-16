@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 if [ "${M2_CONTRACT_FOCUS:-}" = catalog ]; then
   node - "$ROOT" <<'NODE'
 const fs = require('node:fs');
@@ -56,7 +56,6 @@ if (migration.byteLength !== migrationBytes.length ||
 }
 const expected = [
   { kind: 'constraint', schema: 'public', identity: 'users.users_full_name_length_check' },
-  { kind: 'constraint', schema: 'public', identity: 'user_culinary_profiles.user_culinary_profiles_level_check' },
   { kind: 'constraint', schema: 'public', identity: 'user_culinary_profiles.user_culinary_profiles_allergies_bounds_check' },
   { kind: 'constraint', schema: 'public', identity: 'user_culinary_profiles.user_culinary_profiles_disliked_ingredients_bounds_check' },
   { kind: 'constraint', schema: 'public', identity: 'user_culinary_profiles.user_culinary_profiles_household_members_shape_check' },
@@ -68,6 +67,10 @@ const expected = [
   { kind: 'trigger', schema: 'public', identity: 'culinary_terms.culinary_terms_profile_dimension_immutable_trigger' },
   { kind: 'trigger', schema: 'public', identity: 'culinary_dimensions.culinary_dimensions_profile_key_immutable_trigger' },
 ];
+const profileRoute = fs.readFileSync(path.join(root, 'frontend/src/app/api/profile/route.ts'), 'utf8');
+if (!/level:\s*z\.enum\(\['Principiante',\s*'Intermedio',\s*'Chef'\]\)\.nullable\(\)\.optional\(\)/.test(profileRoute)) {
+  fail('profile API must retain the nullable Principiante/Intermedio/Chef allowlist');
+}
 if (!Array.isArray(migration.catalogAdditions)) fail('migration 014 catalogAdditions metadata is absent');
 for (const addition of migration.catalogAdditions) {
   if (!addition || Object.getPrototypeOf(addition) !== Object.prototype ||
@@ -83,7 +86,7 @@ const key = (item) => `${item.kind}|${item.schema}|${item.identity}`;
 const declared = migration.catalogAdditions.map(key);
 if (new Set(declared).size !== declared.length) fail('migration 014 catalog additions contain duplicate identities');
 if (JSON.stringify([...declared].sort()) !== JSON.stringify(expected.map(key).sort())) {
-  fail('migration 014 catalog additions do not exactly match the twelve required identities');
+  fail('migration 014 catalog additions do not exactly match the eleven required identities');
 }
 const provisioner = fs.readFileSync(path.join(root, 'frontend/scripts/provision-database.js'), 'utf8');
 if (!/\['constraint',\s*'function',\s*'trigger'\]\.includes\(addition\.kind\)/.test(provisioner) ||
@@ -104,26 +107,27 @@ if (!/!\s*\[['"]constraint['"],\s*['"]function['"],\s*['"]trigger['"]\]\.include
   fail('migration runner lacks strict catalog metadata validation for exact keys, allowed kinds, schema and identity validation, and duplicate rejection');
 }
 const sql = migrationBytes.toString('utf8');
+if (/\bconstraint\s+user_culinary_profiles_level_check\b/i.test(sql)) {
+  fail('migration 014 must not declare the restrictive profile-level CHECK constraint');
+}
 const declarations = [
   [/\bconstraint\s+users_full_name_length_check\b/i, expected[0].identity],
-  [/\bconstraint\s+user_culinary_profiles_level_check\b/i, expected[1].identity],
-  [/\bconstraint\s+user_culinary_profiles_allergies_bounds_check\b/i, expected[2].identity],
-  [/\bconstraint\s+user_culinary_profiles_disliked_ingredients_bounds_check\b/i, expected[3].identity],
-  [/\bconstraint\s+user_culinary_profiles_household_members_shape_check\b/i, expected[4].identity],
-  [/\bcreate\s+(?:or\s+replace\s+)?function\s+public\.is_valid_culinary_profile_text_list\s*\(/i, expected[5].identity],
-  [/\bcreate\s+(?:or\s+replace\s+)?function\s+public\.is_valid_culinary_household_members\s*\(/i, expected[6].identity],
-  [/\bcreate\s+(?:or\s+replace\s+)?function\s+public\.enforce_culinary_profile_term_group_limit\s*\(/i, expected[7].identity],
-  [/\bcreate\s+trigger\s+user_culinary_profile_terms_group_limit_trigger\s+before\b[\s\S]{0,300}\bon\s+public\.user_culinary_profile_terms\b/i, expected[8].identity],
-  [/\bcreate\s+(?:or\s+replace\s+)?function\s+public\.prevent_culinary_profile_taxonomy_reclassification\s*\(/i, expected[9].identity],
-  [/\bcreate\s+trigger\s+culinary_terms_profile_dimension_immutable_trigger\s+before\s+update\s+of\s+dimension_id\s+on\s+public\.culinary_terms\b[\s\S]{0,200}execute\s+function\s+public\.prevent_culinary_profile_taxonomy_reclassification\s*\(/i, expected[10].identity],
-  [/\bcreate\s+trigger\s+culinary_dimensions_profile_key_immutable_trigger\s+before\s+update\s+of\s+key\s+on\s+public\.culinary_dimensions\b[\s\S]{0,200}execute\s+function\s+public\.prevent_culinary_profile_taxonomy_reclassification\s*\(/i, expected[11].identity],
+  [/\bconstraint\s+user_culinary_profiles_allergies_bounds_check\b/i, expected[1].identity],
+  [/\bconstraint\s+user_culinary_profiles_disliked_ingredients_bounds_check\b/i, expected[2].identity],
+  [/\bconstraint\s+user_culinary_profiles_household_members_shape_check\b/i, expected[3].identity],
+  [/\bcreate\s+(?:or\s+replace\s+)?function\s+public\.is_valid_culinary_profile_text_list\s*\(/i, expected[4].identity],
+  [/\bcreate\s+(?:or\s+replace\s+)?function\s+public\.is_valid_culinary_household_members\s*\(/i, expected[5].identity],
+  [/\bcreate\s+(?:or\s+replace\s+)?function\s+public\.enforce_culinary_profile_term_group_limit\s*\(/i, expected[6].identity],
+  [/\bcreate\s+trigger\s+user_culinary_profile_terms_group_limit_trigger\s+before\b[\s\S]{0,300}\bon\s+public\.user_culinary_profile_terms\b/i, expected[7].identity],
+  [/\bcreate\s+(?:or\s+replace\s+)?function\s+public\.prevent_culinary_profile_taxonomy_reclassification\s*\(/i, expected[8].identity],
+  [/\bcreate\s+trigger\s+culinary_terms_profile_dimension_immutable_trigger\s+before\s+update\s+of\s+dimension_id\s+on\s+public\.culinary_terms\b[\s\S]{0,200}execute\s+function\s+public\.prevent_culinary_profile_taxonomy_reclassification\s*\(/i, expected[9].identity],
+  [/\bcreate\s+trigger\s+culinary_dimensions_profile_key_immutable_trigger\s+before\s+update\s+of\s+key\s+on\s+public\.culinary_dimensions\b[\s\S]{0,200}execute\s+function\s+public\.prevent_culinary_profile_taxonomy_reclassification\s*\(/i, expected[10].identity],
 ];
 for (const [pattern, identity] of declarations) {
   if (!pattern.test(sql)) fail(`migration 014 SQL does not declare metadata identity ${identity}`);
 }
 const sqlContracts = [
   [/char_length\(full_name\) <= 120/i, 'full name maximum length'],
-  [/level is null or level in \('Principiante', 'Intermedio', 'Chef'\)/i, 'exact nullable level allowlist'],
   [/cardinality\(p_values\) <= max_items/i, 'bounded text-list cardinality'],
   [/item\.value is null\s+or\s+char_length\(btrim\(item\.value\)\) > 80/i, 'explicit null rejection and normalized text-list item length'],
   [/is_valid_culinary_profile_text_list\(allergies, 20\)/i, 'allergies maximum count'],
@@ -169,11 +173,9 @@ if (sql.indexOf('Existing culinary profile term group violates limit') > sql.ind
 const vm = require('node:vm');
 const provisionerPath = path.join(root, 'frontend/scripts/provision-database.js');
 const provisionerSource = fs.readFileSync(provisionerPath, 'utf8');
-const executable = provisionerSource.replace(
-  /\nmain\(\)\.catch\(\(error\) => \{[\s\S]*?\n\}\);\s*$/,
-  '\nmodule.exports = { loadTrustedManifest };'
-);
-if (executable === provisionerSource) fail('could not isolate provisioner manifest loader for no-Docker validation tests');
+const exportMarker = /\nmodule\.exports = \{ attestBaselineCatalog \};\s*$/;
+if (!exportMarker.test(provisionerSource)) fail('could not isolate provisioner manifest loader for no-Docker validation tests');
+const executable = provisionerSource.replace(exportMarker, '\nmodule.exports = { loadTrustedManifest };');
 const manifestPath = path.join(root, 'db/migrations/manifest.json');
 const trustedManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 function loadWithManifest(mutator) {

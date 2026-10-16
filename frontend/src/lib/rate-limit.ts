@@ -23,6 +23,7 @@ export interface RateLimitResult {
 // ---------------------------------------------------------------------------
 
 const ROUTE_CONFIGS: Record<string, RateLimitConfig> = {
+  today: { limit: 5, windowSeconds: 60 },
   'recipe-generate': { limit: 10, windowSeconds: 60 },
   'meal-plan': { limit: 5, windowSeconds: 60 },
   'meal-plan/warmup': { limit: 3, windowSeconds: 60 },

@@ -46,8 +46,6 @@ alter table public.users
     check (full_name is null or char_length(full_name) <= 120);
 
 alter table public.user_culinary_profiles
-    add constraint user_culinary_profiles_level_check
-    check (level is null or level in ('Principiante', 'Intermedio', 'Chef')),
     add constraint user_culinary_profiles_allergies_bounds_check
     check (public.is_valid_culinary_profile_text_list(allergies, 20)),
     add constraint user_culinary_profiles_disliked_ingredients_bounds_check

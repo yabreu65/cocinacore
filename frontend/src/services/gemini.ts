@@ -27,7 +27,7 @@ export class GeminiEmbeddingService implements EmbeddingService {
   /**
    * Generates a single vector embedding for a chunk of text using text-embedding-004
    */
-  public async generateEmbedding(text: string): Promise<number[]> {
+  public async generateEmbedding(text: string, signal?: AbortSignal): Promise<number[]> {
     if (!text || text.trim() === '') {
       throw new Error('Text is required to generate embeddings.');
     }
@@ -38,6 +38,7 @@ export class GeminiEmbeddingService implements EmbeddingService {
         headers: {
           'Content-Type': 'application/json',
         },
+        ...(signal ? { signal } : {}),
         body: JSON.stringify({
           model: 'models/text-embedding-004',
           content: {

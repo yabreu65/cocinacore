@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
 const requireUserMock = vi.fn();
+const rateLimitMock = vi.fn();
 const profileMock = vi.fn();
 const termsMock = vi.fn();
 const inventoryMock = vi.fn();
@@ -11,6 +12,7 @@ const ragMock = vi.fn();
 const fetchMock = vi.fn<typeof fetch>();
 
 vi.mock('@/lib/auth/server', () => ({ requireUser: requireUserMock }));
+vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: rateLimitMock }));
 vi.mock('@/lib/db/repositories/culinaryProfileRepository', () => ({
   findCulinaryProfileByUserId: profileMock,
   findCulinaryProfileTermsByUserId: termsMock,
@@ -126,6 +128,7 @@ describe('POST /api/today', () => {
     vi.resetAllMocks();
     vi.stubGlobal('fetch', fetchMock);
     requireUserMock.mockResolvedValue({ id: 'user-1', tenant: { tenantId: 'tenant-1' } });
+    rateLimitMock.mockResolvedValue({ success: true, limit: 5, remaining: 4, resetAt: 1_800_000_060 });
     profileMock.mockResolvedValue(profile);
     termsMock.mockResolvedValue([]);
     inventoryMock.mockResolvedValue([{ tenant_id: 'tenant-1', ingredient_name: 'rice', quantity: '2', unit: 'cups', expiration_date: null }]);
@@ -133,6 +136,33 @@ describe('POST /api/today', () => {
     planMock.mockResolvedValue(null);
     ragMock.mockResolvedValue({ context: '', citations: [], ragContextUsed: false });
     fetchMock.mockResolvedValue(providerResponse(options));
+  });
+
+  it('returns rate-limit headers and short-circuits all Today data and provider work when limited', async () => {
+    const { POST } = await import('./route');
+    rateLimitMock.mockResolvedValueOnce({ success: false, limit: 5, remaining: 0, resetAt: 1_800_000_060 });
+    const dateNowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+
+    try {
+      const response = await POST(request({ slot: 'lunch' }));
+
+      expect(response.status).toBe(429);
+      expect(response.headers.get('Retry-After')).toBe('60');
+      expect(response.headers.get('X-RateLimit-Limit')).toBe('5');
+      expect(response.headers.get('X-RateLimit-Remaining')).toBe('0');
+      expect(response.headers.get('X-RateLimit-Reset')).toBe('1800000060');
+      expect(await response.json()).toMatchObject({ retryAfter: 60 });
+      expect(rateLimitMock).toHaveBeenCalledWith('today', 'unknown', 'user-1');
+      expect(profileMock).not.toHaveBeenCalled();
+      expect(termsMock).not.toHaveBeenCalled();
+      expect(inventoryMock).not.toHaveBeenCalled();
+      expect(historyMock).not.toHaveBeenCalled();
+      expect(planMock).not.toHaveBeenCalled();
+      expect(ragMock).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      dateNowSpy.mockRestore();
+    }
   });
 
   it('authenticates before reads and requires a tenant', async () => {
@@ -308,6 +338,71 @@ describe('POST /api/today', () => {
     expect(promptText).not.toContain('Private book');
     expect(promptText).not.toContain('Página');
     expect(promptText).not.toContain('private-citation-id');
+  });
+
+  it('aborts a stalled optional RAG lookup after 60 seconds and still generates provider options', async () => {
+    vi.useFakeTimers();
+    try {
+      const { POST } = await import('./route');
+      ragMock.mockImplementationOnce((input: { signal?: AbortSignal }) => new Promise<never>((_, reject) => {
+        const timeout = setTimeout(() => reject(new Error('mock RAG safety timeout')), 60_000);
+        input.signal?.addEventListener('abort', () => {
+          clearTimeout(timeout);
+          reject(new DOMException('RAG request aborted', 'AbortError'));
+        }, { once: true });
+      }));
+
+      const pending = POST(request({ slot: 'lunch' }));
+      await vi.advanceTimersByTimeAsync(60_000);
+      const response = await pending;
+      const ragInput = ragMock.mock.calls[0]?.[0] as { signal?: AbortSignal } | undefined;
+
+      expect(ragInput?.signal).toBeInstanceOf(AbortSignal);
+      expect(ragInput?.signal?.aborted).toBe(true);
+      expect(response.status).toBe(200);
+      const payload = await readTodayPayload(response);
+      expect(payload.status).toBe('success');
+      expect(Array.isArray(payload.options)).toBe(true);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('aborts stalled Gemini generation after 60 seconds and falls back to safe history', async () => {
+    vi.useFakeTimers();
+    try {
+      const { POST } = await import('./route');
+      historyMock.mockResolvedValueOnce([{
+        recipe_title: 'Safe timeout fallback', created_at: '2026-01-01T00:00:00Z',
+        recipe_payload: { slot: 'lunch', structuredIngredients: [
+          { name: 'rice', normalized_name: 'rice', quantity: 1, unit: 'cup', structured: true },
+          { name: 'beans', normalized_name: 'beans', quantity: 1, unit: 'cup', structured: true },
+        ] },
+      }]);
+      let providerSignal: AbortSignal | undefined;
+      fetchMock.mockImplementationOnce((_input, init) => new Promise((resolve, reject) => {
+        providerSignal = init?.signal as AbortSignal | undefined;
+        const timeout = setTimeout(() => resolve(providerResponse(options)), 60_000);
+        providerSignal?.addEventListener('abort', () => {
+          clearTimeout(timeout);
+          reject(new DOMException('Gemini request aborted', 'AbortError'));
+        }, { once: true });
+      }));
+
+      const pending = POST(request({ slot: 'lunch' }));
+      await vi.advanceTimersByTimeAsync(60_000);
+      const response = await pending;
+      const payload = await readTodayPayload(response);
+
+      expect(providerSignal).toBeInstanceOf(AbortSignal);
+      expect(providerSignal?.aborted).toBe(true);
+      expect(response.status).toBe(200);
+      expect(payload).toMatchObject({ status: 'degraded' });
+      expect(payload.options.map((option) => option.title)).toContain('Safe timeout fallback');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('treats RAG failure as optional and never claims unknown allergies were checked', async () => {
