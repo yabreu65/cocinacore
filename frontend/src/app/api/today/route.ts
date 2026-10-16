@@ -148,8 +148,7 @@ export async function POST(request: NextRequest) {
   const slot = parseBody(rawBody);
   if (!slot) return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
 
-  const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
-  const rateLimit = await checkRateLimit('today', ip, user.id);
+  const rateLimit = await checkRateLimit('today', 'authenticated-user', user.id);
   if (!rateLimit.success) {
     const nowSeconds = Date.now() / 1000;
     const retryAfter = Math.max(0, Math.ceil(rateLimit.resetAt - nowSeconds));
