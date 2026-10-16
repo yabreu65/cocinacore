@@ -178,6 +178,19 @@ describe('checkRateLimit', () => {
     expect(blocked.resetAt).toBeGreaterThan(Math.floor(now / 1000));
   });
 
+  it('rounds the in-memory resetAt expiration upward to the next second', async () => {
+    vi.setSystemTime(1_800_000_000_500);
+    const ip = '198.51.100.42';
+
+    for (let i = 0; i < 10; i++) {
+      await checkRateLimit('recipe-generate', ip);
+    }
+
+    const blocked = await checkRateLimit('recipe-generate', ip);
+    expect(blocked.success).toBe(false);
+    expect(blocked.resetAt).toBe(1_800_000_061);
+  });
+
   it('resets properly after the window passes using resetAt', async () => {
     const ip = '11.11.11.11';
 

@@ -126,17 +126,24 @@ redis.call('ZREMRANGEBYSCORE', key, '-inf', now - window * 1000)
 
 -- Count current entries within window
 local count = redis.call('ZCARD', key)
+local success = 0
 
-if count >= limit then
-  return 0
+if count < limit then
+  -- Add current millisecond timestamp with uniqueness
+  redis.call('ZADD', key, now, now .. ':' .. count)
+  -- Set expiry on the key slightly longer than the window
+  redis.call('PEXPIRE', key, window * 1000 + 1000)
+  count = redis.call('ZCARD', key)
+  success = 1
 end
 
--- Add current millisecond timestamp with uniqueness
-redis.call('ZADD', key, now, now .. ':' .. redis.call('ZCARD', key))
--- Set expiry on the key slightly longer than the window
-redis.call('PEXPIRE', key, window * 1000 + 1000)
+local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
+local oldestScore = now
+if #oldest >= 2 then
+  oldestScore = tonumber(oldest[2])
+end
 
-return 1
+return { success, count, oldestScore }
 `;
 
 let loadedScript: string | null = null;
@@ -154,23 +161,43 @@ async function redisCheck(key: string, config: RateLimitConfig): Promise<RateLim
       loadedScript = (await client.script('LOAD', SLIDING_WINDOW_LUA)) as string;
     }
 
-    const result = (await client.evalsha(
+    const result: unknown = await client.evalsha(
       loadedScript,
       1,
       key,
       nowMs,
       config.windowSeconds,
       config.limit
-    )) as number;
+    );
 
-    // Get the count of entries in the window for remaining calculation
-    const count = await client.zcount(key, nowMs - config.windowSeconds * 1000, '+inf');
+    if (
+      !Array.isArray(result) ||
+      result.length !== 3 ||
+      (result[0] !== 0 && result[0] !== 1) ||
+      typeof result[1] !== 'number' ||
+      !Number.isInteger(result[1]) ||
+      result[1] < 0 ||
+      (typeof result[2] !== 'number' && typeof result[2] !== 'string')
+    ) {
+      throw new Error('Invalid Redis rate-limit response');
+    }
 
-    const remaining = Math.max(0, config.limit - count);
-    const resetAt = Math.floor((nowMs + config.windowSeconds * 1000) / 1000);
+    if (typeof result[2] === 'string' && result[2].trim() === '') {
+      throw new Error('Invalid Redis rate-limit reset score');
+    }
+
+    const oldestLiveScoreMs = Number(result[2]);
+    if (!Number.isSafeInteger(oldestLiveScoreMs) || oldestLiveScoreMs < 0) {
+      throw new Error('Invalid Redis rate-limit reset score');
+    }
+
+    const remaining = Math.max(0, config.limit - result[1]);
+    const resetAt = Math.ceil(
+      (oldestLiveScoreMs + config.windowSeconds * 1000) / 1000
+    );
 
     return {
-      success: result === 1,
+      success: result[0] === 1,
       limit: config.limit,
       remaining,
       resetAt,
@@ -205,13 +232,13 @@ function memoryCheck(key: string, config: RateLimitConfig): RateLimitResult {
       success: true,
       limit: config.limit,
       remaining: config.limit - 1,
-      resetAt: Math.floor((now + config.windowSeconds * 1000) / 1000),
+      resetAt: Math.ceil((now + config.windowSeconds * 1000) / 1000),
     };
   }
 
   // Window still active
   if (record.count >= config.limit) {
-    const resetAt = Math.floor((record.windowStart + config.windowSeconds * 1000) / 1000);
+    const resetAt = Math.ceil((record.windowStart + config.windowSeconds * 1000) / 1000);
     return {
       success: false,
       limit: config.limit,
@@ -227,7 +254,7 @@ function memoryCheck(key: string, config: RateLimitConfig): RateLimitResult {
     success: true,
     limit: config.limit,
     remaining: config.limit - record.count,
-    resetAt: Math.floor((record.windowStart + config.windowSeconds * 1000) / 1000),
+    resetAt: Math.ceil((record.windowStart + config.windowSeconds * 1000) / 1000),
   };
 }
 

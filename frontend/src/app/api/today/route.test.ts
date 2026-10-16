@@ -141,17 +141,17 @@ describe('POST /api/today', () => {
   it('returns rate-limit headers and short-circuits all Today data and provider work when limited', async () => {
     const { POST } = await import('./route');
     rateLimitMock.mockResolvedValueOnce({ success: false, limit: 5, remaining: 0, resetAt: 1_800_000_060 });
-    const dateNowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+    const dateNowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_055_000);
 
     try {
       const response = await POST(request({ slot: 'lunch' }));
 
       expect(response.status).toBe(429);
-      expect(response.headers.get('Retry-After')).toBe('60');
+      expect(response.headers.get('Retry-After')).toBe('5');
       expect(response.headers.get('X-RateLimit-Limit')).toBe('5');
       expect(response.headers.get('X-RateLimit-Remaining')).toBe('0');
       expect(response.headers.get('X-RateLimit-Reset')).toBe('1800000060');
-      expect(await response.json()).toMatchObject({ retryAfter: 60 });
+      expect(await response.json()).toMatchObject({ retryAfter: 5 });
       expect(rateLimitMock).toHaveBeenCalledWith('today', 'unknown', 'user-1');
       expect(profileMock).not.toHaveBeenCalled();
       expect(termsMock).not.toHaveBeenCalled();
