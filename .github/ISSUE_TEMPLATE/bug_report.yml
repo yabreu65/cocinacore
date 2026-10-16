@@ -1,0 +1,29 @@
+name: Bug report
+description: Reportar defectos reproducibles con criterios de aceptación
+title: "[Bug] "
+labels: ["type:bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Descripción del defecto
+      description: Qué falla y cuál es el comportamiento esperado
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproducción y evidencia
+      description: Pasos, pruebas y logs sin secretos
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Criterios de aceptación
+    validations:
+      required: true
+  - type: textarea
+    id: risks
+    attributes:
+      label: Riesgos y alcance excluido
