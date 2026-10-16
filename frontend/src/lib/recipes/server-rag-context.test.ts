@@ -80,7 +80,8 @@ describe('retrieveServerRagContext', () => {
       restrictions: { allergies: ['maní'], dietaryRules: ['sin gluten'] },
     });
 
-    expect(generateEmbeddingMock).toHaveBeenCalledWith(
+    expect(generateEmbeddingMock).toHaveBeenCalledTimes(1);
+    expect(generateEmbeddingMock.mock.calls[0]?.[0]).toEqual(
       expect.stringContaining('Requested recipe: Sopa de tomate.')
     );
     expect(searchChunksMock).toHaveBeenCalledWith({
