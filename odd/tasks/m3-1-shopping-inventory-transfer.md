@@ -49,6 +49,8 @@ Created in the clean closeout worktree, each with the default pre-commit hook (n
 - `59d6cb8b1b4c8cf7fcdff525de7a48d8e7f93dae` — `feat(shopping): add inventory transfer confirmation`
 - `b582b0a564189759728c37d60cea1533d49b3d19` — `test(e2e): bind shopping flow to isolated services`
 
+Native Gentle AI review was not started: the final workspace inspect reported only an out-of-scope `.atl/skill-registry.md` change. No START or capture was submitted, and the file content was not read.
+
 Hook notes: commits succeeded with standard hooks. The Guardian’s first M31-2 review attempt could not start Vitest because of `ERR_REQUIRE_ESM` involving `std-env`; its retry passed. The first harness review attempt raised a possible tenant-scope concern for culinary-profile fixture queries; the retry passed, and schema inspection confirmed profile rows are globally unique by `user_id` (profile terms by `(user_id, term_id, preference_type)`), so no tenant-composite key was omitted. The independently executed focused tests, typecheck, Prettier, and connected Playwright checks all passed.
 
 The task document is being committed separately to record these full SHAs. No push, PR, merge, or deployment.
