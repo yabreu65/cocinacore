@@ -1,5 +1,6 @@
 import { defineConfig, devices } from '@playwright/test';
 import { applyValidatedTargetsToRunner } from './e2e/database-target';
+import { buildStandaloneServerFixtureEnv } from './e2e/standalone-server-env';
 
 const targets = applyValidatedTargetsToRunner(process.env);
 const configuredAppPort = process.env.E2E_APP_PORT ?? '4320';
@@ -72,13 +73,9 @@ export default defineConfig({
       url: `http://127.0.0.1:${appPort}`,
       reuseExistingServer: false,
       env: {
+        ...buildStandaloneServerFixtureEnv(process.env, providerPort),
         DATABASE_URL: targets.databaseUrl,
         REDIS_URL: targets.redisUrl,
-        AUTH_SECRET: process.env.AUTH_SECRET ?? 'e2e-auth-secret-change-me',
-        GEMINI_API_KEY: 'e2e-gemini-key',
-        GEMINI_BASE_URL: `http://127.0.0.1:${providerPort}/v1beta`,
-        STORAGE_DRIVER: process.env.STORAGE_DRIVER ?? 'local',
-        LOCAL_UPLOAD_DIR: process.env.LOCAL_UPLOAD_DIR ?? './uploads',
       },
     },
   ],
