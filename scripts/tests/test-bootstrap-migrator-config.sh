@@ -55,7 +55,7 @@ const fs = require('fs');
 const path = require('path');
 const [manifestPath, directory, base] = process.argv.slice(2);
 const HISTORICAL_BASELINE_COUNT = 10;
-const CURRENT_MIGRATION_COUNT = 14;
+const CURRENT_MIGRATION_COUNT = 15;
 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 if (manifest.manifestVersion !== 1 || manifest.trustedBaseCommit !== base) process.exit(1);
 if (manifest.migrationLaneVersion !== 1) process.exit(1);
