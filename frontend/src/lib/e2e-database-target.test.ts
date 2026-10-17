@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyValidatedTargetsToRunner, validateE2ETargets } from './database-target';
+import { applyValidatedTargetsToRunner, validateE2ETargets } from '../../e2e/database-target';
 
 describe('validateE2ETargets', () => {
   const valid = {

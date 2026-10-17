@@ -70,20 +70,20 @@ jobs:
       postgres:
         image: pgvector/pgvector:pg16
         env:
-          POSTGRES_DB: cocinacore
+          POSTGRES_DB: cocinacore_local_db
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
         ports:
-          - 5432:5432
+          - 5435:5432
         options: >-
-          --health-cmd "pg_isready -U postgres -d cocinacore"
+          --health-cmd "pg_isready -U postgres -d cocinacore_local_db"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
       redis:
         image: redis:7
         ports:
-          - 6379:6379
+          - 6381:6379
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 10s
@@ -91,11 +91,13 @@ jobs:
           --health-retries 5
     env:
       COCINACORE_SEPARATED_DB_LANES_ENABLED: "true"
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/cocinacore
-      BOOTSTRAP_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/cocinacore
-      MIGRATION_DATABASE_URL: postgresql://migration_admin:ci-migration-admin-password-2026@localhost:5432/cocinacore
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5435/cocinacore_local_db
+      BOOTSTRAP_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5435/cocinacore_local_db
+      MIGRATION_DATABASE_URL: postgresql://migration_admin:ci-migration-admin-password-2026@127.0.0.1:5435/cocinacore_local_db
       MIGRATION_ADMIN_PASSWORD: ci-migration-admin-password-2026
-      REDIS_URL: redis://localhost:6379
+      REDIS_URL: redis://127.0.0.1:6381/15
+      E2E_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5435/cocinacore_local_db
+      E2E_REDIS_URL: redis://127.0.0.1:6381/15
       AUTH_SECRET: ci-auth-secret-change-me
       GEMINI_API_KEY: CHANGE_ME
       STORAGE_DRIVER: local
