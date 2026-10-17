@@ -185,9 +185,9 @@ const ownerFunctions = [
 const functionIdentity = ({ schema, name, arguments: args }) => schema + '.' + name + '(' + args + ')';
 const schemaOwner = 'cocinacore_schema_owner';
 const futureSql = Buffer.from('select 1;');
-if (process.env.FUTURE_015 === 'yes') {
+if (process.env.FUTURE_016 === 'yes') {
   manifest.migrations.push({
-    id: '015', filename: '015_future.sql', lane: 'migration',
+    id: '016', filename: '016_future.sql', lane: 'migration',
     sha256: crypto.createHash('sha256').update(futureSql).digest('hex'),
     byteLength: futureSql.length, transactional: 'required', legacyChecksumBackfillAllowed: false,
   });
@@ -197,13 +197,13 @@ fs.readFileSync = (file, options) => {
     const contents = Buffer.from(JSON.stringify(manifest));
     return options && typeof options === 'object' && options.encoding ? contents.toString(options.encoding) : contents;
   }
-  if (String(file).endsWith('/015_future.sql')) return futureSql;
+  if (String(file).endsWith('/016_future.sql')) return futureSql;
   return originalReadFileSync(file, options);
 };
 fs.readdirSync = (directory, options) => {
   const files = originalReaddirSync(directory, options);
-  return process.env.FUTURE_015 === 'yes' && String(directory) === path.dirname(process.env.MANIFEST_PATH)
-    ? [...files, '015_future.sql']
+  return process.env.FUTURE_016 === 'yes' && String(directory) === path.dirname(process.env.MANIFEST_PATH)
+    ? [...files, '016_future.sql']
     : files;
 };
 const queries = [];
@@ -307,8 +307,8 @@ class Pool {
           }
           let entries = manifest.migrations.map((entry) => ({ filename: entry.filename, checksum: entry.sha256 }));
           if (process.env.LEDGER === 'altered') entries[0].checksum = 'f'.repeat(64);
-          if (process.env.LEDGER === 'pending' || process.env.LEDGER === 'pending-015') entries = entries.slice(0, -1);
-          if (process.env.LEDGER === '014-unapplied') entries = entries.filter((entry) => !entry.filename.startsWith('014_'));
+          if (process.env.LEDGER === 'pending' || process.env.LEDGER === 'pending-016') entries = entries.slice(0, -1);
+          if (process.env.LEDGER === '014-unapplied') entries = entries.filter((entry) => !entry.filename.startsWith('014_') && !entry.filename.startsWith('015_'));
           if (process.env.LEDGER === 'unknown') entries = [...entries, { filename: '999_unexpected.sql', checksum: 'f'.repeat(64) }];
           if (process.env.LEDGER === 'out-of-order') entries = [entries[1]];
           return { rows: entries };
@@ -349,10 +349,10 @@ setTimeout(() => {
   if (!hasShapeCheck || !hasSecurityCheck) process.exitCode = 5;
 }, 0);
 `;
-function run(mode, ledger, future015 = false, separated = false, ownerFunctions = 'none', identity = 'valid', membership = 'valid') {
+function run(mode, ledger, future016 = false, separated = false, ownerFunctions = 'none', identity = 'valid', membership = 'valid') {
   return spawnSync(process.execPath, ['-e', harness], {
     encoding: 'utf8',
-    env: { RUNNER_PATH: runner, MANIFEST_PATH: path.join(root, 'db/migrations/manifest.json'), RUNNER_MODE: mode, LEDGER: ledger, FUTURE_015: future015 ? 'yes' : 'no', SEPARATED: separated ? 'yes' : 'no', OWNER_FUNCTIONS: ownerFunctions, IDENTITY: identity, MEMBERSHIP: membership, COCINACORE_SEPARATED_DB_LANES_ENABLED: separated ? 'true' : 'false', DATABASE_URL: 'postgresql://offline.invalid/test', MIGRATION_DATABASE_URL: 'postgresql://offline.invalid/test' },
+    env: { RUNNER_PATH: runner, MANIFEST_PATH: path.join(root, 'db/migrations/manifest.json'), RUNNER_MODE: mode, LEDGER: ledger, FUTURE_016: future016 ? 'yes' : 'no', SEPARATED: separated ? 'yes' : 'no', OWNER_FUNCTIONS: ownerFunctions, IDENTITY: identity, MEMBERSHIP: membership, COCINACORE_SEPARATED_DB_LANES_ENABLED: separated ? 'true' : 'false', DATABASE_URL: 'postgresql://offline.invalid/test', MIGRATION_DATABASE_URL: 'postgresql://offline.invalid/test' },
   });
 }
 for (const [ledger, expectedStatus, marker] of [
@@ -369,7 +369,7 @@ for (const [ledger, expectedStatus, marker] of [
     process.exit(1);
   }
 }
-const separatedIdentityResult = run('--verify-complete', 'pending', false, true);
+const separatedIdentityResult = run('--verify-complete', 'pending', false, true, 'valid');
 if (separatedIdentityResult.status !== 1 || !`${separatedIdentityResult.stdout}${separatedIdentityResult.stderr}`.includes('Pending migration:')) {
   console.error(`offline separated identity contract failed: status=${separatedIdentityResult.status} stdout=${separatedIdentityResult.stdout} stderr=${separatedIdentityResult.stderr}`);
   process.exit(1);
@@ -412,8 +412,8 @@ for (const [ledger, fixture, label] of [
     process.exit(1);
   }
 }
-const futureResult = run('--verify-complete', 'pending-015', true);
-if (futureResult.status !== 1 || !`${futureResult.stdout}${futureResult.stderr}`.includes('Pending migration: 015_future.sql')) {
+const futureResult = run('--verify-complete', 'pending-016', true);
+if (futureResult.status !== 1 || !`${futureResult.stdout}${futureResult.stderr}`.includes('Pending migration: 016_future.sql')) {
   console.error(`offline future migration contract failed: ${futureResult.stderr}`);
   process.exit(1);
 }
