@@ -1,6 +1,6 @@
 # M3.1 Shopping-to-Inventory Transfer
 
-**Status:** M3.1 implementation and the authorized lint correction are locally verified; the correction commit is pending the normal pre-commit hook. No push, PR, merge, or deployment is authorized.
+**Status:** M3.1 implementation and the authorized lint correction are locally verified and committed. No push, PR, merge, or deployment is authorized.
 
 **Base:** `ffd8afaf165b215d023c3a8c0d4a317b369c9ba8`
 **Source worktree:** `/Users/yoryiabreu/proyectos/cocinacore-worktrees/m3-1-shopping-inventory-transfer-20261017`
@@ -64,4 +64,4 @@ Task-document commits: `e976eb15ba7e3642efdc0fd06e4280029699291f` and `e5999026a
 3. [x] Do not reformat `db/migrations/manifest.json` or baseline content. M3.1-added transfer fields and `InventoryMovementType` union already match Prettier; remaining whole-file warnings are pre-existing.
 4. [x] Verify: focused Vitest **40/40**; target-validator Vitest **12/12**; `tsc --noEmit --incremental false` passed; ESLint across changed TS/TSX passed; Prettier on the changed test and this task document passed; connected E2E **2/2** passed with only the named ephemeral DB/Redis containers (5435/6381), app/provider ports 4320/4319, and no 3000/3001 use.
 5. [x] Independent read-only review found no issue in the guard or preserved SQL assertion semantics.
-6. [ ] Commit the test and task record with the normal pre-commit hook; record the resulting SHA in a follow-up. No merge/push/PR/deploy.
+6. [x] Commit the test and task record with the normal pre-commit hook: `11a0024bee24ca3e910bc26a66dc87b253efce55` (`test(shopping): guard SQL mock assertions`). Hook passed; no merge/push/PR/deploy.
