@@ -42,9 +42,26 @@ expect_vector_availability_state() {
   }
 }
 
+cleanup_vector_unavailable_diagnostics_self_test() {
+  SELF_TEST_EXIT_STATUS=$?
+  trap - EXIT
+  SELF_TEST_CLEANUP_STATUS=0
+  if [ -n "${REGRESSION_TEST_TMP:-}" ]; then
+    rm -rf "$REGRESSION_TEST_TMP" || SELF_TEST_CLEANUP_STATUS=1
+  fi
+  if [ -n "${VECTOR_DIAGNOSTIC_TEST_TMP:-}" ]; then
+    rm -rf "$VECTOR_DIAGNOSTIC_TEST_TMP" || SELF_TEST_CLEANUP_STATUS=1
+  fi
+  if [ "$SELF_TEST_EXIT_STATUS" -eq 0 ] && [ "$SELF_TEST_CLEANUP_STATUS" -ne 0 ]; then
+    SELF_TEST_EXIT_STATUS=$SELF_TEST_CLEANUP_STATUS
+  fi
+  exit "$SELF_TEST_EXIT_STATUS"
+}
+
 vector_unavailable_diagnostics_self_test() {
+  REGRESSION_TEST_TMP=
   VECTOR_DIAGNOSTIC_TEST_TMP=$(mktemp -d)
-  trap 'rm -rf "$VECTOR_DIAGNOSTIC_TEST_TMP"' EXIT
+  trap cleanup_vector_unavailable_diagnostics_self_test EXIT
   VECTOR_DIAGNOSTIC_TEST_LOG="$VECTOR_DIAGNOSTIC_TEST_TMP/provisioner.log"
   expect_vector_availability_state t yes
   expect_vector_availability_state f no
@@ -95,7 +112,6 @@ bootstrap_migrator_regression_self_test() {
   REGRESSION_TEST_SCRIPT="$REGRESSION_TEST_ROOT/scripts/test-bootstrap-migrator-integration.sh"
   REGRESSION_TEST_MANIFEST="$REGRESSION_TEST_ROOT/db/migrations/manifest.json"
   REGRESSION_TEST_TMP=$(mktemp -d)
-  trap 'rm -rf "$REGRESSION_TEST_TMP"' EXIT
   REGRESSION_TEST_FAILURES=0
 
   regression_assert() {
@@ -106,7 +122,19 @@ bootstrap_migrator_regression_self_test() {
 
   if command -v manifest_migration_count >/dev/null 2>&1; then
     REGRESSION_MANIFEST_COUNT=$(manifest_migration_count "$REGRESSION_TEST_MANIFEST")
-    regression_assert "$( [ "$REGRESSION_MANIFEST_COUNT" = 14 ] && printf yes || printf no )" 'manifest count is 14'
+    REGRESSION_EXPECTED_MANIFEST_COUNT=$(python3 - "$REGRESSION_TEST_MANIFEST" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as manifest_file:
+    manifest = json.load(manifest_file)
+migrations = manifest.get("migrations") if isinstance(manifest, dict) else None
+if not isinstance(migrations, list):
+    raise SystemExit("manifest migrations must be a list")
+print(len(migrations))
+PY
+)
+    regression_assert "$( [ "$REGRESSION_MANIFEST_COUNT" = "$REGRESSION_EXPECTED_MANIFEST_COUNT" ] && printf yes || printf no )" 'manifest migration count matches parsed entries'
   else
     regression_assert no 'manifest_migration_count interface is defined'
   fi
@@ -410,22 +438,27 @@ expect_provision_failure() {
 }
 
 make_fixture() {
-  target=$1; filename=$2; source=$3
+  target=$1; suffix=$2; source=$3
   mkdir -p "$target"
   cp "$ROOT"/db/migrations/*.sql "$target/"
   cp "$ROOT/db/migrations/manifest.json" "$target/manifest.json"
-  cp "$source" "$target/$filename"
-  python3 - "$target/manifest.json" "$target/$filename" "$filename" <<'PY'
+  GENERATED_FIXTURE_FILENAME=$(python3 - "$target/manifest.json" "$target" "$suffix" "$source" <<'PY'
 import hashlib, json, pathlib, sys
-manifest_path, migration_path, filename = map(pathlib.Path, sys.argv[1:])
+manifest_path, target, suffix, source = map(pathlib.Path, sys.argv[1:])
 manifest=json.loads(manifest_path.read_text())
-data=migration_path.read_bytes()
+fixture_id=f"{int(manifest['migrations'][-1]['id'])+1:03d}"
+filename=f"{fixture_id}_{suffix.name}"
+migration_path=target / filename
+data=source.read_bytes()
+migration_path.write_bytes(data)
 manifest['migrations'].append({
-  'id':'015','filename':str(filename),'lane':'migration','sha256':hashlib.sha256(data).hexdigest(),
+  'id':fixture_id,'filename':filename,'lane':'migration','sha256':hashlib.sha256(data).hexdigest(),
   'byteLength':len(data),'transactional':'required','legacyChecksumBackfillAllowed':False
 })
 manifest_path.write_text(json.dumps(manifest,indent=2)+'\n')
+print(filename)
 PY
+  )
 }
 
 # ---------------------------------------------------------------------------
@@ -686,7 +719,7 @@ for spec in 'begin:BEGIN:prohibited top-level' 'commit:COMMIT:prohibited top-lev
             'release:RELEASE:prohibited top-level' 'cr_comment:CR_COMMENT:prohibited top-level' \
             'backslash:BACKSLASH:prohibited top-level'; do
   name=${spec%%:*}; rest=${spec#*:}; label=${rest%%:*}; expected=${rest#*:}
-  dir="$TMP_ROOT/fixture-$name"; make_fixture "$dir" "015_${name}_fixture.sql" "$TMP_ROOT/$name.sql"
+  dir="$TMP_ROOT/fixture-$name"; make_fixture "$dir" "${name}_fixture.sql" "$TMP_ROOT/$name.sql"
   if MIGRATIONS_DIR="$dir" node "$ROOT/frontend/scripts/run-migrations.js" --lane migration --dry-run >"$LOG" 2>&1; then
     fail "$label fixture was accepted"
   fi
@@ -702,9 +735,9 @@ end
 $$;
 SQL
 FALSE_DIR="$TMP_ROOT/fixture-false-positive"
-make_fixture "$FALSE_DIR" 015_false_positive_fixture.sql "$TMP_ROOT/false-positive.sql"
+make_fixture "$FALSE_DIR" false_positive_fixture.sql "$TMP_ROOT/false-positive.sql"
 MIGRATIONS_DIR="$FALSE_DIR" node "$ROOT/frontend/scripts/run-migrations.js" --lane migration --dry-run >"$LOG" 2>&1
-grep -q '015_false_positive_fixture.sql' "$LOG" || fail 'lexer false-positive fixture was rejected'
+grep -Fq "$GENERATED_FIXTURE_FILENAME" "$LOG" || fail 'lexer false-positive fixture was rejected'
 
 # A changed historical file can never certify itself.
 MUTATED_DIR="$TMP_ROOT/mutated-history"
@@ -721,13 +754,13 @@ create table public.cp21_must_roll_back(id integer primary key);
 select public.cp21_missing_function();
 SQL
 FAILURE_DIR="$TMP_ROOT/fixture-failure"
-make_fixture "$FAILURE_DIR" 015_atomic_failure.sql "$TMP_ROOT/failure.sql"
+make_fixture "$FAILURE_DIR" atomic_failure.sql "$TMP_ROOT/failure.sql"
 if COCINACORE_SEPARATED_DB_LANES_ENABLED=true MIGRATION_DATABASE_URL="$MIGRATION_URL" \
    MIGRATIONS_DIR="$FAILURE_DIR" node "$ROOT/frontend/scripts/run-migrations.js" --lane migration >"$LOG" 2>&1; then
   fail 'failed migration succeeded'
 fi
 [ "$(admin_sql "$DB" "select to_regclass('public.cp21_must_roll_back') is null")" = t ] || fail 'failed migration left an object'
-[ "$(admin_sql "$DB" "select count(*) from schema_migrations where filename='015_atomic_failure.sql'")" = 0 ] || fail 'failed migration left a ledger row'
+[ "$(admin_sql "$DB" "select count(*) from schema_migrations where filename='$GENERATED_FIXTURE_FILENAME'")" = 0 ] || fail 'failed migration left a ledger row'
 
 # Shared advisory-lock matrix. A real first actor holds the exact key while the second executable times out.
 STAGE=advisory-locks
