@@ -28,6 +28,8 @@ const item = {
   ingredient_name: 'Arroz',
   quantity: '1 kg',
   status: 'pending' as const,
+  transfer_inventory_item_id: null,
+  transferred_at: null,
   created_at: '2026-03-16T00:00:00.000Z',
   updated_at: '2026-03-16T00:00:00.000Z',
 };
@@ -50,7 +52,9 @@ describe('/api/shopping-list', () => {
   });
 
   it('lists public items only in the authenticated tenant and user scope', async () => {
-    const response = await GET(request('/api/shopping-list?tenantId=other-tenant&userId=other-user'));
+    const response = await GET(
+      request('/api/shopping-list?tenantId=other-tenant&userId=other-user')
+    );
 
     expect(response.status).toBe(200);
     expect(listShoppingListItemsMock).toHaveBeenCalledWith('tenant-1', 'user-1', {});
@@ -62,6 +66,8 @@ describe('/api/shopping-list', () => {
           ingredient_name: item.ingredient_name,
           quantity: item.quantity,
           status: item.status,
+          transfer_inventory_item_id: null,
+          transferred_at: null,
           created_at: item.created_at,
           updated_at: item.updated_at,
         },
