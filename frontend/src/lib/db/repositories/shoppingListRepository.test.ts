@@ -207,7 +207,15 @@ describe('shoppingListRepository', () => {
         normalizedName: 'arroz',
       }
     );
-    expect(clientQuery.mock.calls.map(([sql]) => sql)).toEqual([
+    expect(
+      clientQuery.mock.calls.map(([sql]) => {
+        if (typeof sql !== 'string') {
+          throw new TypeError('Expected SQL query argument to be a string');
+        }
+
+        return sql;
+      })
+    ).toEqual([
       expect.stringContaining('for update'),
       expect.stringContaining('insert into public.inventory_movements'),
       expect.stringContaining('update public.shopping_list_items'),

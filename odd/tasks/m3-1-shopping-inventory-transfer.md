@@ -1,6 +1,6 @@
 # M3.1 Shopping-to-Inventory Transfer
 
-**Status:** Implementation and verification complete; preparing local work-unit commits in the clean closeout worktree with standard hooks. No push, PR, merge, or deployment is authorized.
+**Status:** M3.1 implementation and the authorized lint correction are locally verified; the correction commit is pending the normal pre-commit hook. No push, PR, merge, or deployment is authorized.
 
 **Base:** `ffd8afaf165b215d023c3a8c0d4a317b369c9ba8`
 **Source worktree:** `/Users/yoryiabreu/proyectos/cocinacore-worktrees/m3-1-shopping-inventory-transfer-20261017`
@@ -53,4 +53,15 @@ Native Gentle AI review was not started: the final workspace inspect reported on
 
 Hook notes: commits succeeded with standard hooks. The Guardian’s first M31-2 review attempt could not start Vitest because of `ERR_REQUIRE_ESM` involving `std-env`; its retry passed. The first harness review attempt raised a possible tenant-scope concern for culinary-profile fixture queries; the retry passed, and schema inspection confirmed profile rows are globally unique by `user_id` (profile terms by `(user_id, term_id, preference_type)`), so no tenant-composite key was omitted. The independently executed focused tests, typecheck, Prettier, and connected Playwright checks all passed.
 
-The task document is being committed separately to record these full SHAs. No push, PR, merge, or deployment.
+Task-document commits: `e976eb15ba7e3642efdc0fd06e4280029699291f` and `e5999026a4f5ad99a780521fcb5b3bcfb49b2d5e`. No push, PR, merge, or deployment.
+
+## Authorized lint follow-up
+
+**Scope:** Closeout branch `feat/m3-1-shopping-inventory-transfer-closeout-20261017` only. No changes to `main`, server 3000, habitual DB, protected files, or unrelated worktrees.
+
+1. [x] Confirm the introduced unsafe return in `frontend/src/lib/db/repositories/shoppingListRepository.test.ts` and compare formatting against `origin/main`.
+2. [x] Add a runtime string guard to the SQL mock call mapping; non-string arguments throw rather than being cast or coerced. Existing SQL assertions and order remain unchanged.
+3. [x] Do not reformat `db/migrations/manifest.json` or baseline content. M3.1-added transfer fields and `InventoryMovementType` union already match Prettier; remaining whole-file warnings are pre-existing.
+4. [x] Verify: focused Vitest **40/40**; target-validator Vitest **12/12**; `tsc --noEmit --incremental false` passed; ESLint across changed TS/TSX passed; Prettier on the changed test and this task document passed; connected E2E **2/2** passed with only the named ephemeral DB/Redis containers (5435/6381), app/provider ports 4320/4319, and no 3000/3001 use.
+5. [x] Independent read-only review found no issue in the guard or preserved SQL assertion semantics.
+6. [ ] Commit the test and task record with the normal pre-commit hook; record the resulting SHA in a follow-up. No merge/push/PR/deploy.
