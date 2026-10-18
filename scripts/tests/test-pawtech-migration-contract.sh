@@ -19,6 +19,36 @@ contains() {
 not_contains() {
   if grep -Eiq -- "$2" "$1"; then fail "$3"; fi
 }
+workflow_step() {
+  awk -v marker="      - name: $1" '
+    $0 == marker { found=1; next }
+    found && /^      - name:/ { exit }
+    found { print }
+  ' "$WORKFLOW"
+}
+step_contains() {
+  workflow_step "$1" | grep -Fq -- "$2" || fail "$3"
+}
+step_not_contains() {
+  if workflow_step "$1" | grep -Eiq -- "$2"; then fail "$3"; fi
+}
+step_outer_shell_is_strict() {
+  workflow_step "$1" | awk '
+    /^[[:space:]]+run:[[:space:]]*\|[[:space:]]*$/ { in_run=1; next }
+    in_run && /^[[:space:]]*$/ { next }
+    in_run { found=($0 ~ /^[[:space:]]+set -euo pipefail[[:space:]]*$/); exit }
+    END { exit !found }
+  '
+}
+workflow_step_run() {
+  awk -v marker="      - name: $1" '
+    $0 == marker { step=1; next }
+    step && /^      - name:/ { exit }
+    step && /^        run: \|[[:space:]]*$/ { in_run=1; next }
+    in_run && /^          / { sub(/^          /, ""); print; next }
+    in_run { exit }
+  ' "$WORKFLOW"
+}
 
 [ -f "$WORKFLOW" ] || fail 'manual production migration workflow is missing'
 [ -f "$MIGRATION" ] || fail 'VPS migration script is missing'
@@ -51,8 +81,67 @@ not_contains "$WORKFLOW" 'StrictHostKeyChecking=no|ssh-keyscan|echo.*VPS_SSH_KEY
 not_contains "$WORKFLOW" 'DATABASE_URL|MIGRATION_DATABASE_URL|PGPASSWORD' 'workflow must not transfer or configure database credentials'
 contains "$WORKFLOW" 'git archive --format=tar "$MIGRATION_SHA"' 'workflow must transfer an exact-SHA archive'
 contains "$WORKFLOW" 'sha256sum migration-source.tar' 'workflow must checksum the source archive'
-contains "$WORKFLOW" 'scp ' 'workflow must transfer the archive over SSH'
+contains "$WORKFLOW" 'docker build --progress=plain --pull=false' 'exact-SHA image must build visibly on the GitHub runner without pulling'
+contains "$WORKFLOW" '--label "org.opencontainers.image.revision=$MIGRATION_SHA"' 'runner image must carry the selected revision label'
+contains "$WORKFLOW" 'docker save "$IMAGE" -o migration-image.tar' 'runner must export the built image archive'
+contains "$WORKFLOW" 'sha256sum migration-image.tar' 'workflow must checksum the image archive'
+contains "$WORKFLOW" 'scp ' 'workflow must transfer source and image archives over SSH'
+contains "$WORKFLOW" 'docker load -i "$IMAGE_ARCHIVE"' 'image load must run in a separate non-mutating SSH step'
+contains "$WORKFLOW" 'sha256sum "$IMAGE_ARCHIVE" | awk '\''{print $1}'\''' 'VPS image load must verify the transferred image checksum'
+contains "$WORKFLOW" '$(awk '\''{print $1}'\'' "$IMAGE_SHA_FILE")' 'VPS image load must compare against the transferred checksum'
+contains "$WORKFLOW" 'if: success()' 'Apply must be explicitly gated on prior step success'
+contains "$WORKFLOW" 'ServerAliveInterval=30' 'SSH phases must configure server keepalives'
+contains "$WORKFLOW" 'ServerAliveCountMax=6' 'SSH phases must bound missed server keepalives'
+contains "$WORKFLOW" 'TCPKeepAlive=yes' 'SSH phases must enable TCP keepalives'
+contains "$WORKFLOW" 'ConnectTimeout=15' 'SSH phases must bound connection establishment'
+not_contains "$WORKFLOW" 'continue-on-error:|always\(\)|\|\|[[:space:]]*true' 'workflow must not swallow SSH failures or bypass the Apply gate'
 contains "$MIGRATION" 'sha256sum "$ARCHIVE" | awk '\''{print $1}'\''' 'VPS must validate the transferred archive checksum'
+contains "$MIGRATION" 'docker image inspect' 'VPS must verify the loaded image revision label'
+contains "$MIGRATION" '"$RELEASE_SHA" ] || fail '\''loaded migration image revision label mismatch'\''' 'VPS must fail closed on an unexpected image revision'
+contains "$WORKFLOW" 'docker image inspect --format' 'image load step must verify the revision label before Apply'
+not_contains "$MIGRATION" '^[[:space:]]*docker[[:space:]]+build([[:space:]]|$)' 'VPS migration script must never build an image'
+ssh_count=$(grep -Ec '^[[:space:]]*ssh ' "$WORKFLOW")
+scp_count=$(grep -Ec '^[[:space:]]*scp ' "$WORKFLOW")
+[ "$ssh_count" -eq 3 ] && [ "$scp_count" -eq 1 ] || fail 'expected distinct transfer-setup, load, Apply SSH phases and one SCP phase'
+for option in ServerAliveInterval=30 ServerAliveCountMax=6 TCPKeepAlive=yes ConnectTimeout=15; do
+  option_count=$(grep -Fc -- "-o $option" "$WORKFLOW")
+  [ "$option_count" -eq 4 ] || fail "every SSH/SCP phase must specify $option"
+done
+build_step_line=$(grep -nF 'name: Build exact-SHA migration image on runner' "$WORKFLOW" | cut -d: -f1)
+transfer_step_line=$(grep -nF 'name: Transfer exact-SHA source and image archives to VPS' "$WORKFLOW" | cut -d: -f1)
+load_step_line=$(grep -nF 'name: Load and verify migration image on VPS' "$WORKFLOW" | cut -d: -f1)
+apply_step_line=$(grep -nF 'name: Apply exact-SHA production migration procedure' "$WORKFLOW" | cut -d: -f1)
+[ "$build_step_line" -lt "$transfer_step_line" ] && [ "$transfer_step_line" -lt "$load_step_line" ] && [ "$load_step_line" -lt "$apply_step_line" ] || fail 'build, transfer, load, and Apply workflow steps must be strictly ordered'
+# A broken pipe or SSH exit 255 must stop the current step and cannot reach Apply.
+step_contains 'Build exact-SHA migration image on runner' 'set -euo pipefail' 'runner build must fail closed on errors'
+step_contains 'Transfer exact-SHA source and image archives to VPS' 'set -euo pipefail' 'archive transfer must fail closed on SSH errors'
+step_contains 'Load and verify migration image on VPS' 'set -euo pipefail' 'image load must fail closed on SSH exit 255'
+step_contains 'Apply exact-SHA production migration procedure' 'set -euo pipefail' 'Apply must fail closed on SSH errors'
+for step in 'Build exact-SHA migration image on runner' 'Transfer exact-SHA source and image archives to VPS' 'Load and verify migration image on VPS' 'Apply exact-SHA production migration procedure'; do
+  step_outer_shell_is_strict "$step" || fail "outer Actions shell for '$step' must begin with strict mode"
+done
+step_contains 'Apply exact-SHA production migration procedure' 'if: success()' 'Apply must run only after build, transfer, and load all succeed'
+step_not_contains 'Load and verify migration image on VPS' 'docker build|run-migrations|backup-pawtech' 'image-load step must be non-mutating and cannot apply DDL'
+step_not_contains 'Apply exact-SHA production migration procedure' 'docker build' 'SSH Apply payload must not build an orphanable image before DDL'
+step_not_contains 'Build exact-SHA migration image on runner' '^[[:space:]]*(ssh|scp)[[:space:]]' 'image build must remain on the GitHub runner, not the VPS'
+not_contains "$WORKFLOW" 'continue-on-error:|always\(\)|\|\|[[:space:]]*true' 'SSH/build failures must not be swallowed or bypass the Apply gate'
+# Exercise the actual Load step shell with an SSH disconnect (exit 255).
+# The failure must propagate; the separate Apply step is statically success-gated above.
+disconnect_tmp=$(mktemp -d)
+trap 'rm -rf -- "$disconnect_tmp"' EXIT HUP INT TERM
+mkdir -p "$disconnect_tmp/bin" "$disconnect_tmp/home/.ssh"
+printf '#!/bin/sh\nexit 255\n' > "$disconnect_tmp/bin/ssh"
+chmod 700 "$disconnect_tmp/bin/ssh"
+load_run=$(workflow_step_run 'Load and verify migration image on VPS')
+[ -n "$load_run" ] || fail 'could not extract the actual image-load run block for disconnect test'
+if PATH="$disconnect_tmp/bin:$PATH" HOME="$disconnect_tmp/home" VPS_HOST=example.invalid VPS_USER=runner MIGRATION_SHA=0123456789012345678901234567890123456789 RUN_ID=1 RUN_ATTEMPT=1 bash -euo pipefail -c "$load_run" >/dev/null 2>&1; then
+  fail 'simulated SSH exit 255 must fail the image-load step'
+else
+  load_status=$?
+fi
+[ "$load_status" -eq 255 ] || fail 'SSH disconnect status must propagate unchanged and skip success-gated Apply'
+rm -rf -- "$disconnect_tmp"
+trap - EXIT HUP INT TERM
 not_contains "$MIGRATION" '^[[:space:]]*git[[:space:]]+(fetch|checkout|switch)([[:space:]]|$)' 'VPS procedure must not fetch or checkout Git source'
 not_contains "$WORKFLOW" 'DATABASE_URL.*(echo|printf|log)| (echo|printf|log).*DATABASE_URL' 'workflow must not print or transmit database credentials'
 
