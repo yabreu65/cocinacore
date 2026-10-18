@@ -4,7 +4,8 @@
 2. [x] **Verify GitHub manual-dispatch constraints** — At the baseline inspected for this task, the CI workflow had no `workflow_dispatch`; the implementation commit adds it. Official GitHub documentation says the workflow must be on the default branch to receive manual dispatch; REST `ref` accepts a branch or tag, not an arbitrary commit SHA. A run uses the event's associated ref/commit; verify `head_sha` rather than infer exact-SHA coverage. Do not claim that an unmerged configuration PR validates PR #28's SHA.
 3. [x] **Add the minimal manual CI trigger** — Commit `d575b6e3a87317347c1ef23e1f041eb854e28495` adds only `workflow_dispatch:` under `.github/workflows/ci.yml` top-level `on:`; existing `pull_request` and `push` triggers remain intact.
 4. [x] **Validate and review the isolated change** — Ruby Psych parsed the workflow; trigger assertions and `git diff --check` passed; Guardian passed. Native review approved the exact two-path candidate at high risk with all four lenses, and its acknowledgement completed. Lineage: `review-d303b9453b0b767f`; target: `sha256:112b5468af4400f21e203d83fca35bea6da430c9234be56bac547f515c2417b7`.
-5. [ ] **Commit and open a separate PR** — Commits are recorded below. Verify approved issue #21, push the isolated branch, open the separate PR with exactly one appropriate type label, and report the GitHub default-branch/ref limitation. Do not merge. Do not claim CI validated SHA `222ab230...` unless a run's `head_sha` exactly matches. — in progress.
+5. [x] **Commit and open a separate PR** — Pushed `ci/workflow-dispatch-20261018` and opened [PR #29](https://github.com/yabreu65/cocinacore/pull/29), linked to approved issue #21 with exactly one available type label, `type:feature`. No merge.
+6. [ ] **Verify latest PR heads and CI evidence** — At PR creation, #29 was open at `cd10e9c35e6da4a12fde7f78a80c49da78f82056` with CI run #77 in progress; PR #28 remained open at `222ab230245ac29884c9417179840c63a287af55` with no exact-head run/status/checks. The ODD update changes #29's head; re-query its exact checks and report without claiming #28 validated. — in progress.
 
 ## Scope and safety
 
@@ -26,4 +27,6 @@
 
 - Implementation commit: `d575b6e3a87317347c1ef23e1f041eb854e28495` (`ci(workflows): enable manual CI dispatch`).
 - Native review: approved at high risk with four lenses; exact acknowledgement completed for the candidate above.
-- Dedicated PR and CI evidence: pending; PR #28 SHA `222ab230...` remains unvalidated.
+- Dedicated PR: [#29](https://github.com/yabreu65/cocinacore/pull/29), OPEN, base `main`, linked issue #21, label `type:feature`.
+- At PR creation, head was `cd10e9c35e6da4a12fde7f78a80c49da78f82056`; CI run #77 (`pull_request`) was in progress. Recheck after this ODD record update changes the PR head.
+- PR #28 remains OPEN at exact SHA `222ab230245ac29884c9417179840c63a287af55`; no exact-head Actions run/check-run was found. It is not CI-validated.
