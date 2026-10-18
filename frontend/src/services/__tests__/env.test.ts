@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { buildStandaloneServerFixtureEnv } from '../../../e2e/standalone-server-env';
 import { getOptionalServerSecret, getServerEnvSecrets, getServerSecret } from '../env';
 
 const ORIGINAL_ENV = process.env;
@@ -52,38 +53,40 @@ describe('server environment validation', () => {
   });
 });
 
-describe('Playwright standalone Gemini fixture environment', () => {
-  async function getStandaloneServerEnv() {
-    vi.resetModules();
-    const { default: config } = await import('../../../playwright.config');
-    const webServers = Array.isArray(config.webServer)
-      ? config.webServer
-      : config.webServer
-        ? [config.webServer]
-        : [];
-    const standaloneServer = webServers.find((server) =>
-      server.command.includes('node .next/standalone/server.js')
+describe('standalone server fixture environment', () => {
+  it('uses deterministic Gemini fixtures instead of ambient values', () => {
+    const fixtureEnv = buildStandaloneServerFixtureEnv(
+      {
+        GEMINI_API_KEY: 'CHANGE_ME',
+        GEMINI_BASE_URL: 'https://ambient.invalid/v1beta',
+      },
+      4319
     );
 
-    expect(standaloneServer).toBeDefined();
-    return standaloneServer?.env;
-  }
-
-  it('uses the deterministic fixture key instead of an ambient placeholder', async () => {
-    process.env = { ...ORIGINAL_ENV, GEMINI_API_KEY: 'CHANGE_ME' };
-
-    expect((await getStandaloneServerEnv())?.GEMINI_API_KEY).toBe('e2e-gemini-key');
+    expect(fixtureEnv.GEMINI_API_KEY).toBe('e2e-gemini-key');
+    expect(fixtureEnv.GEMINI_BASE_URL).toBe('http://127.0.0.1:4319/v1beta');
   });
 
-  it('uses the local fixture URL instead of an ambient external base URL', async () => {
-    process.env = {
-      ...ORIGINAL_ENV,
-      GEMINI_BASE_URL: 'https://ambient.invalid/v1beta',
-    };
-
-    expect((await getStandaloneServerEnv())?.GEMINI_BASE_URL).toBe(
-      'http://127.0.0.1:4319/v1beta'
-    );
+  it('preserves auth and storage defaults and accepts configured values', () => {
+    expect(buildStandaloneServerFixtureEnv({}, 4319)).toMatchObject({
+      AUTH_SECRET: 'e2e-auth-secret-change-me',
+      STORAGE_DRIVER: 'local',
+      LOCAL_UPLOAD_DIR: './uploads',
+    });
+    expect(
+      buildStandaloneServerFixtureEnv(
+        {
+          AUTH_SECRET: 'configured-auth-secret',
+          STORAGE_DRIVER: 's3',
+          LOCAL_UPLOAD_DIR: '/configured/uploads',
+        },
+        4319
+      )
+    ).toMatchObject({
+      AUTH_SECRET: 'configured-auth-secret',
+      STORAGE_DRIVER: 's3',
+      LOCAL_UPLOAD_DIR: '/configured/uploads',
+    });
   });
 
   it('keeps CHANGE_ME invalid for the application Gemini configuration', async () => {

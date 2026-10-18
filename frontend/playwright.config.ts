@@ -1,4 +1,39 @@
 import { defineConfig, devices } from '@playwright/test';
+import { applyValidatedTargetsToRunner } from './e2e/database-target';
+import { buildStandaloneServerFixtureEnv } from './e2e/standalone-server-env';
+
+const targets = applyValidatedTargetsToRunner(process.env);
+const configuredAppPort = process.env.E2E_APP_PORT ?? '4320';
+const appPort = Number(configuredAppPort);
+const configuredProviderPort = process.env.E2E_PROVIDER_PORT ?? '4319';
+const providerPort = Number(configuredProviderPort);
+if (
+  !/^\d+$/.test(configuredAppPort) ||
+  !Number.isInteger(appPort) ||
+  appPort < 1 ||
+  appPort > 65535
+) {
+  throw new Error('E2E_APP_PORT must be an integer from 1 to 65535.');
+}
+if (
+  !/^\d+$/.test(configuredProviderPort) ||
+  !Number.isInteger(providerPort) ||
+  providerPort < 1 ||
+  providerPort > 65535
+) {
+  throw new Error('E2E_PROVIDER_PORT must be an integer from 1 to 65535.');
+}
+
+console.info('[e2e] validated targets (credentials redacted)', {
+  runner: {
+    database: targets.databaseTarget,
+    redis: targets.redisTarget,
+  },
+  appServer: {
+    database: targets.databaseTarget,
+    redis: targets.redisTarget,
+  },
+});
 
 const standaloneServerCommand = [
   'npm run build',
@@ -6,7 +41,7 @@ const standaloneServerCommand = [
   'rm -rf .next/standalone/.next/static .next/standalone/public',
   'cp -R .next/static .next/standalone/.next/static',
   'cp -R public .next/standalone/public',
-  'PORT=3000 HOSTNAME=0.0.0.0 node .next/standalone/server.js',
+  `PORT=${appPort} HOSTNAME=127.0.0.1 node .next/standalone/server.js`,
 ].join(' && ');
 
 export default defineConfig({
@@ -18,7 +53,7 @@ export default defineConfig({
   workers: 1,
   reporter: 'html',
   use: {
-    baseURL: 'http://localhost:3000',
+    baseURL: `http://127.0.0.1:${appPort}`,
     trace: 'on-first-retry',
   },
   projects: [
@@ -29,25 +64,18 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: 'node e2e/provider-server.mjs',
-      url: 'http://127.0.0.1:4319/__e2e/health',
+      command: `E2E_PROVIDER_PORT=${providerPort} HOSTNAME=127.0.0.1 node e2e/provider-server.mjs`,
+      url: `http://127.0.0.1:${providerPort}/__e2e/health`,
       reuseExistingServer: false,
     },
     {
       command: standaloneServerCommand,
-      url: 'http://localhost:3000',
+      url: `http://127.0.0.1:${appPort}`,
       reuseExistingServer: false,
       env: {
-        DATABASE_URL:
-          process.env.DATABASE_URL ??
-          'postgresql://cocinacore_user:cocinacore_password@localhost:5433/cocinacore_local_db',
-        REDIS_URL:
-          process.env.E2E_REDIS_URL ?? process.env.REDIS_URL ?? 'redis://localhost:6379/15',
-        AUTH_SECRET: process.env.AUTH_SECRET ?? 'e2e-auth-secret-change-me',
-        GEMINI_API_KEY: 'e2e-gemini-key',
-        GEMINI_BASE_URL: 'http://127.0.0.1:4319/v1beta',
-        STORAGE_DRIVER: process.env.STORAGE_DRIVER ?? 'local',
-        LOCAL_UPLOAD_DIR: process.env.LOCAL_UPLOAD_DIR ?? './uploads',
+        ...buildStandaloneServerFixtureEnv(process.env, providerPort),
+        DATABASE_URL: targets.databaseUrl,
+        REDIS_URL: targets.redisUrl,
       },
     },
   ],

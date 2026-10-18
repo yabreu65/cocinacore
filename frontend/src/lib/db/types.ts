@@ -7,7 +7,11 @@ export type PremiumRecipeStatus = 'published' | 'withdrawn' | 'moderation_hidden
 export type PremiumReportStatus = 'open' | 'reviewing' | 'resolved' | 'dismissed';
 export type ShoppingItemStatus = 'pending' | 'purchased';
 export type PreferenceType = 'identity' | 'prefer' | 'avoid' | 'goal';
-export type InventoryMovementType = 'purchase' | 'recipe_consumption' | 'manual_adjustment' | 'correction';
+export type InventoryMovementType =
+  | 'purchase'
+  | 'recipe_consumption'
+  | 'manual_adjustment'
+  | 'correction';
 export type OptimizationMode =
   | 'reduce_waste'
   | 'optimize_cost'
@@ -169,6 +173,8 @@ export interface ShoppingListItemRow {
   ingredient_name: string;
   quantity: string | null;
   status: ShoppingItemStatus;
+  transfer_inventory_item_id: string | null;
+  transferred_at: string | null;
   created_at: string;
   updated_at: string;
 }

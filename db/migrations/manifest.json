@@ -118,6 +118,17 @@
     ],
     "autoRunOnDeploy": false
   },
+  "legacyLineages": [
+    {
+      "anchor": "010_password_reset_tokens.sql",
+      "filenames": [
+        "011_mfa.sql",
+        "012_tenant_rls_stage.sql",
+        "013_platform_operator_stage.sql"
+      ],
+      "ledgerMode": "legacy-two-column"
+    }
+  ],
   "migrations": [
     {
       "id": "001",
@@ -318,6 +329,22 @@
           "kind": "trigger",
           "schema": "public",
           "identity": "culinary_dimensions.culinary_dimensions_profile_key_immutable_trigger"
+        }
+      ]
+    },
+    {
+      "id": "015",
+      "filename": "015_shopping_inventory_transfer.sql",
+      "lane": "migration",
+      "sha256": "17f47c1faefb63d7bfeba95b3e503a2d5375a716a045b480779a603891026370",
+      "byteLength": 392,
+      "transactional": "required",
+      "legacyChecksumBackfillAllowed": false,
+      "catalogAdditions": [
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "shopping_list_items.shopping_list_items_transfer_marker_pair_check"
         }
       ]
     }

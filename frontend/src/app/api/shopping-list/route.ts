@@ -14,6 +14,8 @@ type PublicShoppingListItem = Pick<
   | 'ingredient_name'
   | 'quantity'
   | 'status'
+  | 'transfer_inventory_item_id'
+  | 'transferred_at'
   | 'created_at'
   | 'updated_at'
 >;
@@ -25,6 +27,8 @@ function toPublicShoppingListItem(row: ShoppingListItemRow): PublicShoppingListI
     ingredient_name: row.ingredient_name,
     quantity: row.quantity,
     status: row.status,
+    transfer_inventory_item_id: row.transfer_inventory_item_id,
+    transferred_at: row.transferred_at,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };

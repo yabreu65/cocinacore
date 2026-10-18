@@ -1,6 +1,15 @@
 import { mapSingleRow, query, transaction } from '@/lib/db';
-import type { ShoppingItemStatus, ShoppingListItemRow } from '@/lib/db/types';
-import { normalizeInventoryName } from '@/lib/inventory/normalize-inventory';
+import type {
+  ShoppingItemStatus,
+  ShoppingListItemRow,
+  RecipeInventoryItemRow,
+} from '@/lib/db/types';
+import { createInventoryItemInTransaction } from '@/lib/db/repositories/inventoryRepository';
+import {
+  detectInventoryCategory,
+  normalizeInventoryName,
+} from '@/lib/inventory/normalize-inventory';
+import { normalizeUnit, parseQuantity } from '@/lib/inventory/quantity-normalization';
 
 export interface CreateShoppingListItemInput {
   tenantId: string;
@@ -12,6 +21,18 @@ export interface CreateShoppingListItemInput {
 
 export interface ShoppingListFilter {
   status?: ShoppingItemStatus;
+}
+
+export class ShoppingListTransferError extends Error {
+  constructor(readonly code: 'not_purchased' | 'invalid_quantity' | 'inventory_missing') {
+    super(code);
+    this.name = 'ShoppingListTransferError';
+  }
+}
+
+export interface ShoppingListTransferResult {
+  item: ShoppingListItemRow;
+  inventoryItem: RecipeInventoryItemRow;
 }
 
 export interface MealPlanShoppingItemInput {
@@ -105,6 +126,78 @@ export async function addMealPlanShoppingItems(
     }
 
     return { added, alreadyPresent };
+  });
+}
+
+export async function transferPurchasedShoppingListItem(
+  id: string,
+  tenantId: string,
+  userId: string
+): Promise<ShoppingListTransferResult | null> {
+  return transaction(async (client) => {
+    const itemResult = await client.query<ShoppingListItemRow>(
+      `select * from public.shopping_list_items
+       where id = $1 and tenant_id = $2 and user_id = $3
+       for update`,
+      [id, tenantId, userId]
+    );
+    const item = itemResult.rows[0];
+    if (!item) return null;
+
+    if (item.transfer_inventory_item_id) {
+      const inventoryResult = await client.query<RecipeInventoryItemRow>(
+        `select * from public.recipe_inventory_items
+         where id = $1 and tenant_id = $2 and user_id = $3`,
+        [item.transfer_inventory_item_id, tenantId, userId]
+      );
+      const inventoryItem = inventoryResult.rows[0];
+      if (!inventoryItem) throw new ShoppingListTransferError('inventory_missing');
+      return { item, inventoryItem };
+    }
+
+    if (item.status !== 'purchased') throw new ShoppingListTransferError('not_purchased');
+    const parsed = item.quantity === null ? null : parseQuantity(item.quantity);
+    const hasExplicitUnit = item.quantity !== null && item.quantity.trim().split(/\s+/).length > 1;
+    if (
+      !parsed?.structured ||
+      !hasExplicitUnit ||
+      parsed.value === null ||
+      parsed.value <= 0 ||
+      parsed.unit === 'unknown'
+    ) {
+      throw new ShoppingListTransferError('invalid_quantity');
+    }
+
+    const normalizedName = normalizeInventoryName(item.ingredient_name);
+    const unit = normalizeUnit(parsed.unit);
+    if (!normalizedName || unit === 'unknown')
+      throw new ShoppingListTransferError('invalid_quantity');
+    const inventoryItem = await createInventoryItemInTransaction(client, {
+      tenantId,
+      userId,
+      ingredientName: item.ingredient_name,
+      quantity: String(parsed.value),
+      unit,
+      category: detectInventoryCategory(item.ingredient_name),
+      normalizedName,
+    });
+
+    await client.query(
+      `insert into public.inventory_movements
+       (tenant_id, user_id, inventory_item_id, movement_type, quantity, unit, normalized_name, source)
+       values ($1, $2, $3, 'purchase', $4, $5, $6, 'shopping_list')`,
+      [tenantId, userId, inventoryItem.id, parsed.value, unit, normalizedName]
+    );
+    const updatedResult = await client.query<ShoppingListItemRow>(
+      `update public.shopping_list_items
+       set transfer_inventory_item_id = $1, transferred_at = now(), updated_at = now()
+       where id = $2 and tenant_id = $3 and user_id = $4
+       returning *`,
+      [inventoryItem.id, id, tenantId, userId]
+    );
+    const transferredItem = updatedResult.rows[0];
+    if (!transferredItem) throw new Error('Failed to persist shopping transfer marker');
+    return { item: transferredItem, inventoryItem };
   });
 }
 

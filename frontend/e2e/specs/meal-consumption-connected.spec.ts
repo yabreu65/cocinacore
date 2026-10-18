@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { expect, test, type Page } from '@playwright/test';
 import { Pool } from 'pg';
+import { installResponseCookies } from '../fixtures/auth';
 
 const DATABASE_URL =
   process.env.DATABASE_URL ??
@@ -48,9 +49,10 @@ async function createTestIdentity(
     },
   });
   if (!response.ok()) throw new Error(`M1.6 test account signup failed (${response.status()}).`);
+  await installResponseCookies(page, response);
 
   const profileResponse = await page.request.get('/api/profile');
-  expect(profileResponse.ok()).toBeTruthy();
+  expect(profileResponse.status(), 'profile request after signup').toBe(200);
   const payload = (await profileResponse.json()) as {
     user?: { id?: string; tenant?: { tenantId?: string } | null };
   };

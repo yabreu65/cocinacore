@@ -167,7 +167,8 @@ test.describe('Shopping List UI', () => {
 
     await page.getByLabel(/ingrediente/i).fill('Leche');
     await page.getByLabel(/cantidad/i).fill('1 litro');
-    await page.getByRole('button', { name: /agregar/i }).click();
+    const manualAddForm = page.locator('form').filter({ has: page.getByLabel(/ingrediente/i) });
+    await manualAddForm.getByRole('button', { name: 'Agregar', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Leche' })).toBeVisible();
     expect(api.requests.find((request) => request.method === 'POST')?.body).toEqual({
       ingredientName: 'Leche',
@@ -204,7 +205,8 @@ test.describe('Shopping List UI', () => {
 
     api.fail('POST');
     await page.getByLabel(/ingrediente/i).fill('Queso');
-    await page.getByRole('button', { name: /agregar/i }).click();
+    const manualAddForm = page.locator('form').filter({ has: page.getByLabel(/ingrediente/i) });
+    await manualAddForm.getByRole('button', { name: 'Agregar', exact: true }).click();
     await expect(page.getByRole('alert').filter({ hasText: 'No se pudo guardar el artículo.' })).toBeVisible();
     await expect(page.getByText('Queso')).toHaveCount(0);
 

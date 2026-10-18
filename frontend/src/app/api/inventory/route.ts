@@ -8,8 +8,50 @@ import {
 } from '@/lib/db/repositories/inventoryRepository';
 import { detectInventoryCategory, normalizeInventoryName } from '@/lib/inventory/normalize-inventory';
 
+interface InventoryItemBody {
+  id?: string;
+  ingredientName?: string;
+  quantity?: string;
+  unit?: string;
+  category?: string;
+  expirationDate?: string;
+  estimatedUnitPrice?: string;
+  purchaseLocation?: string;
+  lowStockThreshold?: string;
+  notes?: string;
+}
+
+function isInventoryItemBody(body: unknown): body is InventoryItemBody {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
+
+  const candidate = body as Record<string, unknown>;
+  const textFields = [
+    'id',
+    'ingredientName',
+    'quantity',
+    'unit',
+    'category',
+    'expirationDate',
+    'estimatedUnitPrice',
+    'purchaseLocation',
+    'lowStockThreshold',
+    'notes',
+  ] as const;
+
+  return textFields.every((field) => candidate[field] === undefined || typeof candidate[field] === 'string');
+}
+
 export async function GET() {
-  const tenant = await requireTenant();
+  let tenant: Awaited<ReturnType<typeof requireTenant>>;
+  try {
+    tenant = await requireTenant();
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Unauthorized') {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    throw error;
+  }
+
   const items = await listInventoryItemsByTenant(tenant.tenantId);
   return NextResponse.json({ items });
 }
@@ -20,7 +62,7 @@ export async function POST(request: NextRequest) {
   const authUser = await requireUser();
 
   const body: unknown = await request.json().catch(() => null);
-  if (!body || typeof body !== 'object') {
+  if (!isInventoryItemBody(body)) {
     return NextResponse.json({ error: 'Invalid body' }, { status: 400 });
   }
 
@@ -35,28 +77,24 @@ export async function POST(request: NextRequest) {
     purchaseLocation,
     lowStockThreshold,
     notes,
-  } = body as {
-    id?: string;
-    ingredientName?: string;
-    quantity?: string;
-    unit?: string;
-    category?: string;
-    expirationDate?: string;
-    estimatedUnitPrice?: string;
-    purchaseLocation?: string;
-    lowStockThreshold?: string;
-    notes?: string;
-  };
+  } = body;
 
   const name = ingredientName?.trim();
-  if (!name) {
-    return NextResponse.json({ error: 'Ingredient name is required' }, { status: 400 });
-  }
-
   const parsedEstimatedUnitPrice = estimatedUnitPrice?.trim()
     ? Number(estimatedUnitPrice)
     : null;
   const parsedLowStockThreshold = lowStockThreshold?.trim() ? Number(lowStockThreshold) : null;
+
+  if (
+    (parsedEstimatedUnitPrice !== null && !Number.isFinite(parsedEstimatedUnitPrice)) ||
+    (parsedLowStockThreshold !== null && !Number.isFinite(parsedLowStockThreshold))
+  ) {
+    return NextResponse.json({ error: 'Invalid body' }, { status: 400 });
+  }
+
+  if (!name) {
+    return NextResponse.json({ error: 'Ingredient name is required' }, { status: 400 });
+  }
 
   if (id) {
     const updated = await updateInventoryItem(id, tenant.tenantId, {

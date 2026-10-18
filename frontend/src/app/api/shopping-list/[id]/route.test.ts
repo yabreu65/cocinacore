@@ -29,6 +29,8 @@ const item = {
   ingredient_name: 'Arroz',
   quantity: '1 kg',
   status: 'purchased' as const,
+  transfer_inventory_item_id: 'inventory-1',
+  transferred_at: '2026-03-16T01:00:00.000Z',
   created_at: '2026-03-16T00:00:00.000Z',
   updated_at: '2026-03-16T01:00:00.000Z',
 };
@@ -54,35 +56,40 @@ describe('/api/shopping-list/[id]', () => {
     deleteShoppingListItemMock.mockResolvedValue(item);
   });
 
-  it.each(['pending', 'purchased'] as const)('updates a valid %s status in authenticated scope', async (status) => {
-    const response = await PATCH(
-      request({
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status, tenantId: 'other-tenant', userId: 'other-user' }),
-      }),
-      context()
-    );
+  it.each(['pending', 'purchased'] as const)(
+    'updates a valid %s status in authenticated scope',
+    async (status) => {
+      const response = await PATCH(
+        request({
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status, tenantId: 'other-tenant', userId: 'other-user' }),
+        }),
+        context()
+      );
 
-    expect(response.status).toBe(200);
-    expect(updateShoppingListItemStatusMock).toHaveBeenCalledWith(
-      itemId,
-      'tenant-1',
-      'user-1',
-      status
-    );
-    expect(await response.json()).toEqual({
-      item: {
-        id: item.id,
-        source: item.source,
-        ingredient_name: item.ingredient_name,
-        quantity: item.quantity,
-        status: item.status,
-        created_at: item.created_at,
-        updated_at: item.updated_at,
-      },
-    });
-  });
+      expect(response.status).toBe(200);
+      expect(updateShoppingListItemStatusMock).toHaveBeenCalledWith(
+        itemId,
+        'tenant-1',
+        'user-1',
+        status
+      );
+      expect(await response.json()).toEqual({
+        item: {
+          id: item.id,
+          source: item.source,
+          ingredient_name: item.ingredient_name,
+          quantity: item.quantity,
+          status: item.status,
+          transfer_inventory_item_id: item.transfer_inventory_item_id,
+          transferred_at: item.transferred_at,
+          created_at: item.created_at,
+          updated_at: item.updated_at,
+        },
+      });
+    }
+  );
 
   it('rejects invalid ids and status changes outside the pending/purchased contract', async () => {
     const invalidId = await PATCH(

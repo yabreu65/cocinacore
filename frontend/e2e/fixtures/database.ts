@@ -1,11 +1,9 @@
 import { type Page } from '@playwright/test';
 import Redis from 'ioredis';
 import { Pool } from 'pg';
+import { validateE2ETargets } from '../database-target';
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgresql://cocinacore_user:cocinacore_password@localhost:5433/cocinacore_local_db';
-const REDIS_URL = process.env.E2E_REDIS_URL ?? process.env.REDIS_URL ?? 'redis://localhost:6379/15';
+const { databaseUrl: DATABASE_URL, redisUrl: REDIS_URL } = validateE2ETargets(process.env);
 const VECTOR_1536 = `[${Array.from({ length: 1536 }, () => '1').join(',')}]`;
 
 let pool: Pool | null = null;
