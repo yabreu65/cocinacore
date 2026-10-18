@@ -30,7 +30,20 @@ printf '%s\n' "$preflight" | grep -Fq 'timeout>300000' ||
   fail 'preflight timeout values must use the canonical 300000 ms maximum'
 printf '%s\n' "$preflight" | grep -Fq 'connectionTimeoutMillis:5000' ||
   fail 'preflight must retain its separate client-side connection timeout'
-! printf '%s\n' "$SCRIPT" | grep -Eiq '(echo|printf|log|console\.(log|error))[^[:cntrl:]]*DATABASE_URL' ||
-  fail 'migration script must not expose DATABASE_URL in output'
+leak_pattern="(echo|log|fail)[^[:cntrl:]]*\\\$DATABASE_URL"
+printf '%s\n' "echo \"\$DATABASE_URL\"" | grep -Eiq "$leak_pattern" ||
+  fail 'secret-output detector must reject a representative DATABASE_URL leak'
+! grep -Eiq "$leak_pattern" "$SCRIPT" ||
+  fail 'migration script must not print the runtime DATABASE_URL value'
+secret_printf_lines=$(grep -E 'printf .*DATABASE_URL' "$SCRIPT" || true)
+[ "$(printf '%s\n' "$secret_printf_lines" | grep -c .)" -eq 1 ] ||
+  fail 'runtime DATABASE_URL may only be written once to a private env file'
+printf '%s\n' "$secret_printf_lines" | grep -Fq 'DATABASE_ENV_FILE' ||
+  fail 'runtime DATABASE_URL must only be written to the temporary env file'
+printf '%s\n' "$secret_printf_lines" | grep -Fq '>' ||
+  fail 'runtime DATABASE_URL must not be printed to stdout'
+private_chmod_line=$(grep -E 'chmod 600.*DATABASE_ENV_FILE' "$SCRIPT" || true)
+[ -n "$private_chmod_line" ] ||
+  fail 'temporary database env file must be private'
 
 printf '%s\n' 'pawtech migration contract passed'
