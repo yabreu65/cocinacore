@@ -9,6 +9,8 @@
 - Confirm the environment's SSH credentials and trusted `VPS_SSH_KNOWN_HOSTS` entry are maintained under existing access controls. SSH uses strict host-key checking; never substitute `ssh-keyscan` or disable verification.
 - Require a **fresh** migration preflight immediately before any approved migration attempt. Do not reuse old observations or evidence.
 
+The SHA validation uses the remote `origin/main` reference already fetched by `actions/checkout` with `fetch-depth: 0`, rather than a second unauthenticated `git fetch` (which fails for this private repository). Checkout credentials remain non-persistent.
+
 The workflow transfers a checksummed archive built from the selected SHA; the VPS does not fetch or checkout Git source. The database credential is read only from the existing VPS runtime environment `/opt/pawtech/env/cocinacore.env`. It is never transferred to GitHub, printed, or changed. No replacement credential or database role is provisioned.
 
 ## Fail-closed procedure

@@ -34,6 +34,8 @@ contains "$WORKFLOW" 'MANUAL_APPROVAL_RECEIPT=' 'workflow must log a non-secret 
 contains "$WORKFLOW" 'github.ref == '\''refs/heads/main'\''' 'workflow jobs must be restricted to main'
 contains "$WORKFLOW" '^[0-9a-fA-F]{40}$' 'workflow must validate an exact 40-character SHA'
 contains "$WORKFLOW" 'git merge-base --is-ancestor "$MIGRATION_SHA" origin/main' 'workflow must prove the SHA is integrated in main'
+contains "$WORKFLOW" 'git show-ref --verify --quiet refs/remotes/origin/main' 'workflow must confirm authenticated checkout already has origin/main'
+not_contains "$WORKFLOW" 'git fetch --no-tags origin' 'workflow must not perform an unauthenticated second fetch after checkout'
 ! grep -Eq '^[[:space:]]+(push|pull_request|schedule):' "$WORKFLOW" || fail 'production migration must not have an automatic trigger'
 contains "$WORKFLOW" 'environment: production' 'migration job must use the protected production environment'
 contains "$WORKFLOW" 'group: deploy-production' 'migration must share deploy concurrency group'
