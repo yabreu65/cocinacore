@@ -5,7 +5,8 @@
 3. [x] **Add the minimal manual CI trigger** — Commit `d575b6e3a87317347c1ef23e1f041eb854e28495` adds only `workflow_dispatch:` under `.github/workflows/ci.yml` top-level `on:`; existing `pull_request` and `push` triggers remain intact.
 4. [x] **Validate and review the isolated change** — Ruby Psych parsed the workflow; trigger assertions and `git diff --check` passed; Guardian passed. Native review approved the exact two-path candidate at high risk with all four lenses, and its acknowledgement completed. Lineage: `review-d303b9453b0b767f`; target: `sha256:112b5468af4400f21e203d83fca35bea6da430c9234be56bac547f515c2417b7`.
 5. [x] **Commit and open a separate PR** — Pushed `ci/workflow-dispatch-20261018` and opened [PR #29](https://github.com/yabreu65/cocinacore/pull/29), linked to approved issue #21 with exactly one available type label, `type:feature`. No merge.
-6. [ ] **Verify latest PR heads and CI evidence** — At PR creation, #29 was open at `cd10e9c35e6da4a12fde7f78a80c49da78f82056` with CI run #77 in progress. Before this tracking update, exact head `b9f9bace6436812ec3948c662c6a363072f15e7d` had automatic run #39165813953 (`pull_request`) in progress. PR #28 remained open at `222ab230245ac29884c9417179840c63a287af55` with zero exact-head statuses, checks, or runs. Re-query #29 after this update; do not claim #28 validated. — in progress.
+6. [x] **Verify latest PR heads and CI evidence** — Before this closure update, PR #29 was OPEN at exact head `a92a30e93bb85dae1c78db5a98ade25741af1062` with automatic CI run #39165813953 (`pull_request`) and `frontend-quality` in progress. PR #28 remained OPEN at exact SHA `222ab230245ac29884c9417179840c63a287af55` with zero statuses, check-runs, or Actions runs; it is not CI-validated.
+7. [ ] **Await automatic CI on the final PR #29 head** — This tracking-only commit changes #29's head; check that exact head once after pushing. Report its run state without claiming PR #28 validated. No manual dispatch or merge. — in progress.
 
 ## Scope and safety
 
@@ -29,5 +30,5 @@
 - Native review: approved at high risk with four lenses; exact acknowledgement completed for the candidate above.
 - Dedicated PR: [#29](https://github.com/yabreu65/cocinacore/pull/29), OPEN, base `main`, linked issue #21, label `type:feature`.
 - At PR creation, head was `cd10e9c35e6da4a12fde7f78a80c49da78f82056`; CI run #77 (`pull_request`) was in progress.
-- Before this tracking update, exact head `b9f9bace6436812ec3948c662c6a363072f15e7d` had automatic CI run #39165813953 (`pull_request`) in progress; recheck after this update changes the PR head.
-- PR #28 remains OPEN at exact SHA `222ab230245ac29884c9417179840c63a287af55`; no exact-head Actions run/check-run was found. It is not CI-validated.
+- Latest verified PR #29 head before this closure commit: `a92a30e93bb85dae1c78db5a98ade25741af1062`; automatic CI run #39165813953 (`pull_request`) and check `frontend-quality` were in progress. This tracking-only commit changes the head; query the new exact SHA after pushing.
+- PR #28 remains OPEN at exact SHA `222ab230245ac29884c9417179840c63a287af55`; no exact-head statuses, check-runs, or Actions runs were found. It is not CI-validated.
