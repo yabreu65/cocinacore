@@ -2,7 +2,7 @@
 
 1. [x] **Reconcile and correct the closure acta** — Preserve the pre-existing draft while distinguishing GitHub-run receipts, direct read-only observations, and PM-reported post-migration DB/cleanup facts. Do not publish absolute backup paths; do not claim real-user E2E.
 2. [x] **Run documentation and static contract checks** — `git diff --check` on intended docs and migration/deploy workflow contracts passed. Prettier was unavailable; no production or app services were used.
-3. [ ] **Review and publish the PM-review PR** — Independent review, stage/commit only intended docs, push, open PR linked to approved issue #21 with `type:docs`, and verify CI. Keep the existing worktree; preserve modified `.atl/skill-registry.md` untouched and excluded per user decision. — in progress.
+3. [ ] **Review and publish the PM-review PR** — Independent review, stage/commit only intended docs, push, open PR linked to approved issue #21 with `type:docs`, and verify CI. User authorized a clean temporary worktree solely for native review. Preserve the existing worktree, modified `.atl/skill-registry.md`, and untracked `.codegraph/`; remove only the temporary review worktree after review. — in progress.
 
 ## Evidence collected
 
