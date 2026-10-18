@@ -87,6 +87,19 @@ jobs:
           set -euo pipefail
           git archive --format=tar "$MIGRATION_SHA" > migration-source.tar
           sha256sum migration-source.tar | awk '{print $1}' > migration-source.tar.sha256
+      - name: Build exact-SHA migration image on runner
+        env:
+          MIGRATION_SHA: ${{ needs.validate-sha.outputs.migration_sha }}
+        run: |
+          set -euo pipefail
+          mkdir migration-source
+          tar -xf migration-source.tar -C migration-source
+          IMAGE="cocinacore:migrate-$MIGRATION_SHA"
+          docker build --progress=plain --pull=false \
+            --label "org.opencontainers.image.revision=$MIGRATION_SHA" \
+            -t "$IMAGE" -f migration-source/Dockerfile migration-source
+          docker save "$IMAGE" -o migration-image.tar
+          sha256sum migration-image.tar | awk '{print $1}' > migration-image.tar.sha256
       - name: Configure strict SSH trust
         env:
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
@@ -107,7 +120,7 @@ jobs:
             echo "Trusted SSH known_hosts does not contain VPS_HOST." >&2
             exit 1
           fi
-      - name: Transfer exact-SHA archive to VPS
+      - name: Transfer exact-SHA source and image archives to VPS
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
@@ -115,10 +128,15 @@ jobs:
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          REMOTE_ARCHIVE="/tmp/cocinacore-migration-${RUN_ID}-${RUN_ATTEMPT}.tar"
+          REMOTE_BASE="/tmp/cocinacore-migration-${RUN_ID}-${RUN_ATTEMPT}"
+          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=6 -o TCPKeepAlive=yes -o ConnectTimeout=15 \
+            -i ~/.ssh/cocinacore_migration_key "$VPS_USER@$VPS_HOST" "mkdir -p '$REMOTE_BASE'"
           scp -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
-            -i ~/.ssh/cocinacore_migration_key migration-source.tar "$VPS_USER@$VPS_HOST:$REMOTE_ARCHIVE"
-      - name: Run exact-SHA production migration procedure
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=6 -o TCPKeepAlive=yes -o ConnectTimeout=15 \
+            -i ~/.ssh/cocinacore_migration_key migration-source.tar migration-source.tar.sha256 \
+            migration-image.tar migration-image.tar.sha256 "$VPS_USER@$VPS_HOST:$REMOTE_BASE/"
+      - name: Load and verify migration image on VPS
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
@@ -127,10 +145,39 @@ jobs:
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          REMOTE_ARCHIVE="/tmp/cocinacore-migration-${RUN_ID}-${RUN_ATTEMPT}.tar"
+          REMOTE_BASE="/tmp/cocinacore-migration-${RUN_ID}-${RUN_ATTEMPT}"
+          IMAGE="cocinacore:migrate-$MIGRATION_SHA"
+          printf -v remote_args '%q ' "$REMOTE_BASE/migration-image.tar" "$REMOTE_BASE/migration-image.tar.sha256" "$IMAGE" "$MIGRATION_SHA"
+          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=6 -o TCPKeepAlive=yes -o ConnectTimeout=15 \
+            -i ~/.ssh/cocinacore_migration_key "$VPS_USER@$VPS_HOST" \
+            "bash -s -- $remote_args" <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          IMAGE_ARCHIVE=$1
+          IMAGE_SHA_FILE=$2
+          IMAGE=$3
+          RELEASE_SHA=$4
+          [ -f "$IMAGE_ARCHIVE" ] && [ -f "$IMAGE_SHA_FILE" ]
+          [ "$(sha256sum "$IMAGE_ARCHIVE" | awk '{print $1}')" = "$(awk '{print $1}' "$IMAGE_SHA_FILE")" ]
+          docker load -i "$IMAGE_ARCHIVE"
+          [ "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$IMAGE")" = "$RELEASE_SHA" ]
+          REMOTE_SCRIPT
+      - name: Apply exact-SHA production migration procedure
+        if: success()
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          MIGRATION_SHA: ${{ needs.validate-sha.outputs.migration_sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          REMOTE_BASE="/tmp/cocinacore-migration-${RUN_ID}-${RUN_ATTEMPT}"
+          REMOTE_ARCHIVE="$REMOTE_BASE/migration-source.tar"
           ARCHIVE_SHA256=$(awk '{print $1}' migration-source.tar.sha256)
           printf -v remote_args '%q ' "$MIGRATION_SHA" "$REMOTE_ARCHIVE" "$ARCHIVE_SHA256"
           ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=6 -o TCPKeepAlive=yes -o ConnectTimeout=15 \
             -i ~/.ssh/cocinacore_migration_key "$VPS_USER@$VPS_HOST" \
             "bash -s -- $remote_args" <<'REMOTE_SCRIPT'
           set -euo pipefail

@@ -54,9 +54,10 @@ SOURCE=$WORK/source
 [ -f "$SOURCE/scripts/backup-pawtech-cocinacore-predeploy.sh" ] || fail 'versioned backup helper missing'
 [ -f "$SOURCE/db/migrations/$EXPECTED_PENDING" ] || fail 'versioned 015 migration missing'
 
-# Build only from the transferred archive; no VPS Git fetch/checkout and no application cutover.
+# The image is built on the runner from the exact-SHA archive and loaded in a prior SSH phase.
+# Verify its embedded source revision before any database preflight, backup, or mutation.
 IMAGE="cocinacore:migrate-$RELEASE_SHA"
-docker build --pull=false -f "$SOURCE/Dockerfile" -t "$IMAGE" "$SOURCE" >/dev/null 2>&1 || fail 'exact-SHA migration image build failed'
+[ "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$IMAGE" 2>/dev/null)" = "$RELEASE_SHA" ] || fail 'loaded migration image revision label mismatch'
 
 # All PostgreSQL checks execute in the exact-SHA image. Output is restricted to fixed labels/counts.
 preflight() {

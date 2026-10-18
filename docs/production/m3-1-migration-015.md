@@ -11,7 +11,7 @@
 
 The SHA validation uses the remote `origin/main` reference already fetched by `actions/checkout` with `fetch-depth: 0`, rather than a second unauthenticated `git fetch` (which fails for this private repository). Checkout credentials remain non-persistent.
 
-The workflow transfers a checksummed archive built from the selected SHA; the VPS does not fetch or checkout Git source. The database credential is read only from the existing VPS runtime environment `/opt/pawtech/env/cocinacore.env`. It is never transferred to GitHub, printed, or changed. No replacement credential or database role is provisioned.
+The workflow creates a checksummed source archive from the selected SHA, then builds its labeled image on the GitHub runner from that archive with plain progress output. The VPS receives checksummed source and image archives; it only loads and verifies the image before a separately success-gated Apply SSH session. A runner build cannot leave an orphan build running on the VPS, and any SSH/SCP disconnect (including exit 255) fails its step and prevents Apply; there are no retries or automatic restores. The VPS does not fetch or checkout Git source. The database credential is read only from the existing VPS runtime environment `/opt/pawtech/env/cocinacore.env`. It is never transferred to GitHub, printed, or changed. No replacement credential or database role is provisioned.
 
 ## Fail-closed procedure
 
