@@ -1,0 +1,128 @@
+name: Migrate production schema
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full 40-character commit SHA already integrated into main
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  validate-sha:
+    name: Validate production migration SHA
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    outputs:
+      migration_sha: ${{ steps.validate.outputs.migration_sha }}
+    steps:
+      - name: Checkout workflow ref
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate requested SHA is integrated into main
+        id: validate
+        shell: bash
+        env:
+          MIGRATION_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$MIGRATION_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "Migration SHA must be exactly 40 hexadecimal characters." >&2
+            exit 1
+          fi
+          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          if ! git cat-file -e "${MIGRATION_SHA}^{commit}"; then
+            echo "Requested SHA is not a commit available from origin." >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$MIGRATION_SHA" origin/main; then
+            echo "Requested SHA is not integrated into origin/main." >&2
+            exit 1
+          fi
+          echo "migration_sha=${MIGRATION_SHA,,}" >> "$GITHUB_OUTPUT"
+
+  migrate-production:
+    name: Apply migration 015 on production VPS
+    runs-on: ubuntu-latest
+    needs: validate-sha
+    environment: production
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout workflow source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build exact-SHA source archive
+        env:
+          MIGRATION_SHA: ${{ needs.validate-sha.outputs.migration_sha }}
+        run: |
+          set -euo pipefail
+          git archive --format=tar "$MIGRATION_SHA" > migration-source.tar
+          sha256sum migration-source.tar | awk '{print $1}' > migration-source.tar.sha256
+      - name: Configure strict SSH trust
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${VPS_SSH_KNOWN_HOSTS//[[:space:]]/}" ]]; then
+            echo "Required trusted SSH known_hosts secret is empty." >&2
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/cocinacore_migration_key
+          chmod 600 ~/.ssh/cocinacore_migration_key
+          printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          if ! ssh-keygen -F "$VPS_HOST" -f ~/.ssh/known_hosts >/dev/null 2>&1; then
+            echo "Trusted SSH known_hosts does not contain VPS_HOST." >&2
+            exit 1
+          fi
+      - name: Transfer exact-SHA archive to VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          REMOTE_ARCHIVE="/tmp/cocinacore-migration-${RUN_ID}-${RUN_ATTEMPT}.tar"
+          scp -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+            -i ~/.ssh/cocinacore_migration_key migration-source.tar "$VPS_USER@$VPS_HOST:$REMOTE_ARCHIVE"
+      - name: Run exact-SHA production migration procedure
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          MIGRATION_SHA: ${{ needs.validate-sha.outputs.migration_sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          REMOTE_ARCHIVE="/tmp/cocinacore-migration-${RUN_ID}-${RUN_ATTEMPT}.tar"
+          ARCHIVE_SHA256=$(awk '{print $1}' migration-source.tar.sha256)
+          printf -v remote_args '%q ' "$MIGRATION_SHA" "$REMOTE_ARCHIVE" "$ARCHIVE_SHA256"
+          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+            -i ~/.ssh/cocinacore_migration_key "$VPS_USER@$VPS_HOST" \
+            "bash -s -- $remote_args" <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          RELEASE_SHA=$1
+          ARCHIVE=$2
+          ARCHIVE_SHA256=$3
+          SOURCE_DIR=$(mktemp -d /tmp/cocinacore-migration-entry.XXXXXXXX)
+          trap 'rm -rf -- "$SOURCE_DIR"; rm -f -- "$ARCHIVE"' EXIT HUP INT TERM
+          mkdir -p "$SOURCE_DIR/scripts"
+          tar -xf "$ARCHIVE" -C "$SOURCE_DIR" scripts/migrate-pawtech-production.sh
+          [ -f "$SOURCE_DIR/scripts/migrate-pawtech-production.sh" ]
+          sh "$SOURCE_DIR/scripts/migrate-pawtech-production.sh" "$RELEASE_SHA" "$ARCHIVE" "$ARCHIVE_SHA256"
+          REMOTE_SCRIPT
