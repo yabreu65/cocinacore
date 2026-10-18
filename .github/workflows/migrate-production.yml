@@ -51,7 +51,13 @@ jobs:
             echo "Migration SHA must be exactly 40 hexadecimal characters." >&2
             exit 1
           fi
-          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          # checkout with fetch-depth: 0 already fetched origin/main with its
+          # authenticated checkout credential. Do not perform a second fetch:
+          # persist-credentials is deliberately false for this private repo.
+          if ! git show-ref --verify --quiet refs/remotes/origin/main; then
+            echo "The checkout did not include origin/main." >&2
+            exit 1
+          fi
           if ! git cat-file -e "${MIGRATION_SHA}^{commit}"; then
             echo "Requested SHA is not a commit available from origin." >&2
             exit 1
