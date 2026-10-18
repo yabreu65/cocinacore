@@ -80,7 +80,7 @@ async function signup(page: Page) {
   });
 }
 
-async function installResponseCookies(
+export async function installResponseCookies(
   page: Page,
   response: Awaited<ReturnType<typeof loginWithCredentials>>
 ): Promise<void> {
