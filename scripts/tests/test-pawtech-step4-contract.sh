@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 DEPLOY="$ROOT/scripts/deploy-pawtech-production.sh"
 BACKUP_HELPER="$ROOT/scripts/backup-pawtech-cocinacore-predeploy.sh"
 RUNNER="$ROOT/frontend/scripts/run-migrations.js"
@@ -305,12 +305,62 @@ class Pool {
               !ledgerProvisioning.directSelectGrantToMigrationAdmin) {
             throw new Error('permission denied for table schema_migrations');
           }
-          let entries = manifest.migrations.map((entry) => ({ filename: entry.filename, checksum: entry.sha256 }));
+          let entries = manifest.migrations.map((entry, index) => ({
+            filename: entry.filename, checksum: entry.sha256,
+            applied_at: '2026-01-01T00:00:' + String(index).padStart(2, '0') + '.000Z',
+          }));
           if (process.env.LEDGER === 'altered') entries[0].checksum = 'f'.repeat(64);
           if (process.env.LEDGER === 'pending' || process.env.LEDGER === 'pending-016') entries = entries.slice(0, -1);
           if (process.env.LEDGER === '014-unapplied') entries = entries.filter((entry) => !entry.filename.startsWith('014_') && !entry.filename.startsWith('015_'));
-          if (process.env.LEDGER === 'unknown') entries = [...entries, { filename: '999_unexpected.sql', checksum: 'f'.repeat(64) }];
+          if (process.env.LEDGER === 'unknown') entries = [...entries, { filename: '999_unexpected.sql', checksum: 'f'.repeat(64), applied_at: '2026-01-02T00:00:00.000Z' }];
           if (process.env.LEDGER === 'out-of-order') entries = [entries[1]];
+          if (process.env.LEDGER.startsWith('legacy-')) {
+            const canonicalPrefix = manifest.migrations.slice(0, 10).map((entry, index) => ({
+              filename: entry.filename, checksum: entry.sha256,
+              applied_at: '2026-01-01T00:00:' + String(index).padStart(2, '0') + '.000Z',
+            }));
+            const legacy = [
+              { filename: '011_mfa.sql', checksum: 'a'.repeat(64), applied_at: '2026-01-02T00:00:01.000Z' },
+              { filename: '012_tenant_rls_stage.sql', checksum: 'b'.repeat(64), applied_at: '2026-01-02T00:00:02.000Z' },
+              { filename: '013_platform_operator_stage.sql', checksum: 'c'.repeat(64), applied_at: '2026-01-02T00:00:03.000Z' },
+            ];
+            if (process.env.LEDGER === 'legacy-exact') entries = [...canonicalPrefix, ...legacy];
+            if (process.env.LEDGER === 'legacy-complete') entries = [...canonicalPrefix, ...legacy, ...manifest.migrations.slice(10).map((entry, index) => ({ filename: entry.filename, checksum: entry.sha256, applied_at: '2026-01-03T00:00:' + String(index).padStart(2, '0') + '.000Z' }))];
+            if (process.env.LEDGER === 'legacy-canonical-before') entries = [...canonicalPrefix, { filename: manifest.migrations[10].filename, checksum: manifest.migrations[10].sha256, applied_at: '2026-01-02T00:00:00.000Z' }, ...legacy];
+            if (process.env.LEDGER === 'legacy-partial') entries = [...canonicalPrefix, ...legacy.slice(0, 2)];
+            if (process.env.LEDGER === 'legacy-duplicate') entries = [...canonicalPrefix, ...legacy, legacy[0]];
+            if (process.env.LEDGER === 'legacy-unknown') entries = [...canonicalPrefix, ...legacy.slice(0, 2), { filename: '013_unrecognized.sql', checksum: 'd'.repeat(64), applied_at: '2026-01-02T00:00:04.000Z' }];
+            if (process.env.LEDGER === 'legacy-out-of-order') {
+              legacy[0].applied_at = '2026-01-02T00:00:02.000Z';
+              legacy[1].applied_at = '2026-01-02T00:00:01.000Z';
+              entries = [...canonicalPrefix, legacy[1], legacy[0], legacy[2]];
+            }
+            if (process.env.LEDGER === 'legacy-timestamp-inversion') {
+              legacy[0].applied_at = '2026-01-02T00:00:02.000Z';
+              legacy[1].applied_at = '2026-01-02T00:00:01.000Z';
+              entries = [...canonicalPrefix, ...legacy];
+            }
+            if (process.env.LEDGER === 'legacy-timestamp-tie') {
+              legacy[1].applied_at = legacy[0].applied_at;
+              entries = [...canonicalPrefix, ...legacy];
+            }
+            if (process.env.LEDGER === 'legacy-canonical-prefix-out-of-order') {
+              [canonicalPrefix[0].applied_at, canonicalPrefix[1].applied_at] = [canonicalPrefix[1].applied_at, canonicalPrefix[0].applied_at];
+              entries = [...canonicalPrefix, ...legacy];
+            }
+            if (process.env.LEDGER === 'legacy-canonical-suffix-out-of-order') {
+              const canonicalSuffix = manifest.migrations.slice(10).map((entry, index) => ({
+                filename: entry.filename, checksum: entry.sha256,
+                applied_at: '2026-01-03T00:00:' + String(index).padStart(2, '0') + '.000Z',
+              }));
+              [canonicalSuffix[0].applied_at, canonicalSuffix[1].applied_at] = [canonicalSuffix[1].applied_at, canonicalSuffix[0].applied_at];
+              entries = [...canonicalPrefix, ...legacy, ...canonicalSuffix];
+            }
+          }
+          if (text.includes('order by applied_at')) {
+            entries.sort((left, right) => left.applied_at.localeCompare(right.applied_at) || left.filename.localeCompare(right.filename));
+          }
+          entries = entries.map((entry) => ({ ...entry, timestamp_count: entries.filter((candidate) => candidate.applied_at === entry.applied_at).length }));
           return { rows: entries };
         }
         return { rows: [] };
@@ -366,6 +416,33 @@ for (const [ledger, expectedStatus, marker] of [
   const result = run(mode, ledger);
   if (result.status !== expectedStatus || !`${result.stdout}${result.stderr}`.includes(marker)) {
     console.error(`offline runner contract failed for ${mode}/${ledger}: status=${result.status} stdout=${result.stdout} stderr=${result.stderr}`);
+    process.exit(1);
+  }
+}
+const completeLegacyHistoryResult = run('--verify-complete', 'legacy-complete');
+if (completeLegacyHistoryResult.status !== 0 || !`${completeLegacyHistoryResult.stdout}${completeLegacyHistoryResult.stderr}`.includes('Migration ledger is complete.')) {
+  console.error(`offline complete legacy history contract failed: status=${completeLegacyHistoryResult.status} stdout=${completeLegacyHistoryResult.stdout} stderr=${completeLegacyHistoryResult.stderr}`);
+  process.exit(1);
+}
+const exactLegacySuffixResult = run('--verify-complete', 'legacy-exact');
+if (exactLegacySuffixResult.status !== 1 || !`${exactLegacySuffixResult.stdout}${exactLegacySuffixResult.stderr}`.includes('Pending migration: 011_canonical_email_invariant.sql')) {
+  console.error(`offline exact legacy suffix contract failed: status=${exactLegacySuffixResult.status} stdout=${exactLegacySuffixResult.stdout} stderr=${exactLegacySuffixResult.stderr}`);
+  process.exit(1);
+}
+const separatedLegacyResult = run('--verify-complete', 'legacy-exact', false, true, 'valid');
+if (separatedLegacyResult.status === 0 || !`${separatedLegacyResult.stdout}${separatedLegacyResult.stderr}`.includes('legacy migration lineage is incompatible with separated ledger mode')) {
+  console.error(`offline separated legacy lineage rejection failed: status=${separatedLegacyResult.status} stdout=${separatedLegacyResult.stdout} stderr=${separatedLegacyResult.stderr}`);
+  process.exit(1);
+}
+for (const ledger of [
+  'legacy-partial', 'legacy-unknown', 'legacy-duplicate', 'legacy-out-of-order',
+  'legacy-timestamp-inversion', 'legacy-timestamp-tie', 'legacy-canonical-before',
+  'legacy-canonical-prefix-out-of-order', 'legacy-canonical-suffix-out-of-order',
+]) {
+  const result = run('--verify-complete', ledger);
+  const output = `${result.stdout}${result.stderr}`;
+  if (result.status === 0 || output.includes('Pending migration:')) {
+    console.error(`offline legacy suffix rejection contract failed for ${ledger}: status=${result.status} stdout=${result.stdout} stderr=${result.stderr}`);
     process.exit(1);
   }
 }

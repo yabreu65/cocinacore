@@ -262,6 +262,17 @@ function loadManifestAndMigrations() {
   if (manifest.migrationLaneVersion !== MIGRATION_LANE_VERSION) {
     throw new Error('Unsupported migration lane version.');
   }
+  const legacyLineages = manifest.legacyLineages;
+  if (
+    !Array.isArray(legacyLineages) || legacyLineages.length !== 1 ||
+    !legacyLineages[0] || Object.keys(legacyLineages[0]).sort().join(',') !== 'anchor,filenames,ledgerMode' ||
+    legacyLineages[0].anchor !== '010_password_reset_tokens.sql' ||
+    legacyLineages[0].ledgerMode !== 'legacy-two-column' ||
+    !Array.isArray(legacyLineages[0].filenames) ||
+    legacyLineages[0].filenames.join(',') !== '011_mfa.sql,012_tenant_rls_stage.sql,013_platform_operator_stage.sql'
+  ) {
+    throw new Error('Trusted legacy migration lineage declaration is invalid.');
+  }
   if (!COMMIT_SHA.test(manifest.trustedBaseCommit || '')) {
     throw new Error('Manifest trustedBaseCommit is invalid.');
   }
@@ -497,7 +508,7 @@ function loadManifestAndMigrations() {
   ) {
     throw new Error('Migration manifest and SQL files are not an exact bijection.');
   }
-  return { directory, manifest, migrations };
+  return { directory, manifest, migrations, legacyLineage: legacyLineages[0] };
 }
 
 function getDatabaseUrl(lane, separated) {
@@ -933,7 +944,7 @@ async function assertAndAssumeMigrationIdentity(client, manifest, migrations, se
   let applied = null;
   if (hasLedger) {
     await assertLedgerShape(client, separated);
-    applied = await getAppliedMigrations(client, migrations, separated);
+    applied = await getAppliedMigrations(client, migrations, separated, manifest.legacyLineages[0]);
     assertGlobalOrder(migrations, applied);
   }
 
@@ -1209,20 +1220,67 @@ async function ensureLegacyLedger(client) {
   `);
 }
 
-async function getAppliedMigrations(client, migrations, separated) {
-  const columns = separated ? 'filename, checksum' : 'filename';
+async function getAppliedMigrations(client, migrations, separated, legacyLineage) {
+  const columns = separated ? 'filename, applied_at, checksum' : 'filename, applied_at';
   const result = await client.query(
-    `select ${columns} from public.schema_migrations order by filename`
+    `select ${columns}, count(*) over (partition by applied_at) as timestamp_count from public.schema_migrations order by applied_at, filename`
   );
   const expected = new Map(migrations.map((migration) => [migration.filename, migration]));
-  for (const row of result.rows) {
+  const legacyNames = new Set(legacyLineage.filenames);
+  const seen = new Set();
+  const positions = new Map();
+  for (const [index, row] of result.rows.entries()) {
+    if (seen.has(row.filename)) throw new Error(`BASELINE_MISMATCH: duplicate applied migration ${row.filename}`);
+    seen.add(row.filename);
+    positions.set(row.filename, index);
+    if (legacyNames.has(row.filename)) {
+      if (separated) throw new Error('BASELINE_MISMATCH: legacy migration lineage is incompatible with separated ledger mode.');
+      continue;
+    }
     const migration = expected.get(row.filename);
     if (!migration) throw new Error(`BASELINE_MISMATCH: unknown applied migration ${row.filename}`);
     if (separated && row.checksum !== migration.sha256) {
       throw new Error(`MIGRATION_CHECKSUM_MISMATCH: ${row.filename}`);
     }
   }
-  return new Set(result.rows.map((row) => row.filename));
+  const legacyRows = result.rows.filter((row) => legacyNames.has(row.filename));
+  if (legacyRows.length > 0) {
+    if (legacyRows.length !== legacyLineage.filenames.length ||
+        legacyRows.some((row, index) => row.filename !== legacyLineage.filenames[index])) {
+      throw new Error('BASELINE_MISMATCH: legacy migration lineage must be the complete ordered suffix.');
+    }
+    const anchorPosition = positions.get(legacyLineage.anchor);
+    const firstLegacyPosition = positions.get(legacyRows[0].filename);
+    if (anchorPosition === undefined || !migrations.slice(0, HISTORICAL_BASELINE_COUNT).every((migration) => {
+      const appliedPosition = positions.get(migration.filename);
+      return appliedPosition !== undefined && appliedPosition < firstLegacyPosition;
+    })) {
+      throw new Error('BASELINE_MISMATCH: canonical historical baseline must precede legacy migration lineage.');
+    }
+    if (anchorPosition >= firstLegacyPosition || legacyRows.some((row) => row.applied_at == null || row.timestamp_count > 1)) {
+      throw new Error('BASELINE_MISMATCH: legacy migration lineage does not follow its canonical anchor.');
+    }
+    for (let index = 1; index < legacyRows.length; index += 1) {
+      if (positions.get(legacyRows[index - 1].filename) >= positions.get(legacyRows[index].filename) ||
+          legacyRows[index - 1].applied_at == null || legacyRows[index].applied_at == null ||
+          legacyRows[index].timestamp_count > 1) {
+        throw new Error('BASELINE_MISMATCH: legacy migration timestamps must strictly increase.');
+      }
+    }
+    const appliedCanonical = new Set(result.rows.filter((row) => expected.has(row.filename)).map((row) => row.filename));
+    const expectedSequence = [
+      ...migrations.slice(0, HISTORICAL_BASELINE_COUNT).map((migration) => migration.filename),
+      ...legacyLineage.filenames,
+      ...migrations.slice(HISTORICAL_BASELINE_COUNT)
+        .filter((migration) => appliedCanonical.has(migration.filename))
+        .map((migration) => migration.filename),
+    ];
+    if (result.rows.length !== expectedSequence.length ||
+        result.rows.some((row, index) => row.filename !== expectedSequence[index])) {
+      throw new Error('BASELINE_MISMATCH: applied migration history does not match the canonical and legacy sequence.');
+    }
+  }
+  return new Set(result.rows.filter((row) => !legacyNames.has(row.filename)).map((row) => row.filename));
 }
 
 function assertGlobalOrder(migrations, applied) {
@@ -1264,7 +1322,7 @@ function firstPendingMigration(migrations, applied) {
 
 async function main() {
   const options = getOptions();
-  const { manifest, migrations } = loadManifestAndMigrations();
+  const { manifest, migrations, legacyLineage } = loadManifestAndMigrations();
   const separated = parseActivationGate();
 
   if (options.dryRun) {
@@ -1300,7 +1358,7 @@ async function main() {
         hadLedger = await migrationLedgerExists(client);
         if (!hadLedger) throw new Error('Migration ledger is missing.');
         await assertLedgerShape(client, separated);
-        const applied = await getAppliedMigrations(client, migrations, separated);
+        const applied = await getAppliedMigrations(client, migrations, separated, legacyLineage);
         assertGlobalOrder(migrations, applied);
         const pending = firstPendingMigration(migrations, applied);
         if (pending) {
@@ -1329,7 +1387,7 @@ async function main() {
 
     if (separated) await ensureSeparatedLedger(client);
     else await ensureLegacyLedger(client);
-    const applied = await getAppliedMigrations(client, migrations, separated);
+    const applied = await getAppliedMigrations(client, migrations, separated, legacyLineage);
     assertGlobalOrder(migrations, applied);
 
     for (const migration of migrations) {
