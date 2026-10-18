@@ -19,5 +19,5 @@
 
 - Worktree branch: `docs/m3-1-production-closure-20261018`
 - Pre-existing draft commit retained without amendment: `bd6a5f46f7c8442991f6034fe5ea86d2fc1c06cb` (`docs: record M3.1 production release and conditional acceptance`)
-- Corrective work-unit commit: pending
+- Corrective work-unit commit: `33197c6234c98b538d021853d497a51c0c4a7396` (`docs(production): record M3.1 production closure`)
 - PR / PR CI: pending
