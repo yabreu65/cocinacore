@@ -1,11 +1,11 @@
 # M3.1 production migration 015: operator guide
 
-**This guide documents a controlled, forward-only database operation. This PR does not authorize production execution.** Run it only after the change is merged and separately approved.
+**This guide documents a controlled, forward-only database operation.** Run it only after the change is merged and the owner has explicitly authorized the operation; a green CI check does not grant production authorization.
 
 ## Before requesting the operation
 
 - Select the exact full 40-character commit SHA already integrated into `main`. The workflow is manually dispatched from `main` and independently checks that the requested commit is in `origin/main`.
-- Confirm the GitHub `production` Environment has its required protection rules and human approval configured. The workflow uses this environment and shares non-canceling `deploy-production` concurrency with deployment.
+- **Manual approval for private GitHub repository:** The owner approved the M3.1 migration/deployment in the project conversation on 2026-10-18. This GitHub plan does not support required environment reviewers for this private repository (API HTTP 422). The `production` Environment retains its scoped secrets, strict host-key checking, and shared non-canceling `deploy-production` concurrency, but **does not enforce human review**. The operator must independently verify the owner's authorization and supply the required `approval_reference=M3.1-015-20261018-owner-approved` input. That input is an explicit, auditable operator acknowledgement **not an access-control substitute**. Do not start the workflow without recorded owner authorization.
 - Confirm the environment's SSH credentials and trusted `VPS_SSH_KNOWN_HOSTS` entry are maintained under existing access controls. SSH uses strict host-key checking; never substitute `ssh-keyscan` or disable verification.
 - Require a **fresh** migration preflight immediately before any approved migration attempt. Do not reuse old observations or evidence.
 
@@ -28,7 +28,7 @@ The existing Deploy workflow and deploy script remain unchanged and Deploy stays
 
 ## Review checklist
 
-- [ ] Exact SHA is integrated into `main`; `production` protection and approval are in force.
+- [ ] Exact SHA is integrated into `main`; owner authorization has been independently confirmed; the required manual approval reference is supplied. Do not claim GitHub reviewer enforcement is available.
 - [ ] Fresh preflight passes with the expected database identity and 015-only pending ledger.
 - [ ] Baseline is clean: zero items, relation at most 81,920 bytes, and no lock/session blockers.
 - [ ] Backup precedes DDL and passes private-permission, checksum, and archive-list checks.
