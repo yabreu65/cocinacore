@@ -35,4 +35,5 @@ Remove unsafe local PostgreSQL fallbacks from the six connected Playwright specs
 - Global `/usr/local/bin/tsc --noEmit` could not typecheck the project because project dependencies/types are absent.
 
 ## Commit evidence
-- Pending.
+- `8e0b916` — `test(e2e): require isolated database targets`
+- No push performed.
