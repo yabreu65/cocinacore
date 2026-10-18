@@ -2,7 +2,8 @@
 
 1. [x] **Reconcile and correct the closure acta** — Preserve the pre-existing draft while distinguishing GitHub-run receipts, direct read-only observations, and PM-reported post-migration DB/cleanup facts. Do not publish absolute backup paths; do not claim real-user E2E.
 2. [x] **Run documentation and static contract checks** — `git diff --check` on intended docs and migration/deploy workflow contracts passed. Prettier was unavailable; no production or app services were used.
-3. [ ] **Review and publish the PM-review PR** — Independent review, stage/commit only intended docs, push, open PR linked to approved issue #21 with `type:docs`, and verify CI. User authorized a clean temporary worktree solely for native review. Preserve the existing worktree, modified `.atl/skill-registry.md`, and untracked `.codegraph/`; remove only the temporary review worktree after review. — in progress.
+3. [x] **Review and publish the PM-review PR** — Native review approved; pushed the docs-only branch and opened PR #28, linked to approved issue #21 with `type:docs`. User authorized a clean temporary worktree solely for native review; it was removed afterward. Existing worktree, modified `.atl/skill-registry.md`, and untracked `.codegraph/` remain preserved and excluded.
+4. [ ] **Resolve current-head CI status** — `gh pr checks` reported no checks for PR #28 head `48bce9ef88354b2995d05782a588f8ea1de27895`; prior branch run `39145144621` is for older SHA `bd6a5f46...` and is not current-head evidence. No manual workflow dispatch without authorization. — in progress.
 
 ## Evidence collected
 
@@ -20,4 +21,5 @@
 - Worktree branch: `docs/m3-1-production-closure-20261018`
 - Pre-existing draft commit retained without amendment: `bd6a5f46f7c8442991f6034fe5ea86d2fc1c06cb` (`docs: record M3.1 production release and conditional acceptance`)
 - Corrective work-unit commit: `33197c6234c98b538d021853d497a51c0c4a7396` (`docs(production): record M3.1 production closure`)
-- PR / PR CI: pending
+- PR #28: https://github.com/yabreu65/cocinacore/pull/28, open, `type:docs`, linked to approved issue #21; head `48bce9ef88354b2995d05782a588f8ea1de27895`.
+- Current-head CI: no checks reported by GitHub CLI. Branch-associated success run `39145144621` is for older SHA `bd6a5f46...`, so it does not establish CI for PR #28's current head.
