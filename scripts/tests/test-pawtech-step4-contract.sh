@@ -143,7 +143,7 @@ for expected in \
   grep -Fq -- "$expected" "$RUNNER" || fail "missing migration runner contract: $expected"
 done
 
-verify_begin_line=$(grep -nF "await client.query('begin read only')" "$RUNNER" | cut -d: -f1)
+verify_begin_line=$(grep -nF "await client.query('begin read only')" "$RUNNER" | head -n 1 | cut -d: -f1)
 verify_call_line=$(grep -nF 'if (separated) await assertAndAssumeMigrationIdentity(client, manifest, migrations, separated);' "$RUNNER" | tail -n 1 | cut -d: -f1)
 verify_identity_line=$(grep -nF 'const identity = await client.query(`' "$RUNNER" | cut -d: -f1)
 verify_authority_line=$(grep -nF 'const authority = await client.query(' "$RUNNER" | cut -d: -f1)
@@ -173,6 +173,9 @@ const originalLoad = Module._load;
 const originalReadFileSync = fs.readFileSync.bind(fs);
 const originalReaddirSync = fs.readdirSync.bind(fs);
 const manifest = JSON.parse(originalReadFileSync(process.env.MANIFEST_PATH, 'utf8'));
+const migrationSql = new Set(manifest.migrations.map((entry) =>
+  originalReadFileSync(path.join(path.dirname(process.env.MANIFEST_PATH), entry.filename), 'utf8').trim().toLowerCase()
+));
 if (manifest.baselineObjects.transferable.length !== 38) {
   throw new Error('trusted baseline must contain exactly 38 transferable targets');
 }
@@ -216,12 +219,20 @@ const ledgerProvisioning = {
   owner: 'cocinacore_schema_owner', rowLevelSecurity: true, publicGrants: 0,
   directSelectGrantToMigrationAdmin: false,
 };
+const poolConfigs = [];
 class Pool {
+  constructor(config) {
+    this.config = config;
+    poolConfigs.push(config);
+  }
   async connect() {
     return {
       async query(sql, params = []) {
         const text = String(sql).trim().toLowerCase();
         queries.push(text);
+        if (text.includes('hashtextextended')) return { rows: [{ key: '1' }] };
+        if (text.includes('pg_try_advisory_lock')) return { rows: [{ acquired: true }] };
+        if (text.includes('pg_advisory_unlock')) return { rows: [{ released: true }] };
         if (/^set role cocinacore_schema_owner$/.test(text)) {
           if (provisionedMembership.granted_role !== 'cocinacore_schema_owner' ||
               provisionedMembership.member_role !== 'migration_admin' ||
@@ -232,7 +243,7 @@ class Pool {
           currentRole = 'cocinacore_schema_owner';
           return { rows: [] };
         }
-        if (/^(create|alter|drop|revoke|grant|insert|update|delete|set|reset)\\b/.test(text)) {
+        if (process.env.RUNNER_MODE === '--verify-complete' && /^(create|alter|drop|revoke|grant|insert|update|delete|set|reset)\\b/.test(text)) {
           throw new Error('unexpected mutation in read-only guard');
         }
         if (text.includes('select session_user, current_user, r.rolname')) {
@@ -311,6 +322,12 @@ class Pool {
           }));
           if (process.env.LEDGER === 'altered') entries[0].checksum = 'f'.repeat(64);
           if (process.env.LEDGER === 'pending' || process.env.LEDGER === 'pending-016') entries = entries.slice(0, -1);
+          if (process.env.DRIFT_AFTER_PROVISION === 'yes' && queries.some((sql) => sql.startsWith('create table if not exists public.schema_migrations'))) {
+            entries = manifest.migrations.map((entry, index) => ({
+              filename: entry.filename, checksum: entry.sha256,
+              applied_at: '2026-01-01T00:00:' + String(index).padStart(2, '0') + '.000Z',
+            }));
+          }
           if (process.env.LEDGER === '014-unapplied') entries = entries.filter((entry) => !entry.filename.startsWith('014_') && !entry.filename.startsWith('015_'));
           if (process.env.LEDGER === 'unknown') entries = [...entries, { filename: '999_unexpected.sql', checksum: 'f'.repeat(64), applied_at: '2026-01-02T00:00:00.000Z' }];
           if (process.env.LEDGER === 'out-of-order') entries = [entries[1]];
@@ -376,18 +393,24 @@ Module._load = function (request, parent, isMain) {
   return originalLoad.call(this, request, parent, isMain);
 };
 process.argv = ['node', process.env.RUNNER_PATH, '--lane', 'migration', process.env.RUNNER_MODE];
+if (process.env.RUNNER_MODE === '') process.exit = (code) => { process.exitCode = code; };
 process.env.DATABASE_URL = 'postgresql://offline.invalid/test';
 require(process.env.RUNNER_PATH);
 setTimeout(() => {
-  if (!queries.includes('begin read only')) process.exitCode = 2;
-  if (queries.some((sql) => /^(create|alter|drop|revoke|grant|insert|update|delete|set|reset)\\b/.test(sql) && sql !== 'set role cocinacore_schema_owner')) process.exitCode = 3;
+  if (poolConfigs.length) console.log('POOL_CONFIG=' + JSON.stringify(poolConfigs[0]));
+  const ddlQueries = queries.filter((sql) => /^(create|alter|drop|revoke|grant|insert|update|delete)\b/.test(sql));
+  console.log('DDL_QUERIES=' + JSON.stringify(ddlQueries));
+  console.log('MIGRATION_SQL_QUERIES=' + JSON.stringify(queries.filter((sql) => migrationSql.has(sql))));
+  if (['--verify-complete', '--dry-run'].includes(process.env.RUNNER_MODE) && !queries.includes('begin read only')) process.exitCode = 2;
+  if (process.env.RUNNER_MODE === '--verify-complete' && queries.some((sql) => /^(create|alter|drop|revoke|grant|insert|update|delete|set|reset)\\b/.test(sql) && sql !== 'set role cocinacore_schema_owner')) process.exitCode = 3;
   const roleAssumptions = queries.filter((sql) => sql === 'set role cocinacore_schema_owner');
   const roleVerification = queries.findIndex((sql) =>
     sql.includes('select session_user, current_user, r.rolname') && sql.includes('where r.rolname = current_user'));
   const ledgerRead = queries.findIndex((sql) => sql.includes('from public.schema_migrations'));
   const expectedAssumptions = process.env.SEPARATED === 'yes' ? 1 : 0;
-  if (roleAssumptions.length !== expectedAssumptions || ledgerRead === -1 ||
-      (roleAssumptions.length === 1 && (queries.indexOf(roleAssumptions[0]) > roleVerification || roleVerification > ledgerRead))) {
+  if (['--verify-complete', '--dry-run'].includes(process.env.RUNNER_MODE) &&
+      (roleAssumptions.length !== expectedAssumptions || ledgerRead === -1 ||
+      (roleAssumptions.length === 1 && (queries.indexOf(roleAssumptions[0]) > roleVerification || roleVerification > ledgerRead)))) {
     console.error('read-only role ordering failed: assumptions=' + roleAssumptions.length + ' roleIndex=' + queries.indexOf(roleAssumptions[0]) + ' verificationIndex=' + roleVerification + ' ledgerIndex=' + ledgerRead);
     process.exitCode = 6;
   }
@@ -395,15 +418,98 @@ setTimeout(() => {
   const hasRelease = queries.some((sql) => sql.includes('pg_advisory_unlock'));
   const hasShapeCheck = queries.some((sql) => sql.includes('from pg_catalog.pg_attribute'));
   const hasSecurityCheck = queries.some((sql) => sql.includes('relrowsecurity'));
-  if (hasAcquire || hasRelease) process.exitCode = 4;
-  if (!hasShapeCheck || !hasSecurityCheck) process.exitCode = 5;
+  if (['--verify-complete', '--dry-run'].includes(process.env.RUNNER_MODE) && (hasAcquire || hasRelease)) process.exitCode = 4;
+  if (['--verify-complete', '--dry-run'].includes(process.env.RUNNER_MODE) && (!hasShapeCheck || !hasSecurityCheck)) process.exitCode = 5;
 }, 0);
 `;
-function run(mode, ledger, future016 = false, separated = false, ownerFunctions = 'none', identity = 'valid', membership = 'valid') {
+function run(mode, ledger, future016 = false, separated = false, ownerFunctions = 'none', identity = 'valid', membership = 'valid', extraEnv = {}) {
   return spawnSync(process.execPath, ['-e', harness], {
     encoding: 'utf8',
-    env: { RUNNER_PATH: runner, MANIFEST_PATH: path.join(root, 'db/migrations/manifest.json'), RUNNER_MODE: mode, LEDGER: ledger, FUTURE_016: future016 ? 'yes' : 'no', SEPARATED: separated ? 'yes' : 'no', OWNER_FUNCTIONS: ownerFunctions, IDENTITY: identity, MEMBERSHIP: membership, COCINACORE_SEPARATED_DB_LANES_ENABLED: separated ? 'true' : 'false', DATABASE_URL: 'postgresql://offline.invalid/test', MIGRATION_DATABASE_URL: 'postgresql://offline.invalid/test' },
+    env: { RUNNER_PATH: runner, MANIFEST_PATH: path.join(root, 'db/migrations/manifest.json'), RUNNER_MODE: mode, LEDGER: ledger, FUTURE_016: future016 ? 'yes' : 'no', SEPARATED: separated ? 'yes' : 'no', OWNER_FUNCTIONS: ownerFunctions, IDENTITY: identity, MEMBERSHIP: membership, COCINACORE_SEPARATED_DB_LANES_ENABLED: separated ? 'true' : 'false', DATABASE_URL: 'postgresql://offline.invalid/test', MIGRATION_DATABASE_URL: 'postgresql://offline.invalid/test', ...extraEnv },
   });
+}
+const timeoutResult = run('--verify-complete', 'complete', false, false, 'none', 'valid', 'valid', {
+  MIGRATION_LOCK_TIMEOUT_MS: '1234', MIGRATION_PG_LOCK_TIMEOUT_MS: '2345', MIGRATION_PG_STATEMENT_TIMEOUT_MS: '3456',
+});
+const timeoutConfig = `${timeoutResult.stdout}${timeoutResult.stderr}`.match(/POOL_CONFIG=(.*)/);
+if (timeoutResult.status !== 0 || !timeoutConfig ||
+    JSON.parse(timeoutConfig[1]).lock_timeout !== 2345 ||
+    JSON.parse(timeoutConfig[1]).statement_timeout !== 3456) {
+  console.error(`offline PostgreSQL timeout configuration contract failed: status=${timeoutResult.status} stdout=${timeoutResult.stdout} stderr=${timeoutResult.stderr}`);
+  process.exit(1);
+}
+for (const [name, value] of [['MIGRATION_PG_LOCK_TIMEOUT_MS', '0'], ['MIGRATION_PG_STATEMENT_TIMEOUT_MS', '1.5'], ['MIGRATION_PG_STATEMENT_TIMEOUT_MS', '300001']]) {
+  const invalidTimeout = run('--verify-complete', 'complete', false, false, 'none', 'valid', 'valid', { [name]: value });
+  if (invalidTimeout.status !== 1 || !`${invalidTimeout.stdout}${invalidTimeout.stderr}`.includes(`${name} must be an integer`)) {
+    console.error(`offline invalid ${name} rejection contract failed: status=${invalidTimeout.status} stdout=${invalidTimeout.stdout} stderr=${invalidTimeout.stderr}`);
+    process.exit(1);
+  }
+}
+const malformedExpected = run('--dry-run', 'pending', false, false, 'none', 'valid', 'valid', { MIGRATION_EXPECTED_PENDING: '015_not-canonical.sql' });
+if (malformedExpected.status !== 1 || !`${malformedExpected.stdout}${malformedExpected.stderr}`.includes('MIGRATION_EXPECTED_PENDING must be an exact')) {
+  console.error(`offline malformed expected-pending rejection failed: status=${malformedExpected.status} stdout=${malformedExpected.stdout} stderr=${malformedExpected.stderr}`);
+  process.exit(1);
+}
+const migrations = JSON.parse(require('node:fs').readFileSync(path.join(root, 'db/migrations/manifest.json'), 'utf8')).migrations;
+const expectedPending = migrations.slice(-1)[0].filename;
+const fullExpectedPending = migrations.map((migration) => migration.filename).join(',');
+const verifyCompleteWithPending = run('--verify-complete', 'complete', false, false, 'none', 'valid', 'valid', {
+  MIGRATION_EXPECTED_PENDING: expectedPending,
+});
+if (verifyCompleteWithPending.status !== 1 ||
+    !`${verifyCompleteWithPending.stdout}${verifyCompleteWithPending.stderr}`.includes('MIGRATION_EXPECTED_PENDING_MISMATCH')) {
+  console.error(`offline verify-complete nonempty expected-pending rejection failed: status=${verifyCompleteWithPending.status} stdout=${verifyCompleteWithPending.stdout} stderr=${verifyCompleteWithPending.stderr}`);
+  process.exit(1);
+}
+const verifyCompleteWithEmptyExpected = run('--verify-complete', 'complete', false, false, 'none', 'valid', 'valid', {
+  MIGRATION_EXPECTED_PENDING: '',
+});
+if (verifyCompleteWithEmptyExpected.status !== 0 ||
+    !`${verifyCompleteWithEmptyExpected.stdout}${verifyCompleteWithEmptyExpected.stderr}`.includes('Migration ledger is complete.')) {
+  console.error(`offline verify-complete empty expected-pending contract failed: status=${verifyCompleteWithEmptyExpected.status} stdout=${verifyCompleteWithEmptyExpected.stdout} stderr=${verifyCompleteWithEmptyExpected.stderr}`);
+  process.exit(1);
+}
+const missingLedgerWithFullExpected = run('', 'missing', false, false, 'none', 'valid', 'valid', {
+  MIGRATION_EXPECTED_PENDING: fullExpectedPending,
+});
+const missingLedgerOutput = `${missingLedgerWithFullExpected.stdout}${missingLedgerWithFullExpected.stderr}`;
+if (missingLedgerWithFullExpected.status !== 1 ||
+    !missingLedgerOutput.includes('MIGRATION_EXPECTED_PENDING requires an existing ledger') ||
+    missingLedgerOutput.match(/DDL_QUERIES=(.*)/)?.[1] !== '[]') {
+  console.error(`offline full expected-pending missing-ledger rejection failed: status=${missingLedgerWithFullExpected.status} stdout=${missingLedgerWithFullExpected.stdout} stderr=${missingLedgerWithFullExpected.stderr}`);
+  process.exit(1);
+}
+for (const [ledger, marker] of [['missing', 'MIGRATION_EXPECTED_PENDING requires an existing ledger'], ['unknown', 'unknown applied migration']]) {
+  const guarded = run('', ledger, false, false, 'none', 'valid', 'valid', { MIGRATION_EXPECTED_PENDING: expectedPending });
+  const output = `${guarded.stdout}${guarded.stderr}`;
+  const ddlQueries = output.match(/DDL_QUERIES=(.*)/)?.[1];
+  if (guarded.status !== 1 || !output.includes(marker) || ddlQueries !== '[]') {
+    console.error(`offline pre-provisioning expected-pending guard failed for ${ledger}: status=${guarded.status} stdout=${guarded.stdout} stderr=${guarded.stderr}`);
+    process.exit(1);
+  }
+}
+const driftedLedger = run('', 'pending', false, false, 'none', 'valid', 'valid', {
+  MIGRATION_EXPECTED_PENDING: expectedPending,
+  DRIFT_AFTER_PROVISION: 'yes',
+});
+const driftedOutput = `${driftedLedger.stdout}${driftedLedger.stderr}`;
+if (driftedLedger.status !== 1 || !driftedOutput.includes('MIGRATION_EXPECTED_PENDING_MISMATCH') ||
+    driftedOutput.includes('APPLY ') || driftedOutput.match(/MIGRATION_SQL_QUERIES=(.*)/)?.[1] !== '[]') {
+  console.error(`offline post-provision expected-pending recheck failed: status=${driftedLedger.status} stdout=${driftedLedger.stdout} stderr=${driftedLedger.stderr}`);
+  process.exit(1);
+}
+for (const mode of ['--dry-run', '']) {
+  const guarded = run(mode, 'complete', false, false, 'none', 'valid', 'valid', { MIGRATION_EXPECTED_PENDING: expectedPending });
+  const output = `${guarded.stdout}${guarded.stderr}`;
+  if (guarded.status !== 1 || !output.includes('MIGRATION_EXPECTED_PENDING_MISMATCH') || output.includes('APPLY ')) {
+    console.error(`offline expected-pending guard failed for ${mode || 'mutating'} mode: status=${guarded.status} stdout=${guarded.stdout} stderr=${guarded.stderr}`);
+    process.exit(1);
+  }
+  const matching = run(mode, 'pending', false, false, 'none', 'valid', 'valid', { MIGRATION_EXPECTED_PENDING: expectedPending });
+  if (matching.status !== 0 || `${matching.stdout}${matching.stderr}`.includes('MIGRATION_EXPECTED_PENDING_MISMATCH')) {
+    console.error(`offline matching expected-pending set failed for ${mode || 'mutating'} mode: status=${matching.status} stdout=${matching.stdout} stderr=${matching.stderr}`);
+    process.exit(1);
+  }
 }
 for (const [ledger, expectedStatus, marker] of [
   ['complete', 0, 'Migration ledger is complete.'],
