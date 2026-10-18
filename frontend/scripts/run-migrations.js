@@ -951,6 +951,53 @@ async function assertAndAssumeMigrationIdentity(client, manifest, migrations, se
   await assertSchemaOwnerDatabaseAuthority(client, manifest, applied);
 }
 
+function parseBoundedTimeout(name) {
+  const value = process.env[name];
+  if (value === undefined) return undefined;
+  if (!/^[0-9]+$/.test(value)) {
+    throw new Error(`${name} must be an integer between 1 and 300000.`);
+  }
+  const timeout = Number(value);
+  if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > 300000) {
+    throw new Error(`${name} must be an integer between 1 and 300000.`);
+  }
+  return timeout;
+}
+
+function parseExpectedPending(migrations) {
+  const value = process.env.MIGRATION_EXPECTED_PENDING;
+  if (value === undefined) return undefined;
+  const filenames = value === '' ? [] : value.split(',');
+  const canonical = migrations.map((migration) => migration.filename);
+  let previousIndex = -1;
+  for (const filename of filenames) {
+    const index = canonical.indexOf(filename);
+    if (index === -1 || index <= previousIndex) {
+      throw new Error('MIGRATION_EXPECTED_PENDING must be an exact, ordered set of canonical migration filenames.');
+    }
+    previousIndex = index;
+  }
+  return new Set(filenames);
+}
+
+function assertExpectedPending(migrations, applied, expected) {
+  if (expected === undefined) return;
+  const actual = migrations
+    .filter((migration) => !applied.has(migration.filename))
+    .map((migration) => migration.filename);
+  const expectedFilenames = migrations
+    .filter((migration) => expected.has(migration.filename))
+    .map((migration) => migration.filename);
+  if (
+    actual.length !== expectedFilenames.length ||
+    actual.some((filename, index) => filename !== expectedFilenames[index])
+  ) {
+    throw new Error(
+      `MIGRATION_EXPECTED_PENDING_MISMATCH: expected [${expectedFilenames.join(',')}], found [${actual.join(',')}].`
+    );
+  }
+}
+
 function lockTimeout() {
   const timeout = Number(process.env.MIGRATION_LOCK_TIMEOUT_MS || '30000');
   if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > 300000) {
@@ -1324,8 +1371,11 @@ async function main() {
   const options = getOptions();
   const { manifest, migrations, legacyLineage } = loadManifestAndMigrations();
   const separated = parseActivationGate();
+  const expectedPending = parseExpectedPending(migrations);
+  const pgLockTimeout = parseBoundedTimeout('MIGRATION_PG_LOCK_TIMEOUT_MS');
+  const statementTimeout = parseBoundedTimeout('MIGRATION_PG_STATEMENT_TIMEOUT_MS');
 
-  if (options.dryRun) {
+  if (options.dryRun && expectedPending === undefined) {
     for (const migration of migrations) {
       console.log(`${migration.filename} ${migration.lane} ${migration.sha256}`);
     }
@@ -1338,6 +1388,8 @@ async function main() {
     application_name: separated
       ? 'cocinacore-separated-migration-runner'
       : 'cocinacore-legacy-migration-runner',
+    ...(pgLockTimeout === undefined ? {} : { lock_timeout: pgLockTimeout }),
+    ...(statementTimeout === undefined ? {} : { statement_timeout: statementTimeout }),
   });
   const client = await pool.connect();
   let lockKey;
@@ -1346,6 +1398,26 @@ async function main() {
       if (options.lane === 'bootstrap') await assertBootstrapIdentity(client);
       else await assertAndAssumeMigrationIdentity(client, manifest, migrations, separated);
     }
+    if (options.dryRun) {
+      await client.query('begin read only');
+      try {
+        const hasMigrationLedger = await migrationLedgerExists(client);
+        if (!hasMigrationLedger) throw new Error('Migration ledger is missing.');
+        await assertLedgerShape(client, separated);
+        const applied = await getAppliedMigrations(client, migrations, separated, legacyLineage);
+        assertGlobalOrder(migrations, applied);
+        assertExpectedPending(migrations, applied, expectedPending);
+        await client.query('commit');
+      } catch (error) {
+        await client.query('rollback');
+        throw error;
+      }
+      for (const migration of migrations) {
+        console.log(`${migration.filename} ${migration.lane} ${migration.sha256}`);
+      }
+      return;
+    }
+
     if (!options.verifyComplete) {
       lockKey = await acquireDatabaseChangeLock(client);
     }
@@ -1360,6 +1432,7 @@ async function main() {
         await assertLedgerShape(client, separated);
         const applied = await getAppliedMigrations(client, migrations, separated, legacyLineage);
         assertGlobalOrder(migrations, applied);
+        assertExpectedPending(migrations, applied, expectedPending);
         const pending = firstPendingMigration(migrations, applied);
         if (pending) {
           throw new Error(`Pending migration: ${pending.filename} (${pending.lane} lane).`);
@@ -1375,6 +1448,16 @@ async function main() {
     }
 
     hadLedger = await migrationLedgerExists(client);
+    if (expectedPending !== undefined) {
+      if (hadLedger) {
+        await assertLedgerShape(client, separated);
+        const baselineApplied = await getAppliedMigrations(client, migrations, separated, legacyLineage);
+        assertGlobalOrder(migrations, baselineApplied);
+        assertExpectedPending(migrations, baselineApplied, expectedPending);
+      } else {
+        throw new Error('MIGRATION_EXPECTED_PENDING requires an existing ledger.');
+      }
+    }
     if (separated) {
       await assertRunnerExtensionState(client, manifest, { pgcryptoRequired: hadLedger });
     }
@@ -1389,6 +1472,7 @@ async function main() {
     else await ensureLegacyLedger(client);
     const applied = await getAppliedMigrations(client, migrations, separated, legacyLineage);
     assertGlobalOrder(migrations, applied);
+    assertExpectedPending(migrations, applied, expectedPending);
 
     for (const migration of migrations) {
       if (applied.has(migration.filename)) {

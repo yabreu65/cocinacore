@@ -35,6 +35,9 @@ jobs:
       - name: Validate PawTech production deploy contract
         run: sh ../scripts/tests/test-pawtech-production-deploy-contract.sh
 
+      - name: Validate PawTech production migration contract
+        run: sh ../scripts/tests/test-pawtech-migration-contract.sh
+
       - name: Validate PawTech Step 4 contract
         run: sh ../scripts/tests/test-pawtech-step4-contract.sh
 
