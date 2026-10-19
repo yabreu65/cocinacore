@@ -129,16 +129,38 @@ test.describe('Connected persistent recipe lifecycle', () => {
     await expect(page.getByRole('heading', { name: originalTitle, exact: true })).toBeVisible();
     await expect(page.getByText(`Versión 3 · ${originalTitle}`, { exact: true })).toBeVisible();
 
+    const archiveResponse = page.waitForResponse(
+      (response) => response.url().includes(`/api/recipes/${recipeId}/archive`) && response.ok()
+    );
     await page.getByRole('button', { name: 'Archivar' }).click();
+    await archiveResponse;
+    await expect(page.getByRole('button', { name: 'Desarchivar' })).toBeVisible();
     await page.goto('/recipes');
+    const activeResponse = page.waitForResponse(
+      (response) => response.url().includes('/api/recipes?archived=active') && response.ok()
+    );
     await page.getByLabel('Estado de recetas').selectOption('active');
+    await activeResponse;
     await expect(page.getByRole('link', { name: originalTitle, exact: true })).toHaveCount(0);
+    const archivedResponse = page.waitForResponse(
+      (response) => response.url().includes('/api/recipes?archived=archived') && response.ok()
+    );
     await page.getByLabel('Estado de recetas').selectOption('archived');
+    await archivedResponse;
     await expect(page.getByRole('link', { name: originalTitle, exact: true })).toBeVisible();
     await page.getByRole('link', { name: originalTitle, exact: true }).click();
+    const unarchiveResponse = page.waitForResponse(
+      (response) => response.url().includes(`/api/recipes/${recipeId}/archive`) && response.ok()
+    );
     await page.getByRole('button', { name: 'Desarchivar' }).click();
+    await unarchiveResponse;
+    await expect(page.getByRole('button', { name: 'Archivar' })).toBeVisible();
     await page.goto('/recipes');
+    const activeAfterUnarchiveResponse = page.waitForResponse(
+      (response) => response.url().includes('/api/recipes?archived=active') && response.ok()
+    );
     await page.getByLabel('Estado de recetas').selectOption('active');
+    await activeAfterUnarchiveResponse;
     await expect(page.getByRole('link', { name: originalTitle, exact: true })).toBeVisible();
 
     const detail = await page.request.get(`/api/recipes/${recipeId}`);
@@ -191,23 +213,22 @@ test.describe('Connected persistent recipe lifecycle', () => {
     historyIds.push(history!.id);
 
     await page.getByRole('button', { name: 'Importar al recetario' }).click();
-    await expect(page.getByRole('status')).toContainText('Hay recetas con títulos similares');
+    const importedLink = page.getByRole('link', { name: 'Ver en el recetario' });
+    await expect(importedLink).toBeVisible();
+    const importedHref = await importedLink.getAttribute('href');
+    const importedRecipeId = importedHref?.split('/').pop();
+    if (!importedRecipeId) throw new Error('Imported recipe link did not include a recipe id.');
+    recipeIds.push(importedRecipeId);
+    await expect(page.getByText('Hay recetas con títulos similares', { exact: false })).toBeVisible();
     await page.goto('/recipes');
     await expect(page.getByRole('link', { name: GENERATED_TITLE, exact: true })).toHaveCount(2);
     const response = await page.request.get('/api/recipes?archived=active&limit=100&offset=0');
     const payload = (await response.json()) as {
       items: Array<{ id: string; current_version: { title: string } }>;
     };
-    recipeIds.push(
-      ...payload.items
-        .filter(
-          (item) =>
-            item.current_version.title === GENERATED_TITLE &&
-            !beforeIds.includes(item.id) &&
-            !recipeIds.includes(item.id)
-        )
-        .map((item) => item.id)
-    );
+    expect(
+      payload.items.filter((item) => item.current_version.title === GENERATED_TITLE)
+    ).toHaveLength(2);
   });
 
   test('denies a separately signed-up tenant access to the primary user recipe', async ({
@@ -241,7 +262,12 @@ test.describe('Connected persistent recipe lifecycle', () => {
       expect(
         (
           await secondPage.request.patch(`/api/recipes/${recipeId}`, {
-            data: { title: `Hijacked ${suffix}`, instructions: 'Forbidden' },
+            data: {
+              title: `Hijacked ${suffix}`,
+              instructions: 'Forbidden',
+              servings: 2,
+              ingredients: [],
+            },
           })
         ).status()
       ).toBe(404);

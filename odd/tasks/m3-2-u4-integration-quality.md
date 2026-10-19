@@ -13,8 +13,8 @@ Connect generated AI recipes to the persistent recipe library while preserving A
 ## Tasks
 - [x] Extend generation/import contract so generated recipes expose the persisted AI-history ID and can be imported into `/api/recipes` with `sourceRecipeHistoryId`, without deleting or mutating history.
 - [x] Add focused integration tests for generated structured ingredients, import mapping, duplicate warnings, and history preservation.
-- [ ] Add isolated connected E2E coverage for create/edit/versions/restore/archive/search/import plus cross-user/tenant denial and existing recipe regressions.
-- [ ] Run migration 016/017 validation, focused tests, TypeScript, ESLint, build, and E2E; fix only scoped failures and commit validated work units.
+- [x] Add isolated connected E2E coverage for create/edit/versions/restore/archive/search/import plus cross-user/tenant denial and existing recipe regressions.
+- [x] Run migration 016/017 validation, focused tests, TypeScript, ESLint, build, and E2E; fix only scoped failures and commit validated work units.
 
 ## Acceptance criteria
 - Generated AI UI offers a safe import/save action that creates a persistent recipe from structured ingredients and preserves the source history row.
@@ -36,7 +36,10 @@ Connect generated AI recipes to the persistent recipe library while preserving A
 - `test-persistent-recipe-migration-contract.sh` — migration 016 contract passed.
 - `test-persistent-recipe-api-contract.sh` — migration 017/archive contract passed.
 - `env -u DATABASE_URL npm run db:migrate:dry` — listed migrations 001–017 without connecting.
-- Playwright remains pending: required ports 5435/6381 are occupied by pre-existing `cocinacore-m31-e2e-*` containers; U4 must not stop or reuse those resources.
+- Connected Playwright: 4 scenarios passed (lifecycle, AI import/history, duplicate warning, cross-tenant denial).
+- Signup membership fix was required for valid tenant ownership and guarded temporary-user cleanup.
+- Temporary M32-U4 Postgres/Redis resources were used only on loopback 5435/6381 with tmpfs and no persistent mounts; cleanup is pending final resource-count verification.
 
 ## Commit evidence
 - `fe35fe8 feat(recipes): integrate AI imports and connected quality coverage`
+- Pending final U4 fix commit.
