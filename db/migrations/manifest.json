@@ -493,6 +493,22 @@
           "identity": "user_recipe_versions.user_recipe_versions_invariants"
         }
       ]
+    },
+    {
+      "id": "017",
+      "filename": "017_persistent_recipe_archive.sql",
+      "lane": "migration",
+      "sha256": "525e84bde0c63d1f2afc65a0bab7c55bec8d07fafa48732b7eb8ac7019012a87",
+      "byteLength": 185,
+      "transactional": "required",
+      "legacyChecksumBackfillAllowed": false,
+      "catalogAdditions": [
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "user_recipes.idx_user_recipes_tenant_user_archived_at"
+        }
+      ]
     }
   ],
   "baselineObjects": {
