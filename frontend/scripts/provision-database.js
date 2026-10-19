@@ -135,7 +135,8 @@ function loadTrustedManifest() {
           typeof addition !== 'object' ||
           Array.isArray(addition) ||
           Object.keys(addition).sort().join(',') !== 'identity,kind,schema' ||
-          !['constraint', 'function', 'trigger'].includes(addition.kind) ||
+          (!['constraint', 'function', 'trigger'].includes(addition.kind) &&
+            !['table', 'index'].includes(addition.kind)) ||
           !['internal', 'public'].includes(addition.schema) ||
           !/^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$/.test(addition.identity)
         ) {
@@ -872,7 +873,14 @@ function expectedCatalog(manifest, appliedMigrations, catalogFunctions) {
   for (const migration of manifest.migrations) {
     if (!appliedMigrations.has(migration.filename)) continue;
     for (const addition of migration.catalogAdditions || []) {
-      if (addition.kind === 'constraint') {
+      if (addition.kind === 'table') {
+        expected.tables.push(addition.identity);
+        const [schema, tableName] = addition.identity.split('.');
+        expected.types.push(`${schema}.${tableName}`);
+        expected.types.push(`${schema}._${tableName}`);
+      } else if (addition.kind === 'index') {
+        expected.indexes.push(`${addition.schema}.${addition.identity}`);
+      } else if (addition.kind === 'constraint') {
         expected.constraints.push(`${addition.schema}.${addition.identity}`);
       } else if (addition.kind === 'function') {
         const functionName = `${addition.schema}.${addition.identity.split('.')[1]}`;
@@ -1027,23 +1035,28 @@ async function attestBaselineCatalog(client, manifest, ownerState, appliedMigrat
     throw new Error('Managed function security mode differs from the trusted baseline.');
   }
 
-  const appliedFunctionAdditions = manifest.migrations
+  const appliedOwnerAdditions = manifest.migrations
     .filter((migration) => appliedMigrations.has(migration.filename))
     .flatMap((migration) => migration.catalogAdditions || [])
-    .filter((addition) => addition.kind === 'function');
+    .filter((addition) => addition.kind === 'function' || addition.kind === 'table');
   const expectedAdditionOwner = ownerState === 'legacy' ? 'cocinacore' : SCHEMA_OWNER;
-  const appliedFunctionOwnerEntries = new Map();
-  for (const addition of appliedFunctionAdditions) {
-    const functionName = `${addition.schema}.${addition.identity.split('.')[1]}`;
-    const matches = catalog.functions.rows.filter((row) => row.identity.startsWith(`${functionName}(`));
+  const appliedOwnerEntries = new Map();
+  for (const addition of appliedOwnerAdditions) {
+    const rows = addition.kind === 'function' ? catalog.functions.rows : catalog.tables.rows;
+    const identity = addition.kind === 'function'
+      ? `${addition.schema}.${addition.identity.split('.')[1]}`
+      : addition.identity;
+    const matches = addition.kind === 'function'
+      ? rows.filter((row) => row.identity.startsWith(`${identity}(`))
+      : rows.filter((row) => row.identity === identity);
     if (matches.length !== 1 || matches[0].owner !== expectedAdditionOwner) {
-      throw new Error(`BASELINE_MISMATCH: applied function owner differs for ${functionName}.`);
+      throw new Error(`BASELINE_MISMATCH: applied ${addition.kind} owner differs for ${identity}.`);
     }
-    const key = `function|${matches[0].identity}`;
-    if (appliedFunctionOwnerEntries.has(key)) {
-      throw new Error(`BASELINE_MISMATCH: duplicate applied function owner policy for ${matches[0].identity}.`);
+    const key = `${addition.kind}|${matches[0].identity}`;
+    if (appliedOwnerEntries.has(key)) {
+      throw new Error(`BASELINE_MISMATCH: duplicate applied ${addition.kind} owner policy for ${matches[0].identity}.`);
     }
-    appliedFunctionOwnerEntries.set(key, {
+    appliedOwnerEntries.set(key, {
       expectedLegacyOwner: 'cocinacore',
       targetOwner: SCHEMA_OWNER,
     });
@@ -1059,7 +1072,7 @@ async function attestBaselineCatalog(client, manifest, ownerState, appliedMigrat
       object,
     ])
   );
-  for (const [key, ownerPolicy] of appliedFunctionOwnerEntries) {
+  for (const [key, ownerPolicy] of appliedOwnerEntries) {
     if (byKey.has(key)) {
       throw new Error(`BASELINE_MISMATCH: conflicting owner policy for ${key.slice('function|'.length)}.`);
     }
@@ -1254,13 +1267,21 @@ async function assertReservedRoleOwnership(client, manifest, appliedMigrations) 
           : `${object.kind}|${object.schema}.${object.name}`
     )
   );
+  const appliedAdditions = manifest.migrations
+    .filter((migration) => appliedMigrations.has(migration.filename))
+    .flatMap((migration) => migration.catalogAdditions || []);
   const appliedFunctionNames = new Set(
-    manifest.migrations
-      .filter((migration) => appliedMigrations.has(migration.filename))
-      .flatMap((migration) => migration.catalogAdditions || [])
+    appliedAdditions
       .filter((addition) => addition.kind === 'function')
       .map((addition) => `${addition.schema}.${addition.identity.split('.')[1]}`)
   );
+  for (const addition of appliedAdditions.filter((entry) => entry.kind === 'table')) {
+    const [schema] = addition.identity.split('.');
+    if (schema !== addition.schema || allowed.has(`table|${addition.identity}`)) {
+      throw new Error(`ROLE_STATE_MISMATCH: invalid or duplicate applied table ${addition.identity}.`);
+    }
+    allowed.add(`table|${addition.identity}`);
+  }
   for (const row of ordinary.rows.filter((entry) => entry.owner === SCHEMA_OWNER)) {
     const isAppliedFunction = row.kind === 'function' && [...appliedFunctionNames].some(
       (name) => row.identity.startsWith(`${name}(`)

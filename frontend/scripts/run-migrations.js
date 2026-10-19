@@ -234,7 +234,8 @@ function assertCatalogAdditions(entry, historical, seen) {
     assertPlainObject(addition, `Catalog addition for ${entry.filename}`);
     if (
       Object.keys(addition).sort().join(',') !== 'identity,kind,schema' ||
-      !['constraint', 'function', 'trigger'].includes(addition.kind) ||
+      (!['constraint', 'function', 'trigger'].includes(addition.kind) &&
+        !['table', 'index'].includes(addition.kind)) ||
       !['internal', 'public'].includes(addition.schema) ||
       !/^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$/.test(addition.identity)
     ) {
@@ -759,6 +760,18 @@ async function assertSchemaOwnerDatabaseAuthority(client, manifest, applied) {
     for (const migration of manifest.migrations) {
       if (!applied.has(migration.filename)) continue;
       for (const addition of migration.catalogAdditions || []) {
+        if (addition.kind === 'table') {
+          const [schema, name] = addition.identity.split('.');
+          if (schema !== addition.schema) {
+            throw new Error(`ROLE_STATE_MISMATCH: invalid applied table declaration ${addition.identity}.`);
+          }
+          const identity = `table,${schema}.${name}`;
+          if (allowed.has(identity)) {
+            throw new Error(`ROLE_STATE_MISMATCH: applied table ${addition.identity} duplicates a baseline owner target.`);
+          }
+          allowed.add(identity);
+          continue;
+        }
         if (addition.kind !== 'function') continue;
         const [schema, name] = addition.identity.split('.');
         const declaration = `${schema}.${name}`;

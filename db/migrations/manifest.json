@@ -347,6 +347,152 @@
           "identity": "shopping_list_items.shopping_list_items_transfer_marker_pair_check"
         }
       ]
+    },
+    {
+      "id": "016",
+      "filename": "016_persistent_user_recipes.sql",
+      "lane": "migration",
+      "sha256": "a5f28c75ceaa793213809d05dcbb11c888f553eeb4dc9d7eb988ec9e567890fd",
+      "byteLength": 4529,
+      "transactional": "required",
+      "legacyChecksumBackfillAllowed": false,
+      "catalogAdditions": [
+        {
+          "kind": "table",
+          "schema": "public",
+          "identity": "public.user_recipes"
+        },
+        {
+          "kind": "table",
+          "schema": "public",
+          "identity": "public.user_recipe_versions"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "user_recipes.user_recipes_pkey"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "user_recipes.user_recipes_id_tenant_id_user_id_key"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "user_recipes.idx_user_recipes_tenant_id"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "user_recipes.idx_user_recipes_user_id"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "user_recipe_versions.user_recipe_versions_pkey"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "user_recipe_versions.user_recipe_versions_recipe_id_version_number_key"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "user_recipe_versions.idx_user_recipe_versions_recipe_id"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "user_recipe_versions.idx_user_recipe_versions_tenant_id"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "user_recipe_versions.idx_user_recipe_versions_user_id"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "user_recipes.user_recipes_pkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "user_recipes.user_recipes_tenant_id_fkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "user_recipes.user_recipes_user_id_fkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "user_recipes.user_recipes_tenant_user_membership_fkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "user_recipes.user_recipes_id_tenant_id_user_id_key"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "user_recipes.user_recipes_tags_bounds_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "user_recipe_versions.user_recipe_versions_pkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "user_recipe_versions.user_recipe_versions_version_number_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "user_recipe_versions.user_recipe_versions_title_nonempty_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "user_recipe_versions.user_recipe_versions_servings_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "user_recipe_versions.user_recipe_versions_ingredients_array_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "user_recipe_versions.user_recipe_versions_recipe_id_version_number_key"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "user_recipe_versions.user_recipe_versions_recipe_owner_fkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "user_recipe_versions.user_recipe_versions_source_recipe_history_id_fkey"
+        },
+        {
+          "kind": "function",
+          "schema": "public",
+          "identity": "public.enforce_user_recipe_version_invariants"
+        },
+        {
+          "kind": "trigger",
+          "schema": "public",
+          "identity": "user_recipe_versions.user_recipe_versions_invariants"
+        }
+      ]
     }
   ],
   "baselineObjects": {
