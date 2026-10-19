@@ -39,4 +39,4 @@ Connect generated AI recipes to the persistent recipe library while preserving A
 - Playwright remains pending: required ports 5435/6381 are occupied by pre-existing `cocinacore-m31-e2e-*` containers; U4 must not stop or reuse those resources.
 
 ## Commit evidence
-- Pending.
+- `fe35fe8 feat(recipes): integrate AI imports and connected quality coverage`
