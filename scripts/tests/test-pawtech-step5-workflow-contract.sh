@@ -5,12 +5,12 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 WORKFLOW="$ROOT/.github/workflows/deploy.yml"
 CI="$ROOT/.github/workflows/ci.yml"
 DEPLOY_SCRIPT="$ROOT/scripts/deploy-pawtech-production.sh"
-BACKUP_HELPER="$ROOT/scripts/backup-pawtech-cocinacore-predeploy.sh"
+BACKUP_VERIFIER="$ROOT/scripts/verify-pawtech-cocinacore-daily-backup.sh"
 DEPLOY_CONTRACT="$ROOT/scripts/tests/test-pawtech-production-deploy-contract.sh"
 STEP4_CONTRACT="$ROOT/scripts/tests/test-pawtech-step4-contract.sh"
 BOOTSTRAP_CONTRACT="$ROOT/scripts/tests/test-bootstrap-migrator-config.sh"
 STEP5_CONTRACT="$ROOT/scripts/tests/test-pawtech-step5-workflow-contract.sh"
-BACKUP_SCENARIO="$ROOT/scripts/tests/test-pawtech-backup-force-rls-scenario.sh"
+BACKUP_SCENARIO="$ROOT/scripts/tests/test-pawtech-daily-backup-verification.sh"
 RUNBOOK="$ROOT/docs/production/runbook.md"
 COMPOSE="$ROOT/docker-compose.prod.yml"
 
@@ -19,7 +19,7 @@ fail() {
   exit 1
 }
 
-for required_file in "$WORKFLOW" "$CI" "$DEPLOY_SCRIPT" "$BACKUP_HELPER" "$DEPLOY_CONTRACT" "$STEP4_CONTRACT" "$BOOTSTRAP_CONTRACT" "$STEP5_CONTRACT" "$BACKUP_SCENARIO" "$RUNBOOK" "$COMPOSE"; do
+for required_file in "$WORKFLOW" "$CI" "$DEPLOY_SCRIPT" "$BACKUP_VERIFIER" "$DEPLOY_CONTRACT" "$STEP4_CONTRACT" "$BOOTSTRAP_CONTRACT" "$STEP5_CONTRACT" "$BACKUP_SCENARIO" "$RUNBOOK" "$COMPOSE"; do
   [ -f "$required_file" ] || fail "required static contract input is missing: ${required_file#"$ROOT"/}"
 done
 
@@ -103,48 +103,39 @@ grep -Fq '"$RUNTIME_ENV_FILE" "$PRODUCTION_URL" deploy "$ATTEMPT_ID"' "$WORKFLOW
 grep -Fq '"$RELEASE_SHA" "$RUNTIME_ENV_FILE" "$PRODUCTION_URL" rollback "$ATTEMPT_ID"' "$WORKFLOW" || fail 'failure recovery must receive the same deterministic attempt'
 grep -Fq 'git show "$RELEASE_SHA:scripts/deploy-pawtech-production.sh" | sh -s -- "$RELEASE_SHA" "$RUNTIME_ENV_FILE" "$PRODUCTION_URL" "$MODE" "$ATTEMPT_ID"' "$WORKFLOW" || fail 'recovery must execute exact release source in rollback-only mode'
 recovery_block=$(sed -n '/name: Recover application after public smoke failure/,$p' "$WORKFLOW")
-! printf '%s\n' "$recovery_block" | grep -Eq 'docker build|npm run db:migrate|backup-pawtech-cocinacore-predeploy|git checkout| deploy "\$ATTEMPT_ID"' || fail 'workflow recovery continuation must not redeploy, migrate, back up, or checkout'
+! printf '%s\n' "$recovery_block" | grep -Eq 'docker build|npm run db:migrate|verify-pawtech-cocinacore-daily-backup|git checkout| deploy "\$ATTEMPT_ID"' || fail 'workflow recovery continuation must not redeploy, migrate, verify backups, or checkout'
 [ -n "$fetch_remote" ] && [ -n "$remote_object" ] && [ -n "$remote_ancestor" ] && [ -n "$remote_clean" ] && [ -n "$preflight" ] && [ -n "$remote_checkout" ] && [ -n "$deploy_mode" ] ||
   fail 'remote fetch, SHA checks, tracked clean check, object preflight, checkout, and deploy mode are required'
 [ "$fetch_remote" -lt "$remote_object" ] && [ "$remote_object" -lt "$remote_ancestor" ] && [ "$remote_ancestor" -lt "$remote_clean" ] && [ "$remote_clean" -lt "$preflight" ] && [ "$preflight" -lt "$remote_checkout" ] && [ "$remote_checkout" -lt "$deploy_mode" ] ||
   fail 'read-only release-object preflight must follow remote validation and precede checkout/deploy'
 
-backup_call=$(grep -nF '"$RELEASE_DIR/scripts/backup-pawtech-cocinacore-predeploy.sh" "$RELEASE_SHA"' "$DEPLOY_SCRIPT" | head -n 1 | cut -d: -f1)
-backup_dump=$(grep -nF 'pg_dump -U pawtech_root -d "$DATABASE_NAME" -Fc --no-owner --no-acl' "$BACKUP_HELPER" | head -n 1 | cut -d: -f1)
-backup_checksum=$(grep -nF 'sha256sum -c' "$BACKUP_HELPER" | head -n 1 | cut -d: -f1)
-backup_list=$(grep -nF 'pg_restore --list <"$dump_file"' "$BACKUP_HELPER" | head -n 1 | cut -d: -f1)
+backup_call=$(grep -nF '"$RELEASE_DIR/scripts/verify-pawtech-cocinacore-daily-backup.sh"' "$DEPLOY_SCRIPT" | head -n 1 | cut -d: -f1)
 verify=$(grep -nF 'npm run db:migrate:verify' "$DEPLOY_SCRIPT" | head -n 1 | cut -d: -f1)
 changed_no=$(grep -nF "log 'DATABASE_CHANGED=NO'" "$DEPLOY_SCRIPT" | head -n 1 | cut -d: -f1)
-[ -n "$backup_call" ] && [ -n "$backup_dump" ] && [ -n "$backup_checksum" ] && [ -n "$backup_list" ] && [ -n "$verify" ] && [ -n "$changed_no" ] ||
-  fail 'exact-SHA release-tree backup helper, dump integrity checks, and read-only verify are required'
-[ "$backup_call" -lt "$verify" ] && [ "$backup_dump" -lt "$backup_checksum" ] && [ "$backup_checksum" -lt "$backup_list" ] && [ "$backup_list" -lt "$verify" ] && [ "$verify" -lt "$changed_no" ] ||
-  fail 'backup dump, checksum verification, archive listing, migration verification, and unchanged-database order is invalid'
-grep -Fq 'pg_restore --list <"$dump_file"' "$BACKUP_HELPER" || fail 'backup archive must be listed from stdin without a positional filename'
-! grep -Fq 'pg_restore --list -' "$BACKUP_HELPER" || fail 'backup archive listing must not use a positional filename'
-grep -Fq 'pg_dump -U pawtech_root -d "$DATABASE_NAME" -Fc --no-owner --no-acl' "$BACKUP_HELPER" || fail 'backup must use the verified scheduled operator without credential extraction'
-grep -Fq 'git ls-tree "$RELEASE_SHA" -- scripts/backup-pawtech-cocinacore-predeploy.sh' "$DEPLOY_SCRIPT" || fail 'preflight must inspect the release-tree helper mode'
-grep -Fq '[ "$helper_mode" = 100755 ]' "$DEPLOY_SCRIPT" || fail 'preflight must require helper mode 100755'
+[ -n "$backup_call" ] && [ -n "$verify" ] && [ -n "$changed_no" ] ||
+  fail 'daily backup verifier and read-only migration verification are required'
+[ "$(grep -Fc '"$RELEASE_DIR/scripts/verify-pawtech-cocinacore-daily-backup.sh"' "$DEPLOY_SCRIPT")" -eq 1 ] || fail 'deploy must invoke the daily verifier exactly once'
+[ "$backup_call" -lt "$verify" ] && [ "$verify" -lt "$changed_no" ] ||
+  fail 'daily backup verification, migration verification, and unchanged-database order is invalid'
+grep -Fq 'git ls-tree "$RELEASE_SHA" -- scripts/verify-pawtech-cocinacore-daily-backup.sh' "$DEPLOY_SCRIPT" || fail 'preflight must inspect the release-tree verifier mode'
+grep -Fq '[ "$verifier_mode" = 100755 ]' "$DEPLOY_SCRIPT" || fail 'preflight must require verifier mode 100755'
+[ -x "$BACKUP_VERIFIER" ] || fail 'daily backup verifier must be executable'
+for verifier_expected in 'DATABASE_NAME=cocinacore_db' 'POSTGRES_CONTAINER=pawtech-postgres' 'rclone lsf' 'rclone cat' 'sha256sum' 'pg_restore --list' 'DAILY_BACKUP_SCHEMA_016_017_OK' 'DAILY_BACKUP_RLS_COMPATIBLE' 'DAILY_BACKUP_VERIFIED'; do
+  grep -Fq "$verifier_expected" "$BACKUP_VERIFIER" || fail "daily verifier missing contract: $verifier_expected"
+done
+! grep -Eq 'pg_dump|rclone (copy|sync)|mktemp|mkdir|chmod|docker cp|pg_restore[^[:cntrl:]]*--(dbname|clean|create)' "$BACKUP_VERIFIER" ||
+  fail 'daily verifier must remain read-only without local artifact creation or database restore'
+grep -Fq 'FROM pg_roles' "$BACKUP_VERIFIER" || fail 'daily verifier must inspect role metadata only'
+! grep -Eiq 'INSERT|UPDATE|DELETE|ALTER|CREATE|DROP|FROM public\.' "$BACKUP_VERIFIER" || fail 'daily verifier must not mutate or read application tables'
+grep -Fq 'BACKUP_VERIFICATION' "$DEPLOY_SCRIPT" || fail 'deployment state must retain backup verification evidence'
+grep -Fq 'DATABASE_CHANGED=NO' "$DEPLOY_SCRIPT" || fail 'database must remain unchanged'
 grep -Fq 'check_previous_app || fail' "$DEPLOY_SCRIPT" || fail 'preflight must prove a valid prior application rollback target'
 grep -Fq 'container_networks_exact "$APP_CONTAINER"' "$DEPLOY_SCRIPT" || fail 'preflight must enforce exact previous-app networks'
-grep -Fq 'command -v pg_dump' "$DEPLOY_SCRIPT" && grep -Fq 'command -v pg_restore' "$DEPLOY_SCRIPT" || fail 'preflight must confirm snapshot tools inside PostgreSQL'
 grep -Fq '[ "$attached_networks" = "$expected_networks" ]' "$DEPLOY_SCRIPT" || fail 'rollback must reject networks beyond the exact required set'
 grep -Fq "x.status!=='ok'||x.dependencies?.database?.status!=='ok'||x.dependencies?.redis?.status!=='ok'" "$DEPLOY_SCRIPT" || fail 'public health must validate app/database/redis JSON health'
-grep -Fq '/opt/pawtech/backups/postgres/cocinacore_db/manual' "$BACKUP_HELPER" || fail 'established manual backup hierarchy is missing'
-grep -Fq 'DATABASE_NAME=cocinacore_db' "$BACKUP_HELPER" || fail 'backup database must be fixed to cocinacore_db'
-grep -Fq 'POSTGRES_CONTAINER=pawtech-postgres' "$BACKUP_HELPER" || fail 'backup container must be fixed to pawtech-postgres'
-grep -Fq 'umask 077' "$BACKUP_HELPER" || fail 'backup helper must use a private umask'
-grep -Fq 'mktemp -d' "$BACKUP_HELPER" && grep -Fq 'date' "$BACKUP_HELPER" || fail 'backup artifact path must be timestamped and unique under the manual hierarchy'
-grep -Eq 'chmod 700|install -d -m 700|mktemp -d' "$BACKUP_HELPER" || fail 'backup run directory must be private'
-grep -Fq 'chmod 600' "$BACKUP_HELPER" && grep -Fq '.sha256' "$BACKUP_HELPER" || fail 'dump and checksum sidecar must be mode 0600'
-grep -Fq 'sha256sum' "$BACKUP_HELPER" || fail 'backup checksum generation is missing'
-grep -Fq 'sha256sum -c' "$BACKUP_HELPER" || fail 'backup checksum verification is missing'
-[ "$(grep -c 'pg_dump' "$BACKUP_HELPER")" -eq 1 ] || fail 'helper must dump only its single CocinaCore database'
-! grep -Eiq 'backup-postgres\.sh|retention|rclone|pawtech_db|postgres_db|template1' "$BACKUP_HELPER" ||
-  fail 'backup helper contains shared backup, offsite, or other-database behavior'
-! grep -Eiq 'pg_restore.*--(dbname|clean|create)|psql.*(--dbname| -d )' "$BACKUP_HELPER" ||
-  fail 'backup helper must never restore a database'
-! grep -Eiq 'cat[^[:cntrl:]]*\.(dump|sql)|tee[^[:cntrl:]]*\.(dump|sql)|printenv|^[[:space:]]*env([[:space:]]|$)|\.Config\.Env|(echo|printf|log)[^[:cntrl:]]*(PASSWORD|DATABASE_URL)' "$BACKUP_HELPER" ||
-  fail 'backup helper may not log database contents or credentials'
+! grep -Eq 'pg_restore[^[:cntrl:]]*--(dbname|clean|create)' "$BACKUP_VERIFIER" || fail 'daily verifier must never restore a database'
+! grep -Eiq 'printenv|^[[:space:]]*env([[:space:]]|$)|\.Config\.Env|(echo|printf|log)[^[:cntrl:]]*(PASSWORD|DATABASE_URL)' "$BACKUP_VERIFIER" ||
+  fail 'daily verifier may not expose credentials'
 ! grep -Eq 'npm run db:migrate([[:space:]]|$)' "$DEPLOY_SCRIPT" || fail 'mutating db:migrate command is forbidden'
 grep -Fq 'npm run db:migrate:verify' "$DEPLOY_SCRIPT" || fail 'read-only migration verification is missing'
 grep -Fq 'MIGRATION_EXPECTATION=NO_OP' "$DEPLOY_SCRIPT" || fail 'no-op migration expectation must be emitted'
@@ -172,7 +163,7 @@ grep -Fq 'REMOTE_DEPLOY_READY' "$DEPLOY_SCRIPT" || fail 'remote deploy must not 
 grep -Fq 'DEPLOY_STATE_ATTEMPT=$ATTEMPT_ID' "$DEPLOY_SCRIPT" || fail 'pre-cutover state record must bind the deterministic attempt'
 grep -Fq 'DEPLOY_STATE_FILE' "$DEPLOY_SCRIPT" || fail 'pre-cutover state record path is missing'
 grep -Fq "printf 'PREVIOUS_CONTAINER=%s\\n' \"\$PREVIOUS\"" "$DEPLOY_SCRIPT" || fail 'state must serialize a validated previous container, never a none fallback'
-for state_field in RELEASE_SHA IMAGE PREVIOUS_CONTAINER PREVIOUS_ID PREVIOUS_IMAGE BACKUP_ARTIFACT DATABASE_CHANGED DEPLOY_STATE_ATTEMPT; do
+for state_field in RELEASE_SHA IMAGE PREVIOUS_CONTAINER PREVIOUS_ID PREVIOUS_IMAGE BACKUP_VERIFICATION DATABASE_CHANGED DEPLOY_STATE_ATTEMPT; do
   grep -Fq "printf '$state_field=%s\\n'" "$DEPLOY_SCRIPT" || fail "pre-cutover state record is missing $state_field"
 done
 grep -Fq 'chmod 600 "$DEPLOY_STATE_FILE"' "$DEPLOY_SCRIPT" || fail 'pre-cutover state record must be mode 0600'
@@ -183,7 +174,7 @@ grep -Fq '[ "$previous_id" = "$STATE_PREVIOUS_ID" ] && [ "$previous_image" = "$S
 grep -Fq '[ "$current_image" = "$STATE_IMAGE" ] && [ "$current_attempt" = "$ATTEMPT_ID" ]' "$DEPLOY_SCRIPT" || fail 'rollback must validate current app ownership before removal'
 grep -Fq 'rollback_mode()' "$DEPLOY_SCRIPT" || fail 'rollback-only mode implementation is missing'
 rollback_block=$(sed -n '/^rollback_mode()/,/^}/p' "$DEPLOY_SCRIPT")
-! printf '%s\n' "$rollback_block" | grep -Eq 'docker build|npm run db:migrate|backup-pawtech-cocinacore-predeploy|git archive|pg_restore[^[:cntrl:]]*--(dbname|clean|create)' || fail 'rollback mode must not build, migrate, back up, archive, or restore a database'
+! printf '%s\n' "$rollback_block" | grep -Eq 'docker build|npm run db:migrate|verify-pawtech-cocinacore-daily-backup|git archive|pg_restore[^[:cntrl:]]*--(dbname|clean|create)' || fail 'rollback mode must not build, migrate, verify backups, archive, or restore a database'
 grep -Fq 'DATABASE_CHANGED=NO' "$DEPLOY_SCRIPT" || fail 'state and recovery must preserve no-database-change evidence'
 grep -Fq 'APP_ROLLBACK_SAFE' "$DEPLOY_SCRIPT" && grep -Fq 'MANUAL_INTERVENTION_REQUIRED' "$DEPLOY_SCRIPT" || fail 'rollback must prove recovery or fail for manual intervention'
 grep -Fq 'second public health smoke fails' "$RUNBOOK" || fail 'runbook must document application recovery after the independent smoke fails'
@@ -192,10 +183,10 @@ grep -Fq 'second public health smoke fails' "$RUNBOOK" || fail 'runbook must doc
   fail 'deploy path must not mutate shared database or cache infrastructure'
 ! grep -Eiq 'docker (volume|network) (create|rm|prune)|redis-cli[^[:cntrl:]]*(flush|del)' "$WORKFLOW" ||
   fail 'workflow must not mutate shared Docker or cache infrastructure'
-! grep -Eiq 'pg_restore[^[:cntrl:]]*--(dbname|clean|create)|psql[^[:cntrl:]]*(--dbname| -d )' "$BACKUP_HELPER" ||
-  fail 'backup helper must not perform a database restore'
+! grep -Eiq 'pg_restore[^[:cntrl:]]*--(dbname|clean|create)' "$BACKUP_VERIFIER" ||
+  fail 'daily backup verifier must not perform a database restore'
 
-for static_contract in test-pawtech-production-deploy-contract.sh test-pawtech-step4-contract.sh test-bootstrap-migrator-config.sh test-pawtech-step5-workflow-contract.sh test-pawtech-backup-force-rls-scenario.sh; do
+for static_contract in test-pawtech-production-deploy-contract.sh test-pawtech-step4-contract.sh test-bootstrap-migrator-config.sh test-pawtech-step5-workflow-contract.sh test-pawtech-daily-backup-verification.sh; do
   grep -Fq "$static_contract" "$CI" || fail "CI is missing static contract $static_contract"
   grep -Fq "run: sh ../scripts/tests/$static_contract" "$CI" || fail "CI does not invoke static contract $static_contract"
 done

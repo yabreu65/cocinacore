@@ -3,7 +3,7 @@ set -eu
 
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 DEPLOY="$ROOT/scripts/deploy-pawtech-production.sh"
-BACKUP_HELPER="$ROOT/scripts/backup-pawtech-cocinacore-predeploy.sh"
+BACKUP_VERIFIER="$ROOT/scripts/verify-pawtech-cocinacore-daily-backup.sh"
 RUNNER="$ROOT/frontend/scripts/run-migrations.js"
 
 fail() {
@@ -15,19 +15,8 @@ sh -n "$DEPLOY" || fail 'deploy script syntax is invalid'
 node --check "$RUNNER" || fail 'migration runner syntax is invalid'
 
 for expected in \
-  'BACKUP_CREATED' \
-  'BACKUP_CHECKSUM_OK' \
-  'file_mode=$(stat -c' \
-  'sidecar_mode=$(stat -c' \
-  'parent_mode=$(stat -c' \
-  "[ \"\$parent_mode\" = '700' ]" \
-  'file_owner=$(stat -c' \
-  'sidecar_owner=$(stat -c' \
-  'parent_owner=$(stat -c' \
-  'deploy_uid=$(id -u)' \
-  'BACKUP_DUMP_VALID' \
-  'BACKUP_OK' \
-  'sha256sum -c' \
+  'BACKUP_VERIFICATION' \
+  'DAILY_BACKUP_VERIFIED' \
   'DATABASE_CHANGED=NO' \
   "log 'MIGRATION_EXPECTATION=NO_OP'" \
   'PREVIOUS_RENAME_ATTEMPTED=0' \
@@ -47,18 +36,12 @@ done
   fail 'Pawtech deployment must not use a provisioner or separated migration environment'
 ! grep -Eq 'pg_restore[^\n]*(--clean|--create)|docker (rm|stop|start|rename).*pawtech-(postgres|redis)|docker (compose|volume create|network create)' "$DEPLOY" ||
   fail 'database restore or shared-service mutation is forbidden'
-! grep -Eq 'rm[^\n]*BACKUP_ARTIFACT|rm[^\n]*backup_sidecar' "$DEPLOY" || fail 'backup artifacts must be preserved during cleanup'
-grep -Fq 'sha256sum -c' "$DEPLOY" && grep -Fq 'pg_restore --list <"$dump_file"' "$BACKUP_HELPER" ||
-  fail 'backup checksum and stdin archive validation are required'
-! grep -Fq 'pg_restore --list -' "$BACKUP_HELPER" ||
-  fail 'archive validation must not pass a positional filename to pg_restore'
-grep -Fq 'pg_dump -U pawtech_root -d "$DATABASE_NAME" -Fc --no-owner --no-acl' "$BACKUP_HELPER" ||
-  fail 'CocinaCore-only custom-format backup is required'
+grep -Fq 'BACKUP_VERIFICATION' "$DEPLOY" || fail 'daily backup verification state must be preserved during cleanup'
+grep -Fq 'BACKUP_VERIFICATION' "$DEPLOY" && grep -Fq '[ "$STATE_BACKUP_VERIFICATION" = DAILY_BACKUP_VERIFIED ]' "$DEPLOY" ||
+  fail 'daily backup verification evidence must be validated in deployment state'
 
-backup_line=$(grep -nF '"$RELEASE_DIR/scripts/backup-pawtech-cocinacore-predeploy.sh" "$RELEASE_SHA"' "$DEPLOY" | head -n 1 | cut -d: -f1)
+backup_line=$(grep -nF '"$RELEASE_DIR/scripts/verify-pawtech-cocinacore-daily-backup.sh"' "$DEPLOY" | head -n 1 | cut -d: -f1)
 build_line=$(grep -nF 'docker build' "$DEPLOY" | head -n 1 | cut -d: -f1)
-checksum_line=$(grep -nF 'sha256sum -c' "$DEPLOY" | tail -n 1 | cut -d: -f1)
-archive_line=$(grep -nF 'log "BACKUP_DUMP_VALID artifact=${BACKUP_ARTIFACT}"' "$DEPLOY" | cut -d: -f1)
 verify_line=$(grep -nF 'npm run db:migrate:verify' "$DEPLOY" | cut -d: -f1)
 no_op_line=$(grep -nF "log 'MIGRATION_EXPECTATION=NO_OP'" "$DEPLOY" | cut -d: -f1)
 candidate_line=$(grep -nF "log 'CANDIDATE starting'" "$DEPLOY" | cut -d: -f1)
@@ -66,13 +49,13 @@ candidate_health_line=$(grep -nF "log 'CANDIDATE health=ok'" "$DEPLOY" | cut -d:
 cutover_line=$(grep -nF 'log "CUTOVER new_image=${IMAGE}"' "$DEPLOY" | cut -d: -f1)
 public_health_line=$(grep -nF '[ "$public_ok" -eq 1 ]' "$DEPLOY" | cut -d: -f1)
 preflight_return_line=$(grep -nF 'PREFLIGHT_OK release=${RELEASE_SHA} storage=${STORAGE_DRIVER}' "$DEPLOY" | cut -d: -f1)
-backup_timestamp_line=$(grep -nF 'BACKUP_ARTIFACT=$(' "$DEPLOY" | cut -d: -f1)
-[ "$build_line" -lt "$backup_line" ] && [ "$backup_line" -lt "$checksum_line" ] &&
-  [ "$checksum_line" -lt "$archive_line" ] && [ "$archive_line" -lt "$verify_line" ] &&
+backup_timestamp_line=$(grep -nF 'BACKUP_VERIFICATION=$(' "$DEPLOY" | cut -d: -f1)
+[ "$(grep -Fc '"$RELEASE_DIR/scripts/verify-pawtech-cocinacore-daily-backup.sh"' "$DEPLOY")" -eq 1 ] || fail 'daily backup verifier must be invoked exactly once'
+[ "$build_line" -lt "$backup_line" ] && [ "$backup_line" -lt "$verify_line" ] &&
   [ "$verify_line" -lt "$no_op_line" ] && [ "$no_op_line" -lt "$candidate_line" ] &&
   [ "$candidate_line" -lt "$candidate_health_line" ] && [ "$candidate_health_line" -lt "$cutover_line" ] &&
   [ "$cutover_line" -lt "$public_health_line" ] && [ "$preflight_return_line" -lt "$backup_timestamp_line" ] ||
-  fail 'preflight or build/backup/checksum/archive/verify/no-op/candidate/cutover/public-health order is invalid'
+  fail 'preflight or build/backup-verification/verify/no-op/candidate/cutover/public-health order is invalid'
 ! grep -Eq 'npm run db:migrate([[:space:]]|$)' "$DEPLOY" || fail 'mutating db:migrate command is forbidden'
 grep -Fq 'npm run db:migrate:verify' "$DEPLOY" || fail 'read-only db:migrate:verify command is missing'
 grep -Fq 'DATABASE_CHANGED=NO' "$DEPLOY" || fail 'database change state is not explicit'

@@ -48,8 +48,8 @@ jobs:
       - name: Validate PawTech Step 5 workflow contract
         run: sh ../scripts/tests/test-pawtech-step5-workflow-contract.sh
 
-      - name: Test PawTech FORCE RLS backup scenario
-        run: sh ../scripts/tests/test-pawtech-backup-force-rls-scenario.sh
+      - name: Test PawTech daily backup verification scenario
+        run: sh ../scripts/tests/test-pawtech-daily-backup-verification.sh
 
       - name: Test bootstrap and migrator PostgreSQL boundary
         run: sh ../scripts/test-bootstrap-migrator-integration.sh

@@ -34,37 +34,35 @@ this runbook or this hardening change.
 
 1. A human manually selects the exact 40-hex SHA already integrated into `origin/main`. GitHub
    validates the SHA, confirms ancestry, checks out the exact commit, and runs Node `22.22.3`,
-   `npm ci`, lint, `test:coverage`, typecheck, build, and all four maintained static contracts
-   before configuring SSH. The manual workflow uses the `production` environment and serialized
-   `deploy-production` concurrency with cancellation disabled; it has no automatic retry.
+   `npm ci`, lint, `test:coverage`, typecheck, build, maintained static contracts, and the daily
+   backup verification scenario before configuring SSH. The manual workflow uses the `production`
+   environment and serialized `deploy-production` concurrency with cancellation disabled; it has no
+   automatic retry.
 2. SSH uses the pinned `/opt/pawtech/apps/cocinacore` path and validates its canonical realpath.
    The VPS receives the exact release SHA and production URL; it explicitly runs read-only preflight
    before deploy mode. Preflight validates the absolute URL, runtime env path/mode/expected target,
    shared networks and service health, uploads directory, source ancestry, and required tools/helper.
    It creates no files and returns before deploy lock, trap, or mutations.
 3. Deploy uses `git archive "$RELEASE_SHA"` as the sole release source, excluding untracked VPS
-   files, and builds that exact-SHA image before backup.
-4. The extracted release's versioned `scripts/backup-pawtech-cocinacore-predeploy.sh` handles only
-   `cocinacore_db` on `pawtech-postgres`. It uses `pawtech_root`, the verified scheduled backup
-   operator, not the application role `cocinacore_user`; this operator boundary is needed to export
-   tables protected by FORCE RLS without changing application privileges or RLS. A dedicated
-   least-privilege backup role is future work requiring separate authorization. It requires the pre-existing
-   `/opt/pawtech/backups/postgres/cocinacore_db/manual` hierarchy and creates a unique private
-   timestamp/SHA run directory. It produces a custom `pg_dump -Fc --no-owner --no-acl`, private
-   SHA-256 sidecar, verifies the checksum, and validates the archive with `pg_restore --list` in the
-   PostgreSQL container. Deploy verifies artifact/sidecar ownership and modes, directory mode,
-   checksum, and helper success before migration verification or candidate startup. Any failure
-   stops deployment and leaves artifacts in place. The shared multi-database backup routine,
-   retention, offsite transfer, and restore are never invoked by this helper.
-5. Only `npm run db:migrate:verify` runs, after backup integrity validation. It is read-only and
+   files, and builds that exact-SHA image.
+4. Before migration-state verification, deploy invokes the strict read-only daily Object Storage
+   verifier. It checks only the existing scheduled `cocinacore_db` backup, streams its sidecar and
+   dump for checksum/archive checks, and requires archive markers proving migrations 016/017. It
+   rejects missing, stale, corrupt, unreadable, or pre-016/017 artifacts and checks the scheduled
+   role's `BYPASSRLS` metadata without querying application tables. Deploy never creates a predeploy
+   backup; there is no `pg_dump`, copy/upload, local dump/sidecar, or database restore in this path.
+   The known 19-Oct artifact lacks 016/017 markers and is rejected; it is not claimed to cover
+   FORCE RLS. A future post-migration artifact must pass the markers before any FORCE RLS coverage
+   claim is made.
+5. Only `npm run db:migrate:verify` runs, after scheduled-backup verification. It is read-only and
    requires the existing migration ledger to be complete and ordered. M1 requires
    `MIGRATION_EXPECTATION=NO_OP` and `DATABASE_CHANGED=NO`; pending migrations fail closed. No
    provisioning, mutating migration, DDL, or automatic database restore is allowed. Never run `pg_restore --clean` or restore automatically.
 6. A candidate runs on `pawtech_internal` only. App, database, and Redis health must pass before
-   application cutover. Before cutover, the deploy writes a mode-`0600` non-secret state record in
-   the private CocinaCore backup run directory, binding release SHA, image, previous container/id/
-   image, backup artifact, `DATABASE_CHANGED=NO`, and the deterministic GitHub attempt ID. The
-   record and backup evidence are preserved.
+   application cutover. Before cutover, deploy writes a mode-`0600` non-secret state record in the
+   existing CocinaCore state directory, binding release SHA, image, previous container/id/image, the
+   fixed `DAILY_BACKUP_VERIFIED` token, `DATABASE_CHANGED=NO`, and the deterministic attempt ID. No
+   backup artifact path is stored.
 7. The new app is connected to the existing public network and must pass internal and public health.
    Public health requires successful HTTP and JSON app/database/Redis health. The remote script then
    reports `REMOTE_DEPLOY_READY`, not final deployment success. GitHub performs an independent
@@ -106,8 +104,10 @@ reproducibility task.
   checkpoint.
 - Required frontend quality checks and all four static contracts pass before SSH setup.
 - Preflight confirms the known Pawtech runtime and exits before deploy mutations.
-- Exact-SHA archive build completes before the CocinaCore-only backup.
-- Backup artifact and sidecar pass mode, ownership, checksum, and archive validation.
+- Exact-SHA archive build completes; deploy validates the existing scheduled Object Storage backup only.
+- Deploy creates no predeploy backup. The existing artifact passes freshness, checksum, archive,
+  016/017, and scheduled-role RLS compatibility checks. Pre-016/017 artifacts, including the known
+  19-Oct artifact, are rejected and are not represented as FORCE RLS coverage.
 - Read-only migration verification passes with `MIGRATION_EXPECTATION=NO_OP` and
   `DATABASE_CHANGED=NO`.
 - Internal-only candidate passes app/database/Redis health before cutover.
