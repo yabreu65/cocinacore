@@ -66,13 +66,15 @@ preflight() {
     -e MIGRATION_PG_STATEMENT_TIMEOUT_MS=120000 -e MIGRATION_EXPECTED_PENDING="$EXPECTED_PENDING" \
     "$IMAGE" node -e '
 const { Pool } = require("pg");
+const { validateShoppingListBaseline } = require("./scripts/migration-baseline");
 function parseBoundedTimeout(name){const value=process.env[name];if(!/^[0-9]+$/.test(value||""))throw Error("timeout");const timeout=Number(value);if(!Number.isSafeInteger(timeout)||timeout<1||timeout>300000)throw Error("timeout");return timeout}
 (async()=>{const p=new Pool({connectionString:process.env.DATABASE_URL,connectionTimeoutMillis:5000,lock_timeout:parseBoundedTimeout("MIGRATION_PG_LOCK_TIMEOUT_MS"),statement_timeout:parseBoundedTimeout("MIGRATION_PG_STATEMENT_TIMEOUT_MS")});try{
 const c=await p.connect();try{
 const identity=await c.query("select current_database() db, current_user usr, inet_server_addr()::text addr");
 if(identity.rows.length!==1||identity.rows[0].db!=="cocinacore_db"||identity.rows[0].usr!=="cocinacore_user") throw Error("db identity");
 const relation=await c.query("select count(*)::int item_count, pg_total_relation_size(\u0027public.shopping_list_items\u0027::regclass)::bigint bytes from public.shopping_list_items");
-if(Number(relation.rows[0].item_count)!==0||Number(relation.rows[0].bytes)>81920) throw Error("relation baseline");
+// Migrations 016/017 do not touch shopping-list rows; keep only the bounded 81920-byte safety guard.
+validateShoppingListBaseline(relation.rows[0]);
 const activity=await c.query("select count(*)::int waiting from pg_locks where not granted");
 const idle=await c.query("select count(*)::int idle from pg_stat_activity where state=\u0027idle in transaction\u0027");
 if(Number(activity.rows[0].waiting)!==0||Number(idle.rows[0].idle)!==0) throw Error("lock/activity baseline");

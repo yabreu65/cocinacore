@@ -6,6 +6,8 @@ ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 WORKFLOW="$ROOT/.github/workflows/migrate-production.yml"
 MIGRATION="$ROOT/scripts/migrate-pawtech-production.sh"
 RUNNER="$ROOT/frontend/scripts/run-migrations.js"
+BASELINE="$ROOT/frontend/scripts/migration-baseline.js"
+BASELINE_TEST="$ROOT/scripts/tests/test-pawtech-migration-baseline.js"
 CI="$ROOT/.github/workflows/ci.yml"
 
 fail() {
@@ -53,6 +55,7 @@ workflow_step_run() {
 [ -f "$WORKFLOW" ] || fail 'manual production migration workflow is missing'
 [ -f "$MIGRATION" ] || fail 'VPS migration script is missing'
 sh -n "$MIGRATION" || fail 'VPS migration script syntax is invalid'
+node "$BASELINE_TEST" || fail 'shopping-list migration baseline test failed'
 
 # The only trigger is manual dispatch, and the requested full SHA must be in main.
 contains "$WORKFLOW" 'workflow_dispatch:' 'workflow must be manually dispatched only'
@@ -156,8 +159,12 @@ not_contains "$MIGRATION" '(echo|log|fail)[^[:cntrl:]]*\$DATABASE_URL' 'migratio
 contains "$MIGRATION" 'DATABASE_ENV_FILE=$WORK/database.env' 'runtime credential must be placed only in the private temporary env file'
 contains "$MIGRATION" 'chmod 600 "$DATABASE_ENV_FILE"' 'temporary credential file must be private'
 contains "$MIGRATION" 'MIGRATION_EXPECTED_PENDING="$EXPECTED_PENDING"' 'preflight and runner must enforce the exact pending ledger'
-contains "$MIGRATION" 'relation.rows[0].item_count)!==0' 'baseline requires zero shopping-list items'
-contains "$MIGRATION" 'relation.rows[0].bytes)>81920' 'relation footprint must not exceed 81920 bytes'
+not_contains "$MIGRATION" 'item_count\)!==0' 'baseline must not reject existing shopping-list rows'
+contains "$MIGRATION" 'require("./scripts/migration-baseline")' 'preflight must use the production-image baseline helper'
+contains "$MIGRATION" 'validateShoppingListBaseline(relation.rows[0])' 'preflight must validate the shopping-list query result'
+contains "$MIGRATION" 'Migrations 016/017 do not touch shopping-list rows' 'bounded row-preserving baseline rationale must remain explicit'
+contains "$BASELINE" 'MAX_SHOPPING_LIST_RELATION_BYTES = 81920' 'relation footprint must retain the 81920-byte ceiling'
+contains "$BASELINE" 'bytes > BigInt(MAX_SHOPPING_LIST_RELATION_BYTES)' 'relation size above the ceiling must fail'
 contains "$MIGRATION" 'activity.rows[0].waiting)!==0' 'preflight must stop on waiting PostgreSQL locks'
 contains "$MIGRATION" 'idle.rows[0].idle)!==0' 'preflight must stop on idle-in-transaction sessions'
 contains "$MIGRATION" 'lock_timeout:parseBoundedTimeout("MIGRATION_PG_LOCK_TIMEOUT_MS")' 'preflight must set actual PostgreSQL lock timeout'
