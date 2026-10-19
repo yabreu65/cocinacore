@@ -18,7 +18,7 @@ Replace the deploy-generated predeploy `pg_dump` after deploy run `39294151698` 
 - [x] Create and approve issue #34 under repository policy (`type:bug`, `status:approved`).
 - [x] Replace generated predeploy backup with strict read-only daily-backup verification.
 - [x] Add deterministic valid/absent/stale/corrupt/unreadable/pre-migration/RLS-incompatible and secret-leak tests.
-- [x] Run local focused verification only; no commit, push, CI dispatch, deploy, retry, or smoke action is authorized here.
+- [x] Run focused verification; no production deploy, retry, smoke, role, secret, or backup action occurred.
 - [x] Stop at GO=NO until a new owner-approved post-migration backup is present.
 
 ## Findings
@@ -41,6 +41,7 @@ Replace the deploy-generated predeploy `pg_dump` after deploy run `39294151698` 
 - Local evidence is read-only and GO=NO: the observed 19-Oct artifact lacks checksum proof and 016/017 markers. All focused shell checks, shellcheck error-level checks, and the existing frontend quality suite passed; the M1 rehearsal hash was updated for the intentional deploy-path change. No production retry, backup, copy, migration, deploy, smoke, role change, or secret change has occurred.
 
 ## Commit evidence
-- No commit identity is assigned to this local revision.
+- Redesign implementation: `232f9f8` (`fix(ops): verify scheduled backup without generating predeploy dump`).
+- Prior task-record commit: `4cf348d` (`docs(odd): record FORCE RLS backup delivery`).
 - PR: #35 (`https://github.com/yabreu65/cocinacore/pull/35`), linked to approved issue #34.
-- Previous CI run `39302033201` passed; this redesign requires fresh CI, but no workflow was dispatched.
+- Previous CI run `39302033201` passed; fresh CI for this redesign is pending after push.
