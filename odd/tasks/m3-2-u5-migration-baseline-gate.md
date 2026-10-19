@@ -17,7 +17,7 @@ Correct the official 016/017 production migration preflight so existing `shoppin
 - [x] Implement the smallest safe baseline-gate correction.
 - [x] Add zero-row/one-plus-row/oversized-relation tests and update contract expectations.
 - [x] Verify protected local paths remain unstaged and run focused checks.
-- [ ] Commit one reviewable work unit and open the controlled PR.
+- [x] Commit one reviewable work unit and open the controlled PR.
 - [ ] Monitor official CI; stop before any production retry.
 
 ## Findings
@@ -42,4 +42,4 @@ Correct the official 016/017 production migration preflight so existing `shoppin
 - Protected `.atl/skill-registry.md`, `.codegraph/`, and U0 task edit remain unstaged.
 
 ## Commit evidence
-- Pending.
+- `f74e2fd` — `fix(migration): allow existing shopping-list rows`.
