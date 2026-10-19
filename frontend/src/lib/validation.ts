@@ -95,6 +95,45 @@ export type ShoppingListStatusUpdateBody = z.infer<typeof ShoppingListStatusUpda
 
 export const ShoppingListIdSchema = z.string().uuid();
 
+const ManualRecipeIngredientSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200),
+    quantity: z.string().trim().max(100).nullable().optional(),
+    unit: z.string().trim().max(50).nullable().optional(),
+  })
+  .passthrough();
+
+const PersistentRecipeContentSchema = z.object({
+  title: z.string().trim().min(1).max(200),
+  instructions: z.string().trim().min(1).max(20_000),
+  servings: z.number().int().min(1).max(100).nullable().optional(),
+  ingredients: z.array(ManualRecipeIngredientSchema).max(100),
+  category: z.string().trim().max(100).nullable().optional(),
+  tags: z.array(z.string().trim().min(1).max(50)).max(20).optional().default([]),
+  sourceRecipeHistoryId: z.string().uuid().nullable().optional(),
+});
+
+/** Schema for creating a persistent user recipe. Ownership is always server-derived. */
+export const CreatePersistentRecipeSchema = PersistentRecipeContentSchema.strict();
+export type CreatePersistentRecipeBody = z.infer<typeof CreatePersistentRecipeSchema>;
+
+/** Schema for appending an edited persistent-recipe version. */
+export const EditPersistentRecipeSchema = PersistentRecipeContentSchema.strict();
+export type EditPersistentRecipeBody = z.infer<typeof EditPersistentRecipeSchema>;
+
+export const PersistentRecipeArchiveSchema = z.object({ archived: z.boolean() }).strict();
+export type PersistentRecipeArchiveBody = z.infer<typeof PersistentRecipeArchiveSchema>;
+
+export const PersistentRecipeListQuerySchema = z
+  .object({
+    search: z.string().trim().max(200).optional(),
+    archived: z.enum(['active', 'archived', 'all']).optional().default('active'),
+    limit: z.coerce.number().int().min(1).max(100).optional().default(50),
+    offset: z.coerce.number().int().min(0).max(10_000).optional().default(0),
+  })
+  .strict();
+export type PersistentRecipeListQuery = z.infer<typeof PersistentRecipeListQuerySchema>;
+
 // ---------------------------------------------------------------------------
 // Validation helper
 // ---------------------------------------------------------------------------
