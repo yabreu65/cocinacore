@@ -38,8 +38,11 @@ Connect generated AI recipes to the persistent recipe library while preserving A
 - `env -u DATABASE_URL npm run db:migrate:dry` — listed migrations 001–017 without connecting.
 - Connected Playwright: 4 scenarios passed (lifecycle, AI import/history, duplicate warning, cross-tenant denial).
 - Signup membership fix was required for valid tenant ownership and guarded temporary-user cleanup.
-- Temporary M32-U4 Postgres/Redis resources were used only on loopback 5435/6381 with tmpfs and no persistent mounts; cleanup is pending final resource-count verification.
+- Temporary M32-U4 Postgres/Redis resources were used only on loopback 5435/6381 with tmpfs and no persistent mounts.
+- Cleanup attestation: `user_recipes=0`, `recipe_ai_history=0`, `recipe_versions=0`, Redis `recipe:*` keys `0`; only the bootstrap owner/tenant/membership remained before container removal.
+- Removed only `M32-U4-postgres-20261018T2301Z` and `M32-U4-redis-20261018T2301Z`; local 5433/6379 services remained untouched.
 
 ## Commit evidence
 - `fe35fe8 feat(recipes): integrate AI imports and connected quality coverage`
-- Pending final U4 fix commit.
+- `932b4ca fix(auth): persist signup tenant membership`
+- `1d042c7 docs(odd): record U4 validation status`
