@@ -8,7 +8,7 @@ BACKUP_ROOT=/opt/pawtech/backups/postgres/cocinacore_db/manual
 POSTGRES_CONTAINER=pawtech-postgres
 NETWORK=pawtech_internal
 LOCK_FILE=/tmp/cocinacore-production-deploy.lock
-EXPECTED_PENDING=015_shopping_inventory_transfer.sql
+EXPECTED_PENDING=016_persistent_user_recipes.sql,017_persistent_recipe_archive.sql
 
 fail() { printf 'MIGRATION_STOP: %s\n' "$1" >&2; exit 1; }
 log() { printf '%s\n' "$1"; }
@@ -52,7 +52,7 @@ tar -xf "$ARCHIVE" -C "$WORK/source"
 SOURCE=$WORK/source
 [ -f "$SOURCE/Dockerfile" ] && [ -f "$SOURCE/frontend/scripts/run-migrations.js" ] || fail 'archive lacks canonical build/runner inputs'
 [ -f "$SOURCE/scripts/backup-pawtech-cocinacore-predeploy.sh" ] || fail 'versioned backup helper missing'
-[ -f "$SOURCE/db/migrations/$EXPECTED_PENDING" ] || fail 'versioned 015 migration missing'
+[ -f "$SOURCE/db/migrations/016_persistent_user_recipes.sql" ] && [ -f "$SOURCE/db/migrations/017_persistent_recipe_archive.sql" ] || fail 'versioned 016/017 migrations missing'
 
 # The image is built on the runner from the exact-SHA archive and loaded in a prior SSH phase.
 # Verify its embedded source revision before any database preflight, backup, or mutation.
@@ -106,5 +106,5 @@ docker run --rm --network "$NETWORK" --env-file "$DATABASE_ENV_FILE" \
   -e COCINACORE_SKIP_DOTENV=1 -e MIGRATION_PG_LOCK_TIMEOUT_MS=5000 \
   -e MIGRATION_PG_STATEMENT_TIMEOUT_MS=120000 -e MIGRATION_EXPECTED_PENDING= \
   "$IMAGE" node scripts/run-migrations.js --lane migration --verify-complete >/dev/null 2>&1 || fail 'read-only schema verification failed'
-log "MIGRATION_VERIFIED sha=$RELEASE_SHA migration=$EXPECTED_PENDING"
-log 'RECEIPT secretless=true database_changed=015-only backup=verified schema_verification=passed'
+log "MIGRATIONS_VERIFIED sha=$RELEASE_SHA migrations=$EXPECTED_PENDING"
+log 'RECEIPT secretless=true database_changed=016-017-only backup=verified schema_verification=passed'

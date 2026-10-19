@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       approval_reference:
-        description: Manual owner approval receipt for M3.1 migration 015 (not an enforced GitHub reviewer gate)
+        description: Manual owner approval receipt for U5 migrations 016/017 (not an enforced GitHub reviewer gate)
         required: true
         type: string
 
@@ -42,11 +42,11 @@ jobs:
           set -euo pipefail
           # Manual owner consent was obtained separately. This receipt is an
           # operator attestation, not a GitHub-enforced reviewer approval.
-          if [[ "$APPROVAL_REFERENCE" != 'M3.1-015-20261018-owner-approved' ]]; then
-            echo "Recorded M3.1 owner approval reference is missing or invalid." >&2
+          if [[ "$APPROVAL_REFERENCE" != 'U5-016-017-20261018-owner-approved' ]]; then
+            echo "Recorded U5 migrations 016/017 owner approval reference is missing or invalid." >&2
             exit 1
           fi
-          echo "MANUAL_APPROVAL_RECEIPT=M3.1-015-20261018-owner-approved"
+          echo "MANUAL_APPROVAL_RECEIPT=U5-016-017-20261018-owner-approved"
           if [[ ! "$MIGRATION_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
             echo "Migration SHA must be exactly 40 hexadecimal characters." >&2
             exit 1
@@ -69,7 +69,7 @@ jobs:
           echo "migration_sha=${MIGRATION_SHA,,}" >> "$GITHUB_OUTPUT"
 
   migrate-production:
-    name: Apply migration 015 on production VPS
+    name: Apply migrations 016/017 on production VPS
     runs-on: ubuntu-latest
     needs: validate-sha
     environment: production
