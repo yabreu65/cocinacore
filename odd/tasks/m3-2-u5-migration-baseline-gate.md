@@ -17,8 +17,8 @@ Correct the official 016/017 production migration preflight so existing `shoppin
 - [x] Implement the smallest safe baseline-gate correction.
 - [x] Add zero-row/one-plus-row/oversized-relation tests and update contract expectations.
 - [x] Verify protected local paths remain unstaged and run focused checks.
-- [x] Commit one reviewable work unit and open the controlled PR.
-- [ ] Monitor official CI; stop before any production retry.
+- [x] Commit one reviewable work unit and open the controlled PR (`#33`).
+- [x] Monitor official CI; stop before any production retry.
 
 ## Findings
 - `016_persistent_user_recipes.sql` creates recipe/version tables, constraints, indexes, a version-invariant trigger, and tenant/user RLS; it does not reference `shopping_list_items` or move data.
@@ -43,3 +43,5 @@ Correct the official 016/017 production migration preflight so existing `shoppin
 
 ## Commit evidence
 - `f74e2fd` — `fix(migration): allow existing shopping-list rows`.
+- `a10d2ce` — `docs(odd): record baseline gate verification`.
+- PR `#33` — all official CI checks passed in run `39285537620`; no production workflow was dispatched.
