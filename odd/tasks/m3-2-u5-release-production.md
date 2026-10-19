@@ -26,4 +26,4 @@ Prepare and, only after explicit PM review of live preflight/backup evidence, re
 - Current worktree dirty paths include pre-existing protected files plus the scoped migration gate edits and this U5 task document; protected paths must remain uncommitted.
 
 ## Commit evidence
-- `e2892ed` — `chore(release): gate production migration on 016 and 017`
+- `c720727` — `chore(release): gate production migration on 016 and 017`
