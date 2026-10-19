@@ -108,10 +108,13 @@ describe('persistent recipe repository', () => {
     const valid = CreatePersistentRecipeSchema.safeParse({
       title: ' Tomato soup ',
       instructions: 'Simmer.',
-      ingredients: [{ name: 'Tomato', quantity: '2', unit: 'cups', structured: true }],
+      ingredients: [{ name: 'Tomato', quantity: '2', unit: 'cups' }],
     });
     expect(valid.success).toBe(true);
-    if (valid.success) expect(valid.data.ingredients[0]).toMatchObject({ structured: true });
+    if (valid.success) expect(valid.data.ingredients[0]).toMatchObject({ name: 'Tomato', quantity: '2', unit: 'cups' });
+    expect(CreatePersistentRecipeSchema.safeParse({
+      title: 'Recipe', instructions: 'Cook.', ingredients: [{ name: 'Tomato', unexpected: true }],
+    }).success).toBe(false);
     expect(CreatePersistentRecipeSchema.safeParse({
       title: 'Recipe', instructions: 'Cook.', ingredients: [{ name: ' ' }],
     }).success).toBe(false);
@@ -226,7 +229,7 @@ describe('persistent recipe repository', () => {
     const selected = {
       id: 'old-version', recipe_id: 'recipe-1', tenant_id: 'tenant-1', user_id: 'user-1',
       version_number: 1, title: 'Old title', instructions: 'Old instructions', servings: 3,
-      ingredients: [{ name: 'Onion', amount: '1' }], source_recipe_history_id: null,
+      ingredients: [{ name: 'Onion', quantity: '1' }], source_recipe_history_id: null,
     };
     const clientQuery = vi.fn()
       .mockResolvedValueOnce({ rows: [] })

@@ -226,7 +226,6 @@ export interface ManualRecipeIngredient {
   name: string;
   quantity?: string | null;
   unit?: string | null;
-  [key: string]: unknown;
 }
 
 export interface UserRecipeDetailDto extends UserRecipeRow {

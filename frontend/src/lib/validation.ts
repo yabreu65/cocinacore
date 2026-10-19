@@ -94,6 +94,9 @@ export const ShoppingListStatusUpdateSchema = z.object({
 export type ShoppingListStatusUpdateBody = z.infer<typeof ShoppingListStatusUpdateSchema>;
 
 export const ShoppingListIdSchema = z.string().uuid();
+export const PersistentRecipeIdSchema = z.string().uuid();
+export const PersistentRecipeRestoreSchema = z.object({ versionId: z.string().uuid() }).strict();
+export type PersistentRecipeRestoreBody = z.infer<typeof PersistentRecipeRestoreSchema>;
 
 const ManualRecipeIngredientSchema = z
   .object({
@@ -101,7 +104,7 @@ const ManualRecipeIngredientSchema = z
     quantity: z.string().trim().max(100).nullable().optional(),
     unit: z.string().trim().max(50).nullable().optional(),
   })
-  .passthrough();
+  .strict();
 
 const PersistentRecipeContentSchema = z.object({
   title: z.string().trim().min(1).max(200),

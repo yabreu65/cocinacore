@@ -19,7 +19,7 @@ Implement tenant/user-scoped persistent recipe APIs and repositories over migrat
 ## Tasks
 - [x] Add migration 017 archive state and manifest/catalog/checksum contract.
 - [x] Implement scoped recipe repository and validation/error contracts.
-- [ ] Implement recipe API routes with compatibility-preserving auth and response DTOs.
+- [x] Implement recipe API routes with compatibility-preserving auth and response DTOs.
 - [ ] Add focused repository/route/contract tests and run authorized isolated checks.
 - [ ] Commit each validated work unit and record SHAs.
 
@@ -40,7 +40,9 @@ Implement tenant/user-scoped persistent recipe APIs and repositories over migrat
 - Bootstrap/migrator configuration and U1 persistent-recipe contracts: passed.
 - SQL checksum/byte-length and diff checks: passed.
 - Repository focused Vitest: 12 tests passed; frontend TypeScript check passed.
+- Recipe route Vitest: 20 tests passed; route ESLint and TypeScript checks passed.
 
 ## Commit evidence
 - Task 1 commit: `aea0918` (`feat(db): add recipe archive state`).
 - Task 2 commit pending.
+- Task 3 commit pending.
