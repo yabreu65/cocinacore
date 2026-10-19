@@ -20,8 +20,8 @@ Implement tenant/user-scoped persistent recipe APIs and repositories over migrat
 - [x] Add migration 017 archive state and manifest/catalog/checksum contract.
 - [x] Implement scoped recipe repository and validation/error contracts.
 - [x] Implement recipe API routes with compatibility-preserving auth and response DTOs.
-- [ ] Add focused repository/route/contract tests and run authorized isolated checks.
-- [ ] Commit each validated work unit and record SHAs.
+- [x] Add focused repository/route/contract tests and run authorized isolated checks.
+- [x] Commit each validated work unit and record SHAs.
 
 ## Acceptance criteria
 - No destructive recipe/version deletion for archive or restore.
@@ -41,8 +41,11 @@ Implement tenant/user-scoped persistent recipe APIs and repositories over migrat
 - SQL checksum/byte-length and diff checks: passed.
 - Repository focused Vitest: 12 tests passed; frontend TypeScript check passed.
 - Recipe route Vitest: 20 tests passed; route ESLint and TypeScript checks passed.
+- Combined U2 Vitest: 6 files, 32 tests passed; TypeScript, ESLint, diff, U1/U2 contracts, bootstrap contract, and migration dry-run through 017 passed.
+- Isolated M32-U2 PostgreSQL/pgvector validation passed migrations 001–017, idempotence, provisioner attestation, ledger verify, archived_at nullability/index, non-destructive archive/unarchive preservation, rollback, and cleanup.
 
 ## Commit evidence
 - Task 1 commit: `aea0918` (`feat(db): add recipe archive state`).
-- Task 2 commit pending.
-- Task 3 commit pending.
+- Task 2 commit: `f6670ec` (`feat(recipes): add scoped persistent recipe repository`).
+- Task 3 commit: `dfbb8da` (`feat(recipes): add persistent recipe APIs`).
+- Task 4 docs commit pending.
