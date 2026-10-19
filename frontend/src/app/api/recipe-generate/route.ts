@@ -126,10 +126,10 @@ async function persistAuthenticatedRecipeHistory({
   peopleCount: number;
   persistedContext: Awaited<ReturnType<typeof loadPersistedRecipeContext>> | null;
   ragContext: { citations: Citation[]; ragContextUsed: boolean };
-}): Promise<void> {
-  if (!user?.tenant) return;
+}): Promise<string | null> {
+  if (!user?.tenant) return null;
 
-  await createRecipeHistory({
+  const history = await createRecipeHistory({
     tenantId: user.tenant.tenantId,
     userId: user.id,
     source: result.provider,
@@ -159,6 +159,7 @@ async function persistAuthenticatedRecipeHistory({
         persistedContext?.inventoryContext ?? 'Sin inventario persistido para este hogar.',
     },
   });
+  return history.id;
 }
 
 export async function POST(request: NextRequest) {
@@ -451,8 +452,9 @@ Reglas:
       );
     }
 
+    let recipeHistoryId: string | null;
     try {
-      await persistAuthenticatedRecipeHistory({
+      recipeHistoryId = await persistAuthenticatedRecipeHistory({
         user,
         result: cached,
         requestedIngredients,
@@ -480,6 +482,8 @@ Reglas:
       structuredIngredients: cached.structuredIngredients,
       ragContextUsed: ragContext.ragContextUsed,
       sources: ragContext.citations,
+      servings: peopleCount,
+      ...(recipeHistoryId ? { recipeHistoryId } : {}),
       cached: true,
     });
   }
@@ -555,8 +559,9 @@ Reglas:
       structuredIngredients: safeStructuredIngredients,
     };
 
+    let recipeHistoryId: string | null;
     try {
-      await persistAuthenticatedRecipeHistory({
+      recipeHistoryId = await persistAuthenticatedRecipeHistory({
         user,
         result,
         requestedIngredients,
@@ -594,6 +599,8 @@ Reglas:
       structuredIngredients: safeStructuredIngredients,
       ragContextUsed: ragContext.ragContextUsed,
       sources: ragContext.citations,
+      servings: peopleCount,
+      ...(recipeHistoryId ? { recipeHistoryId } : {}),
     });
   } catch (error) {
     serverLogger.error('recipe_generate.failed', {
