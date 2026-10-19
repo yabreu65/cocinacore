@@ -10,6 +10,7 @@ DEPLOY_CONTRACT="$ROOT/scripts/tests/test-pawtech-production-deploy-contract.sh"
 STEP4_CONTRACT="$ROOT/scripts/tests/test-pawtech-step4-contract.sh"
 BOOTSTRAP_CONTRACT="$ROOT/scripts/tests/test-bootstrap-migrator-config.sh"
 STEP5_CONTRACT="$ROOT/scripts/tests/test-pawtech-step5-workflow-contract.sh"
+BACKUP_SCENARIO="$ROOT/scripts/tests/test-pawtech-backup-force-rls-scenario.sh"
 RUNBOOK="$ROOT/docs/production/runbook.md"
 COMPOSE="$ROOT/docker-compose.prod.yml"
 
@@ -18,7 +19,7 @@ fail() {
   exit 1
 }
 
-for required_file in "$WORKFLOW" "$CI" "$DEPLOY_SCRIPT" "$BACKUP_HELPER" "$DEPLOY_CONTRACT" "$STEP4_CONTRACT" "$BOOTSTRAP_CONTRACT" "$STEP5_CONTRACT" "$RUNBOOK" "$COMPOSE"; do
+for required_file in "$WORKFLOW" "$CI" "$DEPLOY_SCRIPT" "$BACKUP_HELPER" "$DEPLOY_CONTRACT" "$STEP4_CONTRACT" "$BOOTSTRAP_CONTRACT" "$STEP5_CONTRACT" "$BACKUP_SCENARIO" "$RUNBOOK" "$COMPOSE"; do
   [ -f "$required_file" ] || fail "required static contract input is missing: ${required_file#"$ROOT"/}"
 done
 
@@ -109,7 +110,7 @@ recovery_block=$(sed -n '/name: Recover application after public smoke failure/,
   fail 'read-only release-object preflight must follow remote validation and precede checkout/deploy'
 
 backup_call=$(grep -nF '"$RELEASE_DIR/scripts/backup-pawtech-cocinacore-predeploy.sh" "$RELEASE_SHA"' "$DEPLOY_SCRIPT" | head -n 1 | cut -d: -f1)
-backup_dump=$(grep -nF 'pg_dump -U cocinacore_user -d "$DATABASE_NAME" -Fc --no-owner --no-acl' "$BACKUP_HELPER" | head -n 1 | cut -d: -f1)
+backup_dump=$(grep -nF 'pg_dump -U pawtech_root -d "$DATABASE_NAME" -Fc --no-owner --no-acl' "$BACKUP_HELPER" | head -n 1 | cut -d: -f1)
 backup_checksum=$(grep -nF 'sha256sum -c' "$BACKUP_HELPER" | head -n 1 | cut -d: -f1)
 backup_list=$(grep -nF 'pg_restore --list <"$dump_file"' "$BACKUP_HELPER" | head -n 1 | cut -d: -f1)
 verify=$(grep -nF 'npm run db:migrate:verify' "$DEPLOY_SCRIPT" | head -n 1 | cut -d: -f1)
@@ -120,7 +121,7 @@ changed_no=$(grep -nF "log 'DATABASE_CHANGED=NO'" "$DEPLOY_SCRIPT" | head -n 1 |
   fail 'backup dump, checksum verification, archive listing, migration verification, and unchanged-database order is invalid'
 grep -Fq 'pg_restore --list <"$dump_file"' "$BACKUP_HELPER" || fail 'backup archive must be listed from stdin without a positional filename'
 ! grep -Fq 'pg_restore --list -' "$BACKUP_HELPER" || fail 'backup archive listing must not use a positional filename'
-grep -Fq 'pg_dump -U cocinacore_user -d "$DATABASE_NAME" -Fc --no-owner --no-acl' "$BACKUP_HELPER" || fail 'backup must use the documented runtime role without credential extraction'
+grep -Fq 'pg_dump -U pawtech_root -d "$DATABASE_NAME" -Fc --no-owner --no-acl' "$BACKUP_HELPER" || fail 'backup must use the verified scheduled operator without credential extraction'
 grep -Fq 'git ls-tree "$RELEASE_SHA" -- scripts/backup-pawtech-cocinacore-predeploy.sh' "$DEPLOY_SCRIPT" || fail 'preflight must inspect the release-tree helper mode'
 grep -Fq '[ "$helper_mode" = 100755 ]' "$DEPLOY_SCRIPT" || fail 'preflight must require helper mode 100755'
 grep -Fq 'check_previous_app || fail' "$DEPLOY_SCRIPT" || fail 'preflight must prove a valid prior application rollback target'
@@ -194,7 +195,7 @@ grep -Fq 'second public health smoke fails' "$RUNBOOK" || fail 'runbook must doc
 ! grep -Eiq 'pg_restore[^[:cntrl:]]*--(dbname|clean|create)|psql[^[:cntrl:]]*(--dbname| -d )' "$BACKUP_HELPER" ||
   fail 'backup helper must not perform a database restore'
 
-for static_contract in test-pawtech-production-deploy-contract.sh test-pawtech-step4-contract.sh test-bootstrap-migrator-config.sh test-pawtech-step5-workflow-contract.sh; do
+for static_contract in test-pawtech-production-deploy-contract.sh test-pawtech-step4-contract.sh test-bootstrap-migrator-config.sh test-pawtech-step5-workflow-contract.sh test-pawtech-backup-force-rls-scenario.sh; do
   grep -Fq "$static_contract" "$CI" || fail "CI is missing static contract $static_contract"
   grep -Fq "run: sh ../scripts/tests/$static_contract" "$CI" || fail "CI does not invoke static contract $static_contract"
 done

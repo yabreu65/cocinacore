@@ -45,7 +45,10 @@ this runbook or this hardening change.
 3. Deploy uses `git archive "$RELEASE_SHA"` as the sole release source, excluding untracked VPS
    files, and builds that exact-SHA image before backup.
 4. The extracted release's versioned `scripts/backup-pawtech-cocinacore-predeploy.sh` handles only
-   `cocinacore_db` on `pawtech-postgres`. It requires the pre-existing
+   `cocinacore_db` on `pawtech-postgres`. It uses `pawtech_root`, the verified scheduled backup
+   operator, not the application role `cocinacore_user`; this operator boundary is needed to export
+   tables protected by FORCE RLS without changing application privileges or RLS. A dedicated
+   least-privilege backup role is future work requiring separate authorization. It requires the pre-existing
    `/opt/pawtech/backups/postgres/cocinacore_db/manual` hierarchy and creates a unique private
    timestamp/SHA run directory. It produces a custom `pg_dump -Fc --no-owner --no-acl`, private
    SHA-256 sidecar, verifies the checksum, and validates the archive with `pg_restore --list` in the

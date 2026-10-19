@@ -52,7 +52,7 @@ grep -Fq 'sha256sum -c' "$DEPLOY" && grep -Fq 'pg_restore --list <"$dump_file"' 
   fail 'backup checksum and stdin archive validation are required'
 ! grep -Fq 'pg_restore --list -' "$BACKUP_HELPER" ||
   fail 'archive validation must not pass a positional filename to pg_restore'
-grep -Fq 'pg_dump -U cocinacore_user -d "$DATABASE_NAME" -Fc --no-owner --no-acl' "$BACKUP_HELPER" ||
+grep -Fq 'pg_dump -U pawtech_root -d "$DATABASE_NAME" -Fc --no-owner --no-acl' "$BACKUP_HELPER" ||
   fail 'CocinaCore-only custom-format backup is required'
 
 backup_line=$(grep -nF '"$RELEASE_DIR/scripts/backup-pawtech-cocinacore-predeploy.sh" "$RELEASE_SHA"' "$DEPLOY" | head -n 1 | cut -d: -f1)

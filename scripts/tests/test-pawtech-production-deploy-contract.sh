@@ -155,7 +155,7 @@ grep -Fq '"$RELEASE_DIR/scripts/backup-pawtech-cocinacore-predeploy.sh" "$RELEAS
 ! grep -Fq 'backup-postgres.sh' "$SCRIPT" || fail 'shared multi-database backup helper is forbidden'
 ! grep -Fq 'retention' "$SCRIPT" || fail 'shared backup retention must not run'
 grep -Fq '/opt/pawtech/backups/postgres/cocinacore_db/manual' "$BACKUP_HELPER" || fail 'established manual CocinaCore backup hierarchy is missing'
-grep -Fq 'pg_dump -U cocinacore_user -d "$DATABASE_NAME" -Fc --no-owner --no-acl' "$BACKUP_HELPER" || fail 'backup must use the documented runtime database role'
+grep -Fq 'pg_dump -U pawtech_root -d "$DATABASE_NAME" -Fc --no-owner --no-acl' "$BACKUP_HELPER" || fail 'backup must use the verified scheduled backup operator'
 backup_helper_line=$(grep -nF '"$RELEASE_DIR/scripts/backup-pawtech-cocinacore-predeploy.sh" "$RELEASE_SHA"' "$SCRIPT" | head -n 1 | cut -d: -f1)
 backup_archive_line=$(grep -nF 'pg_restore --list <"$dump_file"' "$BACKUP_HELPER" | head -n 1 | cut -d: -f1)
 verify_line=$(grep -nF 'npm run db:migrate:verify' "$SCRIPT" | cut -d: -f1)

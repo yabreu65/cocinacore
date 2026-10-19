@@ -28,7 +28,8 @@ dump_file="$run_dir/${DATABASE_NAME}-${timestamp}-${RELEASE_SHA}.dump"
 sidecar_file="${dump_file}.sha256"
 
 status 'creating CocinaCore custom-format dump'
-if ! docker exec "$POSTGRES_CONTAINER" pg_dump -U cocinacore_user -d "$DATABASE_NAME" -Fc --no-owner --no-acl >"$dump_file" 2>/dev/null; then
+# Use the verified scheduled backup operator to read FORCE RLS data; a dedicated least-privilege role is separate future work.
+if ! docker exec "$POSTGRES_CONTAINER" pg_dump -U pawtech_root -d "$DATABASE_NAME" -Fc --no-owner --no-acl >"$dump_file" 2>/dev/null; then
   fail 'CocinaCore dump command failed; partial artifact retained'
 fi
 [ -s "$dump_file" ] || fail 'CocinaCore dump is empty; artifact retained'
