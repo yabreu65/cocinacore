@@ -4,6 +4,7 @@ import { SignupSchema } from '@/lib/auth/schemas';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { findUserByEmail, createUser } from '@/lib/db/repositories/userRepository';
 import { createTenant } from '@/lib/db/repositories/tenantRepository';
+import { query } from '@/lib/db';
 import { hashPassword } from '@/lib/auth/password';
 import { createSession, setSessionCookie } from '@/lib/auth/session';
 
@@ -63,6 +64,12 @@ export async function POST(request: NextRequest) {
       termsAcceptedAt: now,
       termsVersion: 'v1',
     });
+
+    await query(
+      `insert into public.tenant_memberships (tenant_id, user_id, role)
+       values ($1, $2, 'owner')`,
+      [tenant.id, user.id]
+    );
 
     const session = await createSession(user.id);
     const response = NextResponse.json({ ok: true, user: session.user });

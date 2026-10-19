@@ -192,7 +192,7 @@ describe('POST /api/recipe-generate', () => {
     getGeminiApiKeyMock.mockReturnValue('gemini-test-key');
     getGeminiModelMock.mockReturnValue('gemini-test-model');
     getGeminiBaseUrlMock.mockReturnValue('https://generativelanguage.googleapis.com/v1beta');
-    createRecipeHistoryMock.mockResolvedValue({});
+    createRecipeHistoryMock.mockResolvedValue({ id: 'history-1' });
     fetchMock.mockResolvedValue(geminiResponse());
     vi.stubGlobal('fetch', fetchMock);
   });
@@ -541,13 +541,29 @@ describe('POST /api/recipe-generate', () => {
     );
   });
 
-  it('does not persist anonymous free generation', async () => {
+  it('does not persist or expose import linkage for anonymous free generation', async () => {
     requireUserMock.mockRejectedValue(new Error('Unauthorized'));
 
     const response = await POST(request({ mode: 'free', ingredients: ['tomate'] }) as unknown as NextRequest);
 
     expect(response.status).toBe(200);
     expect(createRecipeHistoryMock).not.toHaveBeenCalled();
+    const generated = (await response.json()) as Record<string, unknown>;
+    expect(generated).toMatchObject({ servings: 4 });
+    expect(generated).not.toHaveProperty('recipeHistoryId');
+  });
+
+  it('returns the persisted history id and servings for authenticated generation', async () => {
+    const response = await POST(
+      request({ mode: 'free', peopleCount: 3 }) as unknown as NextRequest
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      recipeHistoryId: 'history-1',
+      servings: 3,
+    });
+    expect(createRecipeHistoryMock).toHaveBeenCalledTimes(1);
   });
 
   it('does not persist validation, authorization, retrieval, or malformed provider failures', async () => {

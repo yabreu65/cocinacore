@@ -33,6 +33,9 @@ jobs:
       - name: Validate bootstrap and migrator configuration
         run: sh ../scripts/tests/test-bootstrap-migrator-config.sh
 
+      - name: Validate persistent recipe migration contract
+        run: sh ../scripts/tests/test-persistent-recipe-migration-contract.sh
+
       - name: Validate PawTech production deploy contract
         run: sh ../scripts/tests/test-pawtech-production-deploy-contract.sh
 

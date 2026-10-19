@@ -1,12 +1,9 @@
 import { expect, test } from '@playwright/test';
 import { Pool } from 'pg';
+import { validateE2ETargets } from '../database-target';
 import { injectAuth } from '../fixtures/auth';
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgresql://cocinacore_user:cocinacore_password@localhost:5433/cocinacore_local_db';
-
-const database = new Pool({ connectionString: DATABASE_URL });
+const database = new Pool({ connectionString: validateE2ETargets(process.env).databaseUrl });
 
 test.describe('Connected shopping list API', () => {
   test.afterAll(async () => {

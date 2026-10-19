@@ -59,7 +59,7 @@ contains "$WORKFLOW" 'workflow_dispatch:' 'workflow must be manually dispatched 
 contains "$WORKFLOW" 'required: true' 'manual SHA input must be required'
 contains "$WORKFLOW" 'type: string' 'manual SHA input must be a string'
 contains "$WORKFLOW" 'approval_reference:' 'operator must provide owner approval acknowledgement'
-contains "$WORKFLOW" "M3.1-015-20261018-owner-approved" 'workflow must require the one-time owner approval reference'
+contains "$WORKFLOW" 'U5-016-017-20261018-owner-approved' 'workflow must require the U5-scoped 016/017 owner approval reference'
 contains "$WORKFLOW" 'MANUAL_APPROVAL_RECEIPT=' 'workflow must log a non-secret approval receipt'
 contains "$WORKFLOW" 'github.ref == '\''refs/heads/main'\''' 'workflow jobs must be restricted to main'
 contains "$WORKFLOW" '^[0-9a-fA-F]{40}$' 'workflow must validate an exact 40-character SHA'
@@ -146,7 +146,7 @@ not_contains "$MIGRATION" '^[[:space:]]*git[[:space:]]+(fetch|checkout|switch)([
 not_contains "$WORKFLOW" 'DATABASE_URL.*(echo|printf|log)| (echo|printf|log).*DATABASE_URL' 'workflow must not print or transmit database credentials'
 
 # VPS checks are fail-closed and bind to the known runtime and exact pending migration.
-contains "$MIGRATION" 'EXPECTED_PENDING=015_shopping_inventory_transfer.sql' 'only migration 015 may be pending'
+contains "$MIGRATION" 'EXPECTED_PENDING=016_persistent_user_recipes.sql,017_persistent_recipe_archive.sql' 'only the exact ordered 016/017 migrations may be pending'
 contains "$MIGRATION" 'EXPECTED_APP_DIR=/opt/pawtech/apps/cocinacore' 'migration must use the pinned CocinaCore app path'
 contains "$MIGRATION" 'RUNTIME_ENV_FILE=/opt/pawtech/env/cocinacore.env' 'migration must use the existing VPS runtime env file'
 contains "$MIGRATION" 'DATABASE_URL=$(sed -n' 'runtime database URL must come only from the existing VPS environment'
@@ -189,8 +189,8 @@ runner_line=$(grep -nF 'node scripts/run-migrations.js --lane migration >/dev/nu
 contains "$MIGRATION" 'node scripts/run-migrations.js --lane migration --dry-run' 'canonical exact-pending dry-run must precede backup'
 contains "$MIGRATION" 'node scripts/run-migrations.js --lane migration --verify-complete' 'post-migration verification must use read-only complete verification'
 contains "$MIGRATION" 'log "BACKUP_VALIDATED sha=$RELEASE_SHA"' 'backup evidence must identify the selected SHA'
-contains "$MIGRATION" 'log "MIGRATION_VERIFIED sha=$RELEASE_SHA migration=$EXPECTED_PENDING"' 'migration evidence must identify the SHA and migration'
-contains "$MIGRATION" 'RECEIPT secretless=true database_changed=015-only backup=verified schema_verification=passed' 'final operator receipt must be secretless and include backup and verification outcomes'
+contains "$MIGRATION" 'log "MIGRATIONS_VERIFIED sha=$RELEASE_SHA migrations=$EXPECTED_PENDING"' 'migration evidence must identify the SHA and ordered 016/017 migrations'
+contains "$MIGRATION" 'RECEIPT secretless=true database_changed=016-017-only backup=verified schema_verification=passed' 'final operator receipt must be secretless and include 016/017, backup, and verification outcomes'
 contains "$MIGRATION" 'case "$WORK" in /tmp/cocinacore-migration.*)' 'cleanup must be bounded to the private migration temp directory'
 contains "$MIGRATION" 'rm -rf -- "$WORK"' 'cleanup must remove only the bounded private work directory'
 not_contains "$MIGRATION" 'pg_restore[^\n]*(--clean|--dbname)|pg_restore -d|pg_restore --dbname' 'migration must never automatically restore a backup'

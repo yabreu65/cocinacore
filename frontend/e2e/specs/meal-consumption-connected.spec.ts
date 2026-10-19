@@ -1,12 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { expect, test, type Page } from '@playwright/test';
 import { Pool } from 'pg';
+import { validateE2ETargets } from '../database-target';
 import { installResponseCookies } from '../fixtures/auth';
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgresql://cocinacore_user:cocinacore_password@localhost:5433/cocinacore_local_db';
-const database = new Pool({ connectionString: DATABASE_URL });
+const database = new Pool({ connectionString: validateE2ETargets(process.env).databaseUrl });
 
 type Identity = { userId: string; tenantId: string };
 type Seed = {

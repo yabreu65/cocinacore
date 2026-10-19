@@ -1,11 +1,9 @@
 import { expect, test } from '@playwright/test';
 import { Pool } from 'pg';
+import { validateE2ETargets } from '../database-target';
 import { injectAuth } from '../fixtures/auth';
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgresql://cocinacore_user:cocinacore_password@localhost:5433/cocinacore_local_db';
-const database = new Pool({ connectionString: DATABASE_URL });
+const database = new Pool({ connectionString: validateE2ETargets(process.env).databaseUrl });
 
 type Identity = { userId: string; tenantId: string };
 type Seed = { identity: Identity; planId: string; inventoryIds: string[]; source: string };
@@ -175,10 +173,16 @@ test.describe('Connected Meal Planner shopping confirmation', () => {
           'delete from public.shopping_list_items where tenant_id = $1 and user_id = $2 and source = $3',
           [seed.identity.tenantId, seed.identity.userId, seed.source]
         );
-        await database.query('delete from public.user_meal_plans where id = $1', [seed.planId]);
+        await database.query(
+          'delete from public.user_meal_plans where id = $1 and tenant_id = $2 and user_id = $3',
+          [seed.planId, seed.identity.tenantId, seed.identity.userId]
+        );
       }
       if (seed?.inventoryIds.length) {
-        await database.query('delete from public.recipe_inventory_items where id = any($1::uuid[])', [seed.inventoryIds]);
+        await database.query(
+          'delete from public.recipe_inventory_items where id = any($1::uuid[]) and tenant_id = $2 and user_id = $3',
+          [seed.inventoryIds, seed.identity.tenantId, seed.identity.userId]
+        );
       } else {
         await database.query(
           'delete from public.recipe_inventory_items where tenant_id = $1 and user_id = $2 and ingredient_name = any($3::text[])',

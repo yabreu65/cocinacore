@@ -197,6 +197,50 @@ export interface RecipeInventoryItemRow {
   updated_at: string;
 }
 
+export interface UserRecipeRow {
+  id: string;
+  tenant_id: string;
+  user_id: string;
+  category: string | null;
+  tags: string[];
+  archived_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UserRecipeVersionRow {
+  id: string;
+  recipe_id: string;
+  tenant_id: string;
+  user_id: string;
+  version_number: number;
+  title: string;
+  instructions: string;
+  servings: number | null;
+  ingredients: ManualRecipeIngredient[];
+  source_recipe_history_id: string | null;
+  created_at: string;
+}
+
+export interface ManualRecipeIngredient {
+  name: string;
+  quantity?: string | null;
+  unit?: string | null;
+}
+
+export interface UserRecipeDetailDto extends UserRecipeRow {
+  current_version: UserRecipeVersionRow;
+}
+
+export interface UserRecipeListDto extends UserRecipeRow {
+  current_version: Pick<
+    UserRecipeVersionRow,
+    'id' | 'version_number' | 'title' | 'instructions' | 'servings' | 'ingredients' | 'created_at'
+  >;
+}
+
+export type UserRecipeVersionDto = UserRecipeVersionRow;
+
 export interface RecipeAiHistoryRow {
   id: string;
   tenant_id: string;

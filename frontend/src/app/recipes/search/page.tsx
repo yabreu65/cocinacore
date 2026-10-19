@@ -1,10 +1,11 @@
 'use client';
 
-import { FormEvent, useState } from 'react';
+import { FormEvent, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import type { StructuredRecipeIngredient } from '@/components/recipe-view/types';
 import { safeFetch } from '@/lib/api';
+import { buildRecipeImportPayload } from '@/lib/recipes/recipe-import';
 import { getVisibleRecipeSources, type VisibleRecipeSource } from '@/lib/recipes/source-citations';
 import {
   buildRecipeGenerationRequestPayload,
@@ -18,6 +19,8 @@ type RecipeGenerationResponse = {
   structuredIngredients?: StructuredRecipeIngredient[];
   ragContextUsed?: boolean;
   sources?: Citation[];
+  recipeHistoryId?: string;
+  servings?: number;
 };
 
 interface RecipeSearchResult {
@@ -27,6 +30,8 @@ interface RecipeSearchResult {
   mode: 'free' | 'rag';
   ragContextUsed: boolean;
   sources: VisibleRecipeSource[];
+  recipeHistoryId?: string;
+  servings: number;
 }
 
 export default function RecipeSearchPage() {
@@ -39,11 +44,19 @@ export default function RecipeSearchPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<RecipeSearchResult | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importedRecipe, setImportedRecipe] = useState<{ id: string; duplicates: number } | null>(null);
+  const importLock = useRef(false);
 
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
+    if (loading) return;
     setLoading(true);
     setError(null);
+    setImportError(null);
+    setImportedRecipe(null);
+    importLock.current = false;
     setResult(null);
 
     try {
@@ -75,11 +88,49 @@ export default function RecipeSearchPage() {
         mode,
         ragContextUsed,
         sources: getVisibleRecipeSources(mode, ragContextUsed, data.sources ?? []),
+        recipeHistoryId: data.recipeHistoryId,
+        servings: data.servings ?? 4,
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error desconocido.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const onImport = async () => {
+    if (!result?.recipeHistoryId || importLock.current || importedRecipe) return;
+    importLock.current = true;
+    setImporting(true);
+    setImportError(null);
+    try {
+      const response = await safeFetch<{
+        recipe: { id: string };
+        warnings: {
+          duplicates: Array<{ recipeId: string; title: string; versionNumber: number }>;
+        };
+      }>('/api/recipes', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildRecipeImportPayload({
+          title: result.title,
+          instructions: result.recipe,
+          servings: result.servings,
+          structuredIngredients: result.structuredIngredients,
+          recipeHistoryId: result.recipeHistoryId,
+        })),
+      });
+      if (!response.ok) throw new Error('No se pudo importar la receta al recetario.');
+      setImportedRecipe({
+        id: response.data.recipe.id,
+        duplicates: response.data.warnings.duplicates.length,
+      });
+    } catch {
+      importLock.current = false;
+      setImportError('No se pudo importar la receta al recetario. Intentá nuevamente.');
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -162,6 +213,34 @@ export default function RecipeSearchPage() {
           <div className="mt-6 rounded-xl border border-[#E8DDD2] bg-[#faf7f3] p-4">
             <h2 className="font-semibold">{result.title}</h2>
             <pre className="mt-2 whitespace-pre-wrap text-sm">{result.recipe}</pre>
+
+            {result.recipeHistoryId ? (
+              <div className="mt-4 grid gap-2">
+                {!importedRecipe ? (
+                  <button
+                    type="button"
+                    onClick={onImport}
+                    disabled={importing}
+                    className="h-11 w-fit rounded-xl bg-[#C56A1A] px-4 font-semibold text-white disabled:opacity-60"
+                  >
+                    {importing ? 'Importando...' : 'Importar al recetario'}
+                  </button>
+                ) : (
+                  <p role="status" className="text-sm text-green-800">
+                    Receta importada.{' '}
+                    <Link href={`/recipes/${importedRecipe.id}`} className="font-semibold underline">
+                      Ver en el recetario
+                    </Link>
+                  </p>
+                )}
+                {importError ? <p role="alert" className="text-sm text-red-700">{importError}</p> : null}
+                {importedRecipe && importedRecipe.duplicates > 0 ? (
+                  <p role="status" className="text-sm text-[#6B5A50]">
+                    Hay recetas con títulos similares en tu recetario; la receta igualmente fue importada.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
 
             {result.sources.length > 0 ? (
               <section className="mt-4" aria-labelledby="recipe-sources-heading">
