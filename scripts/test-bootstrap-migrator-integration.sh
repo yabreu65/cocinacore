@@ -954,11 +954,11 @@ EXPECTED_TRANSFERRED=$(node - "$ROOT/db/migrations/manifest.json" "$APPLIED_MIGR
 const fs = require('node:fs');
 const manifest = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const applied = new Set(process.argv[3].split('\n').filter(Boolean));
-const functionAdditions = manifest.migrations
+const catalogAdditions = manifest.migrations
   .filter((migration) => applied.has(migration.filename))
   .flatMap((migration) => migration.catalogAdditions || [])
-  .filter((addition) => addition.kind === 'function').length;
-console.log(manifest.baselineObjects.transferable.length + functionAdditions);
+  .filter((addition) => addition.kind === 'function' || addition.kind === 'table').length;
+console.log(manifest.baselineObjects.transferable.length + catalogAdditions);
 NODE
 )
 case "$EXPECTED_TRANSFERRED" in
