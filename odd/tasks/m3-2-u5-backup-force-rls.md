@@ -17,8 +17,8 @@ Correct the CocinaCore predeploy backup after deploy run `39294151698` failed be
 - [x] Create and approve a dedicated issue under repository policy (#34, `type:bug`, `status:approved`).
 - [x] Implement the minimal helper correction without disabling RLS or widening app access.
 - [x] Add FORCE RLS/full-export scenario and contract tests.
-- [ ] Verify checks; commit one work unit and open the controlled PR (outside this implementation task).
-- [ ] Monitor CI; stop before any production role/deploy action.
+- [x] Verify checks; commit one work unit and open the controlled PR (outside this implementation task).
+- [x] Monitor CI; stop before any production role/deploy action.
 
 ## Findings
 - Deploy run `39294151698` failed before app cutover because the helper invoked `pg_dump -U cocinacore_user`; after migrations 016/017, `public.user_recipe_versions` is FORCE RLS and the app role lacks BYPASSRLS.
@@ -35,7 +35,10 @@ Correct the CocinaCore predeploy backup after deploy run `39294151698` failed be
 ## Implementation and test status
 - The predeploy helper now invokes `pg_dump` as verified scheduled operator `pawtech_root`, preserving the fixed CocinaCore database/container and all existing artifact/integrity safeguards.
 - A fake-Docker FORCE RLS scenario asserts the verified role, complete nonempty export, stdin archive listing, and CocinaCore-only resource use. The scenario is included in CI's static-contract section; existing rollback and unchanged-database contracts remain in place.
-- Focused validation is recorded in the implementation handoff. No commit identity is claimed.
+- Focused validation is recorded in the implementation handoff and the commit evidence below.
 
 ## Commit evidence
-- Not committed by this implementation.
+- Implementation: `9ab5913` (`fix(ops): use FORCE RLS-capable predeploy backup role`).
+- Documentation evidence: this follow-up record is committed separately after the implementation work unit.
+- PR: #35 (`https://github.com/yabreu65/cocinacore/pull/35`), linked to approved issue #34.
+- CI: run `39300282588` passed `frontend-quality` and `E2E Tests`.
