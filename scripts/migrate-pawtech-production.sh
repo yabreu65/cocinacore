@@ -4,8 +4,6 @@ set -eu
 # Runs only on the VPS. This workflow is deliberately separate from deploy/cutover.
 EXPECTED_APP_DIR=/opt/pawtech/apps/cocinacore
 RUNTIME_ENV_FILE=/opt/pawtech/env/cocinacore.env
-BACKUP_ROOT=/opt/pawtech/backups/postgres/cocinacore_db/manual
-POSTGRES_CONTAINER=pawtech-postgres
 NETWORK=pawtech_internal
 LOCK_FILE=/tmp/cocinacore-production-deploy.lock
 EXPECTED_PENDING=016_persistent_user_recipes.sql,017_persistent_recipe_archive.sql
@@ -33,7 +31,6 @@ case "$DATABASE_URL" in
   *) fail 'runtime database URL does not identify the expected PawTech database' ;;
 esac
 
-[ -d "$BACKUP_ROOT" ] && [ -w "$BACKUP_ROOT" ] || fail 'established manual backup root unavailable'
 exec 9>"$LOCK_FILE"
 flock -n 9 || fail 'production deploy/migration lock is unavailable'
 umask 077
@@ -51,11 +48,11 @@ mkdir -m 700 "$WORK/source"
 tar -xf "$ARCHIVE" -C "$WORK/source"
 SOURCE=$WORK/source
 [ -f "$SOURCE/Dockerfile" ] && [ -f "$SOURCE/frontend/scripts/run-migrations.js" ] || fail 'archive lacks canonical build/runner inputs'
-[ -f "$SOURCE/scripts/backup-pawtech-cocinacore-predeploy.sh" ] || fail 'versioned backup helper missing'
+[ -x "$SOURCE/scripts/verify-pawtech-cocinacore-daily-backup.sh" ] || fail 'versioned daily backup verifier missing'
 [ -f "$SOURCE/db/migrations/016_persistent_user_recipes.sql" ] && [ -f "$SOURCE/db/migrations/017_persistent_recipe_archive.sql" ] || fail 'versioned 016/017 migrations missing'
 
 # The image is built on the runner from the exact-SHA archive and loaded in a prior SSH phase.
-# Verify its embedded source revision before any database preflight, backup, or mutation.
+# Verify its embedded source revision before any database preflight or mutation.
 IMAGE="cocinacore:migrate-$RELEASE_SHA"
 [ "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$IMAGE" 2>/dev/null)" = "$RELEASE_SHA" ] || fail 'loaded migration image revision label mismatch'
 
@@ -81,21 +78,15 @@ if(Number(activity.rows[0].waiting)!==0||Number(idle.rows[0].idle)!==0) throw Er
 }finally{c.release()}}finally{await p.end()}})().catch(()=>{console.error("DATABASE_PREFLIGHT_FAILED");process.exit(1)});' >/dev/null 2>&1 || fail 'database identity, relation, lock or session preflight failed'
 }
 preflight
-# Canonical dry-run validates the complete ledger and exact pending set before backup/mutation.
+# Canonical dry-run validates the complete ledger and exact pending set before backup verification/mutation.
 docker run --rm --network "$NETWORK" --env-file "$DATABASE_ENV_FILE" \
   -e COCINACORE_SKIP_DOTENV=1 -e MIGRATION_PG_LOCK_TIMEOUT_MS=5000 \
   -e MIGRATION_PG_STATEMENT_TIMEOUT_MS=120000 -e MIGRATION_EXPECTED_PENDING="$EXPECTED_PENDING" \
   "$IMAGE" node scripts/run-migrations.js --lane migration --dry-run >/dev/null 2>&1 || fail 'canonical ledger/exact-pending preflight failed'
 
-# The exact-SHA helper writes a versioned CocinaCore-only custom-format backup and validates it.
-BACKUP=$("$SOURCE"/scripts/backup-pawtech-cocinacore-predeploy.sh "$RELEASE_SHA" 2>/dev/null) || fail 'exact-SHA versioned backup helper failed'
-[ -n "$BACKUP" ] && [ -f "$BACKUP" ] && [ -f "$BACKUP.sha256" ] || fail 'versioned backup artifact/checksum missing'
-backup_dir=$(dirname "$BACKUP")
-[ "$(stat -c '%a' "$BACKUP")" = 600 ] && [ "$(stat -c '%a' "$BACKUP.sha256")" = 600 ] && [ "$(stat -c '%a' "$backup_dir")" = 700 ] || fail 'backup permissions invalid'
-(cd "$backup_dir" && sha256sum -c "$(basename "$BACKUP").sha256") >/dev/null 2>&1 || fail 'backup checksum validation failed'
-docker exec "$POSTGRES_CONTAINER" sh -c 'command -v pg_restore >/dev/null 2>&1' >/dev/null 2>&1 || fail 'pg_restore unavailable'
-docker exec -i "$POSTGRES_CONTAINER" pg_restore --list <"$BACKUP" >/dev/null 2>&1 || fail 'backup archive validation failed'
-log "BACKUP_VALIDATED sha=$RELEASE_SHA"
+# Verify the existing scheduled backup read-only from the exact-SHA release tree.
+DAILY_BACKUP_VERIFIED=$("$SOURCE"/scripts/verify-pawtech-cocinacore-daily-backup.sh 2>/dev/null) || fail 'daily backup verification failed'
+[ "$DAILY_BACKUP_VERIFIED" = DAILY_BACKUP_VERIFIED ] || fail 'daily backup verifier returned unexpected evidence'
 
 # Canonical runner owns its transaction/advisory lock and enforces exactly the pending migration.
 docker run --rm --network "$NETWORK" --env-file "$DATABASE_ENV_FILE" \
@@ -109,4 +100,4 @@ docker run --rm --network "$NETWORK" --env-file "$DATABASE_ENV_FILE" \
   -e MIGRATION_PG_STATEMENT_TIMEOUT_MS=120000 -e MIGRATION_EXPECTED_PENDING= \
   "$IMAGE" node scripts/run-migrations.js --lane migration --verify-complete >/dev/null 2>&1 || fail 'read-only schema verification failed'
 log "MIGRATIONS_VERIFIED sha=$RELEASE_SHA migrations=$EXPECTED_PENDING"
-log 'RECEIPT secretless=true database_changed=016-017-only backup=verified schema_verification=passed'
+log 'RECEIPT secretless=true database_changed=016-017-only daily_backup=verified schema_verification=passed'

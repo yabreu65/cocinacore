@@ -3,7 +3,7 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 SCRIPT="$ROOT/scripts/deploy-pawtech-production.sh"
-BACKUP_HELPER="$ROOT/scripts/backup-pawtech-cocinacore-predeploy.sh"
+BACKUP_VERIFIER="$ROOT/scripts/verify-pawtech-cocinacore-daily-backup.sh"
 WORKFLOW="$ROOT/.github/workflows/deploy.yml"
 RUNBOOK="$ROOT/docs/production/runbook.md"
 
@@ -111,19 +111,42 @@ rollback_pre_validation_block=$(printf '%s\n' "$rollback_block" | sed -n "1,$((r
 grep -Fq 'REMOTE_DEPLOY_READY' "$SCRIPT" || fail 'remote deploy must defer final success to GitHub smoke'
 ! grep -Fq 'DEPLOY_OK' "$SCRIPT" || fail 'remote deploy must not emit premature final success'
 grep -Fq 'public_health_ok()' "$SCRIPT" || fail 'public health check must enforce HTTP and JSON status'
-grep -Fq 'git ls-tree "$RELEASE_SHA" -- scripts/backup-pawtech-cocinacore-predeploy.sh' "$SCRIPT" || fail 'preflight must inspect the release-tree backup helper'
-grep -Fq '[ "$helper_mode" = 100755 ]' "$SCRIPT" || fail 'preflight must require an executable release-tree helper'
+grep -Fq 'git ls-tree "$RELEASE_SHA" -- scripts/verify-pawtech-cocinacore-daily-backup.sh' "$SCRIPT" || fail 'preflight must inspect the release-tree daily backup verifier'
+grep -Fq '[ "$verifier_mode" = 100755 ]' "$SCRIPT" || fail 'preflight must require an executable release-tree verifier'
+grep -Fq 'git cat-file -e "$RELEASE_SHA:scripts/verify-pawtech-cocinacore-daily-backup.sh"' "$SCRIPT" || fail 'preflight must validate the verifier in the release tree'
+! grep -Fq 'backup-pawtech-cocinacore-predeploy.sh' "$SCRIPT" || fail 'deleted generated backup helper must not be referenced'
+[ -x "$BACKUP_VERIFIER" ] || fail 'daily backup verifier must be executable'
+for verifier_expected in \
+  'DATABASE_NAME=cocinacore_db' \
+  'POSTGRES_CONTAINER=pawtech-postgres' \
+  'rclone lsf' \
+  'rclone cat' \
+  '| sha256sum' \
+  '| docker exec -i "$POSTGRES_CONTAINER" pg_restore --list' \
+  'TABLE public user_recipes' \
+  'TABLE public user_recipe_versions' \
+  'rolbypassrls' \
+  'DAILY_BACKUP_CHECKSUM_OK' \
+  'DAILY_BACKUP_SCHEMA_016_017_OK' \
+  'DAILY_BACKUP_RLS_COMPATIBLE' \
+  'DAILY_BACKUP_VERIFIED'; do
+  grep -Fq "$verifier_expected" "$BACKUP_VERIFIER" || fail "daily verifier missing contract: $verifier_expected"
+done
+! grep -Eq 'pg_dump|rclone (copy|sync)|mktemp|mkdir|chmod|docker cp|pg_restore[^[:cntrl:]]*--(dbname|clean|create)' "$BACKUP_VERIFIER" ||
+  fail 'daily verifier must remain read-only and must not create or restore backups'
+grep -Fq 'FROM pg_roles' "$BACKUP_VERIFIER" || fail 'daily verifier must inspect role metadata only'
+! grep -Eiq 'INSERT|UPDATE|DELETE|ALTER|CREATE|DROP|FROM public\.' "$BACKUP_VERIFIER" || fail 'daily verifier must not mutate or read application tables'
+[ "$(grep -Fc '"$RELEASE_DIR/scripts/verify-pawtech-cocinacore-daily-backup.sh"' "$SCRIPT")" -eq 1 ] || fail 'deploy must invoke daily verifier exactly once'
 preflight_log_source=$(grep -F 'PREFLIGHT_OK release=${RELEASE_SHA} storage=${STORAGE_DRIVER}' "$SCRIPT" | head -n 1)
 [ -n "$preflight_log_source" ] || fail 'preflight success evidence is missing'
 printf '%s\n' "$preflight_log_source" | grep -Fq 'attempt=${ATTEMPT_ID}' || fail 'preflight success evidence must include the attempt'
 grep -Fq '[ -d "$MANUAL_BACKUP_ROOT" ] && [ -w "$MANUAL_BACKUP_ROOT" ]' "$SCRIPT" || fail 'preflight must require the existing writable manual snapshot root'
-grep -Fq 'command -v pg_dump' "$SCRIPT" && grep -Fq 'command -v pg_restore' "$SCRIPT" || fail 'preflight must require PostgreSQL dump and archive tools'
+! grep -Fq 'command -v pg_dump' "$SCRIPT" && ! grep -Fq 'command -v pg_restore' "$SCRIPT" || fail 'deploy preflight must not prepare a generated backup'
 grep -Fq 'docker inspect "$APP_CONTAINER"' "$SCRIPT" || fail 'preflight must require the existing application container'
 grep -Fq '[ "$previous_running" = true ]' "$SCRIPT" || fail 'preflight must require the previous app to be running'
 grep -Fq '[ -n "$PREVIOUS_IMAGE" ]' "$SCRIPT" || fail 'preflight must require a nonempty previous image'
 grep -Fq 'grep -Eq '\''^[0-9a-f]{64}$'\''' "$SCRIPT" || fail 'preflight must require a full previous container ID'
-grep -Fq 'docker exec "$POSTGRES_CONTAINER" sh -c '\''command -v pg_dump' "$SCRIPT" || fail 'preflight must inspect pg_dump inside PostgreSQL'
-grep -Fq 'docker exec "$POSTGRES_CONTAINER" sh -c '\''command -v pg_restore' "$SCRIPT" || fail 'preflight must inspect pg_restore inside PostgreSQL'
+grep -Fq 'git cat-file -e "$RELEASE_SHA:scripts/verify-pawtech-cocinacore-daily-backup.sh"' "$SCRIPT" || fail 'preflight must validate the read-only daily backup verifier'
 grep -Fq 'container_networks_exact "$APP_CONTAINER"' "$SCRIPT" || fail 'preflight must require exact previous-app network membership'
 
 # Exact network-set comparisons must ignore Docker's formatter-added trailing blank line
@@ -149,25 +172,18 @@ missing_network_fixture=$(printf '%s\n' pawtech_internal '')
 grep -Fq 'previous_internal_health_ok' "$SCRIPT" && grep -Fq 'public_health_ok' "$SCRIPT" || fail 'preflight must prove prior app internal and public health'
 grep -Fq '[ -n "$PREVIOUS" ] || fail' "$SCRIPT" || fail 'deploy must fail before cutover if prior app identity is unexpectedly absent'
 ! grep -Fq "DATABASE_CHANGED=YES" "$SCRIPT" || fail 'database-changed YES path is forbidden'
-[ -x "$BACKUP_HELPER" ] || fail 'versioned CocinaCore predeploy backup helper must be executable'
-grep -Fq '"$RELEASE_DIR/scripts/backup-pawtech-cocinacore-predeploy.sh" "$RELEASE_SHA"' "$SCRIPT" ||
-  fail 'deploy must invoke the exact-SHA archived CocinaCore-only backup helper'
+grep -Fq '[ "$BACKUP_VERIFICATION" = DAILY_BACKUP_VERIFIED ]' "$SCRIPT" || fail 'deploy must retain daily backup verification evidence'
 ! grep -Fq 'backup-postgres.sh' "$SCRIPT" || fail 'shared multi-database backup helper is forbidden'
 ! grep -Fq 'retention' "$SCRIPT" || fail 'shared backup retention must not run'
-grep -Fq '/opt/pawtech/backups/postgres/cocinacore_db/manual' "$BACKUP_HELPER" || fail 'established manual CocinaCore backup hierarchy is missing'
-grep -Fq 'pg_dump -U cocinacore_user -d "$DATABASE_NAME" -Fc --no-owner --no-acl' "$BACKUP_HELPER" || fail 'backup must use the documented runtime database role'
-backup_helper_line=$(grep -nF '"$RELEASE_DIR/scripts/backup-pawtech-cocinacore-predeploy.sh" "$RELEASE_SHA"' "$SCRIPT" | head -n 1 | cut -d: -f1)
-backup_archive_line=$(grep -nF 'pg_restore --list <"$dump_file"' "$BACKUP_HELPER" | head -n 1 | cut -d: -f1)
+backup_verify_line=$(grep -nF '"$RELEASE_DIR/scripts/verify-pawtech-cocinacore-daily-backup.sh"' "$SCRIPT" | head -n 1 | cut -d: -f1)
 verify_line=$(grep -nF 'npm run db:migrate:verify' "$SCRIPT" | cut -d: -f1)
 no_op_line=$(grep -nF "log 'MIGRATION_EXPECTATION=NO_OP'" "$SCRIPT" | cut -d: -f1)
 candidate_line=$(grep -nF "log 'CANDIDATE starting'" "$SCRIPT" | cut -d: -f1)
 cutover_line=$(grep -nF 'docker rename "$APP_CONTAINER" "$PREVIOUS"' "$SCRIPT" | cut -d: -f1)
-[ -n "$backup_helper_line" ] && [ -n "$backup_archive_line" ] || fail 'versioned exact-SHA backup helper and stdin archive validation are required'
-! grep -Fq 'pg_restore --list -' "$BACKUP_HELPER" || fail 'backup archive listing must not use a positional filename'
-[ "$backup_helper_line" -lt "$verify_line" ] && [ "$backup_archive_line" -lt "$verify_line" ] &&
-  [ "$backup_archive_line" -lt "$candidate_line" ] && [ "$verify_line" -lt "$no_op_line" ] &&
+[ -n "$backup_verify_line" ] && [ "$(grep -Fc '"$RELEASE_DIR/scripts/verify-pawtech-cocinacore-daily-backup.sh"' "$SCRIPT")" -eq 1 ] || fail 'daily backup verifier must be invoked exactly once'
+[ "$backup_verify_line" -lt "$verify_line" ] && [ "$verify_line" -lt "$no_op_line" ] &&
   [ "$no_op_line" -lt "$candidate_line" ] && [ "$candidate_line" -lt "$cutover_line" ] ||
-  fail 'backup archive validation/verify/no-op/candidate/cutover order is invalid'
+  fail 'backup verification/migration verify/no-op/candidate/cutover order is invalid'
 
 grep -Fq 'local)' "$SCRIPT" || fail 'local storage mode is missing'
 local_storage=$(sed -n '/  local)/,/    ;;/p' "$SCRIPT")

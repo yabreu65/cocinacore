@@ -179,25 +179,21 @@ contains "$RUNNER" "parseBoundedTimeout('MIGRATION_PG_STATEMENT_TIMEOUT_MS')" 'c
 contains "$RUNNER" 'lock_timeout: pgLockTimeout' 'canonical runner must apply PostgreSQL lock_timeout to its pool'
 contains "$RUNNER" 'statement_timeout: statementTimeout' 'canonical runner must apply PostgreSQL statement_timeout to its pool'
 
-# Backup precedes DDL; only the exact-SHA CocinaCore helper is permitted.
-contains "$MIGRATION" 'scripts/backup-pawtech-cocinacore-predeploy.sh' 'archive must contain the versioned backup helper'
-contains "$MIGRATION" 'BACKUP=$("$SOURCE"/scripts/backup-pawtech-cocinacore-predeploy.sh "$RELEASE_SHA"' 'exact-SHA helper must run before migration'
-contains "$MIGRATION" 'pg_restore --list' 'backup must be validated without restore'
-contains "$MIGRATION" 'sha256sum -c' 'backup checksum must be verified'
-contains "$MIGRATION" '"$BACKUP"' 'backup artifact must be retained for validation'
-contains "$MIGRATION" 'stat -c '\''%a'\'' "$BACKUP"' 'backup artifact permissions must be checked'
-contains "$MIGRATION" 'stat -c '\''%a'\'' "$BACKUP.sha256"' 'checksum permissions must be checked'
-contains "$MIGRATION" 'stat -c '\''%a'\'' "$backup_dir"' 'backup directory permissions must be checked'
-backup_line=$(grep -nF 'BACKUP=$("$SOURCE"/scripts/backup-pawtech-cocinacore-predeploy.sh' "$MIGRATION" | cut -d: -f1)
-runner_line=$(grep -nF 'node scripts/run-migrations.js --lane migration "' "$MIGRATION" | cut -d: -f1 || true)
-[ -n "$backup_line" ] || fail 'backup helper invocation not found'
+# The exact-SHA release-tree verifier checks the existing daily backup read-only before DDL.
+contains "$MIGRATION" '[ -x "$SOURCE/scripts/verify-pawtech-cocinacore-daily-backup.sh" ]' 'archive must contain the executable daily backup verifier'
+contains "$MIGRATION" 'DAILY_BACKUP_VERIFIED=$("$SOURCE"/scripts/verify-pawtech-cocinacore-daily-backup.sh 2>/dev/null)' 'exact-SHA verifier must run and capture its evidence'
+contains "$MIGRATION" '[ "$DAILY_BACKUP_VERIFIED" = DAILY_BACKUP_VERIFIED ]' 'daily backup verifier evidence must be exact and fail closed'
+not_contains "$MIGRATION" 'pg_dump|rclone[[:space:]]+(copy|sync)|backup-pawtech-cocinacore-predeploy\.sh|BACKUP_ROOT|pg_restore' 'migration must not create/copy backups, use the old helper/manual root, or run pg_restore'
+verifier_line=$(grep -nF 'DAILY_BACKUP_VERIFIED=$("$SOURCE"/scripts/verify-pawtech-cocinacore-daily-backup.sh' "$MIGRATION" | cut -d: -f1)
 runner_line=$(grep -nF 'node scripts/run-migrations.js --lane migration >/dev/null' "$MIGRATION" | cut -d: -f1)
-[ "$backup_line" -lt "$runner_line" ] || fail 'backup must precede the mutating canonical runner'
-contains "$MIGRATION" 'node scripts/run-migrations.js --lane migration --dry-run' 'canonical exact-pending dry-run must precede backup'
+[ -n "$verifier_line" ] || fail 'daily backup verifier invocation not found'
+[ "$verifier_line" -lt "$runner_line" ] || fail 'daily backup verification must precede the mutating canonical runner'
+dry_run_line=$(grep -nF 'node scripts/run-migrations.js --lane migration --dry-run' "$MIGRATION" | cut -d: -f1)
+[ "$dry_run_line" -lt "$verifier_line" ] || fail 'daily backup verification must follow the canonical dry-run'
+contains "$MIGRATION" 'node scripts/run-migrations.js --lane migration --dry-run' 'canonical exact-pending dry-run must precede daily backup verification'
 contains "$MIGRATION" 'node scripts/run-migrations.js --lane migration --verify-complete' 'post-migration verification must use read-only complete verification'
-contains "$MIGRATION" 'log "BACKUP_VALIDATED sha=$RELEASE_SHA"' 'backup evidence must identify the selected SHA'
 contains "$MIGRATION" 'log "MIGRATIONS_VERIFIED sha=$RELEASE_SHA migrations=$EXPECTED_PENDING"' 'migration evidence must identify the SHA and ordered 016/017 migrations'
-contains "$MIGRATION" 'RECEIPT secretless=true database_changed=016-017-only backup=verified schema_verification=passed' 'final operator receipt must be secretless and include 016/017, backup, and verification outcomes'
+contains "$MIGRATION" 'RECEIPT secretless=true database_changed=016-017-only daily_backup=verified schema_verification=passed' 'final operator receipt must be secretless and include 016/017, daily backup, and verification outcomes'
 contains "$MIGRATION" 'case "$WORK" in /tmp/cocinacore-migration.*)' 'cleanup must be bounded to the private migration temp directory'
 contains "$MIGRATION" 'rm -rf -- "$WORK"' 'cleanup must remove only the bounded private work directory'
 not_contains "$MIGRATION" 'pg_restore[^\n]*(--clean|--dbname)|pg_restore -d|pg_restore --dbname' 'migration must never automatically restore a backup'
