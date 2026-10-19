@@ -44,4 +44,4 @@ Replace the deploy-generated predeploy `pg_dump` after deploy run `39294151698` 
 - Redesign implementation: `232f9f8` (`fix(ops): verify scheduled backup without generating predeploy dump`).
 - Prior task-record commit: `4cf348d` (`docs(odd): record FORCE RLS backup delivery`).
 - PR: #35 (`https://github.com/yabreu65/cocinacore/pull/35`), linked to approved issue #34.
-- Redesign CI run `39325688007` passed `frontend-quality` and `E2E Tests` for head `a1b2a0a`.
+- Final CI run `39329867793` passed `frontend-quality` and `E2E Tests` for head `fb034ed`.
