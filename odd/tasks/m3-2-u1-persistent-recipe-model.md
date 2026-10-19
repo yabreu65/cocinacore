@@ -50,4 +50,4 @@ Implement the next additive migration for persistent user-owned recipes without 
 - Every disposable container was stopped/removed by its owning run; pre-existing container IDs were unchanged. No local 5433, production, Redis, shared service, deploy, or push was used.
 
 ## Commit evidence
-- Work-unit commit pending final staging.
+- Work-unit commit: `a8fa5b5` (`feat(db): add persistent user recipe model`).
