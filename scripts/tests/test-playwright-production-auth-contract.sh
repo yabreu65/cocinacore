@@ -3,7 +3,6 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 auth="$root/frontend/src/lib/production-e2e-auth.ts"
-production_dir="$root/frontend/e2e/production"
 
 require_pattern() {
   local pattern="$1"
@@ -26,9 +25,4 @@ if grep -Eiq 'signup|register|database|postgres|redis|storageState|console\.(log
   exit 1
 fi
 
-if find "$production_dir" -type f -name '*.production.spec.ts' -print -quit | grep -q .; then
-  printf 'FAIL: production directory contains a production spec before its authorization gate.\n' >&2
-  exit 1
-fi
-
-printf 'PASS: production auth contract is isolated and the production spec directory is empty.\n'
+printf 'PASS: production auth helper is isolated; production specs are checked by the runner contract.\n'
