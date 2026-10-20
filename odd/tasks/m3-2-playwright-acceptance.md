@@ -25,6 +25,8 @@ The previously revealed production password is not reusable. Production testing 
 - [x] P3 implementation and local verification complete; live production auth remains blocked on rotated approved secrets.
 - [x] P4/P5 implementation and P6 local verification complete; the manual workflow and production specs were not run. The native trusted-ref correction was approved and acknowledged.
 - [ ] P4 live U5, U6, and M3.3 remain pending; production execution requires rotated approved secrets and a separate explicit run decision.
+- [x] Branch published to `origin/feat/m3-2-playwright-acceptance`; PR creation is blocked by the mandatory issue-first rule because no semantically suitable `status:approved` issue exists. Do not link unrelated issues.
+- [x] GitHub environment `production-acceptance` created without secrets. Exact branch policy restricts it to `feat/m3-2-playwright-acceptance`. Required reviewers could not be configured: the plan/API did not support `wait_timer`, and GitHub rejected `prevent_self_review` without at least one reviewer; only the authenticated actor was available. No production or staging secrets were touched.
 
 ## P1 findings
 
@@ -64,4 +66,4 @@ PASS: `frontend/playwright.config.ts` uses loopback and starts local provider/ap
 
 ## Commit evidence
 
-P1/P2 work-unit commit: `6b404272025a5959048e881ea1c3f205bacc49b9` (`feat(e2e): add fail-closed production runner`). P3 work-unit commit: `dec20477c63403f3df6faf37aafd208a2534f19f` (`feat(e2e): verify production test identity`). P4/P5 work-unit commit: `41da59eea8bd7e1181b8571f1c25a000e9f4091f` (`feat(e2e): add gated U5 production acceptance`). Contract alignment commit: `e5f8b310831c5a9b65d7a91a63d30b2e3cb1e046` (`test(e2e): align auth contract with production specs`). Trusted-ref correction commit: `b007af10c592a94b6b5f64d67133b385541bab98` (`fix(ci): restrict production acceptance to trusted branch`), natively reviewed and acknowledged. This final task-record update is documentation-only; no push/PR/merge. Live U5, U6, and M3.3 remain pending.
+P1/P2 work-unit commit: `6b404272025a5959048e881ea1c3f205bacc49b9` (`feat(e2e): add fail-closed production runner`). P3 work-unit commit: `dec20477c63403f3df6faf37aafd208a2534f19f` (`feat(e2e): verify production test identity`). P4/P5 work-unit commit: `41da59eea8bd7e1181b8571f1c25a000e9f4091f` (`feat(e2e): add gated U5 production acceptance`). Contract alignment commit: `e5f8b310831c5a9b65d7a91a63d30b2e3cb1e046` (`test(e2e): align auth contract with production specs`). Trusted-ref correction commit: `b007af10c592a94b6b5f64d67133b385541bab98` (`fix(ci): restrict production acceptance to trusted branch`), natively reviewed and acknowledged. Environment/PR readiness record is documentation-only and remains to be committed/published. No merge/deploy. Live U5, U6, and M3.3 remain pending.
