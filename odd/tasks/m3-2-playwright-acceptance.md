@@ -21,7 +21,7 @@ The previously revealed production password is not reusable. Production testing 
 - [x] Create clean branch/worktree from `origin/main`.
 - [x] Audit P1 Playwright suite/config/security.
 - [x] Verify P2 runner separation with focused unit, static contract, lint, typecheck, shell syntax, ShellCheck, and diff checks.
-- [ ] Commit P1/P2 work unit and record its identity below.
+- [x] Commit P1/P2 work unit and record its identity below.
 - [ ] P3–P6, U6, and M3.3 are explicitly not started; do not begin until separately authorized.
 
 ## P1 findings
@@ -42,7 +42,7 @@ The previously revealed production password is not reusable. Production testing 
 
 ## P2 implementation status
 
-Implementation and verification complete. The environment interface accepts arbitrary string keys with optional string values, preserving explicit known variables; the validator returns only `baseURL` while validating mode, exact URL, auth-variable presence, and signup mode without echoing values. Evidence: 22 focused Vitest tests passed; ESLint passed; `tsc --noEmit` passed; static contract, ShellCheck, `bash -n`, and `git diff --check` passed. `npm ci --ignore-scripts` installed local dependencies only and reported six high-severity npm audit advisories; no dependency changes were made. No production tests, production writes, credentials, or server access are part of P2.
+Implementation and verification complete. The environment interface accepts arbitrary string keys with optional string values, preserving explicit known variables; the validator returns only `baseURL` while validating mode, exact URL, auth-variable presence, and signup mode without echoing values. Evidence: 22 focused Vitest tests passed; ESLint passed; `tsc --noEmit` passed; static contract, ShellCheck, `bash -n`, and `git diff --check` passed. Runtime fail-closed evidence: production config listing with mode unset and with `E2E_RUN_MODE=local` both exited 1 before collection with `E2E_RUN_MODE must be exactly production.` `npm ci --ignore-scripts` installed local dependencies only and reported six high-severity npm audit advisories; no dependency changes were made. No production tests, production writes, credentials, or server access are part of P2.
 
 ## P1 audit evidence
 
@@ -50,4 +50,4 @@ PASS: `frontend/playwright.config.ts` uses loopback and starts local provider/ap
 
 ## Commit evidence
 
-Commit pending. P1/P2 implementation is ready for one work-unit commit; push/PR are not authorized. P3–P6, U6, and M3.3 remain not started.
+P1/P2 work-unit commit: `6b404272025a5959048e881ea1c3f205bacc49b9` (`feat(e2e): add fail-closed production runner`). Push/PR are not authorized. P3–P6, U6, and M3.3 remain not started.
