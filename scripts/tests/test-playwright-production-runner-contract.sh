@@ -38,8 +38,8 @@ if grep -Eq 'webServer|globalSetup|storageState|database-target|standalone-serve
 fi
 
 while IFS= read -r -d '' spec; do
-  if grep -Ein 'sign.?up|register' "$spec" >/dev/null; then
-    printf 'FAIL: a production spec contains signup/registration behavior.\n' >&2
+  if grep -Eiq 'sign.?up|register|database|postgres|redis|storageState|console\.(log|info|warn|error)|logger\.' "$spec"; then
+    printf 'FAIL: a production spec contains signup, direct persistence, state, or logging behavior.\n' >&2
     exit 1
   fi
 done < <(find "$production_dir" -type f -name '*.production.spec.ts' -print0)

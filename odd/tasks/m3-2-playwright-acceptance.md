@@ -10,11 +10,11 @@ The previously revealed production password is not reusable. Production testing 
 
 - [x] **P1 — Audit: PASS.** Existing config/fixture findings are recorded below; no production execution was performed.
 - [x] **P2 — Runner: PASS.** The isolated runner, validator, tests, documentation, and static contract passed focused verification. The validator returns only `baseURL` while retaining exact mode, URL, signup, and auth-presence validation.
-- [x] **P3 — Auth implementation: PASS; live production gate: BLOCKED.** Runtime-only credential injection, login/session verification, and exact user/tenant checks passed local verification. Live U5 remains blocked until rotated credentials are injected through an owner-approved mechanism; no password from chat may be reused.
-- [ ] **P4 — U5: NOT STARTED.** No production specs or writes are included in P2.
-- [ ] **P5 — CI: NOT STARTED.** No workflow changes.
-- [ ] **P6 — Verify: NOT STARTED.** No production execution.
-- [ ] **U6 — Close: NOT STARTED.** No cleanup or worktree changes.
+- [x] **P3 — Auth implementation: PASS; live production gate: BLOCKED.** Runtime-only credential injection, login/session verification, and exact user/tenant checks passed local verification. The real `/api/auth/session` path was traced and confirmed compatible: tenant-backed sessions expose `user.id` and `user.tenant.tenantId`; unauthenticated or tenantless sessions are rejected. Live U5 remains blocked until rotated credentials are injected through an owner-approved mechanism; no password from chat may be reused.
+- [x] **P4 — U5 specs: PASS (not executed).** Added bounded read-only and explicitly gated synthetic lifecycle specs; no production execution or U5 PASS is claimed. Synthetic cleanup is archive-only because no DELETE route exists; residual cleanup remains pending the U6/product decision.
+- [x] **P5 — CI workflow: PASS (not executed).** Added a protected, manual-only workflow and static workflow contract; the workflow has not been run.
+- [x] **P6 — Local verification: PASS; production execution: BLOCKED.** Focused tests, lint, typecheck, contracts, shell checks, YAML parsing, diff-check, and fail-closed Playwright listing passed locally. No production execution occurred.
+- [ ] **U6 — Close: NOT STARTED.** No U6 closure or production cleanup is claimed.
 
 ## Current work plan
 
@@ -23,7 +23,8 @@ The previously revealed production password is not reusable. Production testing 
 - [x] Verify P2 runner separation with focused unit, static contract, lint, typecheck, shell syntax, ShellCheck, and diff checks.
 - [x] Commit P1/P2 work unit and record its identity below.
 - [x] P3 implementation and local verification complete; live production auth remains blocked on rotated approved secrets.
-- [ ] P4/P5/P6/U6/M3.3 are not started; do not begin until the P3 live gate is explicitly continued.
+- [x] P4/P5 implementation and P6 local verification complete; the manual workflow and production specs were not run.
+- [ ] P4 live U5, U6, and M3.3 remain pending; production execution requires rotated approved secrets and a separate explicit run decision.
 
 ## P1 findings
 
@@ -49,10 +50,18 @@ Implementation and verification complete. The environment interface accepts arbi
 
 Implementation and local verification complete. Added an explicit runtime auth-environment reader while preserving the baseURL-only validator; added a production-only login/session identity helper with mocked deterministic tests, a static isolation contract, and runtime secret-injection guidance. Evidence: 34 focused Vitest tests passed; ESLint passed with `--max-warnings=0`; `tsc --noEmit`, both static contracts, and `git diff --check` passed. Vitest emitted a non-failing Vite config-loader warning. The production auth gate remains BLOCKED until rotated credentials are injected through an approved mechanism. No live U5 result is claimed. No production access or credential use occurred.
 
+## P4/P5 implementation status
+
+P4 uses only the public application API through Playwright `request` and the P3 auth helper. The synthetic suite requires exact `E2E_PRODUCTION_SYNTHETIC_WRITES=approved`, authenticates and verifies expected identity first, scopes all operations to one observed synthetic recipe ID, and archives it in `finally`. There is no DELETE endpoint, so cleanup is intentionally archive-only and U6/product policy must decide any residual data handling.
+
+P5 is a manual `workflow_dispatch` only workflow with protected environment `production-acceptance`, contents-read permission, concurrency lock, required confirmation, secret-only runtime injection, signup disabled, and synthetic writes disabled unless the boolean input is explicitly enabled. It does not deploy, migrate, backup, SSH, upload artifacts, or trigger automatically.
+
+P6 evidence: 34 focused Vitest tests passed; ESLint with `--max-warnings=0` passed; TypeScript passed; runner/auth/workflow contracts passed; ShellCheck and `bash -n` passed; workflow YAML parsed; production config listing without mode exited 1 before collection with the fail-closed mode error; `git diff --check` passed. No production command, workflow, browser, login, signup, DB/Redis, or credential access occurred.
+
 ## P1 audit evidence
 
 PASS: `frontend/playwright.config.ts` uses loopback and starts local provider/app servers; `frontend/e2e/database-target.ts`, connected fixtures, and related setup include DB/Redis writes and signup/cleanup paths. The existing suite had no production URL mode, allowlist, fail-closed distinction, or expected user/tenant validation. P1 audit is complete; no production access was used.
 
 ## Commit evidence
 
-P1/P2 work-unit commit: `6b404272025a5959048e881ea1c3f205bacc49b9` (`feat(e2e): add fail-closed production runner`). P3 changes remain uncommitted in the isolated worktree for the PM gate result; no push/PR/merge. P4–P6, U6, and M3.3 remain not started.
+P1/P2 work-unit commit: `6b404272025a5959048e881ea1c3f205bacc49b9` (`feat(e2e): add fail-closed production runner`). P3 work-unit commit: `dec20477c63403f3df6faf37aafd208a2534f19f` (`feat(e2e): verify production test identity`). P4/P5/P6 changes are ready for separate work-unit commit; no push/PR/merge. Live U5, U6, and M3.3 remain pending.
