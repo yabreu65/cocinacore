@@ -37,4 +37,5 @@ The verifier SQL casts `rolsuper` and `rolbypassrls` to text, which returns `tru
 
 ## Commit evidence
 
-Pending implementation and review PR; no merge/deploy evidence is expected in this task.
+- `7302622` — `fix(backup): parse canonical PostgreSQL role booleans`.
+- A follow-up documentation-only task-record commit will record final PR evidence; no merge/deploy evidence is expected in this task.
