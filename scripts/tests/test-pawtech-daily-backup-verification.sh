@@ -34,7 +34,12 @@ printf '%s\n' "$*" >>"$CALL_LOG"
 case "$*" in
   'exec -i pawtech-postgres pg_restore --list')
     case ${ARCHIVE_MODE:-valid} in unreadable) exit 1 ;; premigration) printf '%s\n' 'TABLE public user_recipes';; *) printf '%s\n' 'TABLE public user_recipes' 'TABLE public user_recipe_versions' 'INDEX public idx_user_recipes_tenant_user_archived_at';; esac ;;
-  'exec pawtech-postgres psql '*) [ "${ROLE_MODE:-valid}" = incompatible ] && printf '%s\n' 'backup_operator|f|f' || printf '%s\n' 'backup_operator|f|t' ;;
+  'exec pawtech-postgres psql '*)
+    case ${ROLE_MODE:-valid} in
+      incompatible) printf '%s\n' 'backup_operator|false|false' ;;
+      superuser) printf '%s\n' 'backup_operator|true|true' ;;
+      *) printf '%s\n' 'backup_operator|false|true' ;;
+    esac ;;
   *) exit 1 ;;
 esac
 DOCKER
@@ -60,6 +65,9 @@ make_valid
 FIXTURE_TIME=$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ)
 export FIXTURE_TIME
 run_ok
+ROLE_MODE=superuser; export ROLE_MODE
+run_ok
+unset ROLE_MODE
 ! grep -Eiq 'pg_dump|rclone (copy|sync)|mkdir|mktemp|chmod|docker cp|pg_restore .*--(dbname|clean|create)' "$VERIFIER" || fail 'verifier contains a forbidden write or restore operation'
 ! grep -Eiq 'pg_dump|rclone (copy|sync)|docker cp|pg_restore .*--(dbname|clean|create)' "$ROOT/scripts/deploy-pawtech-production.sh" || fail 'deploy contains backup creation or restore operation'
 grep -Fq 'cocinacore_db' "$VERIFIER" && grep -Fq 'pawtech-postgres' "$VERIFIER" || fail 'fixed CocinaCore target isolation missing'

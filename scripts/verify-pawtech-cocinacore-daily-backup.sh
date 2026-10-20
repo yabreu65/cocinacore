@@ -88,7 +88,7 @@ esac
 role_super=$(printf '%s' "$role_evidence" | awk -F'|' '{print $2}')
 role_bypass=$(printf '%s' "$role_evidence" | awk -F'|' '{print $3}')
 case "$role_super:$role_bypass" in
-  t:t|f:t) printf '%s\n' DAILY_BACKUP_RLS_COMPATIBLE >&2 ;;
+  true:true|false:true|t:t|f:t) printf '%s\n' DAILY_BACKUP_RLS_COMPATIBLE >&2 ;;
   *) fail 'scheduled backup role is not RLS-compatible' ;;
 esac
 printf '%s\n' DAILY_BACKUP_VERIFIED
