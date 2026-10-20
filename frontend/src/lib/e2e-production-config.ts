@@ -15,6 +15,13 @@ export interface ValidatedProductionConfig {
   baseURL: string;
 }
 
+export interface ProductionAuthEnvironment extends ValidatedProductionConfig {
+  email: string;
+  password: string;
+  expectedUserId: string;
+  expectedTenantId: string;
+}
+
 export function validateProductionMode(env: ProductionEnvironment): void {
   if (env.E2E_RUN_MODE !== 'production') {
     throw new Error('E2E_RUN_MODE must be exactly production.');
@@ -35,9 +42,7 @@ export function validateProductionUrl(value: string | undefined): string {
   return PRODUCTION_ORIGIN;
 }
 
-export function validateProductionEnvironment(
-  env: ProductionEnvironment,
-): ValidatedProductionConfig {
+function validateProductionGates(env: ProductionEnvironment): ValidatedProductionConfig {
   validateProductionMode(env);
   const baseURL = validateProductionUrl(env.E2E_PRODUCTION_URL);
 
@@ -58,4 +63,23 @@ export function validateProductionEnvironment(
   }
 
   return { baseURL };
+}
+
+export function validateProductionEnvironment(
+  env: ProductionEnvironment,
+): ValidatedProductionConfig {
+  return validateProductionGates(env);
+}
+
+export function readProductionAuthEnvironment(
+  env: ProductionEnvironment,
+): ProductionAuthEnvironment {
+  const { baseURL } = validateProductionGates(env);
+  return {
+    baseURL,
+    email: env.E2E_PRODUCTION_USER_EMAIL!,
+    password: env.E2E_PRODUCTION_USER_PASSWORD!,
+    expectedUserId: env.E2E_PRODUCTION_USER_ID!,
+    expectedTenantId: env.E2E_PRODUCTION_TENANT_ID!,
+  };
 }

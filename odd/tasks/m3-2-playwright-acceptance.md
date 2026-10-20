@@ -10,7 +10,7 @@ The previously revealed production password is not reusable. Production testing 
 
 - [x] **P1 — Audit: PASS.** Existing config/fixture findings are recorded below; no production execution was performed.
 - [x] **P2 — Runner: PASS.** The isolated runner, validator, tests, documentation, and static contract passed focused verification. The validator returns only `baseURL` while retaining exact mode, URL, signup, and auth-presence validation.
-- [ ] **P3 — Auth: NOT STARTED.** Requires owner-approved rotation of the previously revealed password and secure secret-manager injection; no password from chat may be reused.
+- [x] **P3 — Auth implementation: PASS; live production gate: BLOCKED.** Runtime-only credential injection, login/session verification, and exact user/tenant checks passed local verification. Live U5 remains blocked until rotated credentials are injected through an owner-approved mechanism; no password from chat may be reused.
 - [ ] **P4 — U5: NOT STARTED.** No production specs or writes are included in P2.
 - [ ] **P5 — CI: NOT STARTED.** No workflow changes.
 - [ ] **P6 — Verify: NOT STARTED.** No production execution.
@@ -22,7 +22,8 @@ The previously revealed production password is not reusable. Production testing 
 - [x] Audit P1 Playwright suite/config/security.
 - [x] Verify P2 runner separation with focused unit, static contract, lint, typecheck, shell syntax, ShellCheck, and diff checks.
 - [x] Commit P1/P2 work unit and record its identity below.
-- [ ] P3–P6, U6, and M3.3 are explicitly not started; do not begin until separately authorized.
+- [x] P3 implementation and local verification complete; live production auth remains blocked on rotated approved secrets.
+- [ ] P4/P5/P6/U6/M3.3 are not started; do not begin until the P3 live gate is explicitly continued.
 
 ## P1 findings
 
@@ -44,10 +45,14 @@ The previously revealed production password is not reusable. Production testing 
 
 Implementation and verification complete. The environment interface accepts arbitrary string keys with optional string values, preserving explicit known variables; the validator returns only `baseURL` while validating mode, exact URL, auth-variable presence, and signup mode without echoing values. Evidence: 22 focused Vitest tests passed; ESLint passed; `tsc --noEmit` passed; static contract, ShellCheck, `bash -n`, and `git diff --check` passed. Runtime fail-closed evidence: production config listing with mode unset and with `E2E_RUN_MODE=local` both exited 1 before collection with `E2E_RUN_MODE must be exactly production.` `npm ci --ignore-scripts` installed local dependencies only and reported six high-severity npm audit advisories; no dependency changes were made. No production tests, production writes, credentials, or server access are part of P2.
 
+## P3 implementation status
+
+Implementation and local verification complete. Added an explicit runtime auth-environment reader while preserving the baseURL-only validator; added a production-only login/session identity helper with mocked deterministic tests, a static isolation contract, and runtime secret-injection guidance. Evidence: 34 focused Vitest tests passed; ESLint passed with `--max-warnings=0`; `tsc --noEmit`, both static contracts, and `git diff --check` passed. Vitest emitted a non-failing Vite config-loader warning. The production auth gate remains BLOCKED until rotated credentials are injected through an approved mechanism. No live U5 result is claimed. No production access or credential use occurred.
+
 ## P1 audit evidence
 
 PASS: `frontend/playwright.config.ts` uses loopback and starts local provider/app servers; `frontend/e2e/database-target.ts`, connected fixtures, and related setup include DB/Redis writes and signup/cleanup paths. The existing suite had no production URL mode, allowlist, fail-closed distinction, or expected user/tenant validation. P1 audit is complete; no production access was used.
 
 ## Commit evidence
 
-P1/P2 work-unit commit: `6b404272025a5959048e881ea1c3f205bacc49b9` (`feat(e2e): add fail-closed production runner`). Push/PR are not authorized. P3–P6, U6, and M3.3 remain not started.
+P1/P2 work-unit commit: `6b404272025a5959048e881ea1c3f205bacc49b9` (`feat(e2e): add fail-closed production runner`). P3 changes remain uncommitted in the isolated worktree for the PM gate result; no push/PR/merge. P4–P6, U6, and M3.3 remain not started.

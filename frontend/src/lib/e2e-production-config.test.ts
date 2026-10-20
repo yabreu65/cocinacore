@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   PRODUCTION_ORIGIN,
+  readProductionAuthEnvironment,
   validateProductionEnvironment,
   validateProductionMode,
   validateProductionUrl,
@@ -68,6 +69,18 @@ describe('production Playwright environment validation', () => {
     const validated = validateProductionEnvironment(validEnvironment);
     expect(validated).toEqual({ baseURL: PRODUCTION_ORIGIN });
     expect(Object.keys(validated)).toEqual(['baseURL']);
+  });
+
+  it('reads validated auth values only through the explicit auth accessor', () => {
+    const auth = readProductionAuthEnvironment(validEnvironment);
+    expect(auth).toEqual({
+      baseURL: PRODUCTION_ORIGIN,
+      email: validEnvironment.E2E_PRODUCTION_USER_EMAIL,
+      password: validEnvironment.E2E_PRODUCTION_USER_PASSWORD,
+      expectedUserId: validEnvironment.E2E_PRODUCTION_USER_ID,
+      expectedTenantId: validEnvironment.E2E_PRODUCTION_TENANT_ID,
+    });
+    expect(validateProductionEnvironment(validEnvironment)).not.toHaveProperty('password');
   });
 
   it('uses safe errors that do not echo supplied values', () => {
