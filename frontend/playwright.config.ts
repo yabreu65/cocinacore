@@ -46,6 +46,7 @@ const standaloneServerCommand = [
 
 export default defineConfig({
   testDir: './e2e',
+  testIgnore: '**/*.production.spec.ts',
   globalSetup: './e2e/global-setup.ts',
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
