@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   acceptance:
-    if: inputs.confirmation == 'RUN_PRODUCTION_ACCEPTANCE'
+    if: github.ref == 'refs/heads/feat/m3-2-playwright-acceptance' && inputs.confirmation == 'RUN_PRODUCTION_ACCEPTANCE'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment:

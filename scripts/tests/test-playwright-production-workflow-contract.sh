@@ -14,7 +14,7 @@ require_pattern() {
 
 require_pattern 'on:'
 require_pattern '  workflow_dispatch:'
-require_pattern "if: inputs.confirmation == 'RUN_PRODUCTION_ACCEPTANCE'"
+require_pattern "if: github.ref == 'refs/heads/feat/m3-2-playwright-acceptance' && inputs.confirmation == 'RUN_PRODUCTION_ACCEPTANCE'"
 require_pattern '      confirmation:'
 require_pattern '      run_synthetic_writes:'
 require_pattern '        type: boolean'
