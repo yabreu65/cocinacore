@@ -80,4 +80,4 @@ P1/P2 work-unit commit: `6b404272025a5959048e881ea1c3f205bacc49b9` (`feat(e2e): 
 
 **Final status:** U5 and U6 closed with the database verification limitation above; M3.3 pending.
 
-**U6 documentation commit identity: pending**
+**U6 documentation commit identity:** `beef5303863affa60f90e08addd06f4c9b6c2e89`
