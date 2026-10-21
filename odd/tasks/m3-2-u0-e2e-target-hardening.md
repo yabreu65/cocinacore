@@ -10,9 +10,9 @@ Remove unsafe local PostgreSQL fallbacks from the six connected Playwright specs
 - Preserve existing unrelated worktree changes.
 
 ## Tasks
-- [ ] Replace the six connected-spec fallbacks with `validateE2ETargets(process.env).databaseUrl`.
-- [ ] Run focused non-writing tests/static checks proving missing or unsafe E2E URLs fail closed.
-- [ ] Record evidence and close with one functional Conventional Commit.
+- [x] Replace the six connected-spec fallbacks with `validateE2ETargets(process.env).databaseUrl`.
+- [x] Run focused non-writing tests/static checks proving missing or unsafe E2E URLs fail closed.
+- [x] Record evidence and close with one functional Conventional Commit.
 
 ## Acceptance criteria
 - No targeted connected spec contains a `5433`/local fallback.
@@ -30,10 +30,11 @@ Remove unsafe local PostgreSQL fallbacks from the six connected Playwright specs
 - `git diff --check`: PASS.
 - Static contract: all six specs now require `validateE2ETargets(process.env).databaseUrl`; no local `5433` fallback remains.
 - Review follow-up: scoped `user_meal_plans` and `recipe_inventory_items` cleanup predicates by `tenant_id` and `user_id` in `meal-plan-shopping-connected.spec.ts`.
-- Focused Vitest could not run because `frontend/node_modules/.bin/vitest` is absent; npm install was prohibited.
+- Focused Vitest: `npm test -- src/lib/e2e-database-target.test.ts` from `frontend` — PASS, 12/12.
+- `npx tsc --noEmit` from `frontend` — PASS, exit 0.
 - No database, Redis, container, migration, deploy, or shared service was contacted.
-- Global `/usr/local/bin/tsc --noEmit` could not typecheck the project because project dependencies/types are absent.
 
 ## Commit evidence
 - `8e0b916` — `test(e2e): require isolated database targets`
+- `8eb9a0f` — `docs(odd): record E2E target hardening evidence`
 - No push performed.
