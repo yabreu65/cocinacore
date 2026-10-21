@@ -24,7 +24,7 @@ require_pattern '  contents: read'
 require_pattern 'concurrency:'
 require_pattern 'timeout-minutes:'
 require_pattern 'actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683'
-require_pattern 'actions/setup-node@1e60f620b9541d30d0d9583c6386797b1694693'
+require_pattern 'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020'
 require_pattern 'run: npm ci'
 require_pattern "E2E_PRODUCTION_URL: \${{ secrets.E2E_PRODUCTION_URL }}"
 require_pattern "E2E_PRODUCTION_USER_EMAIL: \${{ secrets.E2E_PRODUCTION_USER_EMAIL }}"
