@@ -80,4 +80,4 @@ P1/P2 work-unit commit: `6b404272025a5959048e881ea1c3f205bacc49b9` (`feat(e2e): 
 
 **Final status:** M3.2 Playwright U5/U6 are closed; authenticated API evidence confirms the archived-list state and final archive cleanup. No SQL check was required. M3.3 is a separate subsequent scope.
 
-**U6 documentation commit identity:** `beef5303863affa60f90e08addd06f4c9b6c2e89`
+**U6 documentation commit identities:** initial closeout `beef5303863affa60f90e08addd06f4c9b6c2e89`; authenticated API evidence correction `396d35bac61b3b245a5fcef61d3c80f9e1c611dc`; removal of the account-bearing run URL `fe1958e7dbfc4661f84329c95fa965c0d78cd454`.
