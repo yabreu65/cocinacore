@@ -11,10 +11,10 @@ The previously revealed production password is not reusable. Production testing 
 - [x] **P1 — Audit: PASS.** Existing config/fixture findings are recorded below; no production execution was performed.
 - [x] **P2 — Runner: PASS.** The isolated runner, validator, tests, documentation, and static contract passed focused verification. The validator returns only `baseURL` while retaining exact mode, URL, signup, and auth-presence validation.
 - [x] **P3 — Auth implementation: PASS.** Runtime-only credential injection, login/session verification, and exact user/tenant checks passed local verification. U5 later passed in the authorized manual workflow; no credentials or identity values are recorded here.
-- [x] **P4 — U5 specs: PASS; U5 run: PASS.** The manual workflow completed successfully. PM reports 2/2 tests PASS and explicitly approved synthetic writes. The app-level test exercises archive and re-archives the synthetic recipe in `finally`. Cleanup remains archive-only; no DELETE route exists.
+- [x] **P4 — U5 specs: PASS; U5 run: PASS.** The manual workflow completed successfully. PM reports 2/2 tests PASS and explicitly approved synthetic writes. After archiving, the authenticated test reads the archived list and confirms the created recipe ID; final archive cleanup returns HTTP 200 (PM verification). Cleanup remains archive-only; no DELETE route exists.
 - [x] **P5 — CI workflow: PASS; run: PASS.** The protected manual workflow completed successfully on `main` at the merged PR #41 commit. It remains manual-only and does not deploy.
 - [x] **P6 — Local verification: PASS.** Focused tests, lint, typecheck, contracts, shell checks, YAML parsing, diff-check, and fail-closed Playwright listing passed locally.
-- [x] **U6 — Close: CLOSED.** Close based on successful U5 app-level archive/cleanup and the retention policy; no deletion is authorized. Final database persistence and archive persistence were not independently verified (see U6 limitation below).
+- [x] **U6 — Close: CLOSED.** The authenticated archived-list readback and successful final archive cleanup provide the required API-level archive evidence; SQL verification is not required. The retention decision is archive-only; no deletion is authorized.
 
 ## Current work plan
 
@@ -25,7 +25,7 @@ The previously revealed production password is not reusable. Production testing 
 - [x] P3 implementation and local verification complete; live U5 later passed in the authorized workflow using the production environment. Credential values are not recorded.
 - [x] P4/P5 implementation and P6 local verification complete; the authorized manual U5 workflow and production specs subsequently ran successfully. The trusted-ref correction was approved and acknowledged.
 - [x] P4 live U5 completed successfully; U6 closed under the archive-only retention decision below.
-- [ ] M3.3 remains pending and is outside this closeout.
+- [x] M3.2 Playwright U5/U6 closeout is complete; M3.3 is a separate subsequent scope.
 - [x] Branch was published to `origin/feat/m3-2-playwright-acceptance`; PR #41 was later created and merged as recorded in the U5/U6 closeout evidence.
 - [x] GitHub environment `production-acceptance` was initially restricted to `feat/m3-2-playwright-acceptance`; after PR #41 its deployment branch policy is `main`, confirmed by the successful U5 run on `main`. Required reviewers could not be configured: the plan/API did not support `wait_timer`, and GitHub rejected `prevent_self_review` without at least one reviewer; only the authenticated actor was available.
 
@@ -68,16 +68,16 @@ PASS: `frontend/playwright.config.ts` uses loopback and starts local provider/ap
 ## U5/U6 closeout evidence
 
 - PR #41 merged at `01f45d3843a7c9a97f6965d7ac81cdad1387e01a`.
-- Manual workflow run [39522319909](https://github.com/yabreu65/cocinacore/actions/runs/39522319909) completed `success` on `main` at that SHA. Job acceptance succeeded; run started `2026-10-21T00:36:19Z`.
+- Manual workflow run `39522319909` completed `success` on `main` at that SHA. The acceptance job succeeded; run started `2026-10-21T00:36:19Z`.
 - PM reports 2/2 tests PASS and explicitly approved synthetic writes. The app-level test archives its created synthetic recipe in `finally`.
-- **U6 decision:** close based on successful app-level archive/cleanup and the retention policy. No deletion was authorized; no DELETE route exists, so cleanup is archive-only.
-- **Database verification limitation:** the parent performed a read-only connection preflight to the production database and confirmed `transaction_read_only=on`. RLS bypass was false and both `app.user_id` and `app.tenant_id` contexts were absent, so no recipe-row query was made. Final database persistence of the recipe was **not independently verified**; database archive persistence is not claimed. Per PM, RLS was not bypassed and no sensitive access was sought.
-- M3.3 remains pending. No deployment is claimed.
+- **U6 API evidence:** PM verified the authenticated test's `GET /api/recipes?archived=archived` readback returned the created synthetic recipe ID after archiving; the final archive cleanup returned HTTP 200. No recipe ID or synthetic marker is recorded here. This API-level readback satisfies U6; SQL row verification is not required or claimed, and RLS was not bypassed.
+- **U6 decision:** retain synthetic records archived; no deletion was authorized and no DELETE route exists.
+- **M3.2 status:** U5 and U6 are closed with no remaining M3.2 Playwright acceptance tasks. M3.3 is a separate subsequent scope. No deployment is claimed.
 
 ## Commit evidence and final status
 
 P1/P2 work-unit commit: `6b404272025a5959048e881ea1c3f205bacc49b9` (`feat(e2e): add fail-closed production runner`). P3 work-unit commit: `dec20477c63403f3df6faf37aafd208a2534f19f` (`feat(e2e): verify production test identity`). P4/P5 work-unit commit: `41da59eea8bd7e1181b8571f1c25a000e9f4091f` (`feat(e2e): add gated U5 production acceptance`). Contract alignment commit: `e5f8b310831c5a9b65d7a91a63d30b2e3cb1e046` (`test(e2e): align auth contract with production specs`). Trusted-ref correction commit: `b007af10c592a94b6b5f64d67133b385541bab98` (`fix(ci): restrict production acceptance to trusted branch`), natively reviewed and acknowledged. PR #41 is merged at `01f45d3843a7c9a97f6965d7ac81cdad1387e01a`; this is not a deployment claim.
 
-**Final status:** U5 and U6 closed with the database verification limitation above; M3.3 pending.
+**Final status:** M3.2 Playwright U5/U6 are closed; authenticated API evidence confirms the archived-list state and final archive cleanup. No SQL check was required. M3.3 is a separate subsequent scope.
 
-**U6 documentation commit identity:** `beef5303863affa60f90e08addd06f4c9b6c2e89`
+**U6 documentation commit identities:** initial closeout `beef5303863affa60f90e08addd06f4c9b6c2e89`; authenticated API evidence correction `396d35bac61b3b245a5fcef61d3c80f9e1c611dc`; removal of the account-bearing run URL `fe1958e7dbfc4661f84329c95fa965c0d78cd454`.
