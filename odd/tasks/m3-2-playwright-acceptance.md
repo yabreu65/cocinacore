@@ -68,7 +68,7 @@ PASS: `frontend/playwright.config.ts` uses loopback and starts local provider/ap
 ## U5/U6 closeout evidence
 
 - PR #41 merged at `01f45d3843a7c9a97f6965d7ac81cdad1387e01a`.
-- Manual workflow run [39522319909](https://github.com/yabreu65/cocinacore/actions/runs/39522319909) completed `success` on `main` at that SHA. Job acceptance succeeded; run started `2026-10-21T00:36:19Z`.
+- Manual workflow run `39522319909` completed `success` on `main` at that SHA. The acceptance job succeeded; run started `2026-10-21T00:36:19Z`.
 - PM reports 2/2 tests PASS and explicitly approved synthetic writes. The app-level test archives its created synthetic recipe in `finally`.
 - **U6 API evidence:** PM verified the authenticated test's `GET /api/recipes?archived=archived` readback returned the created synthetic recipe ID after archiving; the final archive cleanup returned HTTP 200. No recipe ID or synthetic marker is recorded here. This API-level readback satisfies U6; SQL row verification is not required or claimed, and RLS was not bypassed.
 - **U6 decision:** retain synthetic records archived; no deletion was authorized and no DELETE route exists.
