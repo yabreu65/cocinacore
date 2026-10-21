@@ -10,11 +10,11 @@ The previously revealed production password is not reusable. Production testing 
 
 - [x] **P1 — Audit: PASS.** Existing config/fixture findings are recorded below; no production execution was performed.
 - [x] **P2 — Runner: PASS.** The isolated runner, validator, tests, documentation, and static contract passed focused verification. The validator returns only `baseURL` while retaining exact mode, URL, signup, and auth-presence validation.
-- [x] **P3 — Auth implementation: PASS; live production gate: BLOCKED.** Runtime-only credential injection, login/session verification, and exact user/tenant checks passed local verification. The real `/api/auth/session` path was traced and confirmed compatible: tenant-backed sessions expose `user.id` and `user.tenant.tenantId`; unauthenticated or tenantless sessions are rejected. Live U5 remains blocked until rotated credentials are injected through an owner-approved mechanism; no password from chat may be reused.
-- [x] **P4 — U5 specs: PASS (not executed).** Added bounded read-only and explicitly gated synthetic lifecycle specs; no production execution or U5 PASS is claimed. Synthetic cleanup is archive-only because no DELETE route exists; residual cleanup remains pending the U6/product decision.
-- [x] **P5 — CI workflow: PASS (not executed).** Added a protected, manual-only workflow and static workflow contract; the job requires the exact audited branch and confirmation token before protected secrets can be used. Native review approved and acknowledged the correction; the workflow has not been run.
-- [x] **P6 — Local verification: PASS; production execution: BLOCKED.** Focused tests, lint, typecheck, contracts, shell checks, YAML parsing, diff-check, and fail-closed Playwright listing passed locally. No production execution occurred.
-- [ ] **U6 — Close: NOT STARTED.** No U6 closure or production cleanup is claimed.
+- [x] **P3 — Auth implementation: PASS.** Runtime-only credential injection, login/session verification, and exact user/tenant checks passed local verification. U5 later passed in the authorized manual workflow; no credentials or identity values are recorded here.
+- [x] **P4 — U5 specs: PASS; U5 run: PASS.** The manual workflow completed successfully. PM reports 2/2 tests PASS and explicitly approved synthetic writes. The app-level test exercises archive and re-archives the synthetic recipe in `finally`. Cleanup remains archive-only; no DELETE route exists.
+- [x] **P5 — CI workflow: PASS; run: PASS.** The protected manual workflow completed successfully on `main` at the merged PR #41 commit. It remains manual-only and does not deploy.
+- [x] **P6 — Local verification: PASS.** Focused tests, lint, typecheck, contracts, shell checks, YAML parsing, diff-check, and fail-closed Playwright listing passed locally.
+- [x] **U6 — Close: CLOSED.** Close based on successful U5 app-level archive/cleanup and the retention policy; no deletion is authorized. Final database persistence and archive persistence were not independently verified (see U6 limitation below).
 
 ## Current work plan
 
@@ -22,11 +22,12 @@ The previously revealed production password is not reusable. Production testing 
 - [x] Audit P1 Playwright suite/config/security.
 - [x] Verify P2 runner separation with focused unit, static contract, lint, typecheck, shell syntax, ShellCheck, and diff checks.
 - [x] Commit P1/P2 work unit and record its identity below.
-- [x] P3 implementation and local verification complete; live production auth remains blocked on rotated approved secrets.
-- [x] P4/P5 implementation and P6 local verification complete; the manual workflow and production specs were not run. The native trusted-ref correction was approved and acknowledged.
-- [ ] P4 live U5, U6, and M3.3 remain pending; production execution requires rotated approved secrets and a separate explicit run decision.
-- [x] Branch published to `origin/feat/m3-2-playwright-acceptance`; PR creation is blocked by the mandatory issue-first rule because no semantically suitable `status:approved` issue exists. Do not link unrelated issues.
-- [x] GitHub environment `production-acceptance` created without secrets. Exact branch policy restricts it to `feat/m3-2-playwright-acceptance`. Required reviewers could not be configured: the plan/API did not support `wait_timer`, and GitHub rejected `prevent_self_review` without at least one reviewer; only the authenticated actor was available. No production or staging secrets were touched.
+- [x] P3 implementation and local verification complete; live U5 later passed in the authorized workflow using the production environment. Credential values are not recorded.
+- [x] P4/P5 implementation and P6 local verification complete; the authorized manual U5 workflow and production specs subsequently ran successfully. The trusted-ref correction was approved and acknowledged.
+- [x] P4 live U5 completed successfully; U6 closed under the archive-only retention decision below.
+- [ ] M3.3 remains pending and is outside this closeout.
+- [x] Branch was published to `origin/feat/m3-2-playwright-acceptance`; PR #41 was later created and merged as recorded in the U5/U6 closeout evidence.
+- [x] GitHub environment `production-acceptance` was initially restricted to `feat/m3-2-playwright-acceptance`; after PR #41 its deployment branch policy is `main`, confirmed by the successful U5 run on `main`. Required reviewers could not be configured: the plan/API did not support `wait_timer`, and GitHub rejected `prevent_self_review` without at least one reviewer; only the authenticated actor was available.
 
 ## P1 findings
 
@@ -50,20 +51,33 @@ Implementation and verification complete. The environment interface accepts arbi
 
 ## P3 implementation status
 
-Implementation and local verification complete. Added an explicit runtime auth-environment reader while preserving the baseURL-only validator; added a production-only login/session identity helper with mocked deterministic tests, a static isolation contract, and runtime secret-injection guidance. Evidence: 34 focused Vitest tests passed; ESLint passed with `--max-warnings=0`; `tsc --noEmit`, both static contracts, and `git diff --check` passed. Vitest emitted a non-failing Vite config-loader warning. The production auth gate remains BLOCKED until rotated credentials are injected through an approved mechanism. No live U5 result is claimed. No production access or credential use occurred.
+Implementation and local verification complete. Added an explicit runtime auth-environment reader while preserving the baseURL-only validator; added a production-only login/session identity helper with mocked deterministic tests, a static isolation contract, and runtime secret-injection guidance. Evidence: 34 focused Vitest tests passed; ESLint passed with `--max-warnings=0`; `tsc --noEmit`, both static contracts, and `git diff --check` passed. Vitest emitted a non-failing Vite config-loader warning. **At the time this implementation record was written**, the production auth gate remained blocked pending approved credential injection and no live U5 result was claimed. The later authorized U5 outcome is documented in U5/U6 closeout evidence.
 
 ## P4/P5 implementation status
 
-P4 uses only the public application API through Playwright `request` and the P3 auth helper. The synthetic suite requires exact `E2E_PRODUCTION_SYNTHETIC_WRITES=approved`, authenticates and verifies expected identity first, scopes all operations to one observed synthetic recipe ID, and archives it in `finally`. There is no DELETE endpoint, so cleanup is intentionally archive-only and U6/product policy must decide any residual data handling.
+P4 uses only the public application API through Playwright `request` and the P3 auth helper. The synthetic suite requires exact `E2E_PRODUCTION_SYNTHETIC_WRITES=approved`, authenticates and verifies expected identity first, scopes all operations to one observed synthetic recipe ID, and archives it in `finally`. There is no DELETE endpoint, so cleanup is intentionally archive-only. U6 is now closed under the retention decision recorded in U5/U6 closeout evidence; no deletion is authorized.
 
-P5 is a manual `workflow_dispatch` only workflow with protected environment `production-acceptance`, contents-read permission, concurrency lock, required confirmation, secret-only runtime injection, signup disabled, and synthetic writes disabled unless the boolean input is explicitly enabled. Following native review R1-001, the job-level gate now also requires `github.ref` to equal `refs/heads/feat/m3-2-playwright-acceptance`; the bounded correction passed local checks and native review. It does not deploy, migrate, backup, SSH, upload artifacts, or trigger automatically.
+P5 is a manual `workflow_dispatch` only workflow with protected environment `production-acceptance`, contents-read permission, concurrency lock, required confirmation, secret-only runtime injection, signup disabled, and synthetic writes disabled unless the boolean input is explicitly enabled. Following PR #41, the job-level gate requires `github.ref` to equal `refs/heads/main`; the environment deployment branch policy is also `main`. U5 run 39522319909 succeeded on main. The workflow does not deploy, migrate, back up, SSH, upload artifacts, or trigger automatically.
 
-P6 evidence: 34 focused Vitest tests passed; ESLint with `--max-warnings=0` passed; TypeScript passed; runner/auth/workflow contracts passed; ShellCheck and `bash -n` passed; workflow YAML parsed; production config listing without mode exited 1 before collection with the fail-closed mode error; `git diff --check` passed. No production command, workflow, browser, login, signup, DB/Redis, or credential access occurred.
+P6 local evidence: 34 focused Vitest tests passed; ESLint with `--max-warnings=0` passed; TypeScript passed; runner/auth/workflow contracts passed; ShellCheck and `bash -n` passed; workflow YAML parsed; production config listing without mode exited 1 before collection with the fail-closed mode error; `git diff --check` passed. This records local verification only; the later manual U5 workflow result and limited read-only database preflight are documented in U5/U6 closeout evidence.
 
 ## P1 audit evidence
 
 PASS: `frontend/playwright.config.ts` uses loopback and starts local provider/app servers; `frontend/e2e/database-target.ts`, connected fixtures, and related setup include DB/Redis writes and signup/cleanup paths. The existing suite had no production URL mode, allowlist, fail-closed distinction, or expected user/tenant validation. P1 audit is complete; no production access was used.
 
-## Commit evidence
+## U5/U6 closeout evidence
 
-P1/P2 work-unit commit: `6b404272025a5959048e881ea1c3f205bacc49b9` (`feat(e2e): add fail-closed production runner`). P3 work-unit commit: `dec20477c63403f3df6faf37aafd208a2534f19f` (`feat(e2e): verify production test identity`). P4/P5 work-unit commit: `41da59eea8bd7e1181b8571f1c25a000e9f4091f` (`feat(e2e): add gated U5 production acceptance`). Contract alignment commit: `e5f8b310831c5a9b65d7a91a63d30b2e3cb1e046` (`test(e2e): align auth contract with production specs`). Trusted-ref correction commit: `b007af10c592a94b6b5f64d67133b385541bab98` (`fix(ci): restrict production acceptance to trusted branch`), natively reviewed and acknowledged. Environment/PR readiness record is documentation-only and remains to be committed/published. No merge/deploy. Live U5, U6, and M3.3 remain pending.
+- PR #41 merged at `01f45d3843a7c9a97f6965d7ac81cdad1387e01a`.
+- Manual workflow run [39522319909](https://github.com/yabreu65/cocinacore/actions/runs/39522319909) completed `success` on `main` at that SHA. Job acceptance succeeded; run started `2026-10-21T00:36:19Z`.
+- PM reports 2/2 tests PASS and explicitly approved synthetic writes. The app-level test archives its created synthetic recipe in `finally`.
+- **U6 decision:** close based on successful app-level archive/cleanup and the retention policy. No deletion was authorized; no DELETE route exists, so cleanup is archive-only.
+- **Database verification limitation:** the parent performed a read-only connection preflight to the production database and confirmed `transaction_read_only=on`. RLS bypass was false and both `app.user_id` and `app.tenant_id` contexts were absent, so no recipe-row query was made. Final database persistence of the recipe was **not independently verified**; database archive persistence is not claimed. Per PM, RLS was not bypassed and no sensitive access was sought.
+- M3.3 remains pending. No deployment is claimed.
+
+## Commit evidence and final status
+
+P1/P2 work-unit commit: `6b404272025a5959048e881ea1c3f205bacc49b9` (`feat(e2e): add fail-closed production runner`). P3 work-unit commit: `dec20477c63403f3df6faf37aafd208a2534f19f` (`feat(e2e): verify production test identity`). P4/P5 work-unit commit: `41da59eea8bd7e1181b8571f1c25a000e9f4091f` (`feat(e2e): add gated U5 production acceptance`). Contract alignment commit: `e5f8b310831c5a9b65d7a91a63d30b2e3cb1e046` (`test(e2e): align auth contract with production specs`). Trusted-ref correction commit: `b007af10c592a94b6b5f64d67133b385541bab98` (`fix(ci): restrict production acceptance to trusted branch`), natively reviewed and acknowledged. PR #41 is merged at `01f45d3843a7c9a97f6965d7ac81cdad1387e01a`; this is not a deployment claim.
+
+**Final status:** U5 and U6 closed with the database verification limitation above; M3.3 pending.
+
+**U6 documentation commit identity:** `beef5303863affa60f90e08addd06f4c9b6c2e89`
