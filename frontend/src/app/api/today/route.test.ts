@@ -70,6 +70,7 @@ type TodayIngredientAvailabilityPayload = {
   availableUnit: string;
   missingQuantity: number | null;
   remainingQuantity: number | null;
+  quantityProvenance?: 'ai_estimate' | 'unknown';
 };
 
 type TodayOptionPayload = {
@@ -84,6 +85,7 @@ type TodayOptionPayload = {
   ingredientAvailability?: TodayIngredientAvailabilityPayload[];
   availability?: 'sufficient' | 'partial' | 'missing' | 'unknown';
   provenance?: string;
+  quantityProvenance?: 'ai_estimate' | 'unknown';
   uncertainty?: { inventory: boolean; prepTime: boolean; planDate: boolean };
 };
 
@@ -138,10 +140,16 @@ function parseTodayPayload(value: unknown): TodayPayload {
           availableUnit: String(item.availableUnit),
           missingQuantity: typeof item.missingQuantity === 'number' ? item.missingQuantity : null,
           remainingQuantity: typeof item.remainingQuantity === 'number' ? item.remainingQuantity : null,
+          ...(item.quantityProvenance === 'ai_estimate' || item.quantityProvenance === 'unknown'
+            ? { quantityProvenance: item.quantityProvenance }
+            : {}),
         })),
       } : {}),
       ...(typeof option.availability === 'string' ? { availability: option.availability as TodayOptionPayload['availability'] } : {}),
       ...(typeof option.provenance === 'string' ? { provenance: option.provenance } : {}),
+      ...(option.quantityProvenance === 'ai_estimate' || option.quantityProvenance === 'unknown'
+        ? { quantityProvenance: option.quantityProvenance }
+        : {}),
       ...(isRecord(option.uncertainty) && typeof option.uncertainty.inventory === 'boolean' &&
         typeof option.uncertainty.prepTime === 'boolean' && typeof option.uncertainty.planDate === 'boolean'
         ? { uncertainty: { inventory: option.uncertainty.inventory, prepTime: option.uncertainty.prepTime, planDate: option.uncertainty.planDate } }
@@ -646,6 +654,55 @@ describe('POST /api/today', () => {
       missingIngredients: [],
       unknownIngredients: ['turmeric'],
       uncertainty: { inventory: true, prepTime: true, planDate: false },
+    });
+    expect(createPersistentRecipeMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps linked saved recipe quantities as AI estimates and does not claim sufficient inventory', async () => {
+    const { POST } = await import('./route');
+    persistentRecipesMock.mockResolvedValueOnce([{
+      id: 'recipe-43',
+      tenant_id: 'tenant-1',
+      user_id: 'user-1',
+      category: null,
+      tags: [],
+      archived_at: null,
+      created_at: '',
+      updated_at: '',
+      current_version: {
+        id: 'version-2',
+        version_number: 1,
+        title: 'Saved rice',
+        instructions: 'Cook rice.',
+        servings: 2,
+        ingredients: [{ name: 'rice', quantity: '1', unit: 'kg' }],
+        source_recipe_history_id: 'history-43',
+        created_at: '',
+      },
+    }]);
+    inventoryMock.mockResolvedValueOnce([{
+      tenant_id: 'tenant-1', ingredient_name: 'rice', quantity: '2', unit: 'kg', expiration_date: null,
+    }]);
+    fetchMock.mockRejectedValueOnce(new Error('provider offline'));
+
+    const response = await POST(request({ slot: 'lunch' }));
+    const payload = await readTodayPayload(response);
+    const saved = payload.options.find(({ source }) => source === 'saved_recipe');
+
+    expect(response.status).toBe(200);
+    expect(saved).toMatchObject({
+      ingredients: ['rice'],
+      quantityProvenance: 'ai_estimate',
+      availability: 'unknown',
+      unknownIngredients: ['rice'],
+      ingredientAvailability: [{
+        name: 'rice',
+        quantityProvenance: 'ai_estimate',
+        availability: 'unknown',
+        requiredQuantity: 1,
+        missingQuantity: null,
+        remainingQuantity: null,
+      }],
     });
     expect(createPersistentRecipeMock).not.toHaveBeenCalled();
   });

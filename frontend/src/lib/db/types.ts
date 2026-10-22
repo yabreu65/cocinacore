@@ -235,7 +235,7 @@ export interface UserRecipeDetailDto extends UserRecipeRow {
 export interface UserRecipeListDto extends UserRecipeRow {
   current_version: Pick<
     UserRecipeVersionRow,
-    'id' | 'version_number' | 'title' | 'instructions' | 'servings' | 'ingredients' | 'created_at'
+    'id' | 'version_number' | 'title' | 'instructions' | 'servings' | 'ingredients' | 'source_recipe_history_id' | 'created_at'
   >;
 }
 

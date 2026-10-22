@@ -79,6 +79,12 @@ describe('buildTodayContext', () => {
     expect(result.localSignals.savedPlanCandidates.map((candidate) => candidate.title)).toContain('Lunch 2');
     expect(result.localSignals.savedPlanCandidates.every((candidate) => candidate.prepMinutes === null)).toBe(true);
     expect(result.localSignals.savedPlanCandidates.every((candidate) => candidate.source === 'saved_plan')).toBe(true);
+    expect(result.localSignals.savedPlanCandidates[0]?.ingredients).toContainEqual({
+      name: 'rice',
+      quantity: 1,
+      unit: 'cup',
+    });
+    expect(result.localSignals.savedPlanCandidates[0]?.quantityProvenance).toBe('ai_estimate');
     expect(JSON.stringify(result.providerContext)).not.toContain('saved_plan');
     expect(result.localSignals.savedPlanCandidates.map((candidate) => candidate.title)).not.toContain('Lunch 1');
     expect(result.localSignals.savedPlanCandidates.every((candidate) => candidate.slot === 'lunch')).toBe(true);
@@ -146,6 +152,25 @@ describe('buildTodayContext', () => {
     expect(result.status).toBe('ready');
     if (result.status !== 'ready') return;
     expect(result.localSignals.historyCandidates.map(({ title }) => title)).toEqual(['Safe']);
+  });
+
+  it('retains structured history quantities as explicit AI estimates', () => {
+    const result = buildTodayContext({ ...base, history: [{
+      recipe_title: 'Estimated rice',
+      source: 'gemini',
+      created_at: '2025-04-09T00:00:00Z',
+      recipe_payload: {
+        slot: 'lunch',
+        structuredIngredients: [{ name: 'rice', normalized_name: 'rice', quantity: 1, unit: 'cup', structured: true }],
+      },
+    }] as RecipeAiHistoryRow[] });
+
+    expect(result.status).toBe('ready');
+    if (result.status !== 'ready') return;
+    expect(result.localSignals.historyCandidates[0]).toMatchObject({
+      ingredients: [{ name: 'rice', quantity: 1, unit: 'cup' }],
+      quantityProvenance: 'ai_estimate',
+    });
   });
 
   it('fails closed on malformed candidate structures and bounds provider inventory and quantities', () => {

@@ -186,6 +186,30 @@ describe('TodayRecommendations', () => {
     expect(markup).toContain('aceite: requerimiento no cuantificable; inventario no verificable; faltante no calculable');
   });
 
+  it('labels AI-estimated ingredient quantities as estimates', () => {
+    const markup = renderToStaticMarkup(
+      <TodayRecommendationResults
+        response={{
+          status: 'success',
+          options: [{
+            ...option,
+            quantityProvenance: 'ai_estimate',
+            ingredientAvailability: [{
+              name: 'rice', availability: 'unknown', present: true,
+              requiredQuantity: 1, requiredUnit: 'cup', availableQuantity: null,
+              availableUnit: 'unknown', missingQuantity: null, remainingQuantity: null,
+              quantityProvenance: 'ai_estimate',
+            }],
+          }],
+        }}
+        slot="lunch"
+        onChoose={vi.fn()}
+      />,
+    );
+
+    expect(markup).toContain('Cantidades estimadas por IA; no verificadas.');
+  });
+
   it('requires explicit base and target servings before handing a recipe off', () => {
     const onChoose = vi.fn();
     const markup = renderToStaticMarkup(

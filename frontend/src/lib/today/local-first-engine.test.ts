@@ -161,6 +161,47 @@ describe('recommendLocalFirst', () => {
     });
   });
 
+  it('keeps AI-estimated recipe requirements unknown instead of claiming sufficient stock', () => {
+    const result = recommendLocalFirst(baseInput({
+      inventory: [{ ingredient_name: 'rice', quantity: '2', unit: 'kg' }],
+      candidates: [baseCandidate({ quantityProvenance: 'ai_estimate' })],
+    }));
+
+    expect(result.status).toBe('ready');
+    expect(result.recommendations[0]).toMatchObject({
+      availability: 'unknown',
+      ingredientAvailability: [{
+        quantityProvenance: 'ai_estimate',
+        availability: 'unknown',
+        requiredQuantity: 1,
+        requiredUnit: 'kg',
+        missingQuantity: null,
+        remainingQuantity: null,
+      }],
+    });
+  });
+
+  it('keeps unverified structured requirements unknown instead of claiming sufficient stock', () => {
+    const result = recommendLocalFirst(baseInput({
+      inventory: [{ ingredient_name: 'rice', quantity: '2', unit: 'kg' }],
+      candidates: [baseCandidate({ quantityProvenance: 'unknown' })],
+    }));
+
+    expect(result.status).toBe('ready');
+    expect(result.recommendations[0]).toMatchObject({
+      availability: 'unknown',
+      ingredientAvailability: [{
+        quantityProvenance: 'unknown',
+        availability: 'unknown',
+        requiredQuantity: 1,
+        requiredUnit: 'kg',
+        availableQuantity: null,
+        missingQuantity: null,
+        remainingQuantity: null,
+      }],
+    });
+  });
+
   it('returns an invalid result for null or malformed input without throwing', () => {
     expect(recommendLocalFirst(null)).toEqual({ status: 'invalid', reason: 'invalid-input', recommendations: [] });
     expect(recommendLocalFirst({ ...baseInput(), asOf: 'not-a-date' })).toEqual({
