@@ -157,6 +157,35 @@ describe('TodayRecommendations', () => {
     expect(markup).not.toContain('Origen: undefined');
   });
 
+  it('renders structured quantities separately from legacy status summaries', () => {
+    const quantitativeOption = {
+      ...option,
+      ingredientAvailability: [
+        {
+          name: 'tomate', availability: 'partial' as const, present: true,
+          requiredQuantity: 1, requiredUnit: 'kg', availableQuantity: 0.5,
+          availableUnit: 'kg', missingQuantity: 0.5, remainingQuantity: 0,
+        },
+        {
+          name: 'aceite', availability: 'unknown' as const, present: false,
+          requiredQuantity: null, requiredUnit: 'unknown', availableQuantity: null,
+          availableUnit: 'unknown', missingQuantity: null, remainingQuantity: null,
+        },
+      ],
+    };
+    const markup = renderToStaticMarkup(
+      <TodayRecommendationResults
+        response={{ status: 'success', options: [quantitativeOption] }}
+        slot="lunch"
+        onChoose={vi.fn()}
+      />,
+    );
+
+    expect(markup).toContain('Detalle de cantidades');
+    expect(markup).toContain('tomate: requiere 1 kg; disponible 0.5 kg; faltan 0.5 kg');
+    expect(markup).toContain('aceite: requerimiento no cuantificable; inventario no verificable; faltante no calculable');
+  });
+
   it('renders unknown ingredients separately from confirmed missing ingredients', () => {
     const optionWithUnknown = {
       ...option,

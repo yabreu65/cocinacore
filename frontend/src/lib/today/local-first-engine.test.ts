@@ -39,6 +39,14 @@ describe('recommendLocalFirst', () => {
       availability: 'unknown',
       provenance: 'saved_recipe',
       uncertainty: { inventory: true },
+      ingredientAvailability: [{
+        requiredQuantity: 1,
+        requiredUnit: 'kg',
+        availableQuantity: null,
+        availableUnit: 'unknown',
+        missingQuantity: null,
+        remainingQuantity: null,
+      }],
     });
     expect(result.recommendations[0]?.reason).toContain('availability-unknown');
   });
@@ -54,7 +62,17 @@ describe('recommendLocalFirst', () => {
       inventory: [{ ingredient_name: 'arroz', quantity, unit }],
     }));
     expect(result.recommendations[0]?.ingredientAvailability).toEqual([
-      { name: '1 kg arroz', availability, present: true },
+      {
+        name: '1 kg arroz',
+        availability,
+        present: true,
+        requiredQuantity: 1,
+        requiredUnit: 'kg',
+        availableQuantity: availability === 'unknown' ? null : Number(quantity),
+        availableUnit: availability === 'unknown' ? 'unknown' : 'kg',
+        missingQuantity: availability === 'sufficient' ? 0 : availability === 'partial' ? 0.5 : availability === 'missing' ? 1 : null,
+        remainingQuantity: availability === 'sufficient' ? 1 : availability === 'unknown' ? null : 0,
+      },
     ]);
     expect(result.recommendations[0]?.availability).toBe(availability);
   });

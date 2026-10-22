@@ -60,6 +60,18 @@ function request(body: unknown, headers: Record<string, string> = {}): NextReque
   });
 }
 
+type TodayIngredientAvailabilityPayload = {
+  name: string;
+  availability: 'sufficient' | 'partial' | 'missing' | 'unknown';
+  present: boolean;
+  requiredQuantity: number | null;
+  requiredUnit: string;
+  availableQuantity: number | null;
+  availableUnit: string;
+  missingQuantity: number | null;
+  remainingQuantity: number | null;
+};
+
 type TodayOptionPayload = {
   title: string;
   slot: string;
@@ -69,6 +81,7 @@ type TodayOptionPayload = {
   availableIngredients: string[];
   missingIngredients: string[];
   unknownIngredients?: string[];
+  ingredientAvailability?: TodayIngredientAvailabilityPayload[];
   availability?: 'sufficient' | 'partial' | 'missing' | 'unknown';
   provenance?: string;
   uncertainty?: { inventory: boolean; prepTime: boolean; planDate: boolean };
@@ -114,6 +127,19 @@ function parseTodayPayload(value: unknown): TodayPayload {
       availableIngredients: parseStringArray(option.availableIngredients),
       missingIngredients: parseStringArray(option.missingIngredients),
       ...(option.unknownIngredients === undefined ? {} : { unknownIngredients: parseStringArray(option.unknownIngredients) }),
+      ...(Array.isArray(option.ingredientAvailability) ? {
+        ingredientAvailability: option.ingredientAvailability.filter(isRecord).map((item) => ({
+          name: String(item.name),
+          availability: item.availability as TodayIngredientAvailabilityPayload['availability'],
+          present: Boolean(item.present),
+          requiredQuantity: typeof item.requiredQuantity === 'number' ? item.requiredQuantity : null,
+          requiredUnit: String(item.requiredUnit),
+          availableQuantity: typeof item.availableQuantity === 'number' ? item.availableQuantity : null,
+          availableUnit: String(item.availableUnit),
+          missingQuantity: typeof item.missingQuantity === 'number' ? item.missingQuantity : null,
+          remainingQuantity: typeof item.remainingQuantity === 'number' ? item.remainingQuantity : null,
+        })),
+      } : {}),
       ...(typeof option.availability === 'string' ? { availability: option.availability as TodayOptionPayload['availability'] } : {}),
       ...(typeof option.provenance === 'string' ? { provenance: option.provenance } : {}),
       ...(isRecord(option.uncertainty) && typeof option.uncertainty.inventory === 'boolean' &&
@@ -734,6 +760,17 @@ describe('POST /api/today', () => {
       unknownIngredients: ['rice vinegar'],
       availability: 'unknown',
       reason: 'Una opción para el horario elegido.',
+      ingredientAvailability: [{
+        name: 'rice vinegar',
+        availability: 'unknown',
+        present: false,
+        requiredQuantity: null,
+        requiredUnit: 'unknown',
+        availableQuantity: null,
+        availableUnit: 'unknown',
+        missingQuantity: null,
+        remainingQuantity: null,
+      }],
     });
     expect(result.options[0].reason).not.toMatch(/inventario|disponibles/i);
   });
@@ -810,6 +847,17 @@ describe('POST /api/today', () => {
       missingIngredients,
       unknownIngredients,
       reason,
+    });
+    expect(result.options[0].ingredientAvailability?.[0]).toMatchObject({
+      name: '1 kg tomate',
+      availability,
+      present: true,
+      requiredQuantity: 1,
+      requiredUnit: 'kg',
+      availableQuantity: unit === 'cups' ? null : Number(quantity),
+      availableUnit: unit === 'cups' ? 'unknown' : 'kg',
+      missingQuantity: unit === 'cups' ? null : quantity === '0.5' ? 0.5 : quantity === '0' ? 1 : 0,
+      remainingQuantity: unit === 'cups' ? null : quantity === '2' ? 1 : 0,
     });
     expect(
       result.options[0].availableIngredients.filter((ingredient) =>

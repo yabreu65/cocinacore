@@ -6,6 +6,7 @@ import {
   type InventoryComparableItem,
 } from '../inventory/recipe-requirements';
 import { normalizeInventoryName } from '../inventory/normalize-inventory';
+import type { NormalizedUnit } from '../inventory/quantity-normalization';
 import { rankOneSlotOptions, TODAY_SLOT_VALUES, type TodayOptionSource, type TodaySlot } from './one-slot';
 
 export type LocalFirstSource = TodayOptionSource | 'saved_recipe';
@@ -21,6 +22,12 @@ export interface LocalFirstIngredientAvailability {
   name: string;
   availability: LocalFirstAvailability;
   present: boolean;
+  requiredQuantity: number | null;
+  requiredUnit: NormalizedUnit;
+  availableQuantity: number | null;
+  availableUnit: NormalizedUnit;
+  missingQuantity: number | null;
+  remainingQuantity: number | null;
 }
 
 export interface LocalFirstCandidate {
@@ -232,15 +239,50 @@ function availabilityFor(
   const ingredients = candidate.ingredients.map((ingredient): LocalFirstIngredientAvailability => {
     const name = ingredientName(ingredient);
     const requirement = normalizeRecipeIngredient(ingredient);
-    if (!requirement) return { name, availability: 'unknown', present: false };
+    if (!requirement) {
+      return {
+        name,
+        availability: 'unknown',
+        present: false,
+        requiredQuantity: null,
+        requiredUnit: 'unknown',
+        availableQuantity: null,
+        availableUnit: 'unknown',
+        missingQuantity: null,
+        remainingQuantity: null,
+      };
+    }
 
     const matching = currentInventory.filter((item) =>
       normalizeInventoryName(item.ingredient_name) === requirement.normalizedName
     );
-    if (matching.length === 0) return { name, availability: 'unknown', present: false };
+    if (matching.length === 0) {
+      return {
+        name,
+        availability: 'unknown',
+        present: false,
+        requiredQuantity: requirement.requiredQuantity,
+        requiredUnit: requirement.requiredUnit,
+        availableQuantity: null,
+        availableUnit: 'unknown',
+        missingQuantity: null,
+        remainingQuantity: null,
+      };
+    }
 
     const compared = compareRecipeRequirementsToInventory([requirement], matching)[0];
-    return { name, availability: compared?.status ?? 'unknown', present: true };
+    return {
+      name,
+      availability: compared?.status ?? 'unknown',
+      present: true,
+      requiredQuantity: compared?.requiredQuantity ?? requirement.requiredQuantity,
+      requiredUnit: compared?.requiredUnit ?? requirement.requiredUnit,
+      availableQuantity:
+        compared?.availableUnit !== 'unknown' ? compared?.availableQuantity ?? null : null,
+      availableUnit: compared?.availableUnit ?? 'unknown',
+      missingQuantity: compared?.missingQuantity ?? null,
+      remainingQuantity: compared?.remainingQuantity ?? null,
+    };
   });
   const statuses: ComparedRequirement['status'][] = ingredients.map(({ availability }) => availability);
   if (statuses.length === 0 || statuses.includes('unknown')) return { availability: 'unknown', ingredients };
