@@ -1,7 +1,4 @@
-import {
-  containsRestrictedIngredientName,
-  normalizeIngredientName,
-} from '../recipes/structured-ingredients';
+import { containsRestrictedIngredientName } from '../recipes/structured-ingredients';
 import {
   compareRecipeRequirementsToInventory,
   normalizeRecipeIngredient,
@@ -234,19 +231,15 @@ function availabilityFor(
   const currentInventory = inventory.filter((item) => item.expiresOn === undefined || item.expiresOn >= asOf);
   const ingredients = candidate.ingredients.map((ingredient): LocalFirstIngredientAvailability => {
     const name = ingredientName(ingredient);
-    const normalizedName = normalizeIngredientName(name);
-    const matching = currentInventory.filter((item) =>
-      normalizeIngredientName(item.ingredient_name) === normalizedName
-    );
     const requirement = normalizeRecipeIngredient(ingredient);
-    if (!requirement || matching.length === 0) {
-      return { name, availability: 'unknown', present: matching.length > 0 };
-    }
-    const comparableInventory = matching.filter((item) =>
+    if (!requirement) return { name, availability: 'unknown', present: false };
+
+    const matching = currentInventory.filter((item) =>
       normalizeInventoryName(item.ingredient_name) === requirement.normalizedName
     );
-    if (comparableInventory.length === 0) return { name, availability: 'unknown', present: true };
-    const compared = compareRecipeRequirementsToInventory([requirement], comparableInventory)[0];
+    if (matching.length === 0) return { name, availability: 'unknown', present: false };
+
+    const compared = compareRecipeRequirementsToInventory([requirement], matching)[0];
     return { name, availability: compared?.status ?? 'unknown', present: true };
   });
   const statuses: ComparedRequirement['status'][] = ingredients.map(({ availability }) => availability);

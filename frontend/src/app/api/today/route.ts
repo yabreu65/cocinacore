@@ -124,10 +124,10 @@ function promptFor(context: TodayProviderContext, ragText: string): string {
 
 function userReason(candidate: LocalFirstRecommendation) {
   const availableIngredients = candidate.ingredientAvailability
-    .filter(({ present }) => present)
+    .filter(({ availability }) => availability === 'sufficient')
     .map(({ name }) => name);
   const missingIngredients = candidate.ingredientAvailability
-    .filter(({ availability }) => availability === 'missing')
+    .filter(({ availability }) => availability === 'missing' || availability === 'partial')
     .map(({ name }) => name);
   const unknownIngredients = candidate.ingredientAvailability
     .filter(({ availability }) => availability === 'unknown')

@@ -44,13 +44,18 @@ describe('recommendLocalFirst', () => {
   });
 
   it.each([
-    ['sufficient', '2'],
-    ['partial', '0.5'],
-    ['missing', '0'],
-  ] as const)('classifies explicitly observed stock as %s', (availability, quantity) => {
+    ['sufficient', '2', 'kg'],
+    ['partial', '0.5', 'kg'],
+    ['missing', '0', 'kg'],
+    ['unknown', '2', 'cups'],
+  ] as const)('matches parsed quantity-bearing ingredients by canonical name (%s)', (availability, quantity, unit) => {
     const result = recommendLocalFirst(baseInput({
-      inventory: [{ ingredient_name: 'rice', quantity, unit: 'kg' }],
+      candidates: [baseCandidate({ ingredients: ['1 kg arroz'] })],
+      inventory: [{ ingredient_name: 'arroz', quantity, unit }],
     }));
+    expect(result.recommendations[0]?.ingredientAvailability).toEqual([
+      { name: '1 kg arroz', availability, present: true },
+    ]);
     expect(result.recommendations[0]?.availability).toBe(availability);
   });
 

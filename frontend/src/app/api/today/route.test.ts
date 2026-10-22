@@ -709,7 +709,7 @@ describe('POST /api/today', () => {
     expect(persisted).toMatchObject({
       title: 'Saved safe lunch',
       reason: 'Una opción de tu historial reciente.',
-      availableIngredients: ['rice'],
+      availableIngredients: [],
       missingIngredients: [],
       unknownIngredients: ['rice', 'beans'],
     });
@@ -738,6 +738,86 @@ describe('POST /api/today', () => {
     expect(result.options[0].reason).not.toMatch(/inventario|disponibles/i);
   });
 
+  it.each([
+    {
+      label: 'sufficient stock',
+      quantity: '2',
+      unit: 'kg',
+      availability: 'sufficient',
+      availableIngredients: ['1 kg tomate'],
+      missingIngredients: [],
+      unknownIngredients: [],
+      reason: 'Aprovecha ingredientes disponibles en tu inventario.',
+    },
+    {
+      label: 'partial stock',
+      quantity: '0.5',
+      unit: 'kg',
+      availability: 'partial',
+      availableIngredients: [],
+      missingIngredients: ['1 kg tomate'],
+      unknownIngredients: [],
+      reason: 'Una opción para el horario elegido.',
+    },
+    {
+      label: 'zero stock',
+      quantity: '0',
+      unit: 'kg',
+      availability: 'missing',
+      availableIngredients: [],
+      missingIngredients: ['1 kg tomate'],
+      unknownIngredients: [],
+      reason: 'Una opción para el horario elegido.',
+    },
+    {
+      label: 'incomparable units',
+      quantity: '2',
+      unit: 'cups',
+      availability: 'unknown',
+      availableIngredients: [],
+      missingIngredients: [],
+      unknownIngredients: ['1 kg tomate'],
+      reason: 'Una opción para el horario elegido.',
+    },
+  ] as const)('projects $label without false availability', async ({
+    quantity,
+    unit,
+    availability,
+    availableIngredients,
+    missingIngredients,
+    unknownIngredients,
+    reason,
+  }) => {
+    const { POST } = await import('./route');
+    inventoryMock.mockResolvedValueOnce([
+      {
+        tenant_id: 'tenant-1',
+        ingredient_name: 'tomate',
+        quantity,
+        unit,
+        expiration_date: null,
+      },
+    ]);
+    fetchMock.mockResolvedValueOnce(
+      providerResponse(options.map((option) => ({ ...option, ingredients: ['1 kg tomate'] })))
+    );
+
+    const result = await readTodayPayload(await POST(request({ slot: 'lunch' })));
+
+    expect(result.options[0]).toMatchObject({
+      availability,
+      availableIngredients,
+      missingIngredients,
+      unknownIngredients,
+      reason,
+    });
+    expect(
+      result.options[0].availableIngredients.filter((ingredient) =>
+        result.options[0].missingIngredients.includes(ingredient)
+      )
+    ).toEqual([]);
+  });
+
   it('matches normalized exact inventory names including supported plurals', async () => {
     const { POST } = await import('./route');
     inventoryMock.mockResolvedValueOnce([
@@ -756,11 +836,11 @@ describe('POST /api/today', () => {
 
     expect(result.options).toHaveLength(3);
     expect(result.options[0]).toMatchObject({
-      availableIngredients: ['tomate'],
+      availableIngredients: [],
       missingIngredients: [],
       unknownIngredients: ['tomate'],
       availability: 'unknown',
-      reason: 'Aprovecha ingredientes disponibles en tu inventario.',
+      reason: 'Una opción para el horario elegido.',
     });
   });
 

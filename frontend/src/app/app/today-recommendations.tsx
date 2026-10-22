@@ -4,7 +4,7 @@ import { useRef, useState } from 'react';
 import { safeFetch } from '@/lib/api';
 
 export type TodaySlot = 'breakfast' | 'lunch' | 'snack' | 'dinner';
-export type TodayOptionSource = 'provider' | 'history' | 'saved_plan';
+export type TodayOptionSource = 'provider' | 'history' | 'saved_plan' | 'saved_recipe';
 
 export interface TodayOption {
   title: string;
@@ -15,6 +15,7 @@ export interface TodayOption {
   reason: string;
   availableIngredients: string[];
   missingIngredients: string[];
+  unknownIngredients?: string[];
 }
 
 export interface TodayResponse {
@@ -54,6 +55,7 @@ const sourceLabels: Record<TodayOptionSource, string> = {
   provider: 'sugerencia nueva',
   history: 'historial reciente',
   saved_plan: 'plan guardado',
+  saved_recipe: 'receta guardada',
 };
 
 export function TodayRecommendationResults({ response, slot, onChoose }: TodayRecommendationResultsProps) {
@@ -88,7 +90,10 @@ export function TodayRecommendationResults({ response, slot, onChoose }: TodayRe
                   </p>
                   <dl className="mt-3 grid gap-2 text-sm">
                     <div><dt className="inline font-semibold text-[#241A14]">Disponible: </dt><dd className="inline text-[#6B5A50]">{option.availableIngredients.length ? option.availableIngredients.join(', ') : 'ningún ingrediente confirmado'}</dd></div>
-                    <div><dt className="inline font-semibold text-[#241A14]">Falta: </dt><dd className="inline text-[#6B5A50]">{option.missingIngredients.length ? option.missingIngredients.join(', ') : 'ningún ingrediente'}</dd></div>
+                    <div><dt className="inline font-semibold text-[#241A14]">Falta: </dt><dd className="inline text-[#6B5A50]">{option.missingIngredients.length ? option.missingIngredients.join(', ') : 'sin faltantes confirmados'}</dd></div>
+                    {option.unknownIngredients?.length ? (
+                      <div><dt className="inline font-semibold text-[#241A14]">Sin verificar: </dt><dd className="inline text-[#6B5A50]">{option.unknownIngredients.join(', ')}</dd></div>
+                    ) : null}
                   </dl>
                   <button
                     type="button"
