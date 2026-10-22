@@ -2,7 +2,7 @@ import { containsRestrictedIngredientName, normalizeIngredientName } from '../re
 
 export const TODAY_SLOT_VALUES = ['breakfast', 'lunch', 'snack', 'dinner'] as const;
 export type TodaySlot = (typeof TODAY_SLOT_VALUES)[number];
-export type TodayOptionSource = 'provider' | 'history' | 'saved_plan';
+export type TodayOptionSource = 'provider' | 'history' | 'saved_plan' | 'saved_recipe';
 
 export interface TodayOption {
   title: string;
@@ -106,9 +106,9 @@ function parseOption(value: unknown): RankedTodayOption | null {
   if (!isRecord(value) || !boundedString(value.title, MAX_TITLE_LENGTH) || !isSlot(value.slot)) return null;
   if (!Object.prototype.hasOwnProperty.call(value, 'prepMinutes')) return null;
   if (value.prepMinutes !== null && (typeof value.prepMinutes !== 'number' || !Number.isInteger(value.prepMinutes) || value.prepMinutes < 1 || value.prepMinutes > 240)) return null;
-  const validSources: TodayOptionSource[] = ['provider', 'history', 'saved_plan'];
+  const validSources: TodayOptionSource[] = ['provider', 'history', 'saved_plan', 'saved_recipe'];
   if (value.source !== undefined && (typeof value.source !== 'string' || !validSources.includes(value.source as TodayOptionSource))) return null;
-  if (value.prepMinutes === null && value.source !== 'history' && value.source !== 'saved_plan') return null;
+  if (value.prepMinutes === null && value.source !== 'history' && value.source !== 'saved_plan' && value.source !== 'saved_recipe') return null;
   const source = value.source === undefined ? 'provider' : value.source as TodayOptionSource;
   let ingredients: string[] = [];
   if (value.ingredients !== undefined) {
