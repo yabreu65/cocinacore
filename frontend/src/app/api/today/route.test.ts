@@ -7,6 +7,8 @@ const profileMock = vi.fn();
 const termsMock = vi.fn();
 const inventoryMock = vi.fn();
 const historyMock = vi.fn();
+const persistentRecipesMock = vi.fn();
+const createPersistentRecipeMock = vi.fn();
 const planMock = vi.fn();
 const ragMock = vi.fn();
 const fetchMock = vi.fn<typeof fetch>();
@@ -24,6 +26,8 @@ vi.mock('@/lib/db/repositories/inventoryRepository', () => ({
 }));
 vi.mock('@/lib/db/repositories/recipeRepository', () => ({
   listTodayRecipeHistoryByUserAndTenant: historyMock,
+  listPersistentRecipes: persistentRecipesMock,
+  createPersistentRecipe: createPersistentRecipeMock,
 }));
 vi.mock('@/lib/db/repositories/mealPlanRepository', () => ({
   findLatestMealPlanByUserAndTenant: planMock,
@@ -64,6 +68,10 @@ type TodayOptionPayload = {
   reason: string;
   availableIngredients: string[];
   missingIngredients: string[];
+  unknownIngredients?: string[];
+  availability?: 'sufficient' | 'partial' | 'missing' | 'unknown';
+  provenance?: string;
+  uncertainty?: { inventory: boolean; prepTime: boolean; planDate: boolean };
 };
 
 type TodayPayload = { status?: string; options: TodayOptionPayload[]; warnings?: string[] };
@@ -105,6 +113,13 @@ function parseTodayPayload(value: unknown): TodayPayload {
       ingredients: parseStringArray(option.ingredients),
       availableIngredients: parseStringArray(option.availableIngredients),
       missingIngredients: parseStringArray(option.missingIngredients),
+      ...(option.unknownIngredients === undefined ? {} : { unknownIngredients: parseStringArray(option.unknownIngredients) }),
+      ...(typeof option.availability === 'string' ? { availability: option.availability as TodayOptionPayload['availability'] } : {}),
+      ...(typeof option.provenance === 'string' ? { provenance: option.provenance } : {}),
+      ...(isRecord(option.uncertainty) && typeof option.uncertainty.inventory === 'boolean' &&
+        typeof option.uncertainty.prepTime === 'boolean' && typeof option.uncertainty.planDate === 'boolean'
+        ? { uncertainty: { inventory: option.uncertainty.inventory, prepTime: option.uncertainty.prepTime, planDate: option.uncertainty.planDate } }
+        : {}),
     };
   });
   if (
@@ -188,6 +203,7 @@ describe('POST /api/today', () => {
       },
     ]);
     historyMock.mockResolvedValue([]);
+    persistentRecipesMock.mockResolvedValue([]);
     planMock.mockResolvedValue(null);
     ragMock.mockResolvedValue({ context: '', citations: [], ragContextUsed: false });
     fetchMock.mockResolvedValue(providerResponse(options));
@@ -429,9 +445,11 @@ describe('POST /api/today', () => {
     requireUserMock.mockRejectedValueOnce(new Error('no auth'));
     expect((await POST(request({ slot: 'lunch' }))).status).toBe(401);
     expect(profileMock).not.toHaveBeenCalled();
+    expect(persistentRecipesMock).not.toHaveBeenCalled();
     requireUserMock.mockResolvedValueOnce({ id: 'user-1', tenant: null });
     expect((await POST(request({ slot: 'lunch' }))).status).toBe(401);
     expect(profileMock).not.toHaveBeenCalled();
+    expect(persistentRecipesMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -516,11 +534,94 @@ describe('POST /api/today', () => {
       expect.any(Number)
     );
     expect(planMock).toHaveBeenCalledWith('user-1', 'tenant-1');
+    expect(persistentRecipesMock).toHaveBeenCalledWith(
+      { tenantId: 'tenant-1', userId: 'user-1' },
+      { limit: 50 }
+    );
     const prompt = fetchBody();
     expect(prompt).not.toContain('user-1');
     expect(prompt).not.toContain('tenant-1');
     expect(prompt).not.toContain('citations');
     expect(new Headers(fetchInit().headers).get('x-goog-api-key')).toBe('test-server-key');
+  });
+
+  it('keeps provider recommendations when the saved recipe library exceeds the engine candidate bound', async () => {
+    const { POST } = await import('./route');
+    persistentRecipesMock.mockResolvedValueOnce(Array.from({ length: 50 }, (_, index) => ({
+      id: `saved-${index}`,
+      tenant_id: 'tenant-1',
+      user_id: 'user-1',
+      category: null,
+      tags: [],
+      archived_at: null,
+      created_at: '',
+      updated_at: '',
+      current_version: {
+        id: `version-${index}`,
+        version_number: 1,
+        title: `Saved rice ${index}`,
+        instructions: 'Cook rice.',
+        servings: 2,
+        ingredients: [{ name: 'rice', quantity: 1, unit: 'cups' }],
+        created_at: '',
+      },
+    })));
+    fetchMock.mockResolvedValueOnce(providerResponse(options));
+
+    const response = await POST(request({ slot: 'lunch' }));
+    const payload = await readTodayPayload(response);
+
+    expect(response.status).toBe(200);
+    expect(payload.status).toBe('success');
+    expect(payload.options.length).toBeGreaterThan(0);
+    expect(persistentRecipesMock).toHaveBeenCalledWith(
+      { tenantId: 'tenant-1', userId: 'user-1' },
+      { limit: 50 }
+    );
+  });
+
+  it('uses saved recipes as read-only offline recommendations and reports absent stock as unknown', async () => {
+    const { POST } = await import('./route');
+    persistentRecipesMock.mockResolvedValueOnce([{
+      id: 'recipe-42',
+      tenant_id: 'tenant-1',
+      user_id: 'user-1',
+      category: null,
+      tags: [],
+      archived_at: null,
+      created_at: '',
+      updated_at: '',
+      current_version: {
+        id: 'version-1',
+        version_number: 1,
+        title: 'Saved turmeric rice',
+        instructions: 'Cook rice.',
+        servings: 2,
+        ingredients: [{ name: 'turmeric', quantity: null, unit: null }],
+        created_at: '',
+      },
+    }]);
+    fetchMock.mockRejectedValueOnce(new Error('provider offline'));
+
+    const response = await POST(request({ slot: 'lunch' }));
+    const payload = await readTodayPayload(response);
+    const saved = payload.options.find(({ source }) => source === 'saved_recipe');
+
+    expect(response.status).toBe(200);
+    expect(persistentRecipesMock).toHaveBeenCalledWith(
+      { tenantId: 'tenant-1', userId: 'user-1' },
+      { limit: 50 }
+    );
+    expect(payload.status).toBe('degraded');
+    expect(saved).toMatchObject({
+      title: 'Saved turmeric rice',
+      availability: 'unknown',
+      provenance: 'saved_recipe',
+      missingIngredients: [],
+      unknownIngredients: ['turmeric'],
+      uncertainty: { inventory: true, prepTime: true, planDate: false },
+    });
+    expect(createPersistentRecipeMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -548,6 +649,10 @@ describe('POST /api/today', () => {
         expect.any(Number)
       );
       expect(planMock).toHaveBeenCalledWith('user-2', tenantId);
+      expect(persistentRecipesMock).toHaveBeenCalledWith(
+        { tenantId, userId: 'user-2' },
+        { limit: 50 }
+      );
     }
   );
 
@@ -605,7 +710,8 @@ describe('POST /api/today', () => {
       title: 'Saved safe lunch',
       reason: 'Una opción de tu historial reciente.',
       availableIngredients: ['rice'],
-      missingIngredients: ['beans'],
+      missingIngredients: [],
+      unknownIngredients: ['rice', 'beans'],
     });
     expect(
       result.options.every(
@@ -624,7 +730,9 @@ describe('POST /api/today', () => {
     expect(result.options).toHaveLength(3);
     expect(result.options[0]).toMatchObject({
       availableIngredients: [],
-      missingIngredients: ['rice vinegar'],
+      missingIngredients: [],
+      unknownIngredients: ['rice vinegar'],
+      availability: 'unknown',
       reason: 'Una opción para el horario elegido.',
     });
     expect(result.options[0].reason).not.toMatch(/inventario|disponibles/i);
@@ -650,6 +758,8 @@ describe('POST /api/today', () => {
     expect(result.options[0]).toMatchObject({
       availableIngredients: ['tomate'],
       missingIngredients: [],
+      unknownIngredients: ['tomate'],
+      availability: 'unknown',
       reason: 'Aprovecha ingredientes disponibles en tu inventario.',
     });
   });

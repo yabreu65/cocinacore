@@ -9,10 +9,12 @@ import {
   findCulinaryProfileTermsByUserId,
 } from '@/lib/db/repositories/culinaryProfileRepository';
 import { listTodayInventoryContextByTenant } from '@/lib/db/repositories/inventoryRepository';
-import { listTodayRecipeHistoryByUserAndTenant } from '@/lib/db/repositories/recipeRepository';
+import {
+  listPersistentRecipes,
+  listTodayRecipeHistoryByUserAndTenant,
+} from '@/lib/db/repositories/recipeRepository';
 import { findLatestMealPlanByUserAndTenant } from '@/lib/db/repositories/mealPlanRepository';
 import { retrieveServerRagContext } from '@/lib/recipes/server-rag-context';
-import { normalizeIngredientName } from '@/lib/recipes/structured-ingredients';
 import { buildTodayContext, type TodayProviderContext } from '@/lib/today/context';
 import {
   rankOneSlotOptions,
@@ -20,6 +22,11 @@ import {
   type TodaySlot,
   type TodayOptionSource,
 } from '@/lib/today/one-slot';
+import {
+  recommendLocalFirst,
+  type LocalFirstCandidate,
+  type LocalFirstRecommendation,
+} from '@/lib/today/local-first-engine';
 
 const MAX_PREP_MINUTES = 240;
 const PROVIDER_TIMEOUT_MS = 60_000;
@@ -115,29 +122,41 @@ function promptFor(context: TodayProviderContext, ragText: string): string {
   return `Suggest 3 to 5 distinct meal options for the requested slot. Treat allergies and hardAvoid as absolute exclusions; dislikes are preferences only. Use only the supplied context. Never claim allergy safety beyond explicitly listed allergies. Return only JSON matching the supplied schema.\nTrusted meal context JSON:\n${JSON.stringify(context)}${ragText ? `\nOptional trusted cookbook text (plain text only):\n${ragText}` : ''}`;
 }
 
-function userReason(candidate: Candidate, context: TodayProviderContext) {
-  const currentInventory = context.inventory.filter(
-    (item) => !item.expiresOn || item.expiresOn >= context.asOf
-  );
-  const availableInventory = new Set(
-    currentInventory.map((item) => normalizeIngredientName(item.name))
-  );
-  const availableIngredients = candidate.ingredients.filter((ingredient) =>
-    availableInventory.has(normalizeIngredientName(ingredient))
-  );
-  const available = new Set(availableIngredients.map(normalizeIngredientName));
-  const missingIngredients = candidate.ingredients.filter(
-    (item) => !available.has(normalizeIngredientName(item))
-  );
+function userReason(candidate: LocalFirstRecommendation) {
+  const availableIngredients = candidate.ingredientAvailability
+    .filter(({ present }) => present)
+    .map(({ name }) => name);
+  const missingIngredients = candidate.ingredientAvailability
+    .filter(({ availability }) => availability === 'missing')
+    .map(({ name }) => name);
+  const unknownIngredients = candidate.ingredientAvailability
+    .filter(({ availability }) => availability === 'unknown')
+    .map(({ name }) => name);
   const reason =
     candidate.source === 'saved_plan'
       ? 'Una opción guardada en tu plan; el día del plan no determina que esté programada para hoy.'
-      : candidate.source === 'history'
-        ? 'Una opción de tu historial reciente.'
-        : availableIngredients.length > 0
-          ? 'Aprovecha ingredientes disponibles en tu inventario.'
-          : 'Una opción para el horario elegido.';
-  return { ...candidate, reason, availableIngredients, missingIngredients };
+      : candidate.source === 'saved_recipe'
+        ? 'Una receta guardada en tu biblioteca.'
+        : candidate.source === 'history'
+          ? 'Una opción de tu historial reciente.'
+          : availableIngredients.length > 0
+            ? 'Aprovecha ingredientes disponibles en tu inventario.'
+            : 'Una opción para el horario elegido.';
+  return {
+    title: candidate.title,
+    slot: candidate.slot,
+    ingredients: candidate.ingredients.map((ingredient) => typeof ingredient === 'string' ? ingredient : ingredient.name),
+    prepMinutes: candidate.prepMinutes,
+    ...(candidate.servings === undefined ? {} : { servings: candidate.servings }),
+    source: candidate.provenance,
+    provenance: candidate.provenance,
+    availability: candidate.availability,
+    reason,
+    availableIngredients,
+    missingIngredients,
+    unknownIngredients,
+    uncertainty: candidate.uncertainty,
+  };
 }
 
 class ProviderTimeoutError extends Error {}
@@ -436,49 +455,68 @@ export async function POST(request: NextRequest) {
   });
   const safeProvider = rankedProvider.status === 'invalid' ? [] : rankedProvider.options;
   const providerSucceeded = safeProvider.length >= 3;
-  if (providerSucceeded) {
-    logTodayPipeline({
-      requestId,
-      slot,
-      ragOutcome: providerLoad.ragOutcome,
-      generationOutcome: providerLoad.outcome,
-      rankingOutcome: rankedProvider.status === 'invalid' ? 'invalid' : 'sufficient_safe_options',
-      model,
-      ...(providerLoad.httpStatus === undefined ? {} : { httpStatus: providerLoad.httpStatus }),
-      providerOptionCount: Math.min(providerOptions?.length ?? 0, 5),
-      safeProviderCount: Math.min(safeProvider.length, 5),
-      fallbackOptionCount: 0,
-      profileConfigured: context.profileConfigured,
-      inventoryCount: Math.min(context.inventory.length, 50),
-    });
-    return NextResponse.json({
-      status: 'success',
-      options: safeProvider.map((option) => userReason(option, context)),
-      ...(context.profileConfigured ? {} : { warnings: ['PROFILE_NOT_CONFIGURED'] }),
-    });
-  }
+  const persistentRecipes = await listPersistentRecipes(
+    { tenantId, userId: user.id },
+    { limit: 50 }
+  ).catch(() => []);
 
-  const localCandidates: Candidate[] = [
-    ...contextResult.localSignals.historyCandidates,
-    ...contextResult.localSignals.savedPlanCandidates,
+  const localCandidates: LocalFirstCandidate[] = [
+    ...persistentRecipes.map((recipe): LocalFirstCandidate => ({
+      id: recipe.id,
+      title: recipe.current_version.title,
+      slot,
+      ingredients: recipe.current_version.ingredients.map(({ name, quantity, unit }) =>
+        [quantity, unit, name].filter((part): part is string => typeof part === 'string' && part.trim().length > 0).join(' ')
+      ),
+      prepMinutes: null,
+      servings: recipe.current_version.servings,
+      source: 'saved_recipe',
+      identity: { userId: recipe.user_id, tenantId: recipe.tenant_id },
+    })),
+    ...contextResult.localSignals.historyCandidates.map((candidate, index): LocalFirstCandidate => ({
+      ...candidate,
+      id: `history-${index}-${candidate.title}`,
+      identity: { userId: user.id, tenantId },
+    })),
+    ...contextResult.localSignals.savedPlanCandidates.map((candidate, index): LocalFirstCandidate => ({
+      ...candidate,
+      id: `saved-plan-${index}-${candidate.title}`,
+      identity: { userId: user.id, tenantId },
+      plannedDate: null,
+    })),
+    ...safeProvider.map((candidate, index): LocalFirstCandidate => ({
+      ...candidate,
+      id: `provider-${index}-${candidate.title}`,
+    })),
   ];
-  const merged = rankOneSlotOptions([...safeProvider, ...localCandidates], {
+  const recommendations = recommendLocalFirst({
     asOf,
     slot,
     maxPrepMinutes: context.maxPrepMinutes ?? MAX_PREP_MINUTES,
+    userId: user.id,
+    tenantId,
     allergies: context.allergies,
     hardAvoid: context.hardAvoid,
     dislikedIngredients: context.dislikedIngredients,
+    preferred: context.preferred,
     recentTitles: contextResult.localSignals.recentTitles,
-    inventory: context.inventory,
+    inventory: context.inventory.map((item) => ({
+      ingredient_name: item.name,
+      quantity: item.quantity ?? null,
+      unit: item.unit ?? null,
+      ...(item.expiresOn ? { expiresOn: item.expiresOn } : {}),
+    })),
+    candidates: localCandidates,
+    plannedMeals: [],
+    providerStatus: providerOptions === null ? 'unavailable' : 'available',
   });
-  const options = merged.status === 'invalid' ? [] : merged.options;
+  const options = recommendations.status === 'ready' ? recommendations.recommendations : [];
   logTodayPipeline({
     requestId,
     slot,
     ragOutcome: providerLoad.ragOutcome,
     generationOutcome: providerLoad.outcome,
-    rankingOutcome: rankedProvider.status === 'invalid' ? 'invalid' : 'insufficient_safe_options',
+    rankingOutcome: rankedProvider.status === 'invalid' ? 'invalid' : providerSucceeded ? 'sufficient_safe_options' : 'insufficient_safe_options',
     model,
     ...(providerLoad.httpStatus === undefined ? {} : { httpStatus: providerLoad.httpStatus }),
     providerOptionCount: Math.min(providerOptions?.length ?? 0, 5),
@@ -491,9 +529,11 @@ export async function POST(request: NextRequest) {
     inventoryCount: Math.min(context.inventory.length, 50),
   });
   return NextResponse.json({
-    status: 'degraded',
-    reason: providerOptions === null ? 'provider-unavailable' : 'insufficient-safe-options',
-    options: options.map((option) => userReason(option, context)),
+    status: providerSucceeded ? 'success' : 'degraded',
+    ...(!providerSucceeded ? {
+      reason: providerOptions === null ? 'provider-unavailable' : 'insufficient-safe-options',
+    } : {}),
+    options: options.map((option) => userReason(option)),
     ...(context.profileConfigured ? {} : { warnings: ['PROFILE_NOT_CONFIGURED'] }),
   });
 }
