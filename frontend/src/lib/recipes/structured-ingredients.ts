@@ -56,21 +56,181 @@ function normalizeIngredientTokens(value: string): string[] {
   return normalizeIngredientName(value).match(/[\p{L}\p{N}]+/gu) ?? [];
 }
 
+export type IngredientRestrictionAssessment = {
+  status: 'clear' | 'conflict' | 'review';
+};
+
+type DietaryCategory = 'vegan' | 'gluten-free' | 'lactose-free';
+
+const DIETARY_CATEGORY_ALIASES: Record<DietaryCategory, readonly string[]> = {
+  vegan: ['vegano', 'vegana', 'veganos', 'veganas', 'vegan', 'dieta vegana', 'veganismo'],
+  'gluten-free': [
+    'sin tacc',
+    'intolerancia al gluten',
+    'sin gluten',
+    'libre de gluten',
+    'gluten free',
+    'celiaco',
+    'celiaca',
+    'celiaquia',
+  ],
+  'lactose-free': [
+    'sin lactosa', 'libre de lactosa', 'intolerancia a la lactosa',
+    'lactose free', 'lactose-free',
+  ],
+};
+
+const VEGAN_ANIMAL_INGREDIENTS = [
+  'pollo', 'gallina', 'chicken', 'carne', 'carnes', 'meat', 'meats', 'jamon', 'res', 'vacuno', 'beef', 'cerdo', 'puerco', 'pork',
+  'cordero', 'lamb', 'pavo', 'turkey', 'pato', 'duck', 'pescado', 'fish', 'atun', 'salmon',
+  'sardina', 'mariscos', 'camaron', 'langostino', 'huevo', 'egg', 'leche', 'lacteo', 'lacteos', 'dairy', 'milk', 'queso',
+  'crema', 'nata', 'mantequilla', 'yogur', 'yogurt', 'suero', 'whey', 'miel', 'honey',
+  'gelatina', 'gelatin',
+] as const;
+const GLUTEN_CONTAINING_INGREDIENTS = [
+  'trigo', 'wheat', 'cebada', 'barley', 'centeno', 'rye', 'seitan', 'gluten', 'gluten vital',
+] as const;
+const LACTOSE_CONTAINING_INGREDIENTS = [
+  'lactosa', 'lactose', 'leche', 'milk', 'crema de leche', 'nata', 'leche condensada',
+  'leche evaporada', 'leche en polvo', 'suero de leche', 'whey',
+] as const;
+
+function containsTokenSequence(value: string, phrase: string): boolean {
+  const tokens = normalizeIngredientTokens(value);
+  const phraseTokens = normalizeIngredientTokens(phrase);
+  return phraseTokens.length > 0 && tokens.some((_, start) =>
+    phraseTokens.every((token, offset) => tokens[start + offset] === token)
+  );
+}
+
+function containsAnyPhrase(value: string, phrases: readonly string[]): boolean {
+  return phrases.some((phrase) => containsTokenSequence(value, phrase));
+}
+
+function dietaryCategoryForRestriction(restriction: string): DietaryCategory | null {
+  const normalized = normalizeIngredientName(restriction);
+  return (
+    Object.entries(DIETARY_CATEGORY_ALIASES).find(([, aliases]) =>
+      aliases.some((alias) => normalizeIngredientName(alias) === normalized)
+    )?.[0] as DietaryCategory | undefined
+  ) ?? null;
+}
+
+const RECOGNIZED_PLANT_BASED_ALTERNATIVES = [
+  'leche de almendra', 'leche de soya', 'leche de soja', 'leche de avena', 'leche de coco',
+  'leche de arroz', 'leche vegetal', 'almond milk', 'soy milk', 'oat milk', 'coconut milk',
+  'queso vegano', 'queso vegetal', 'yogur vegano', 'yogur vegetal', 'crema vegetal',
+  'mantequilla vegana', 'carne vegetal', 'carne vegana', 'hamburguesa vegetal',
+] as const;
+
+function removeRecognizedPhrases(name: string, phrases: readonly string[]): string {
+  const remainingTokens = normalizeIngredientTokens(name);
+  for (const phrase of phrases) {
+    const phraseTokens = normalizeIngredientTokens(phrase);
+    if (phraseTokens.length === 0) continue;
+
+    for (let start = 0; start <= remainingTokens.length - phraseTokens.length; start += 1) {
+      const matches = phraseTokens.every(
+        (token, offset) => remainingTokens[start + offset] === token
+      );
+      if (!matches) continue;
+      remainingTokens.splice(start, phraseTokens.length);
+      start -= 1;
+    }
+  }
+  return remainingTokens.join(' ');
+}
+
+function assessVeganIngredient(name: string): IngredientRestrictionAssessment['status'] {
+  const remaining = removeRecognizedPhrases(name, RECOGNIZED_PLANT_BASED_ALTERNATIVES);
+  if (containsAnyPhrase(remaining, VEGAN_ANIMAL_INGREDIENTS)) return 'conflict';
+  if (containsAnyPhrase(remaining, ['caldo', 'stock', 'margarina', 'saborizante'])) return 'review';
+  return 'clear';
+}
+
+function assessGlutenIngredient(name: string): IngredientRestrictionAssessment['status'] {
+  const glutenFreeIngredientPhrases = [
+    'harina de trigo sarraceno', 'trigo sarraceno', 'alforfon', 'buckwheat', 'malta de arroz',
+    'harina de maiz', 'harina de arroz', 'harina de mandioca', 'harina de yuca',
+    'harina de almendra', 'corn flour', 'rice flour', 'tapioca flour',
+  ];
+  const remaining = removeRecognizedPhrases(name, glutenFreeIngredientPhrases);
+  if (containsAnyPhrase(remaining, [
+    'malta con gluten', 'malta que contiene gluten', 'malta que contenga gluten',
+    'malt with gluten', 'malt containing gluten', 'gluten-containing malt',
+    'con gluten', 'contiene gluten', 'contains gluten',
+  ])) return 'conflict';
+  if (containsAnyPhrase(remaining, GLUTEN_CONTAINING_INGREDIENTS)) return 'conflict';
+  if (containsAnyPhrase(remaining, [
+    'harina', 'flour', 'pan', 'bread', 'pasta', 'avena', 'oat', 'malta', 'malt',
+    'salsa de soja', 'soy sauce', 'salsa inglesa',
+  ])) return 'review';
+  return 'clear';
+}
+
+function assessLactoseIngredient(name: string): IngredientRestrictionAssessment['status'] {
+  const safeProductPhrases = [
+    ...RECOGNIZED_PLANT_BASED_ALTERNATIVES,
+    'leche sin lactosa', 'leche deslactosada', 'lactose-free milk',
+  ];
+  const remaining = removeRecognizedPhrases(name, safeProductPhrases);
+  if (containsAnyPhrase(remaining, LACTOSE_CONTAINING_INGREDIENTS)) return 'conflict';
+  if (containsAnyPhrase(remaining, [
+    'queso', 'yogur', 'yogurt', 'mantequilla', 'butter', 'margarina', 'crema', 'lacteo', 'lacteos',
+  ])) {
+    return 'review';
+  }
+  return 'clear';
+}
+
+function assessDietaryCategory(
+  category: DietaryCategory,
+  ingredientNames: readonly string[]
+): IngredientRestrictionAssessment['status'] {
+  const assess = category === 'vegan'
+    ? assessVeganIngredient
+    : category === 'gluten-free'
+      ? assessGlutenIngredient
+      : assessLactoseIngredient;
+  const statuses = ingredientNames.map(assess);
+  if (statuses.includes('conflict')) return 'conflict';
+  return statuses.includes('review') ? 'review' : 'clear';
+}
+
+/** Classifies listed ingredient names only; `clear` is not a safety or contamination guarantee. */
+export function assessIngredientRestrictions(
+  ingredientNames: readonly string[],
+  restrictions: readonly string[]
+): IngredientRestrictionAssessment {
+  const categories = new Set<DietaryCategory>();
+  const explicitRestrictions: string[] = [];
+  for (const restriction of restrictions) {
+    const category = dietaryCategoryForRestriction(restriction);
+    if (category) categories.add(category);
+    else explicitRestrictions.push(restriction);
+  }
+
+  if (explicitRestrictions.some((restriction) =>
+    ingredientNames.some((ingredient) => containsTokenSequence(ingredient, restriction))
+  )) return { status: 'conflict' };
+
+  let needsReview =
+    categories.size > 0 &&
+    (ingredientNames.length === 0 || ingredientNames.some((name) => normalizeIngredientTokens(name).length === 0));
+  for (const category of categories) {
+    const status = assessDietaryCategory(category, ingredientNames);
+    if (status === 'conflict') return { status };
+    if (status === 'review') needsReview = true;
+  }
+  return { status: needsReview ? 'review' : 'clear' };
+}
+
+/** Existing callers reject both known conflicts and names that require dietary review. */
 export function containsRestrictedIngredientName(
   ingredientNames: readonly string[],
   restrictions: readonly string[]
 ): boolean {
-  const ingredientTokens = ingredientNames.map(normalizeIngredientTokens);
-  return restrictions.some((restriction) => {
-    const restrictedTokens = normalizeIngredientTokens(restriction);
-    if (restrictedTokens.length === 0) return false;
-
-    return ingredientTokens.some((tokens) =>
-      tokens.some((_, start) =>
-        restrictedTokens.every((token, offset) => tokens[start + offset] === token)
-      )
-    );
-  });
+  return assessIngredientRestrictions(ingredientNames, restrictions).status !== 'clear';
 }
 
 export function normalizeIngredientName(name: string): string {

@@ -650,6 +650,29 @@ describe('POST /api/recipe-generate', () => {
     expect(setCachedRecipeMock).toHaveBeenCalledTimes(1);
   });
 
+  it('rejects a vegan-incompatible generated recipe before persistence and caching', async () => {
+    loadPersistedRecipeContextMock.mockResolvedValue(
+      persistedContext({
+        profile: {
+          identity: [],
+          preferred: [],
+          avoid: ['Vegano'],
+          goals: [],
+          level: 'Intermedio',
+          allergies: [],
+          dislikedIngredients: [],
+        },
+      })
+    );
+    fetchMock.mockResolvedValueOnce(geminiResponse('Guiso\n\nINGREDIENTES\n- 2 unidades pollo'));
+
+    const response = await POST(request({ mode: 'free' }) as unknown as NextRequest);
+
+    expect(response.status).toBe(502);
+    expect(createRecipeHistoryMock).not.toHaveBeenCalled();
+    expect(setCachedRecipeMock).not.toHaveBeenCalled();
+  });
+
   it('rejects an allergen in parsed ingredients without persisting or caching', async () => {
     fetchMock.mockResolvedValueOnce(
       geminiResponse('Sopa de tomate\n\nINGREDIENTES\n- 2 cucharadas de maní')
@@ -697,6 +720,49 @@ describe('POST /api/recipe-generate', () => {
     const response = await POST(request({ mode: 'free' }) as unknown as NextRequest);
 
     expect(response.status).toBe(502);
+    expect(createRecipeHistoryMock).not.toHaveBeenCalled();
+    expect(setCachedRecipeMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects cached recipes that conflict with a persisted dietary category before returning them', async () => {
+    loadPersistedRecipeContextMock.mockResolvedValue(
+      persistedContext({
+        profile: {
+          identity: [],
+          preferred: [],
+          avoid: ['Sin lactosa'],
+          goals: [],
+          level: 'Intermedio',
+          allergies: [],
+          dislikedIngredients: [],
+        },
+      })
+    );
+    getCachedRecipeMock.mockResolvedValueOnce({
+      recipe: 'Bebida\n\nINGREDIENTES\n- leche convencional',
+      title: 'Bebida cacheada',
+      provider: 'gemini',
+      model: 'gemini-test-model',
+      mode: 'free',
+      structuredIngredients: [
+        {
+          name: 'leche convencional',
+          normalized_name: 'leche convencional',
+          quantity: 1,
+          unit: 'taza',
+          optional_quantity_text: null,
+          category: 'Lácteos',
+          estimated_cost_optional: null,
+          structured: true,
+        },
+      ],
+      createdAt: Date.now(),
+    });
+
+    const response = await POST(request({ mode: 'free', ingredients: ['tomate'] }) as unknown as NextRequest);
+
+    expect(response.status).toBe(502);
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(createRecipeHistoryMock).not.toHaveBeenCalled();
     expect(setCachedRecipeMock).not.toHaveBeenCalled();
   });
