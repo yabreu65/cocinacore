@@ -650,6 +650,54 @@ describe('POST /api/recipe-generate', () => {
     expect(setCachedRecipeMock).toHaveBeenCalledTimes(1);
   });
 
+  it('rejects a vegan-incompatible generated recipe before persistence and caching', async () => {
+    loadPersistedRecipeContextMock.mockResolvedValue(
+      persistedContext({
+        profile: {
+          identity: [],
+          preferred: [],
+          avoid: ['Vegano'],
+          goals: [],
+          level: 'Intermedio',
+          allergies: [],
+          dislikedIngredients: [],
+        },
+      })
+    );
+    fetchMock.mockResolvedValueOnce(geminiResponse('Guiso\n\nINGREDIENTES\n- 2 unidades pollo'));
+
+    const response = await POST(request({ mode: 'free' }) as unknown as NextRequest);
+
+    expect(response.status).toBe(502);
+    expect(createRecipeHistoryMock).not.toHaveBeenCalled();
+    expect(setCachedRecipeMock).not.toHaveBeenCalled();
+  });
+
+  it('accepts a generated recipe with a gluten-free title when its ingredients contain no conflict', async () => {
+    loadPersistedRecipeContextMock.mockResolvedValue(
+      persistedContext({
+        profile: {
+          identity: [],
+          preferred: [],
+          avoid: ['Sin TACC'],
+          goals: [],
+          level: 'Intermedio',
+          allergies: [],
+          dislikedIngredients: [],
+        },
+      })
+    );
+    fetchMock.mockResolvedValueOnce(
+      geminiResponse('Arroz sin gluten\n\nINGREDIENTES\n- 1 taza arroz\n- 1 cucharada aceite de oliva')
+    );
+
+    const response = await POST(request({ mode: 'free' }) as unknown as NextRequest);
+
+    expect(response.status).toBe(200);
+    expect(createRecipeHistoryMock).toHaveBeenCalledTimes(1);
+    expect(setCachedRecipeMock).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects an allergen in parsed ingredients without persisting or caching', async () => {
     fetchMock.mockResolvedValueOnce(
       geminiResponse('Sopa de tomate\n\nINGREDIENTES\n- 2 cucharadas de maní')
@@ -699,6 +747,84 @@ describe('POST /api/recipe-generate', () => {
     expect(response.status).toBe(502);
     expect(createRecipeHistoryMock).not.toHaveBeenCalled();
     expect(setCachedRecipeMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects cached recipes that conflict with a persisted dietary category before returning them', async () => {
+    loadPersistedRecipeContextMock.mockResolvedValue(
+      persistedContext({
+        profile: {
+          identity: [],
+          preferred: [],
+          avoid: ['Sin lactosa'],
+          goals: [],
+          level: 'Intermedio',
+          allergies: [],
+          dislikedIngredients: [],
+        },
+      })
+    );
+    getCachedRecipeMock.mockResolvedValueOnce({
+      recipe: 'Bebida\n\nINGREDIENTES\n- leche convencional',
+      title: 'Bebida cacheada',
+      provider: 'gemini',
+      model: 'gemini-test-model',
+      mode: 'free',
+      structuredIngredients: [
+        {
+          name: 'leche convencional',
+          normalized_name: 'leche convencional',
+          quantity: 1,
+          unit: 'taza',
+          optional_quantity_text: null,
+          category: 'Lácteos',
+          estimated_cost_optional: null,
+          structured: true,
+        },
+      ],
+      createdAt: Date.now(),
+    });
+
+    const response = await POST(request({ mode: 'free', ingredients: ['tomate'] }) as unknown as NextRequest);
+
+    expect(response.status).toBe(502);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(createRecipeHistoryMock).not.toHaveBeenCalled();
+    expect(setCachedRecipeMock).not.toHaveBeenCalled();
+  });
+
+  it('serves a cached gluten-free recipe whose title contains the negated gluten token', async () => {
+    loadPersistedRecipeContextMock.mockResolvedValue(
+      persistedContext({
+        profile: {
+          identity: [],
+          preferred: [],
+          avoid: ['Sin TACC'],
+          goals: [],
+          level: 'Intermedio',
+          allergies: [],
+          dislikedIngredients: [],
+        },
+      })
+    );
+    getCachedRecipeMock.mockResolvedValueOnce({
+      recipe: 'Arroz sin gluten\n\nINGREDIENTES\n- 1 taza arroz\n- 1 cucharada aceite de oliva',
+      title: 'Arroz sin gluten',
+      provider: 'gemini',
+      model: 'gemini-test-model',
+      mode: 'free',
+      structuredIngredients: [
+        { name: 'arroz', normalized_name: 'arroz', structured: true },
+        { name: 'aceite de oliva', normalized_name: 'aceite de oliva', structured: true },
+      ],
+      createdAt: Date.now(),
+    });
+
+    const response = await POST(request({ mode: 'free', ingredients: ['arroz'] }) as unknown as NextRequest);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ title: 'Arroz sin gluten', cached: true });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(createRecipeHistoryMock).toHaveBeenCalledTimes(1);
   });
 
   it('rejects cached recipe text with a persisted hard allergy outside safe structured ingredients', async () => {

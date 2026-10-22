@@ -481,6 +481,15 @@ describe('POST /api/meal-plan', () => {
       restrictions: ['Sésamo'],
       ingredient: 'sesamo negro',
     },
+    {
+      label: 'persisted dietary category',
+      setup: () => {
+        findCulinaryProfileByUserIdMock.mockResolvedValue(profile());
+        findCulinaryProfileTermsByUserIdMock.mockResolvedValue([profileTerm('avoid', 'Sin TACC')]);
+      },
+      restrictions: undefined,
+      ingredient: 'harina de trigo',
+    },
   ])('rejects a generated plan containing a $label before persistence', async ({ setup, restrictions, ingredient }) => {
     setup();
     fetchMock.mockResolvedValueOnce(
@@ -770,6 +779,14 @@ describe('GET /api/meal-plan', () => {
         findCulinaryProfileTermsByUserIdMock.mockResolvedValue([profileTerm('avoid', 'Sésamo')]);
       },
       ingredient: 'Sésamo negro',
+    },
+    {
+      label: 'current profile dietary category',
+      setup: () => {
+        findCulinaryProfileByUserIdMock.mockResolvedValue(profile());
+        findCulinaryProfileTermsByUserIdMock.mockResolvedValue([profileTerm('avoid', 'Sin TACC')]);
+      },
+      ingredient: 'harina de trigo',
     },
   ])('rejects a saved plan conflicting with $label without exposing or mutating history', async ({ setup, ingredient }) => {
     setup();

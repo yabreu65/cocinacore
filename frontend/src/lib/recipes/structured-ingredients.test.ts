@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  assessIngredientRestrictions,
   containsRestrictedIngredientName,
   extractStructuredIngredients,
   mergeDuplicateIngredients,
@@ -56,6 +57,144 @@ describe('structured ingredients', () => {
     expect(containsRestrictedIngredientName(['tomateado'], ['jitomates'])).toBe(false);
     expect(containsRestrictedIngredientName(['maní tostado'], ['maní'])).toBe(true);
     expect(containsRestrictedIngredientName(['ajos'], ['ajo'])).toBe(true);
+  });
+
+  it.each([
+    ['Vegano', 'pollo'],
+    ['Vegano', 'carne de res'],
+    ['Vegano', 'carnes'],
+    ['Vegano', 'pescado'],
+    ['Vegano', 'dairy'],
+    ['Vegano', 'lácteos'],
+    ['Vegano', 'leche convencional'],
+    ['Vegano', 'huevo'],
+    ['Sin TACC', 'harina de trigo'],
+    ['Sin TACC', 'cebada'],
+    ['Sin TACC', 'centeno'],
+    ['Sin TACC', 'malta de cebada'],
+    ['Vegano', 'milk'],
+    ['Vegano', 'jamón'],
+    ['Sin TACC', 'gluten'],
+    ['Sin lactosa', 'leche convencional'],
+    ['Sin lactosa', 'leche condensada'],
+    ['Sin lactosa', 'suero de leche'],
+    ['Sin lactosa', 'lactosa'],
+  ])('rejects %s when ingredient %s is incompatible', (restriction, ingredient) => {
+    expect(containsRestrictedIngredientName([ingredient], [restriction])).toBe(true);
+  });
+
+  it.each([
+    'trigo sarraceno con trigo',
+    'malta de arroz con cebada',
+  ])('does not let a gluten-free ingredient phrase hide %s', (ingredient) => {
+    expect(assessIngredientRestrictions([ingredient], ['Sin TACC'])).toEqual({
+      status: 'conflict',
+    });
+  });
+
+  it('marks malt explicitly described as containing gluten as a conflict', () => {
+    expect(assessIngredientRestrictions(['malta con gluten'], ['Sin TACC'])).toEqual({
+      status: 'conflict',
+    });
+  });
+
+  it('classifies plural eggs as a vegan conflict after ingredient normalization', () => {
+    expect(assessIngredientRestrictions(['huevos'], ['Vegano'])).toEqual({
+      status: 'conflict',
+    });
+  });
+
+  it('rejects vital wheat gluten under Sin TACC', () => {
+    expect(assessIngredientRestrictions(['vital wheat gluten'], ['Sin TACC'])).toEqual({
+      status: 'conflict',
+    });
+  });
+
+  it('rejects gluten vital under Sin TACC', () => {
+    expect(assessIngredientRestrictions(['gluten vital'], ['Sin TACC'])).toEqual({
+      status: 'conflict',
+    });
+  });
+
+  it.each([
+    ['arroz sin gluten', 'clear'],
+    ['harina de maíz sin gluten', 'clear'],
+    ['gluten-free pasta', 'review'],
+    ['sin gluten', 'review'],
+  ])('does not treat an explicit gluten-free qualifier as gluten content: %s', (ingredient, status) => {
+    expect(assessIngredientRestrictions([ingredient], ['Sin TACC'])).toEqual({ status });
+  });
+
+  it('does not reject a recipe body solely because its title says gluten-free', () => {
+    const recipe =
+      'Arroz sin gluten\n\nINGREDIENTES\n- 1 taza arroz\n- 1 cucharada aceite de oliva\n\nPREPARACIÓN\nCocinar.';
+
+    expect(assessIngredientRestrictions([recipe], ['Sin TACC'])).toEqual({ status: 'clear' });
+  });
+
+  it.each([
+    'harina de trigo sin gluten',
+    'sin gluten, pero contiene gluten',
+    'gluten-free rice, con gluten vital',
+    'no es sin gluten',
+  ])('preserves a real gluten conflict despite a gluten-free qualifier: %s', (ingredient) => {
+    expect(assessIngredientRestrictions([ingredient], ['Sin TACC'])).toEqual({ status: 'conflict' });
+  });
+
+  it('lets a conflicting ingredient override a separate gluten-free claim', () => {
+    expect(assessIngredientRestrictions(['arroz sin gluten', 'harina de trigo'], ['Sin TACC'])).toEqual({
+      status: 'conflict',
+    });
+  });
+
+  it.each([
+    ['Vegana', 'egg'],
+    ['Sin gluten', 'barley'],
+    ['Libre de gluten', 'rye'],
+    ['Sin TACC', 'malta de cebada'],
+    ['Lactose-free', 'milk'],
+  ])('recognizes common dietary labels and ingredient terms: %s / %s', (restriction, ingredient) => {
+    expect(containsRestrictedIngredientName([ingredient], [restriction])).toBe(true);
+  });
+
+  it.each([
+    ['Vegano', 'leche de almendras con pollo'],
+    ['Sin lactosa', 'leche de almendras con leche condensada'],
+  ])('does not let a safe alternative hide conflicts for %s', (restriction, ingredient) => {
+    expect(assessIngredientRestrictions([ingredient], [restriction])).toEqual({ status: 'conflict' });
+  });
+
+  it('keeps bare Gluten and Lactosa as explicit literal restrictions', () => {
+    expect(containsRestrictedIngredientName(['harina de trigo'], ['Gluten'])).toBe(false);
+    expect(containsRestrictedIngredientName(['milk'], ['Lactosa'])).toBe(false);
+  });
+
+  it.each([
+    ['Vegano', ['leche de almendras', 'harina de maíz', 'arroz']],
+    ['Vegano', ['soy milk', 'leche de soya', 'arroz']],
+    ['Sin TACC', ['harina de maíz', 'trigo sarraceno']],
+    ['Sin lactosa', ['leche de almendras', 'arroz']],
+  ])('does not reject explicit non-conflicting ingredients for %s', (restriction, ingredients) => {
+    expect(assessIngredientRestrictions(ingredients, [restriction])).toEqual({ status: 'clear' });
+  });
+
+  it.each([
+    ['Vegano', ['caldo']],
+    ['Sin TACC', ['harina']],
+    ['Sin TACC', ['malta']],
+    ['Sin lactosa', ['queso']],
+    ['Sin lactosa', ['lácteos']],
+    ['Sin lactosa', ['crema']],
+  ])('marks ambiguous ingredient names for %s as review-needed', (restriction, ingredients) => {
+    expect(assessIngredientRestrictions(ingredients, [restriction])).toEqual({ status: 'review' });
+    expect(containsRestrictedIngredientName(ingredients, [restriction])).toBe(true);
+  });
+
+  it('marks missing or blank category-restricted ingredient data as review-needed', () => {
+    expect(assessIngredientRestrictions([], ['Sin TACC'])).toEqual({ status: 'review' });
+    expect(assessIngredientRestrictions([''], ['Sin TACC'])).toEqual({ status: 'review' });
+    expect(assessIngredientRestrictions(['   '], ['Vegano'])).toEqual({ status: 'review' });
+    expect(assessIngredientRestrictions(['', 'pollo'], ['Vegano'])).toEqual({ status: 'conflict' });
   });
 
   it('parses structured amounts', () => {
