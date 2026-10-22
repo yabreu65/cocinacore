@@ -3,6 +3,8 @@
 import { useRef, useState } from 'react';
 import { safeFetch } from '@/lib/api';
 import { scaleRecipeIngredients } from '@/lib/inventory/portion-scaling';
+import { normalizeInventoryName } from '@/lib/inventory/normalize-inventory';
+import { assessSessionInventoryQuantity } from '@/lib/today/session-inventory-confirmation';
 
 export type TodaySlot = 'breakfast' | 'lunch' | 'snack' | 'dinner';
 export type TodayOptionSource = 'provider' | 'history' | 'saved_plan' | 'saved_recipe';
@@ -84,20 +86,24 @@ function parseTargetServings(value: string): number | null {
   return parsed !== null && Number.isInteger(parsed) && parsed <= 100 ? parsed : null;
 }
 
+function parseNonNegativeNumber(value: string): number | null {
+  if (!value.trim()) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
 function formatIngredientAvailability(ingredient: TodayIngredientAvailability): string {
   const required = formatAmount(ingredient.requiredQuantity, ingredient.requiredUnit);
-  const available = formatAmount(ingredient.availableQuantity, ingredient.availableUnit);
-  const missing = formatAmount(ingredient.missingQuantity, ingredient.requiredUnit);
+  const registered = formatAmount(ingredient.availableQuantity, ingredient.availableUnit);
   const quantitySource = ingredient.quantityProvenance === undefined
     ? []
     : [ingredient.quantityProvenance === 'ai_estimate'
-      ? 'cantidad estimada por IA, no verificada'
+      ? 'cantidad estimada por IA; no se puede verificar suficiencia'
       : 'procedencia de cantidad desconocida'];
   return [
     `${ingredient.name}: ${required ? `requiere ${required}` : 'requerimiento no cuantificable'}`,
     ...quantitySource,
-    available ? `disponible ${available}` : 'inventario no verificable',
-    missing ? `faltan ${missing}` : 'faltante no calculable',
+    registered ? `registrado ${registered} (sin confirmar)` : ingredient.present ? 'cantidad registrada no comparable' : 'sin cantidad registrada; no se asume cero',
   ].join('; ');
 }
 
@@ -110,6 +116,7 @@ const sourceLabels: Record<TodayOptionSource, string> = {
 
 export function TodayRecommendationResults({ response, slot, onChoose }: TodayRecommendationResultsProps) {
   const [portionInputs, setPortionInputs] = useState<Record<string, { original: string; target: string }>>({});
+  const [inventoryInputs, setInventoryInputs] = useState<Record<string, { quantity: string; confirmed: boolean }>>({});
   const slotLabel = slots.find((item) => item.value === slot)?.label ?? 'Momento elegido';
   const options = response.options.filter((option) => option.slot === slot);
   return (
@@ -137,6 +144,38 @@ export function TodayRecommendationResults({ response, slot, onChoose }: TodayRe
               const baseServings = declaredBaseServings ?? parsePositiveNumber(input.original);
               const targetServings = parseTargetServings(input.target);
               const scaling = scaleRecipeIngredients(option.ingredients, baseServings, targetServings);
+              const ingredientAvailability = option.ingredientAvailability ?? [];
+              const requirementNameCounts = new Map<string, number>();
+              for (const ingredient of ingredientAvailability) {
+                const normalizedName = normalizeInventoryName(ingredient.name);
+                requirementNameCounts.set(normalizedName, (requirementNameCounts.get(normalizedName) ?? 0) + 1);
+              }
+              const duplicateRequirementNames = new Set(
+                [...requirementNameCounts].filter(([, count]) => count > 1).map(([name]) => name)
+              );
+              const sessionStatuses = ingredientAvailability.map((ingredient, ingredientIndex) => {
+                const confirmation = inventoryInputs[`${portionKey}:${ingredientIndex}`];
+                const confirmedQuantity = parseNonNegativeNumber(confirmation?.quantity ?? '');
+                if (ingredient.requiredUnit === 'unknown' || ingredient.quantityProvenance !== undefined || duplicateRequirementNames.has(normalizeInventoryName(ingredient.name))) return 'unknown' as const;
+                return assessSessionInventoryQuantity(
+                  ingredient.requiredQuantity,
+                  confirmedQuantity,
+                  confirmation?.confirmed === true
+                );
+              });
+              const decisionAvailability = sessionStatuses.length === 0 || sessionStatuses.includes('unknown')
+                ? 'unknown'
+                : sessionStatuses.every((status) => status === 'sufficient')
+                  ? 'sufficient'
+                  : sessionStatuses.every((status) => status === 'missing')
+                    ? 'missing'
+                    : 'partial';
+              const registeredIngredients = ingredientAvailability.filter((ingredient) => ingredient.present).map((ingredient) => ingredient.name);
+              const reportedInventoryIngredients = [...new Set([
+                ...option.availableIngredients,
+                ...option.missingIngredients,
+                ...(option.unknownIngredients ?? []),
+              ])];
               const canChoose = baseServings !== null && targetServings !== null;
               const updatePortionInput = (field: 'original' | 'target', value: string) => {
                 setPortionInputs((previous) => ({
@@ -162,26 +201,72 @@ export function TodayRecommendationResults({ response, slot, onChoose }: TodayRe
                   <p className="mt-2 text-sm text-[#6B5A50]">
                     {option.prepMinutes === null ? 'Tiempo no estimado' : `${option.prepMinutes} minutos`}
                   </p>
-                  <p className="mt-3 text-xs text-[#6B5A50]">El estado de inventario refleja la receta original; no se recalcula con las porciones elegidas.</p>
+                  <p className="mt-3 text-xs text-[#6B5A50]">Las cantidades registradas no se consideran verificadas hasta que confirmes lo que tenés ahora para esta decisión. Esta confirmación no se guarda.</p>
                   <dl className="mt-3 grid gap-2 text-sm">
-                    <div><dt className="inline font-semibold text-[#241A14]">Disponible: </dt><dd className="inline text-[#6B5A50]">{option.availableIngredients.length ? option.availableIngredients.join(', ') : 'ningún ingrediente confirmado'}</dd></div>
-                    <div><dt className="inline font-semibold text-[#241A14]">Falta: </dt><dd className="inline text-[#6B5A50]">{option.missingIngredients.length ? option.missingIngredients.join(', ') : 'sin faltantes confirmados'}</dd></div>
-                    {option.unknownIngredients?.length ? (
-                      <div><dt className="inline font-semibold text-[#241A14]">Sin verificar: </dt><dd className="inline text-[#6B5A50]">{option.unknownIngredients.join(', ')}</dd></div>
-                    ) : null}
-                    {option.ingredientAvailability?.length ? (
+                    <div><dt className="inline font-semibold text-[#241A14]">{ingredientAvailability.length ? 'Inventario registrado, aún sin confirmar: ' : 'Datos de inventario reportados (sin confirmar): '}</dt><dd className="inline text-[#6B5A50]">{ingredientAvailability.length ? (registeredIngredients.length ? registeredIngredients.join(', ') : 'sin cantidades registradas') : (reportedInventoryIngredients.length ? reportedInventoryIngredients.join(', ') : 'sin detalle disponible')}</dd></div>
+                    <div><dt className="inline font-semibold text-[#241A14]">Disponibilidad para esta decisión: </dt><dd className="inline text-[#6B5A50]">{decisionAvailability === 'unknown' ? 'desconocida' : decisionAvailability === 'sufficient' ? 'suficiente' : decisionAvailability === 'missing' ? 'faltante según cantidades confirmadas' : 'parcial según cantidades confirmadas'}</dd></div>
+                    {ingredientAvailability.length ? (
                       <div>
-                        <dt className="font-semibold text-[#241A14]">Detalle de cantidades</dt>
+                        <dt className="font-semibold text-[#241A14]">Detalle de cantidades registradas</dt>
                         <dd className="text-[#6B5A50]">
                           Cantidades de origen; no ajustadas por porciones.
-                          <ul className="mt-1 grid gap-1">
-                            {option.ingredientAvailability.map((ingredient, ingredientIndex) => (
-                              <li key={`${ingredient.name}-${ingredientIndex}`}>{formatIngredientAvailability(ingredient)}</li>
-                            ))}
+                          <ul className="mt-1 grid gap-3">
+                            {ingredientAvailability.map((ingredient, ingredientIndex) => {
+                              const confirmationKey = `${portionKey}:${ingredientIndex}`;
+                              const confirmation = inventoryInputs[confirmationKey] ?? { quantity: '', confirmed: false };
+                              const duplicateRequirement = duplicateRequirementNames.has(normalizeInventoryName(ingredient.name));
+                              const isComparable = ingredient.requiredQuantity !== null && ingredient.requiredUnit !== 'unknown' && ingredient.quantityProvenance === undefined && !duplicateRequirement;
+                              const canConfirm = isComparable && parseNonNegativeNumber(confirmation.quantity) !== null;
+                              return (
+                                <li key={`${ingredient.name}-${ingredientIndex}`}>
+                                  <p>{formatIngredientAvailability(ingredient)}</p>
+                                  {ingredient.quantityProvenance === 'ai_estimate' ? (
+                                    <p className="mt-1 text-amber-800">Cantidad estimada por IA; no se puede verificar suficiencia.</p>
+                                  ) : ingredient.quantityProvenance === 'unknown' ? (
+                                    <p className="mt-1">Procedencia de cantidad desconocida; no se puede verificar suficiencia.</p>
+                                  ) : duplicateRequirement ? (
+                                    <p className="mt-1">Ingrediente repetido; confirmación individual no disponible.</p>
+                                  ) : isComparable ? (
+                                    <div className="mt-1 grid gap-1">
+                                      <label htmlFor={`today-inventory-quantity-${index}-${ingredientIndex}`} className="font-medium">Cantidad actual de {ingredient.name} ({ingredient.requiredUnit})</label>
+                                      <input
+                                        id={`today-inventory-quantity-${index}-${ingredientIndex}`}
+                                        type="number"
+                                        min="0"
+                                        step="any"
+                                        value={confirmation.quantity}
+                                        aria-label={`Cantidad actual de ${ingredient.name} (${ingredient.requiredUnit})`}
+                                        onChange={(event) => setInventoryInputs((previous) => ({
+                                          ...previous,
+                                          [confirmationKey]: { quantity: event.target.value, confirmed: false },
+                                        }))}
+                                        className="rounded-lg border border-[#C8B9AC] px-3 py-2 text-sm"
+                                      />
+                                      <label className="flex items-center gap-2">
+                                        <input
+                                          type="checkbox"
+                                          aria-label={`Confirmo que la cantidad de ${ingredient.name} está vigente`}
+                                          checked={confirmation.confirmed}
+                                          disabled={!canConfirm}
+                                          onChange={(event) => setInventoryInputs((previous) => ({
+                                            ...previous,
+                                            [confirmationKey]: { ...(previous[confirmationKey] ?? { quantity: '' }), confirmed: event.target.checked && canConfirm },
+                                          }))}
+                                        />
+                                        Confirmo que esta cantidad está vigente para esta decisión.
+                                      </label>
+                                    </div>
+                                  ) : (
+                                    <p className="mt-1">Requerimiento o unidad no comparable; queda desconocido.</p>
+                                  )}
+                                </li>
+                              );
+                            })}
                           </ul>
+                          <p className="mt-2 text-xs">El inventario solo se confirma para esta decisión y no se guarda.</p>
                         </dd>
                       </div>
-                    ) : null}
+                    ) : <p role="status">No hay cantidades comparables para confirmar; la disponibilidad queda desconocida.</p>}
                   </dl>
                   <fieldset className="mt-4 grid gap-2 rounded-xl border border-[#E8DDD2] p-3" aria-label={`Porciones de ${option.title}`}>
                     <legend className="px-1 text-sm font-semibold text-[#241A14]">Ajustar porciones</legend>
