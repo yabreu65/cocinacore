@@ -154,7 +154,15 @@ function assessGlutenIngredient(name: string): IngredientRestrictionAssessment['
     'harina de maiz', 'harina de arroz', 'harina de mandioca', 'harina de yuca',
     'harina de almendra', 'corn flour', 'rice flour', 'tapioca flour',
   ];
-  const remaining = removeRecognizedPhrases(name, glutenFreeIngredientPhrases);
+  const glutenFreeQualifierPhrases = [
+    'sin gluten', 'libre de gluten', 'gluten free', 'no contiene gluten',
+  ];
+  const hasRecognizedGlutenFreeIngredient = containsAnyPhrase(name, glutenFreeIngredientPhrases);
+  const hasGlutenFreeQualifier = containsAnyPhrase(name, glutenFreeQualifierPhrases);
+  if (containsAnyPhrase(name, ['no es sin gluten'])) return 'conflict';
+  const withoutKnownSafeIngredients = removeRecognizedPhrases(name, glutenFreeIngredientPhrases);
+  const remaining = removeRecognizedPhrases(withoutKnownSafeIngredients, glutenFreeQualifierPhrases);
+
   if (containsAnyPhrase(remaining, [
     'malta con gluten', 'malta que contiene gluten', 'malta que contenga gluten',
     'malt with gluten', 'malt containing gluten', 'gluten-containing malt',
@@ -165,6 +173,11 @@ function assessGlutenIngredient(name: string): IngredientRestrictionAssessment['
     'harina', 'flour', 'pan', 'bread', 'pasta', 'avena', 'oat', 'malta', 'malt',
     'salsa de soja', 'soy sauce', 'salsa inglesa',
   ])) return 'review';
+  if (
+    hasGlutenFreeQualifier &&
+    !hasRecognizedGlutenFreeIngredient &&
+    normalizeIngredientTokens(remaining).length === 0
+  ) return 'review';
   return 'clear';
 }
 

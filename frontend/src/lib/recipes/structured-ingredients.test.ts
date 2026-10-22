@@ -117,6 +117,37 @@ describe('structured ingredients', () => {
   });
 
   it.each([
+    ['arroz sin gluten', 'clear'],
+    ['harina de maíz sin gluten', 'clear'],
+    ['gluten-free pasta', 'review'],
+    ['sin gluten', 'review'],
+  ])('does not treat an explicit gluten-free qualifier as gluten content: %s', (ingredient, status) => {
+    expect(assessIngredientRestrictions([ingredient], ['Sin TACC'])).toEqual({ status });
+  });
+
+  it('does not reject a recipe body solely because its title says gluten-free', () => {
+    const recipe =
+      'Arroz sin gluten\n\nINGREDIENTES\n- 1 taza arroz\n- 1 cucharada aceite de oliva\n\nPREPARACIÓN\nCocinar.';
+
+    expect(assessIngredientRestrictions([recipe], ['Sin TACC'])).toEqual({ status: 'clear' });
+  });
+
+  it.each([
+    'harina de trigo sin gluten',
+    'sin gluten, pero contiene gluten',
+    'gluten-free rice, con gluten vital',
+    'no es sin gluten',
+  ])('preserves a real gluten conflict despite a gluten-free qualifier: %s', (ingredient) => {
+    expect(assessIngredientRestrictions([ingredient], ['Sin TACC'])).toEqual({ status: 'conflict' });
+  });
+
+  it('lets a conflicting ingredient override a separate gluten-free claim', () => {
+    expect(assessIngredientRestrictions(['arroz sin gluten', 'harina de trigo'], ['Sin TACC'])).toEqual({
+      status: 'conflict',
+    });
+  });
+
+  it.each([
     ['Vegana', 'egg'],
     ['Sin gluten', 'barley'],
     ['Libre de gluten', 'rye'],
