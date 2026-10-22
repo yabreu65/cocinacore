@@ -2,6 +2,7 @@
 
 import { useRef, useState } from 'react';
 import { safeFetch } from '@/lib/api';
+import { scaleRecipeIngredients } from '@/lib/inventory/portion-scaling';
 
 export type TodaySlot = 'breakfast' | 'lunch' | 'snack' | 'dinner';
 export type TodayOptionSource = 'provider' | 'history' | 'saved_plan' | 'saved_recipe';
@@ -29,6 +30,7 @@ export interface TodayOption {
   missingIngredients: string[];
   unknownIngredients?: string[];
   ingredientAvailability?: TodayIngredientAvailability[];
+  servings?: number | null;
 }
 
 export interface TodayResponse {
@@ -42,6 +44,7 @@ export interface TodayOptionIntent {
   slot: TodaySlot;
   title: string;
   ingredients: string[];
+  targetServings: number;
 }
 
 interface TodayRecommendationResultsProps {
@@ -68,6 +71,17 @@ function formatAmount(quantity: number | null, unit: string): string | null {
   return quantity === null || unit === 'unknown' ? null : `${quantity} ${unit}`;
 }
 
+function parsePositiveNumber(value: string): number | null {
+  if (!value.trim()) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function parseTargetServings(value: string): number | null {
+  const parsed = parsePositiveNumber(value);
+  return parsed !== null && Number.isInteger(parsed) && parsed <= 100 ? parsed : null;
+}
+
 function formatIngredientAvailability(ingredient: TodayIngredientAvailability): string {
   const required = formatAmount(ingredient.requiredQuantity, ingredient.requiredUnit);
   const available = formatAmount(ingredient.availableQuantity, ingredient.availableUnit);
@@ -87,6 +101,7 @@ const sourceLabels: Record<TodayOptionSource, string> = {
 };
 
 export function TodayRecommendationResults({ response, slot, onChoose }: TodayRecommendationResultsProps) {
+  const [portionInputs, setPortionInputs] = useState<Record<string, { original: string; target: string }>>({});
   const slotLabel = slots.find((item) => item.value === slot)?.label ?? 'Momento elegido';
   const options = response.options.filter((option) => option.slot === slot);
   return (
@@ -104,7 +119,25 @@ export function TodayRecommendationResults({ response, slot, onChoose }: TodayRe
         <>
           <h3 className="mb-3 text-lg font-semibold text-[#241A14]">Opciones para {slotLabel}</h3>
           <ul role="list" className="grid gap-4 md:grid-cols-2">
-            {options.map((option, index) => (
+            {options.map((option, index) => {
+              const portionKey = `${option.slot}:${option.source}:${option.title}:${index}`;
+              const input = portionInputs[portionKey] ?? { original: '', target: '' };
+              const declaredBaseServings = typeof option.servings === 'number'
+                && Number.isFinite(option.servings) && option.servings > 0
+                ? option.servings
+                : null;
+              const baseServings = declaredBaseServings ?? parsePositiveNumber(input.original);
+              const targetServings = parseTargetServings(input.target);
+              const scaling = scaleRecipeIngredients(option.ingredients, baseServings, targetServings);
+              const canChoose = baseServings !== null && targetServings !== null;
+              const updatePortionInput = (field: 'original' | 'target', value: string) => {
+                setPortionInputs((previous) => ({
+                  ...previous,
+                  [portionKey]: { ...(previous[portionKey] ?? { original: '', target: '' }), [field]: value },
+                }));
+              };
+
+              return (
               <li key={`${option.title}-${index}`} role="listitem" className="rounded-2xl border border-[#E8DDD2] bg-white p-5 shadow-sm">
                 <article aria-labelledby={`today-option-${index}`}>
                   <div className="flex flex-wrap items-start justify-between gap-2">
@@ -116,6 +149,7 @@ export function TodayRecommendationResults({ response, slot, onChoose }: TodayRe
                   <p className="mt-2 text-sm text-[#6B5A50]">
                     {option.prepMinutes === null ? 'Tiempo no estimado' : `${option.prepMinutes} minutos`}
                   </p>
+                  <p className="mt-3 text-xs text-[#6B5A50]">El estado de inventario refleja la receta original; no se recalcula con las porciones elegidas.</p>
                   <dl className="mt-3 grid gap-2 text-sm">
                     <div><dt className="inline font-semibold text-[#241A14]">Disponible: </dt><dd className="inline text-[#6B5A50]">{option.availableIngredients.length ? option.availableIngredients.join(', ') : 'ningún ingrediente confirmado'}</dd></div>
                     <div><dt className="inline font-semibold text-[#241A14]">Falta: </dt><dd className="inline text-[#6B5A50]">{option.missingIngredients.length ? option.missingIngredients.join(', ') : 'sin faltantes confirmados'}</dd></div>
@@ -136,17 +170,75 @@ export function TodayRecommendationResults({ response, slot, onChoose }: TodayRe
                       </div>
                     ) : null}
                   </dl>
+                  <fieldset className="mt-4 grid gap-2 rounded-xl border border-[#E8DDD2] p-3" aria-label={`Porciones de ${option.title}`}>
+                    <legend className="px-1 text-sm font-semibold text-[#241A14]">Ajustar porciones</legend>
+                    {declaredBaseServings !== null ? (
+                      <p className="text-sm text-[#6B5A50]">Porciones originales declaradas: {declaredBaseServings}</p>
+                    ) : (
+                      <>
+                        <p className="text-sm text-[#6B5A50]">Porciones originales no declaradas. Ingresá el dato de la receta para calcular.</p>
+                        <label htmlFor={`today-original-servings-${index}`} className="text-sm font-medium text-[#241A14]">Porciones originales: {option.title}</label>
+                        <input
+                          id={`today-original-servings-${index}`}
+                          type="number"
+                          min="0.01"
+                          step="any"
+                          value={input.original}
+                          onChange={(event) => updatePortionInput('original', event.target.value)}
+                          className="rounded-lg border border-[#C8B9AC] px-3 py-2 text-sm"
+                        />
+                      </>
+                    )}
+                    <label htmlFor={`today-target-servings-${index}`} className="text-sm font-medium text-[#241A14]">Porciones deseadas: {option.title}</label>
+                    <input
+                      id={`today-target-servings-${index}`}
+                      type="number"
+                      min="1"
+                      max="100"
+                      step="1"
+                      value={input.target}
+                      onChange={(event) => updatePortionInput('target', event.target.value)}
+                      className="rounded-lg border border-[#C8B9AC] px-3 py-2 text-sm"
+                    />
+                    {baseServings === null ? (
+                      <p role="status" className="text-sm text-[#6B5A50]">Porciones originales desconocidas; ingresá el dato declarado para calcular.</p>
+                    ) : !targetServings ? (
+                      <p role="status" className="text-sm text-[#6B5A50]">Elegí cuántas porciones querés preparar.</p>
+                    ) : (
+                      <div aria-live="polite" className="text-sm text-[#6B5A50]">
+                        <p role="status">
+                          {scaling.status === 'scaled'
+                            ? `Cantidades ajustadas para ${targetServings} porciones.`
+                            : scaling.status === 'partial'
+                              ? `Solo se ajustaron las cantidades compatibles para ${targetServings} porciones; el resto queda sin escalar.`
+                              : 'No se encontraron cantidades compatibles para escalar; los valores originales quedan intactos.'}
+                        </p>
+                        <ul className="mt-1 grid gap-1">
+                          {scaling.ingredients.map((ingredient, ingredientIndex) => (
+                            <li key={`${ingredient.source}-${ingredientIndex}`}>
+                              {ingredient.text}{ingredient.scaled ? '' : ' (texto de origen, sin escalar)'}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </fieldset>
                   <button
                     type="button"
                     aria-label={`Ver receta: ${option.title}`}
-                    onClick={() => onChoose({ slot: option.slot, title: option.title, ingredients: [...option.ingredients] })}
-                    className="mt-4 rounded-xl bg-[#A55412] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#87440F] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#A55412]"
+                    disabled={!canChoose}
+                    onClick={() => {
+                      if (!canChoose || targetServings === null) return;
+                      onChoose({ slot: option.slot, title: option.title, ingredients: [...option.ingredients], targetServings });
+                    }}
+                    className="mt-4 rounded-xl bg-[#A55412] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#87440F] disabled:cursor-not-allowed disabled:bg-[#C8B9AC] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#A55412]"
                   >
                     Ver receta
                   </button>
                 </article>
               </li>
-            ))}
+              );
+            })}
           </ul>
         </>
       )}

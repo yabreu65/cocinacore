@@ -186,6 +186,75 @@ describe('TodayRecommendations', () => {
     expect(markup).toContain('aceite: requerimiento no cuantificable; inventario no verificable; faltante no calculable');
   });
 
+  it('requires explicit base and target servings before handing a recipe off', () => {
+    const onChoose = vi.fn();
+    const markup = renderToStaticMarkup(
+      <TodayRecommendationResults response={{ status: 'success', options: [option] }} slot="lunch" onChoose={onChoose} />,
+    );
+
+    expect(markup).toContain('Porciones originales no declaradas. Ingresá el dato de la receta para calcular.');
+    expect(markup).toContain('El estado de inventario refleja la receta original; no se recalcula con las porciones elegidas.');
+    expect(markup).toContain('for="today-original-servings-0"');
+    expect(markup).toContain('for="today-target-servings-0"');
+    expect(markup).toContain('Porciones originales desconocidas; ingresá el dato declarado para calcular.');
+    expect(markup).toContain('aria-label="Ver receta: Arroz con tomate" disabled=""');
+  });
+
+  it('scales supported quantities and hands off the explicit target servings', () => {
+    const scaledOption = {
+      ...option,
+      servings: 4,
+      ingredients: ['1 kg arroz', '1/2 taza aceite', 'al gusto'],
+    };
+    const onChoose = vi.fn();
+    hookHarness.states = [];
+    hookHarness.active = true;
+    const render = () => {
+      hookHarness.cursor = 0;
+      return TodayRecommendationResults({ response: { status: 'success', options: [scaledOption] }, slot: 'lunch', onChoose });
+    };
+    const findElement = (tree: unknown, predicate: (element: { type?: unknown; props?: Record<string, unknown> }) => boolean): { props: Record<string, unknown> } => {
+      if (!tree || typeof tree !== 'object') throw new Error('Element not found');
+      const element = tree as { type?: unknown; props?: Record<string, unknown> };
+      if (predicate(element)) return element as { props: Record<string, unknown> };
+      const children = element.props?.children;
+      for (const child of Array.isArray(children) ? children : [children]) {
+        try { return findElement(child, predicate); } catch { /* Continue through the element tree. */ }
+      }
+      throw new Error('Element not found');
+    };
+    const textContent = (tree: unknown): string => {
+      if (typeof tree === 'string') return tree;
+      if (!tree || typeof tree !== 'object') return '';
+      const children = (tree as { props?: { children?: unknown } }).props?.children;
+      return (Array.isArray(children) ? children : [children]).map(textContent).join('');
+    };
+
+    try {
+      let tree = render();
+      const targetInput = findElement(tree, (element) => element.type === 'input' && element.props?.id === 'today-target-servings-0');
+      expect(targetInput.props.value).toBe('');
+      const buttonBeforeSelection = findElement(tree, (element) => element.type === 'button' && element.props?.['aria-label'] === 'Ver receta: Arroz con tomate');
+      expect(buttonBeforeSelection.props.disabled).toBe(true);
+      const onChange = targetInput.props.onChange as (event: { target: { value: string } }) => void;
+      onChange({ target: { value: '2' } });
+      tree = render();
+
+      expect(textContent(tree)).toContain('0.5 kg arroz');
+      expect(textContent(tree)).toContain('0.25 taza aceite');
+      expect(textContent(tree)).toContain('al gusto');
+      const button = findElement(tree, (element) => element.type === 'button' && element.props?.['aria-label'] === 'Ver receta: Arroz con tomate');
+      expect(button.props.disabled).toBe(false);
+      (button.props.onClick as () => void)();
+      expect(onChoose).toHaveBeenCalledWith({
+        slot: 'lunch', title: 'Arroz con tomate', ingredients: ['1 kg arroz', '1/2 taza aceite', 'al gusto'], targetServings: 2,
+      });
+    } finally {
+      hookHarness.active = false;
+      hookHarness.states = [];
+    }
+  });
+
   it('renders unknown ingredients separately from confirmed missing ingredients', () => {
     const optionWithUnknown = {
       ...option,

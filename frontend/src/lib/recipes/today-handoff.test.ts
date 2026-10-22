@@ -103,6 +103,29 @@ describe('Today recipe handoff', () => {
     expect(payload).not.toHaveProperty('mealType');
   });
 
+  it('carries an explicitly selected target through the existing handoff and generation payload', () => {
+    const handoff: TodayHandoff = { ...selected, targetServings: 3 };
+    const url = serializeTodayHandoff(handoff);
+    expect(url).toBe(
+      '/recipes/search?slot=snack&title=Tostadas+con+tomate&ingredient=pan&ingredient=tomate&ingredient=aceite&servings=3',
+    );
+
+    const query = new URLSearchParams('slot=snack&title=Tostadas&servings=3&ingredient=pan');
+    expect(parseTodayHandoff(query)).toMatchObject({ targetServings: 3 });
+    const todayFields = buildTodayRecipeRequestFields(query);
+    expect(todayFields).toMatchObject({ targetServings: 3 });
+    expect(buildRecipeGenerationRequestPayload({
+      mode: 'rag', ingredients: 'pan', recipeName: 'Tostadas', restrictions: '', todayFields,
+    }).peopleCount).toBe(3);
+  });
+
+  it.each(['0', '-1', '2.5', '101', 'not-a-number'])(
+    'rejects invalid explicit target servings %s instead of using a default',
+    (servings) => {
+      expect(parseTodayHandoff(new URLSearchParams(`slot=snack&title=Tostadas&servings=${servings}`))).toBeNull();
+    },
+  );
+
   it('stops scanning repeated ingredients at the raw ingredient bound', () => {
     class InstrumentedParams extends URLSearchParams {
       ingredientReads = 0;
