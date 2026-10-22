@@ -551,6 +551,32 @@ describe('POST /api/today', () => {
     }
   );
 
+  it('filters vegan-incompatible provider options from Today recommendations', async () => {
+    const { POST } = await import('./route');
+    termsMock.mockResolvedValueOnce([
+      {
+        user_id: 'user-1',
+        term_id: 'avoid-vegano',
+        preference_type: 'avoid',
+        term_label: 'Vegano',
+        weight: 1,
+        created_at: '2026-01-01T00:00:00Z',
+      },
+    ]);
+    fetchMock.mockResolvedValueOnce(
+      providerResponse([
+        { ...options[0], title: 'Chicken stew', ingredients: ['pollo', 'arroz'] },
+        ...options.slice(1),
+      ])
+    );
+
+    const payload = await readTodayPayload(await POST(request({ slot: 'lunch' })));
+
+    expect(payload.status).toBe('degraded');
+    expect(payload.options.map(({ title }) => title)).not.toContain('Chicken stew');
+    expect(payload.options).toHaveLength(2);
+  });
+
   it('ranks validated persisted fallback candidates and computes truthful source/reason/ingredient details', async () => {
     const { POST } = await import('./route');
     historyMock.mockResolvedValueOnce([
