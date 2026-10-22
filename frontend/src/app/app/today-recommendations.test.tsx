@@ -143,6 +143,54 @@ describe('TodayRecommendations', () => {
     expect(markup).not.toMatch(/allerg(y|ies).{0,20}(safe|checked)/i);
   });
 
+  it('labels saved-recipe options without exposing an undefined source', () => {
+    const savedRecipeOption = { ...option, source: 'saved_recipe' as const };
+    const markup = renderToStaticMarkup(
+      <TodayRecommendationResults
+        response={{ status: 'success', options: [savedRecipeOption] }}
+        slot="lunch"
+        onChoose={vi.fn()}
+      />,
+    );
+
+    expect(markup).toContain('Origen: receta guardada');
+    expect(markup).not.toContain('Origen: undefined');
+  });
+
+  it('renders unknown ingredients separately from confirmed missing ingredients', () => {
+    const optionWithUnknown = {
+      ...option,
+      missingIngredients: ['tomate'],
+      unknownIngredients: ['aceite'],
+    };
+    const markup = renderToStaticMarkup(
+      <TodayRecommendationResults
+        response={{ status: 'success', options: [optionWithUnknown] }}
+        slot="lunch"
+        onChoose={vi.fn()}
+      />,
+    );
+
+    expect(markup).toContain('Falta: </dt><dd class="inline text-[#6B5A50]">tomate</dd>');
+    expect(markup).toContain('Sin verificar: </dt><dd class="inline text-[#6B5A50]">aceite</dd>');
+    expect(markup).not.toContain('Falta: ningún ingrediente');
+  });
+
+  it('renders legacy responses without unknownIngredients using non-assertive empty copy', () => {
+    const legacyOption = { ...option, availableIngredients: [], missingIngredients: [] };
+    const markup = renderToStaticMarkup(
+      <TodayRecommendationResults
+        response={{ status: 'success', options: [legacyOption] }}
+        slot="lunch"
+        onChoose={vi.fn()}
+      />,
+    );
+
+    expect(markup).toContain('Falta: </dt><dd class="inline text-[#6B5A50]">sin faltantes confirmados</dd>');
+    expect(markup).not.toContain('Sin verificar:');
+    expect(markup).not.toContain('Falta: </dt><dd class="inline text-[#6B5A50]">ningún ingrediente</dd>');
+  });
+
   it('fails closed when a response option does not match the selected slot', () => {
     const mismatched: TodayResponse = { status: 'success', options: [{ ...option, slot: 'dinner' }], warnings: [] };
     const onChoose = vi.fn();

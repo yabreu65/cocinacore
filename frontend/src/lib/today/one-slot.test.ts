@@ -143,12 +143,14 @@ describe('rankOneSlotOptions', () => {
       { ...candidates(1)[0], title: 'Invalid source', prepMinutes: null, source: 'other' },
       { ...candidates(1)[0], title: 'History source', prepMinutes: null, source: 'history' },
       { ...candidates(1)[0], title: 'Saved plan source', prepMinutes: null, source: 'saved_plan' },
+      { ...candidates(1)[0], title: 'Saved recipe source', prepMinutes: null, source: 'saved_recipe' },
       { ...candidates(1)[0], title: 'Numeric provider', prepMinutes: 20 },
     ], context());
     expect(result.options.map(({ title, source }) => ({ title, source }))).toEqual([
       { title: 'Numeric provider', source: 'provider' },
       { title: 'History source', source: 'history' },
       { title: 'Saved plan source', source: 'saved_plan' },
+      { title: 'Saved recipe source', source: 'saved_recipe' },
     ]);
   });
 
