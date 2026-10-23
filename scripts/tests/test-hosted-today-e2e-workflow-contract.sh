@@ -44,6 +44,10 @@ if (!connectedStep ||
     !/^        run: npm run test:e2e -- e2e\/specs\/today-recommendations-connected\.spec\.ts$/m.test(connectedStep)) {
   fail('the opt-in step must require manual dispatch, the exact M3.4 branch, and true input, and run only the connected Today spec');
 }
+if (!/^          E2E_PROVIDER_PORT: "4319"$/m.test(connectedStep) ||
+    (workflow.match(/^ {10}E2E_PROVIDER_PORT:/gm) ?? []).length !== 1) {
+  fail('E2E_PROVIDER_PORT=4319 must be set only in the connected Today step');
+}
 if ((workflow.match(/COCINACORE_ISOLATED_E2E/g) ?? []).length !== 1) {
   fail('the isolated opt-in must exist only on the gated connected Today step');
 }
