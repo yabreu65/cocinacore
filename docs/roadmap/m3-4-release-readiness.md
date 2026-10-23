@@ -13,7 +13,7 @@
 | U4 | `f151295461235590cae9f1ef7c3dc017d9d612d9` | Ephemeral user confirmation of current quantities | 306 |
 | **Total** | | Four focused, dependent work units | **1,186** |
 
-Each unit is below the 400 changed-line review budget. Owner selected **Stacked PRs to main**, in order U1 → U2 → U3 → U4; later units build on earlier Today UI/API work. Issue #52 is verified OPEN with `status:approved` and `type:feature`, and is limited to M3.4 development/PRs; it does not authorize merge or production. Planned branches are `feat/m3-4-u1-availability` (base `main`, 248 lines), `feat/m3-4-u2-portions` (base U1 branch, 346 lines), `feat/m3-4-u3-provenance` (base U2 branch, 286 lines), and `feat/m3-4-u4-confirmation` (base U3 branch, 346 lines including U6 documentation). PRs and CI are not yet created. Each PR will link #52 and carry exactly one `type:feature` label.
+Each unit is below the 400 changed-line review budget. Owner selected **Stacked PRs to main**, in order U1 → U2 → U3 → U4; later units build on earlier Today UI/API work. Issue #52 is verified OPEN with `status:approved` and `type:feature`, and is limited to M3.4 development/PRs; it does not authorize merge or production. Planned branches are `feat/m3-4-u1-availability` (base `main`, 248 lines), `feat/m3-4-u2-portions` (base U1 branch, 346 lines), `feat/m3-4-u3-provenance` (base U2 branch, 286 lines), and `feat/m3-4-u4-confirmation` (base U3 branch, 350 lines including U6 documentation). PRs and CI are not yet created. Each PR will link #52 and carry exactly one `type:feature` label.
 
 ## Verification evidence
 
