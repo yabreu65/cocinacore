@@ -2,6 +2,12 @@ name: CI
 
 on:
   workflow_dispatch:
+    inputs:
+      run_connected_today:
+        description: Run the connected Today journey against isolated hosted services
+        type: boolean
+        required: false
+        default: false
   pull_request:
     branches: [main]
   push:
@@ -47,6 +53,9 @@ jobs:
 
       - name: Validate PawTech Step 5 workflow contract
         run: sh ../scripts/tests/test-pawtech-step5-workflow-contract.sh
+
+      - name: Validate hosted Today E2E workflow contract
+        run: sh ../scripts/tests/test-hosted-today-e2e-workflow-contract.sh
 
       - name: Test PawTech daily backup verification scenario
         run: sh ../scripts/tests/test-pawtech-daily-backup-verification.sh
@@ -148,6 +157,12 @@ jobs:
 
       - name: Run E2E tests
         run: npm run test:e2e
+
+      - name: Run connected Today Playwright journey
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feat/m3-4-u5-hosted-e2e' && inputs.run_connected_today == true
+        env:
+          COCINACORE_ISOLATED_E2E: "1"
+        run: npm run test:e2e -- e2e/specs/today-recommendations-connected.spec.ts
 
       - name: Upload Playwright report
         if: always()
