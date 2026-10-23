@@ -1,6 +1,6 @@
 # M3.4 Release Readiness — Draft
 
-**State:** Local feature branch only; not ready for PR or release. U5 browser proof and issue/PR decisions remain open.
+**State:** Local feature branch only; not ready for PR or release. U5 browser proof awaits an isolated target; an approved M3.4 issue reference is not available.
 **Branch:** `feat/m3-4-inventario-porciones`, based on `origin/main` at `52dd9fd45b759677fe996a6c477951acd363733a`.
 
 ## Local work units
@@ -13,7 +13,7 @@
 | U4 | `f151295461235590cae9f1ef7c3dc017d9d612d9` | Ephemeral user confirmation of current quantities | 306 |
 | **Total** | | Four focused, dependent work units | **1,186** |
 
-Each unit is below the 400 changed-line review budget. The proposed PR order is U1 → U2 → U3 → U4; later units build on earlier Today UI/API work. No PR or push has been created. Before PR preparation, identify an issue with `status:approved`, verify its scope, choose the chained-PR strategy, and use exactly one matching `type:*` label per PR. Current issue reference and PR strategy: **not selected**.
+Each unit is below the 400 changed-line review budget. Owner selected **Stacked PRs to main**, in order U1 → U2 → U3 → U4; later units build on earlier Today UI/API work. No PR or push has been created. The issue-first check found only approved issues #10 (M2 profile/planning) and #3 (email identity), neither matching M3.4. An exact M3.4 issue with `status:approved` is still required. Use exactly one matching `type:*` label per PR.
 
 ## Verification evidence
 
@@ -25,13 +25,13 @@ Each unit is below the 400 changed-line review budget. The proposed PR order is 
 
 ## U5 browser proof — blocked
 
-The React component tests exercise explicit confirmation, edits revoking confirmation, confirmed zero, duplicate ingredients, and unknown/estimated quantities. The regular Playwright configuration starts a provider server on port 4319 and an app server on port 4320, validates database/Redis targets, and the connected Today journey creates a synthetic account/profile behind `COCINACORE_ISOLATED_E2E=1`. That setup was not run: no disposable validated DB/Redis target or safe mocked port-3000 browser route has been authorized. Do not point synthetic writes at the original or production database, and do not start parallel servers. Owner decision required: authorize a safe browser-test route/fixture, or accept the current unit/full-suite verification without Playwright.
+The React component tests exercise explicit confirmation, edits revoking confirmation, confirmed zero, duplicate ingredients, and unknown/estimated quantities. The regular Playwright configuration starts a provider server on port 4319 and an app server on port 4320, validates local E2E targets, and the connected Today journey creates a synthetic account/profile behind `COCINACORE_ISOLATED_E2E=1`. `E2E_DATABASE_URL` is constrained to `127.0.0.1:5435/cocinacore_local_db`; `E2E_REDIS_URL` to loopback port 6381. No browser run was started: these disposable DB/Redis targets were not provided or verified as available. Do not point synthetic writes at the original or production database. Owner selected the isolated Playwright route; execution awaits availability of the isolated targets, not new provisioning by this agent.
 
 ## Release gates still required
 
-- Resolve U5 browser-proof decision and record the result.
-- Identify the exact `status:approved` issue and confirm its scope before creating any PR.
-- Select a PR chain strategy for the four dependent slices; keep every PR under 400 changed lines, include the repository template, and add exactly one `type:*` label.
+- Owner selected isolated Playwright; provide/enable validated disposable local DB/Redis targets at the configured loopback endpoints before U5 runs.
+- Provide the exact M3.4 issue reference bearing `status:approved` and confirm its scope before creating any PR; the two currently approved issues found are unrelated.
+- The owner-selected PR strategy is stacked PRs to main; keep every PR under 400 changed lines, include the repository template, and add exactly one `type:*` label.
 - Push/PR publication and CI results remain unperformed; record them only after authorized execution.
 - Before any future production work, separately authorize and verify backup, migration ledger, acceptance, cleanup, and deployment gates. No merge, migration, production acceptance/write, or deployment is authorized by this draft.
 
