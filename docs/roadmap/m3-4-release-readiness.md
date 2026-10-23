@@ -1,6 +1,6 @@
 # M3.4 Release Readiness — Draft
 
-**State:** Local feature branch only; not ready for PR or release. U5 browser proof awaits an isolated target; an approved M3.4 issue reference is not available.
+**State:** Local feature branch only; PR preparation is authorized under approved issue #52. No PR or CI run has been created yet. U5's local isolated-browser proof remains blocked.
 **Branch:** `feat/m3-4-inventario-porciones`, based on `origin/main` at `52dd9fd45b759677fe996a6c477951acd363733a`.
 
 ## Local work units
@@ -13,7 +13,7 @@
 | U4 | `f151295461235590cae9f1ef7c3dc017d9d612d9` | Ephemeral user confirmation of current quantities | 306 |
 | **Total** | | Four focused, dependent work units | **1,186** |
 
-Each unit is below the 400 changed-line review budget. Owner selected **Stacked PRs to main**, in order U1 → U2 → U3 → U4; later units build on earlier Today UI/API work. No PR or push has been created. The issue-first check found only approved issues #10 (M2 profile/planning) and #3 (email identity), neither matching M3.4. An exact M3.4 issue with `status:approved` is still required. Use exactly one matching `type:*` label per PR.
+Each unit is below the 400 changed-line review budget. Owner selected **Stacked PRs to main**, in order U1 → U2 → U3 → U4; later units build on earlier Today UI/API work. Issue #52 is verified OPEN with `status:approved` and `type:feature`, and is limited to M3.4 development/PRs; it does not authorize merge or production. Planned branches are `feat/m3-4-u1-availability` (base `main`, 248 lines), `feat/m3-4-u2-portions` (base U1 branch, 346 lines), `feat/m3-4-u3-provenance` (base U2 branch, 286 lines), and `feat/m3-4-u4-confirmation` (base U3 branch, 346 lines including U6 documentation). PRs and CI are not yet created. Each PR will link #52 and carry exactly one `type:feature` label.
 
 ## Verification evidence
 
@@ -25,13 +25,17 @@ Each unit is below the 400 changed-line review budget. Owner selected **Stacked 
 
 ## U5 browser proof — blocked
 
-The React component tests exercise explicit confirmation, edits revoking confirmation, confirmed zero, duplicate ingredients, and unknown/estimated quantities. The regular Playwright configuration starts a provider server on port 4319 and an app server on port 4320, validates local E2E targets, and the connected Today journey creates a synthetic account/profile behind `COCINACORE_ISOLATED_E2E=1`. `E2E_DATABASE_URL` is constrained to `127.0.0.1:5435/cocinacore_local_db`; `E2E_REDIS_URL` to loopback port 6381. No browser run was started: these disposable DB/Redis targets were not provided or verified as available. Do not point synthetic writes at the original or production database. Owner selected the isolated Playwright route; execution awaits availability of the isolated targets, not new provisioning by this agent.
+The React component tests exercise explicit confirmation, edits revoking confirmation, confirmed zero, duplicate ingredients, and unknown/estimated quantities. The regular Playwright configuration starts a provider server on port 4319 and an app server on port 4320, validates local E2E targets, and the connected Today journey creates a synthetic account/profile behind `COCINACORE_ISOLATED_E2E=1`. Local targets are unavailable: the existing Docker resources on 5433/5434/6379/6380 are original/BuildingOS and forbidden; E2E ports 5435/6381 are not running. Do not provision, clone, migrate, reset, or touch those databases.
+
+Static CI review found a safe hosted-runner path: `.github/workflows/ci.yml` creates ephemeral GitHub Actions Postgres/Redis services, runs migrations/bootstrap only on that runner, and runs Playwright there. It does not connect to local or production services. The connected Today synthetic-account test is skipped by the current workflow because `COCINACORE_ISOLATED_E2E` is not set, so CI will not by itself close the specific U5 browser-proof gap. The deploy, production migration, and production acceptance workflows are separate `workflow_dispatch` workflows gated to `main`; a CI dispatch does not invoke them.
+
+The PR workflow trigger filters `pull_request` to base `main`; stacked child PRs targeting parent branches need explicit `workflow_dispatch` of the CI workflow for each exact branch. No such run has been triggered yet.
 
 ## Release gates still required
 
-- Owner selected isolated Playwright; provide/enable validated disposable local DB/Redis targets at the configured loopback endpoints before U5 runs.
-- Provide the exact M3.4 issue reference bearing `status:approved` and confirm its scope before creating any PR; the two currently approved issues found are unrelated.
-- The owner-selected PR strategy is stacked PRs to main; keep every PR under 400 changed lines, include the repository template, and add exactly one `type:*` label.
+- Resolve the isolated local Playwright target before claiming the full U5 browser proof; do not use the original/BuildingOS Docker resources.
+- Create the four stacked drafts under approved issue #52; PR1 targets `main`, later PRs target their immediate parent PR branches. Use the repository template, keep each below 400 changed lines, and apply exactly one `type:feature` label.
+- Trigger and record safe hosted CI on each exact PR branch. Child PRs do not receive automatic pull-request CI because the workflow filters base branches to `main`.
 - Push/PR publication and CI results remain unperformed; record them only after authorized execution.
 - Before any future production work, separately authorize and verify backup, migration ledger, acceptance, cleanup, and deployment gates. No merge, migration, production acceptance/write, or deployment is authorized by this draft.
 
