@@ -6,6 +6,18 @@ import { safeFetch } from '@/lib/api';
 export type TodaySlot = 'breakfast' | 'lunch' | 'snack' | 'dinner';
 export type TodayOptionSource = 'provider' | 'history' | 'saved_plan' | 'saved_recipe';
 
+export interface TodayIngredientAvailability {
+  name: string;
+  availability: 'sufficient' | 'partial' | 'missing' | 'unknown';
+  present: boolean;
+  requiredQuantity: number | null;
+  requiredUnit: string;
+  availableQuantity: number | null;
+  availableUnit: string;
+  missingQuantity: number | null;
+  remainingQuantity: number | null;
+}
+
 export interface TodayOption {
   title: string;
   slot: TodaySlot;
@@ -16,6 +28,7 @@ export interface TodayOption {
   availableIngredients: string[];
   missingIngredients: string[];
   unknownIngredients?: string[];
+  ingredientAvailability?: TodayIngredientAvailability[];
 }
 
 export interface TodayResponse {
@@ -49,6 +62,21 @@ export function getNextSlotIndex(currentIndex: number, key: string, slotCount: n
   if (key === 'ArrowRight' || key === 'ArrowDown') return (currentIndex + 1) % slotCount;
   if (key === 'ArrowLeft' || key === 'ArrowUp') return (currentIndex - 1 + slotCount) % slotCount;
   return null;
+}
+
+function formatAmount(quantity: number | null, unit: string): string | null {
+  return quantity === null || unit === 'unknown' ? null : `${quantity} ${unit}`;
+}
+
+function formatIngredientAvailability(ingredient: TodayIngredientAvailability): string {
+  const required = formatAmount(ingredient.requiredQuantity, ingredient.requiredUnit);
+  const available = formatAmount(ingredient.availableQuantity, ingredient.availableUnit);
+  const missing = formatAmount(ingredient.missingQuantity, ingredient.requiredUnit);
+  return [
+    `${ingredient.name}: ${required ? `requiere ${required}` : 'requerimiento no cuantificable'}`,
+    available ? `disponible ${available}` : 'inventario no verificable',
+    missing ? `faltan ${missing}` : 'faltante no calculable',
+  ].join('; ');
 }
 
 const sourceLabels: Record<TodayOptionSource, string> = {
@@ -93,6 +121,19 @@ export function TodayRecommendationResults({ response, slot, onChoose }: TodayRe
                     <div><dt className="inline font-semibold text-[#241A14]">Falta: </dt><dd className="inline text-[#6B5A50]">{option.missingIngredients.length ? option.missingIngredients.join(', ') : 'sin faltantes confirmados'}</dd></div>
                     {option.unknownIngredients?.length ? (
                       <div><dt className="inline font-semibold text-[#241A14]">Sin verificar: </dt><dd className="inline text-[#6B5A50]">{option.unknownIngredients.join(', ')}</dd></div>
+                    ) : null}
+                    {option.ingredientAvailability?.length ? (
+                      <div>
+                        <dt className="font-semibold text-[#241A14]">Detalle de cantidades</dt>
+                        <dd className="text-[#6B5A50]">
+                          Cantidades de origen; no ajustadas por porciones.
+                          <ul className="mt-1 grid gap-1">
+                            {option.ingredientAvailability.map((ingredient, ingredientIndex) => (
+                              <li key={`${ingredient.name}-${ingredientIndex}`}>{formatIngredientAvailability(ingredient)}</li>
+                            ))}
+                          </ul>
+                        </dd>
+                      </div>
                     ) : null}
                   </dl>
                   <button

@@ -155,6 +155,7 @@ function userReason(candidate: LocalFirstRecommendation) {
     availableIngredients,
     missingIngredients,
     unknownIngredients,
+    ingredientAvailability: candidate.ingredientAvailability,
     uncertainty: candidate.uncertainty,
   };
 }
