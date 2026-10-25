@@ -1,6 +1,6 @@
 # M3.4 Release Readiness
 
-**Current state (2026-10-25):** M3.4 product PRs #53–#56, correction PR #58, U5 PR #61, and GGA policy PR #59 are merged to `main` with ancestry-preserving merge commits. Main CI is green through U5; post-PR59 main CI is still running on `bdfb97a64c5ad37cef6c2442efc4ff894233276e` and must pass before PR #60 is merged. Production deployment, production migrations, and production acceptance remain **not performed** and are separately gated; this document does not authorize them.
+**Current state (2026-10-25):** M3.4 product PRs #53–#56, correction PR #58, U5 PR #61, and GGA policy PR #59 are merged to `main` with ancestry-preserving merge commits. Main CI is green through PR #59. Post-PR59 main CI [40215516582](https://github.com/yabreu65/cocinacore/actions/runs/40215516582) completed SUCCESS on `bdfb97a64c5ad37cef6c2442efc4ff894233276e`; PR #60 remains the final readiness-document PR. Production deployment, production migrations, and production acceptance remain **not performed** and are separately gated; this document does not authorize them.
 
 ## Merged implementation and CI evidence
 
@@ -12,7 +12,7 @@
 | #56 | U4 — migration-free inventory confirmation | `c2f9a00833bc97eea66ce8acd726a875e0f82ed0` | [40152744480](https://github.com/yabreu65/cocinacore/actions/runs/40152744480) | SUCCESS |
 | #58 | R3 — inventory/portion correction | `a38f6dfb05fb7794218d2fdc2de187f86eaa923a` | [40153707725](https://github.com/yabreu65/cocinacore/actions/runs/40153707725) | SUCCESS |
 | #61 | U5 — hosted connected Today proof and test correction | `40d40a8bc58cac10f6a53912d9e4d2344a8ee748` | [40214765776](https://github.com/yabreu65/cocinacore/actions/runs/40214765776) | SUCCESS |
-| #59 | GGA review policy | `bdfb97a64c5ad37cef6c2442efc4ff894233276e` | [40215516582](https://github.com/yabreu65/cocinacore/actions/runs/40215516582) | IN PROGRESS — verify and record its final result before merging #60 |
+| #59 | GGA review policy | `bdfb97a64c5ad37cef6c2442efc4ff894233276e` | [40215516582](https://github.com/yabreu65/cocinacore/actions/runs/40215516582) | SUCCESS (`frontend-quality`, `E2E Tests`; connected journey skipped in push CI) |
 
 The exact main-run heads are the merge commits shown above. The run IDs are recorded once; do not dispatch replacement runs. PR #60 is the remaining readiness-document PR.
 
@@ -21,7 +21,7 @@ The exact main-run heads are the merge commits shown above. The run IDs are reco
 - Connected Today workflow-dispatch run [40204398689](https://github.com/yabreu65/cocinacore/actions/runs/40204398689) completed **SUCCESS** on head `1233324ee757cd724e888c3e7ec89b1c2905cc52`; the connected Today Playwright journey ran and passed. This is distinct from the post-merge main CI, where the manual connected journey is skipped.
 - Standard PR CI [40204324702](https://github.com/yabreu65/cocinacore/actions/runs/40204324702) also completed **SUCCESS** on that exact U5 head.
 - Native RDD lineage `review-a65f7ae25849dd30`, target `sha256:c0e4dddf23ab06e15dfc5834e125cb715436d48abf5e7659d3e05bac90cca509`: the provider-frozen risk, readability, and reliability lenses were admitted once each; review closed **APPROVED** and the exact acknowledgement was completed/burned at revision `sha256:dbedca6b9c7f888644bd45d0924de2c1d5c7817443d804c1eebcdee4a7cc87c0`.
-- PR #59 was assessed on its actual tested base `a38f6dfb05fb7794218d2fdc2de187f86eaa923a`: `risk=medium`, `nativeRisk=medium`, `reviewDue=false`. Exact-head CI [40214453804](https://github.com/yabreu65/cocinacore/actions/runs/40214453804) passed both `frontend-quality` and `E2E Tests`; the PR was merged preserving ancestry. Its post-merge main CI is listed above and remains in progress as of this document update.
+- PR #59 was assessed on its actual tested base `a38f6dfb05fb7794218d2fdc2de187f86eaa923a`: `risk=medium`, `nativeRisk=medium`, `reviewDue=false`. Exact-head CI [40214453804](https://github.com/yabreu65/cocinacore/actions/runs/40214453804) passed both `frontend-quality` and `E2E Tests`; the PR was merged preserving ancestry. Its post-merge main CI completed SUCCESS on the exact merge commit; the connected Today manual journey is skipped by the push-triggered workflow. The separate connected workflow-dispatch journey passed on PR #61 as recorded above.
 
 ## Supporting CI repair and duplicate PR disposition
 
@@ -48,7 +48,6 @@ Do not invoke production deploy or migration workflows unless these gates are ev
 
 ## Remaining closeout sequence
 
-1. Record the final SUCCESS (or failure) for post-PR59 main CI #40215516582 on exact merge commit `bdfb97a64c5ad37cef6c2442efc4ff894233276e`.
-2. Run documentation-focused checks and the normal GGA pre-commit hook for this readiness update; commit through that hook and push the existing PR #60 branch without force-pushing.
-3. Validate PR #60 exact-head CI, run passive native ASSESS for the committed documentation candidate, and merge with an exact-head guard only after all applicable gates pass.
-4. Complete the final-SHA non-destructive production preflight evidence above; stop if backup/restore, migration correlation, secret validation, or required acceptance proof is missing. No deployment or migration occurs as part of this documentation closeout.
+1. Run documentation-focused checks and the normal GGA pre-commit hook for this final CI-status update; commit through that hook and push the existing PR #60 branch without force-pushing.
+2. Validate PR #60 CI on the final exact head and run passive native ASSESS for that committed documentation candidate; merge with an exact-head guard only after all applicable gates pass.
+3. Complete the final-SHA non-destructive production preflight evidence above; stop if backup/restore, migration correlation, secret validation, or required acceptance proof is missing. No deployment or migration occurs as part of this documentation closeout.
