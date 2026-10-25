@@ -16,6 +16,7 @@ import {
 import { findLatestMealPlanByUserAndTenant } from '@/lib/db/repositories/mealPlanRepository';
 import { retrieveServerRagContext } from '@/lib/recipes/server-rag-context';
 import { buildTodayContext, type TodayProviderContext } from '@/lib/today/context';
+import { parseQuantity } from '@/lib/inventory/quantity-normalization';
 import {
   rankOneSlotOptions,
   TODAY_SLOT_VALUES,
@@ -156,6 +157,7 @@ function userReason(candidate: LocalFirstRecommendation) {
     missingIngredients,
     unknownIngredients,
     ingredientAvailability: candidate.ingredientAvailability,
+    quantityProvenance: candidate.quantityProvenance,
     uncertainty: candidate.uncertainty,
   };
 }
@@ -466,12 +468,20 @@ export async function POST(request: NextRequest) {
       id: recipe.id,
       title: recipe.current_version.title,
       slot,
-      ingredients: recipe.current_version.ingredients.map(({ name, quantity, unit }) =>
-        [quantity, unit, name].filter((part): part is string => typeof part === 'string' && part.trim().length > 0).join(' ')
-      ),
+      ingredients: recipe.current_version.ingredients.map(({ name, quantity, unit }) => {
+        const parsed = typeof quantity === 'string' ? parseQuantity(quantity) : null;
+        return {
+          name,
+          quantity: parsed?.structured ? parsed.value : null,
+          unit: unit ?? (parsed?.structured ? parsed.unit : null),
+        };
+      }),
       prepMinutes: null,
       servings: recipe.current_version.servings,
       source: 'saved_recipe',
+      ...(recipe.current_version.ingredients.some(({ quantity }) => typeof quantity === 'string' && quantity.trim().length > 0)
+        ? { quantityProvenance: recipe.current_version.source_recipe_history_id ? 'ai_estimate' as const : 'unknown' as const }
+        : {}),
       identity: { userId: recipe.user_id, tenantId: recipe.tenant_id },
     })),
     ...contextResult.localSignals.historyCandidates.map((candidate, index): LocalFirstCandidate => ({

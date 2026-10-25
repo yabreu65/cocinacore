@@ -67,7 +67,7 @@ describe('listTodayRecipeHistoryByUserAndTenant', () => {
     queryMock.mockResolvedValue({ rows: [] });
     await listTodayRecipeHistoryByUserAndTenant('user-1', 'tenant-1', '2025-04-01T00:00:00Z', 90);
     const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
-    expect(sql).toMatch(/select\s+recipe_title,\s*recipe_payload,\s*created_at/i);
+    expect(sql).toMatch(/select\s+source,\s*recipe_title,\s*recipe_payload,\s*created_at/i);
     expect(sql).toContain('user_id = $1');
     expect(sql).toContain('tenant_id = $2');
     expect(sql).toContain('created_at >= $3');
@@ -165,6 +165,26 @@ describe('persistent recipe repository', () => {
     expect(sql[2]).toContain('coalesce(max(version_number), 0) + 1');
     expect(clientQuery.mock.calls[1]?.[1]).toEqual(['recipe-1', 'tenant-1', 'user-1']);
     expect(sql.some((statement) => /update\s+public\.user_recipe_versions|delete\s+from\s+public\.user_recipe/i.test(statement))).toBe(false);
+  });
+
+  it('returns the saved-history link in the internal recipe list projection', async () => {
+    const clientQuery = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{
+        id: 'recipe-1', tenant_id: 'tenant-1', user_id: 'user-1', category: null, tags: [],
+        archived_at: null, created_at: '', updated_at: '', current_version_id: 'version-1',
+        current_version_number: 1, current_version_title: 'Rice', current_version_instructions: 'Cook.',
+        current_version_servings: 2, current_version_ingredients: [{ name: 'rice', quantity: '1', unit: 'cup' }],
+        current_version_source_recipe_history_id: 'history-1', current_version_created_at: '',
+      }] });
+    mockTransaction(clientQuery);
+
+    const recipes = await listPersistentRecipes(recipeScope);
+
+    expect(String(clientQuery.mock.calls[1]?.[0])).toContain(
+      'current_version.source_recipe_history_id as current_version_source_recipe_history_id'
+    );
+    expect(recipes[0]?.current_version.source_recipe_history_id).toBe('history-1');
   });
 
   it('scopes list search and archive filtering with parameterized pagination', async () => {

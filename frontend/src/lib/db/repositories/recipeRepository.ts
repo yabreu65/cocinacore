@@ -9,7 +9,7 @@ import type {
   UserRecipeVersionRow,
 } from '@/lib/db/types';
 
-export type TodayRecipeHistoryRow = Pick<RecipeAiHistoryRow, 'recipe_title' | 'recipe_payload' | 'created_at'>;
+export type TodayRecipeHistoryRow = Pick<RecipeAiHistoryRow, 'source' | 'recipe_title' | 'recipe_payload' | 'created_at'>;
 
 const MAX_TODAY_HISTORY_LIMIT = 20;
 
@@ -23,7 +23,7 @@ export async function listTodayRecipeHistoryByUserAndTenant(
     ? Math.min(MAX_TODAY_HISTORY_LIMIT, Math.max(1, Math.floor(limit)))
     : MAX_TODAY_HISTORY_LIMIT;
   const result = await query<TodayRecipeHistoryRow>(
-    `select recipe_title, recipe_payload, created_at
+    `select source, recipe_title, recipe_payload, created_at
      from public.recipe_ai_history
      where user_id = $1 and tenant_id = $2 and created_at >= $3
      order by created_at desc
@@ -182,6 +182,7 @@ type PersistentRecipeListQueryRow = UserRecipeRow & {
   current_version_instructions: string;
   current_version_servings: number | null;
   current_version_ingredients: ManualRecipeIngredient[];
+  current_version_source_recipe_history_id: string | null;
   current_version_created_at: string;
 };
 
@@ -291,6 +292,7 @@ export async function listPersistentRecipes(
               current_version.instructions as current_version_instructions,
               current_version.servings as current_version_servings,
               current_version.ingredients as current_version_ingredients,
+              current_version.source_recipe_history_id as current_version_source_recipe_history_id,
               current_version.created_at as current_version_created_at
        from public.user_recipes recipe
        join lateral (
@@ -319,6 +321,7 @@ export async function listPersistentRecipes(
         instructions: row.current_version_instructions,
         servings: row.current_version_servings,
         ingredients: row.current_version_ingredients,
+        source_recipe_history_id: row.current_version_source_recipe_history_id,
         created_at: row.current_version_created_at,
       },
     } as UserRecipeListDto));

@@ -10,6 +10,7 @@ export type TodayOptionSource = 'provider' | 'history' | 'saved_plan' | 'saved_r
 export interface TodayIngredientAvailability {
   name: string;
   availability: 'sufficient' | 'partial' | 'missing' | 'unknown';
+  quantityProvenance?: 'ai_estimate' | 'unknown';
   present: boolean;
   requiredQuantity: number | null;
   requiredUnit: string;
@@ -31,6 +32,7 @@ export interface TodayOption {
   unknownIngredients?: string[];
   ingredientAvailability?: TodayIngredientAvailability[];
   servings?: number | null;
+  quantityProvenance?: 'ai_estimate' | 'unknown';
 }
 
 export interface TodayResponse {
@@ -86,8 +88,14 @@ function formatIngredientAvailability(ingredient: TodayIngredientAvailability): 
   const required = formatAmount(ingredient.requiredQuantity, ingredient.requiredUnit);
   const available = formatAmount(ingredient.availableQuantity, ingredient.availableUnit);
   const missing = formatAmount(ingredient.missingQuantity, ingredient.requiredUnit);
+  const quantitySource = ingredient.quantityProvenance === undefined
+    ? []
+    : [ingredient.quantityProvenance === 'ai_estimate'
+      ? 'cantidad estimada por IA, no verificada'
+      : 'procedencia de cantidad desconocida'];
   return [
     `${ingredient.name}: ${required ? `requiere ${required}` : 'requerimiento no cuantificable'}`,
+    ...quantitySource,
     available ? `disponible ${available}` : 'inventario no verificable',
     missing ? `faltan ${missing}` : 'faltante no calculable',
   ].join('; ');
@@ -146,6 +154,11 @@ export function TodayRecommendationResults({ response, slot, onChoose }: TodayRe
                   </div>
                   <p className="mt-2 text-sm text-[#6B5A50]">{option.reason}</p>
                   <p className="mt-1 text-xs text-[#6B5A50]">Origen: {sourceLabels[option.source]}</p>
+                  {option.quantityProvenance === 'ai_estimate' ? (
+                    <p className="mt-1 text-xs text-amber-800">Cantidades estimadas por IA; no verificadas.</p>
+                  ) : option.quantityProvenance === 'unknown' ? (
+                    <p className="mt-1 text-xs text-[#6B5A50]">Procedencia de cantidades desconocida.</p>
+                  ) : null}
                   <p className="mt-2 text-sm text-[#6B5A50]">
                     {option.prepMinutes === null ? 'Tiempo no estimado' : `${option.prepMinutes} minutos`}
                   </p>

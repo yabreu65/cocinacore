@@ -10,6 +10,7 @@ import { parseMealConsumptionPayload, mealConsumptionKey } from '@/lib/meal-plan
 import { parseStructuredMealPlanValue, type StructuredMealType } from '@/lib/meal-planner/structured-plan';
 import { containsRestrictedIngredientName } from '@/lib/recipes/structured-ingredients';
 import type { TodayOptionSource, TodaySlot } from './one-slot';
+import type { LocalFirstIngredient } from './local-first-engine';
 
 const MAX_INVENTORY_ITEMS = 50;
 const MAX_HISTORY_TITLES = 20;
@@ -40,12 +41,15 @@ export interface TodayProviderContext {
   householdCounts?: { adult: number; teen: number; child: number };
 }
 
+export type TodayQuantityProvenance = 'ai_estimate' | 'unknown';
+
 export interface TodayLocalCandidate {
   title: string;
   slot: TodaySlot;
-  ingredients: string[];
+  ingredients: LocalFirstIngredient[];
   prepMinutes: number | null;
   source: TodayOptionSource;
+  quantityProvenance?: TodayQuantityProvenance;
 }
 
 export interface TodayLocalSignals {
@@ -66,7 +70,7 @@ export interface BuildTodayContextInput {
   profile: UserCulinaryProfileRow | null;
   terms: readonly UserCulinaryProfileTermWithLabel[];
   inventory: readonly Pick<RecipeInventoryItemRow, 'tenant_id' | 'ingredient_name' | 'quantity' | 'unit' | 'expiration_date'>[];
-  history: readonly Pick<RecipeAiHistoryRow, 'recipe_title' | 'recipe_payload' | 'created_at'>[];
+  history: readonly Pick<RecipeAiHistoryRow, 'source' | 'recipe_title' | 'recipe_payload' | 'created_at'>[];
   latestPlan?: Pick<UserMealPlanRow, 'period' | 'calendar_payload' | 'consumption_payload'> | null;
   consumption?: unknown;
 }
@@ -115,7 +119,11 @@ function buildInventory(
   return output;
 }
 
-function parseHistoryCandidate(raw: unknown, defaultTitle: unknown): TodayLocalCandidate | null {
+function parseHistoryCandidate(
+  raw: unknown,
+  defaultTitle: unknown,
+  quantityProvenance: TodayQuantityProvenance,
+): TodayLocalCandidate | null {
   if (!isRecord(raw)) return null;
   const slot = raw.slot;
   const title = cleanString(raw.title ?? defaultTitle, 120);
@@ -124,20 +132,30 @@ function parseHistoryCandidate(raw: unknown, defaultTitle: unknown): TodayLocalC
   if (prepMinutes !== undefined && (typeof prepMinutes !== 'number' || !Number.isInteger(prepMinutes) || prepMinutes < 1 || prepMinutes > 240)) return null;
   if (!title || typeof slot !== 'string' || !SLOT_VALUES.has(slot as TodaySlot)) return null;
   if (!Array.isArray(rawIngredients) || rawIngredients.length < 1 || rawIngredients.length > MAX_INGREDIENTS) return null;
-  const ingredients: string[] = [];
+  const ingredients: LocalFirstIngredient[] = [];
   for (const item of rawIngredients) {
     if (!isRecord(item) || item.structured !== true || typeof item.normalized_name !== 'string') return null;
     const name = cleanString(item.name, 80);
     if (!name) return null;
     if (item.quantity !== null && (typeof item.quantity !== 'number' || !Number.isFinite(item.quantity) || item.quantity < 0)) return null;
     if (item.unit !== null && typeof item.unit !== 'string') return null;
-    ingredients.push(name);
+    ingredients.push({ name, quantity: item.quantity, unit: item.unit });
   }
-  return { title, slot: slot as TodaySlot, ingredients, prepMinutes: prepMinutes ?? null, source: 'history' };
+  return {
+    title,
+    slot: slot as TodaySlot,
+    ingredients,
+    prepMinutes: prepMinutes ?? null,
+    source: 'history',
+    ...(ingredients.some((ingredient) => typeof ingredient !== 'string' && ingredient.quantity !== null && ingredient.quantity !== undefined)
+      ? { quantityProvenance }
+      : {}),
+  };
 }
 
-function conflictsWithRestrictions(ingredients: readonly string[], restrictions: readonly string[]): boolean {
-  return ingredients.length === 0 || containsRestrictedIngredientName(ingredients, restrictions);
+function conflictsWithRestrictions(ingredients: readonly LocalFirstIngredient[], restrictions: readonly string[]): boolean {
+  const names = ingredients.map((ingredient) => typeof ingredient === 'string' ? ingredient : ingredient.name);
+  return names.length === 0 || containsRestrictedIngredientName(names, restrictions);
 }
 
 function savedPlanCandidates(input: BuildTodayContextInput, restrictions: readonly string[]): TodayLocalCandidate[] {
@@ -150,9 +168,16 @@ function savedPlanCandidates(input: BuildTodayContextInput, restrictions: readon
   for (const day of parsed.plan.days) {
     for (const meal of day.meals) {
       if (meal.mealType !== input.slot || consumption[mealConsumptionKey(day.dayIndex, meal.mealType)]) continue;
-      const ingredients = meal.ingredients.map(({ name }) => name);
+      const ingredients: LocalFirstIngredient[] = meal.ingredients.map(({ name, quantity, unit }) => ({ name, quantity, unit }));
       if (conflictsWithRestrictions(ingredients, restrictions)) continue;
-      candidates.push({ title: meal.title, slot: meal.mealType, ingredients, prepMinutes: null, source: 'saved_plan' });
+      candidates.push({
+        title: meal.title,
+        slot: meal.mealType,
+        ingredients,
+        prepMinutes: null,
+        source: 'saved_plan',
+        ...(meal.ingredients.some(({ quantity }) => quantity !== null) ? { quantityProvenance: 'ai_estimate' } : {}),
+      });
       if (candidates.length >= MAX_SAVED_PLAN_CANDIDATES) return candidates;
     }
   }
@@ -193,7 +218,11 @@ export function buildTodayContext(input: BuildTodayContextInput): TodayContextRe
     const title = cleanString(row.recipe_title, 120);
     if (title && recentTitles.length < MAX_HISTORY_TITLES && !recentTitles.includes(title)) recentTitles.push(title);
     if (historyCandidates.length >= MAX_HISTORY_CANDIDATES) continue;
-    const candidate = parseHistoryCandidate(row.recipe_payload, row.recipe_title);
+    const candidate = parseHistoryCandidate(
+      row.recipe_payload,
+      row.recipe_title,
+      row.source === 'gemini' ? 'ai_estimate' : 'unknown',
+    );
     if (candidate?.slot === input.slot && !conflictsWithRestrictions(candidate.ingredients, restrictions)) historyCandidates.push(candidate);
   }
 
