@@ -162,6 +162,7 @@ describe('TodayRecommendations', () => {
   it('does not treat registered stock as sufficient until explicitly confirmed for this decision', () => {
     const confirmedOption = {
       ...option,
+      servings: 4,
       ingredients: ['1 kg arroz', '1 kg tomate'],
       ingredientAvailability: [
         {
@@ -179,9 +180,10 @@ describe('TodayRecommendations', () => {
     hookHarness.states = [];
     hookHarness.active = true;
     const onChoose = vi.fn();
+    const confirmedResponse: TodayResponse = { status: 'success', options: [confirmedOption] };
     const render = () => {
       hookHarness.cursor = 0;
-      return TodayRecommendationResults({ response: { status: 'success', options: [confirmedOption] }, slot: 'lunch', onChoose });
+      return TodayRecommendationResults({ response: confirmedResponse, slot: 'lunch', onChoose });
     };
     const findElement = (tree: unknown, predicate: (element: { type?: unknown; props?: Record<string, unknown> }) => boolean): { props: Record<string, unknown> } => {
       if (!tree || typeof tree !== 'object') throw new Error('Element not found');
@@ -203,6 +205,9 @@ describe('TodayRecommendations', () => {
       expect(markup).not.toContain('Falta:');
       expect(markup).toContain('El inventario solo se confirma para esta decisión y no se guarda.');
 
+      const targetServings = findElement(tree, (element) => element.type === 'input' && element.props?.id === 'today-target-servings-0');
+      (targetServings.props.onChange as (event: { target: { value: string } }) => void)({ target: { value: '4' } });
+      tree = render();
       const quantity = findElement(tree, (element) => element.type === 'input' && element.props?.['aria-label'] === 'Cantidad actual de arroz (kg)');
       (quantity.props.onChange as (event: { target: { value: string } }) => void)({ target: { value: '2' } });
       tree = render();
@@ -230,6 +235,112 @@ describe('TodayRecommendations', () => {
       tree = render();
       markup = renderToStaticMarkup(tree);
       expect(markup).toContain('Disponibilidad para esta decisión: </dt><dd class="inline text-[#6B5A50]">parcial según cantidades confirmadas</dd>');
+    } finally {
+      hookHarness.active = false;
+      hookHarness.states = [];
+    }
+  });
+
+  it('compares confirmed stock against the requirement scaled to explicit target servings', () => {
+    const scaledOption = {
+      ...option,
+      servings: 4,
+      ingredientAvailability: [{
+        name: 'arroz', availability: 'sufficient' as const, present: true,
+        requiredQuantity: 1, requiredUnit: 'kg', availableQuantity: 1.5,
+        availableUnit: 'kg', missingQuantity: 0, remainingQuantity: 0,
+      }],
+    };
+    const scaledResponse: TodayResponse = { status: 'success', options: [scaledOption] };
+    hookHarness.states = [];
+    hookHarness.active = true;
+    const render = () => {
+      hookHarness.cursor = 0;
+      return TodayRecommendationResults({ response: scaledResponse, slot: 'lunch', onChoose: vi.fn() });
+    };
+    const findElement = (tree: unknown, predicate: (element: { type?: unknown; props?: Record<string, unknown> }) => boolean): { props: Record<string, unknown> } => {
+      if (!tree || typeof tree !== 'object') throw new Error('Element not found');
+      const element = tree as { type?: unknown; props?: Record<string, unknown> };
+      if (predicate(element)) return element as { props: Record<string, unknown> };
+      const children = element.props?.children;
+      for (const child of Array.isArray(children) ? children : [children]) {
+        try { return findElement(child, predicate); } catch { /* Continue through the element tree. */ }
+      }
+      throw new Error('Element not found');
+    };
+
+    try {
+      let tree = render();
+      const targetServings = findElement(tree, (element) => element.type === 'input' && element.props?.id === 'today-target-servings-0');
+      (targetServings.props.onChange as (event: { target: { value: string } }) => void)({ target: { value: '8' } });
+      tree = render();
+      const quantity = findElement(tree, (element) => element.type === 'input' && element.props?.['aria-label'] === 'Cantidad actual de arroz (kg)');
+      (quantity.props.onChange as (event: { target: { value: string } }) => void)({ target: { value: '1.5' } });
+      tree = render();
+      const checkbox = findElement(tree, (element) => element.type === 'input' && element.props?.['aria-label'] === 'Confirmo que la cantidad de arroz está vigente');
+      (checkbox.props.onChange as (event: { target: { checked: boolean } }) => void)({ target: { checked: true } });
+      tree = render();
+
+      const markup = renderToStaticMarkup(tree);
+      expect(markup).toContain('arroz: requiere 2 kg');
+      expect(markup).toContain('Disponibilidad para esta decisión: </dt><dd class="inline text-[#6B5A50]">parcial según cantidades confirmadas</dd>');
+    } finally {
+      hookHarness.active = false;
+      hookHarness.states = [];
+    }
+  });
+
+  it('invalidates inventory confirmation when refreshed results replace an ingredient', () => {
+    const createResponse = (name: string): TodayResponse => ({
+      status: 'success',
+      options: [{
+        ...option,
+        servings: 4,
+        ingredientAvailability: [{
+          name, availability: 'sufficient', present: true,
+          requiredQuantity: 1, requiredUnit: 'kg', availableQuantity: 2,
+          availableUnit: 'kg', missingQuantity: 0, remainingQuantity: 1,
+        }],
+      }],
+    });
+    let currentResponse = createResponse('arroz');
+    hookHarness.states = [];
+    hookHarness.active = true;
+    const render = () => {
+      hookHarness.cursor = 0;
+      return TodayRecommendationResults({ response: currentResponse, slot: 'lunch', onChoose: vi.fn() });
+    };
+    const findElement = (tree: unknown, predicate: (element: { type?: unknown; props?: Record<string, unknown> }) => boolean): { props: Record<string, unknown> } => {
+      if (!tree || typeof tree !== 'object') throw new Error('Element not found');
+      const element = tree as { type?: unknown; props?: Record<string, unknown> };
+      if (predicate(element)) return element as { props: Record<string, unknown> };
+      const children = element.props?.children;
+      for (const child of Array.isArray(children) ? children : [children]) {
+        try { return findElement(child, predicate); } catch { /* Continue through the element tree. */ }
+      }
+      throw new Error('Element not found');
+    };
+
+    try {
+      let tree = render();
+      const targetServings = findElement(tree, (element) => element.type === 'input' && element.props?.id === 'today-target-servings-0');
+      (targetServings.props.onChange as (event: { target: { value: string } }) => void)({ target: { value: '4' } });
+      tree = render();
+      const quantity = findElement(tree, (element) => element.type === 'input' && element.props?.['aria-label'] === 'Cantidad actual de arroz (kg)');
+      (quantity.props.onChange as (event: { target: { value: string } }) => void)({ target: { value: '2' } });
+      tree = render();
+      const checkbox = findElement(tree, (element) => element.type === 'input' && element.props?.['aria-label'] === 'Confirmo que la cantidad de arroz está vigente');
+      (checkbox.props.onChange as (event: { target: { checked: boolean } }) => void)({ target: { checked: true } });
+      tree = render();
+      expect(renderToStaticMarkup(tree)).toContain('Disponibilidad para esta decisión: </dt><dd class="inline text-[#6B5A50]">suficiente</dd>');
+
+      currentResponse = createResponse('tomate');
+      tree = render();
+      const refreshedQuantity = findElement(tree, (element) => element.type === 'input' && element.props?.['aria-label'] === 'Cantidad actual de tomate (kg)');
+      const refreshedCheckbox = findElement(tree, (element) => element.type === 'input' && element.props?.['aria-label'] === 'Confirmo que la cantidad de tomate está vigente');
+      expect(refreshedQuantity.props.value).toBe('');
+      expect(refreshedCheckbox.props.checked).toBe(false);
+      expect(renderToStaticMarkup(tree)).toContain('Disponibilidad para esta decisión: </dt><dd class="inline text-[#6B5A50]">desconocida</dd>');
     } finally {
       hookHarness.active = false;
       hookHarness.states = [];
@@ -298,7 +409,7 @@ describe('TodayRecommendations', () => {
     );
 
     expect(markup).toContain('Detalle de cantidades');
-    expect(markup).toContain('tomate: requiere 1 kg; registrado 0.5 kg (sin confirmar)');
+    expect(markup).toContain('tomate: requerimiento de origen 1 kg; registrado 0.5 kg (sin confirmar)');
     expect(markup).toContain('aceite: requerimiento no cuantificable; sin cantidad registrada; no se asume cero');
   });
 

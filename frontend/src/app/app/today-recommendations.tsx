@@ -57,6 +57,37 @@ interface TodayRecommendationResultsProps {
   onChoose: (option: TodayOptionIntent) => void;
 }
 
+interface SessionInventoryInput {
+  quantity: string;
+  confirmed: boolean;
+  response: TodayResponse;
+  decisionKey: string;
+}
+
+function scaleInventoryRequirement(requiredQuantity: number | null, factor: number | null): number | null {
+  if (
+    requiredQuantity === null || !Number.isFinite(requiredQuantity) || requiredQuantity <= 0 ||
+    factor === null || !Number.isFinite(factor) || factor <= 0
+  ) return null;
+  const scaled = requiredQuantity * factor;
+  return Number.isFinite(scaled) && scaled > 0 ? scaled : null;
+}
+
+function inventoryDecisionKey(
+  ingredient: TodayIngredientAvailability,
+  targetServings: number | null,
+  factor: number | null,
+): string {
+  return [
+    targetServings ?? 'unknown',
+    factor ?? 'unknown',
+    normalizeInventoryName(ingredient.name),
+    ingredient.requiredQuantity ?? 'unknown',
+    ingredient.requiredUnit,
+    ingredient.quantityProvenance ?? 'known',
+  ].join(':');
+}
+
 const slots: Array<{ value: TodaySlot; label: string }> = [
   { value: 'breakfast', label: 'Desayuno' },
   { value: 'lunch', label: 'Almuerzo' },
@@ -92,16 +123,26 @@ function parseNonNegativeNumber(value: string): number | null {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
-function formatIngredientAvailability(ingredient: TodayIngredientAvailability): string {
-  const required = formatAmount(ingredient.requiredQuantity, ingredient.requiredUnit);
+function formatIngredientAvailability(
+  ingredient: TodayIngredientAvailability,
+  requiredQuantity: number | null,
+  requirementIsScaled: boolean,
+): string {
+  const required = formatAmount(requiredQuantity, ingredient.requiredUnit);
+  const sourceRequirement = formatAmount(ingredient.requiredQuantity, ingredient.requiredUnit);
   const registered = formatAmount(ingredient.availableQuantity, ingredient.availableUnit);
   const quantitySource = ingredient.quantityProvenance === undefined
     ? []
     : [ingredient.quantityProvenance === 'ai_estimate'
       ? 'cantidad estimada por IA; no se puede verificar suficiencia'
       : 'procedencia de cantidad desconocida'];
+  const requirement = required
+    ? `${requirementIsScaled ? 'requiere' : 'requerimiento de origen'} ${required}`
+    : sourceRequirement && !requirementIsScaled
+      ? `requerimiento de origen ${sourceRequirement}`
+      : 'requerimiento no cuantificable';
   return [
-    `${ingredient.name}: ${required ? `requiere ${required}` : 'requerimiento no cuantificable'}`,
+    `${ingredient.name}: ${requirement}`,
     ...quantitySource,
     registered ? `registrado ${registered} (sin confirmar)` : ingredient.present ? 'cantidad registrada no comparable' : 'sin cantidad registrada; no se asume cero',
   ].join('; ');
@@ -116,7 +157,7 @@ const sourceLabels: Record<TodayOptionSource, string> = {
 
 export function TodayRecommendationResults({ response, slot, onChoose }: TodayRecommendationResultsProps) {
   const [portionInputs, setPortionInputs] = useState<Record<string, { original: string; target: string }>>({});
-  const [inventoryInputs, setInventoryInputs] = useState<Record<string, { quantity: string; confirmed: boolean }>>({});
+  const [inventoryInputs, setInventoryInputs] = useState<Record<string, SessionInventoryInput>>({});
   const slotLabel = slots.find((item) => item.value === slot)?.label ?? 'Momento elegido';
   const options = response.options.filter((option) => option.slot === slot);
   return (
@@ -153,14 +194,21 @@ export function TodayRecommendationResults({ response, slot, onChoose }: TodayRe
               const duplicateRequirementNames = new Set(
                 [...requirementNameCounts].filter(([, count]) => count > 1).map(([name]) => name)
               );
+              const getConfirmation = (ingredient: TodayIngredientAvailability, ingredientIndex: number) => {
+                const stored = inventoryInputs[`${portionKey}:${ingredientIndex}`];
+                const decisionKey = inventoryDecisionKey(ingredient, targetServings, scaling.factor);
+                return stored?.response === response && stored.decisionKey === decisionKey
+                  ? stored
+                  : { quantity: '', confirmed: false };
+              };
               const sessionStatuses = ingredientAvailability.map((ingredient, ingredientIndex) => {
-                const confirmation = inventoryInputs[`${portionKey}:${ingredientIndex}`];
-                const confirmedQuantity = parseNonNegativeNumber(confirmation?.quantity ?? '');
+                const confirmation = getConfirmation(ingredient, ingredientIndex);
+                const confirmedQuantity = parseNonNegativeNumber(confirmation.quantity);
                 if (ingredient.requiredUnit === 'unknown' || ingredient.quantityProvenance !== undefined || duplicateRequirementNames.has(normalizeInventoryName(ingredient.name))) return 'unknown' as const;
                 return assessSessionInventoryQuantity(
-                  ingredient.requiredQuantity,
+                  scaleInventoryRequirement(ingredient.requiredQuantity, scaling.factor),
                   confirmedQuantity,
-                  confirmation?.confirmed === true
+                  confirmation.confirmed
                 );
               });
               const decisionAvailability = sessionStatuses.length === 0 || sessionStatuses.includes('unknown')
@@ -209,17 +257,21 @@ export function TodayRecommendationResults({ response, slot, onChoose }: TodayRe
                       <div>
                         <dt className="font-semibold text-[#241A14]">Detalle de cantidades registradas</dt>
                         <dd className="text-[#6B5A50]">
-                          Cantidades de origen; no ajustadas por porciones.
+                          {scaling.factor !== null && targetServings !== null
+                            ? `Requerimientos ajustados para ${targetServings} porciones.`
+                            : 'Requerimientos de origen; disponibilidad desconocida hasta definir porciones.'}
                           <ul className="mt-1 grid gap-3">
                             {ingredientAvailability.map((ingredient, ingredientIndex) => {
                               const confirmationKey = `${portionKey}:${ingredientIndex}`;
-                              const confirmation = inventoryInputs[confirmationKey] ?? { quantity: '', confirmed: false };
+                              const decisionKey = inventoryDecisionKey(ingredient, targetServings, scaling.factor);
+                              const confirmation = getConfirmation(ingredient, ingredientIndex);
+                              const scaledRequiredQuantity = scaleInventoryRequirement(ingredient.requiredQuantity, scaling.factor);
                               const duplicateRequirement = duplicateRequirementNames.has(normalizeInventoryName(ingredient.name));
                               const isComparable = ingredient.requiredQuantity !== null && ingredient.requiredUnit !== 'unknown' && ingredient.quantityProvenance === undefined && !duplicateRequirement;
                               const canConfirm = isComparable && parseNonNegativeNumber(confirmation.quantity) !== null;
                               return (
                                 <li key={`${ingredient.name}-${ingredientIndex}`}>
-                                  <p>{formatIngredientAvailability(ingredient)}</p>
+                                  <p>{formatIngredientAvailability(ingredient, scaledRequiredQuantity, scaling.factor !== null)}</p>
                                   {ingredient.quantityProvenance === 'ai_estimate' ? (
                                     <p className="mt-1 text-amber-800">Cantidad estimada por IA; no se puede verificar suficiencia.</p>
                                   ) : ingredient.quantityProvenance === 'unknown' ? (
@@ -238,7 +290,7 @@ export function TodayRecommendationResults({ response, slot, onChoose }: TodayRe
                                         aria-label={`Cantidad actual de ${ingredient.name} (${ingredient.requiredUnit})`}
                                         onChange={(event) => setInventoryInputs((previous) => ({
                                           ...previous,
-                                          [confirmationKey]: { quantity: event.target.value, confirmed: false },
+                                          [confirmationKey]: { quantity: event.target.value, confirmed: false, response, decisionKey },
                                         }))}
                                         className="rounded-lg border border-[#C8B9AC] px-3 py-2 text-sm"
                                       />
@@ -248,10 +300,21 @@ export function TodayRecommendationResults({ response, slot, onChoose }: TodayRe
                                           aria-label={`Confirmo que la cantidad de ${ingredient.name} está vigente`}
                                           checked={confirmation.confirmed}
                                           disabled={!canConfirm}
-                                          onChange={(event) => setInventoryInputs((previous) => ({
-                                            ...previous,
-                                            [confirmationKey]: { ...(previous[confirmationKey] ?? { quantity: '' }), confirmed: event.target.checked && canConfirm },
-                                          }))}
+                                          onChange={(event) => setInventoryInputs((previous) => {
+                                            const stored = previous[confirmationKey];
+                                            const current = stored?.response === response && stored.decisionKey === decisionKey
+                                              ? stored
+                                              : { quantity: '', confirmed: false };
+                                            return {
+                                              ...previous,
+                                              [confirmationKey]: {
+                                                ...current,
+                                                confirmed: event.target.checked && canConfirm,
+                                                response,
+                                                decisionKey,
+                                              },
+                                            };
+                                          })}
                                         />
                                         Confirmo que esta cantidad está vigente para esta decisión.
                                       </label>
