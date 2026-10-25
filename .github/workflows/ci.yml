@@ -60,6 +60,9 @@ jobs:
       - name: Test PawTech daily backup verification scenario
         run: sh ../scripts/tests/test-pawtech-daily-backup-verification.sh
 
+      - name: Validate E2E runner compatibility
+        run: sh ../scripts/tests/test-ci-e2e-runner-contract.sh
+
       - name: Test bootstrap and migrator PostgreSQL boundary
         run: sh ../scripts/test-bootstrap-migrator-integration.sh
 
@@ -80,7 +83,7 @@ jobs:
 
   e2e-tests:
     name: E2E Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: frontend-quality
     defaults:
       run:
