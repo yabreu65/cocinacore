@@ -78,7 +78,7 @@ test('connects saved culinary context to safe Today recommendations and recipe h
     await expect(todaySection.getByRole('heading', { name: title, exact: true })).toBeVisible();
   }
   await expect(todaySection.getByRole('heading', { name: 'Peanut bowl', exact: true })).toHaveCount(0);
-  await expect(todaySection.getByRole('listitem')).toHaveCount(3);
+  await expect(todaySection.getByRole('article')).toHaveCount(3);
 
   const captureResponse = await fetch(await providerCaptureUrl('/__e2e/requests'));
   expect(captureResponse.ok).toBe(true);
@@ -118,7 +118,11 @@ test('connects saved culinary context to safe Today recommendations and recipe h
   expect(prompt.includes(adultMemberName)).toBe(false);
 
   const selectedTitle = safeTitles[0];
-  await page.getByRole('button', { name: `Ver receta: ${selectedTitle}` }).click();
+  await todaySection.getByLabel(`Porciones originales: ${selectedTitle}`).fill('2');
+  await todaySection.getByLabel(`Porciones deseadas: ${selectedTitle}`).fill('2');
+  const recipeButton = todaySection.getByRole('button', { name: `Ver receta: ${selectedTitle}` });
+  await expect(recipeButton).toBeEnabled();
+  await recipeButton.click();
   await expect(page).toHaveURL(/\/recipes\/search\?/);
   const handoffUrl = new URL(page.url());
   expect(handoffUrl.pathname === '/recipes/search').toBe(true);
