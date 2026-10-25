@@ -134,8 +134,10 @@ describe('TodayRecommendations', () => {
     expect(markup).toContain('Almuerzo');
     expect(markup).toContain('Una opción de tu historial reciente.');
     expect(markup).toContain('Origen: historial reciente');
-    expect(markup).toContain('Disponible: </dt><dd class="inline text-[#6B5A50]">arroz</dd>');
-    expect(markup).toContain('Falta: </dt><dd class="inline text-[#6B5A50]">tomate, aceite</dd>');
+    expect(markup).toContain('Datos de inventario reportados (sin confirmar): </dt><dd class="inline text-[#6B5A50]">arroz, tomate, aceite</dd>');
+    expect(markup).toContain('Disponibilidad para esta decisión: </dt><dd class="inline text-[#6B5A50]">desconocida</dd>');
+    expect(markup).not.toContain('Disponible:');
+    expect(markup).not.toContain('Falta:');
     expect(markup).toContain('Tiempo no estimado');
     expect(markup).toContain('role="alert"');
     expect(markup).toContain('Solo se aplican las restricciones guardadas. No se han verificado alergias ni preferencias desconocidas.');
@@ -155,6 +157,120 @@ describe('TodayRecommendations', () => {
 
     expect(markup).toContain('Origen: receta guardada');
     expect(markup).not.toContain('Origen: undefined');
+  });
+
+  it('does not treat registered stock as sufficient until explicitly confirmed for this decision', () => {
+    const confirmedOption = {
+      ...option,
+      ingredients: ['1 kg arroz', '1 kg tomate'],
+      ingredientAvailability: [
+        {
+          name: 'arroz', availability: 'sufficient' as const, present: true,
+          requiredQuantity: 1, requiredUnit: 'kg', availableQuantity: 2,
+          availableUnit: 'kg', missingQuantity: 0, remainingQuantity: 1,
+        },
+        {
+          name: 'tomate', availability: 'unknown' as const, present: false,
+          requiredQuantity: 1, requiredUnit: 'kg', availableQuantity: null,
+          availableUnit: 'unknown', missingQuantity: null, remainingQuantity: null,
+        },
+      ],
+    };
+    hookHarness.states = [];
+    hookHarness.active = true;
+    const onChoose = vi.fn();
+    const render = () => {
+      hookHarness.cursor = 0;
+      return TodayRecommendationResults({ response: { status: 'success', options: [confirmedOption] }, slot: 'lunch', onChoose });
+    };
+    const findElement = (tree: unknown, predicate: (element: { type?: unknown; props?: Record<string, unknown> }) => boolean): { props: Record<string, unknown> } => {
+      if (!tree || typeof tree !== 'object') throw new Error('Element not found');
+      const element = tree as { type?: unknown; props?: Record<string, unknown> };
+      if (predicate(element)) return element as { props: Record<string, unknown> };
+      const children = element.props?.children;
+      for (const child of Array.isArray(children) ? children : [children]) {
+        try { return findElement(child, predicate); } catch { /* Continue through the element tree. */ }
+      }
+      throw new Error('Element not found');
+    };
+
+    try {
+      let tree = render();
+      let markup = renderToStaticMarkup(tree);
+      expect(markup).toContain('Inventario registrado, aún sin confirmar: </dt><dd class="inline text-[#6B5A50]">arroz</dd>');
+      expect(markup).toContain('Disponibilidad para esta decisión: </dt><dd class="inline text-[#6B5A50]">desconocida</dd>');
+      expect(markup).not.toContain('Disponible:');
+      expect(markup).not.toContain('Falta:');
+      expect(markup).toContain('El inventario solo se confirma para esta decisión y no se guarda.');
+
+      const quantity = findElement(tree, (element) => element.type === 'input' && element.props?.['aria-label'] === 'Cantidad actual de arroz (kg)');
+      (quantity.props.onChange as (event: { target: { value: string } }) => void)({ target: { value: '2' } });
+      tree = render();
+      const checkbox = findElement(tree, (element) => element.type === 'input' && element.props?.['aria-label'] === 'Confirmo que la cantidad de arroz está vigente');
+      (checkbox.props.onChange as (event: { target: { checked: boolean } }) => void)({ target: { checked: true } });
+      tree = render();
+      markup = renderToStaticMarkup(tree);
+      expect(markup).toContain('Disponibilidad para esta decisión: </dt><dd class="inline text-[#6B5A50]">desconocida</dd>');
+
+      const tomatoQuantity = findElement(tree, (element) => element.type === 'input' && element.props?.['aria-label'] === 'Cantidad actual de tomate (kg)');
+      (tomatoQuantity.props.onChange as (event: { target: { value: string } }) => void)({ target: { value: '1' } });
+      tree = render();
+      const tomatoCheckbox = findElement(tree, (element) => element.type === 'input' && element.props?.['aria-label'] === 'Confirmo que la cantidad de tomate está vigente');
+      (tomatoCheckbox.props.onChange as (event: { target: { checked: boolean } }) => void)({ target: { checked: true } });
+      tree = render();
+      markup = renderToStaticMarkup(tree);
+      expect(markup).toContain('Disponibilidad para esta decisión: </dt><dd class="inline text-[#6B5A50]">suficiente</dd>');
+
+      const updatedTomatoQuantity = findElement(tree, (element) => element.type === 'input' && element.props?.['aria-label'] === 'Cantidad actual de tomate (kg)');
+      (updatedTomatoQuantity.props.onChange as (event: { target: { value: string } }) => void)({ target: { value: '0' } });
+      tree = render();
+      const zeroCheckbox = findElement(tree, (element) => element.type === 'input' && element.props?.['aria-label'] === 'Confirmo que la cantidad de tomate está vigente');
+      expect(zeroCheckbox.props.checked).toBe(false);
+      (zeroCheckbox.props.onChange as (event: { target: { checked: boolean } }) => void)({ target: { checked: true } });
+      tree = render();
+      markup = renderToStaticMarkup(tree);
+      expect(markup).toContain('Disponibilidad para esta decisión: </dt><dd class="inline text-[#6B5A50]">parcial según cantidades confirmadas</dd>');
+    } finally {
+      hookHarness.active = false;
+      hookHarness.states = [];
+    }
+  });
+
+  it('never verifies an inventory quantity against an estimated recipe requirement', () => {
+    const estimatedOption = {
+      ...option,
+      quantityProvenance: 'ai_estimate' as const,
+      ingredientAvailability: [{
+        name: 'arroz', availability: 'unknown' as const, quantityProvenance: 'ai_estimate' as const,
+        present: true, requiredQuantity: 1, requiredUnit: 'kg', availableQuantity: null,
+        availableUnit: 'unknown', missingQuantity: null, remainingQuantity: null,
+      }],
+    };
+    const markup = renderToStaticMarkup(
+      <TodayRecommendationResults response={{ status: 'success', options: [estimatedOption] }} slot="lunch" onChoose={vi.fn()} />,
+    );
+
+    expect(markup).toContain('Cantidad estimada por IA; no se puede verificar suficiencia.');
+    expect(markup).not.toContain('Cantidad actual de arroz');
+    expect(markup).not.toContain('Confirmo que la cantidad de arroz está vigente');
+    expect(markup).toContain('Disponibilidad para esta decisión: </dt><dd class="inline text-[#6B5A50]">desconocida</dd>');
+  });
+
+  it('fails closed when a recipe repeats the same ingredient quantity', () => {
+    const repeatedOption = {
+      ...option,
+      ingredientAvailability: [
+        { name: 'arroz', availability: 'sufficient' as const, present: true, requiredQuantity: 1, requiredUnit: 'kg', availableQuantity: 2, availableUnit: 'kg', missingQuantity: 0, remainingQuantity: 1 },
+        { name: 'Arroz', availability: 'sufficient' as const, present: true, requiredQuantity: 1, requiredUnit: 'kg', availableQuantity: 2, availableUnit: 'kg', missingQuantity: 0, remainingQuantity: 1 },
+      ],
+    };
+    const markup = renderToStaticMarkup(
+      <TodayRecommendationResults response={{ status: 'success', options: [repeatedOption] }} slot="lunch" onChoose={vi.fn()} />,
+    );
+
+    expect(markup).toContain('Disponibilidad para esta decisión: </dt><dd class="inline text-[#6B5A50]">desconocida</dd>');
+    expect(markup.match(/Ingrediente repetido; confirmación individual no disponible\./g)).toHaveLength(2);
+    expect(markup).not.toContain('Cantidad actual de arroz');
   });
 
   it('renders structured quantities separately from legacy status summaries', () => {
@@ -182,8 +298,8 @@ describe('TodayRecommendations', () => {
     );
 
     expect(markup).toContain('Detalle de cantidades');
-    expect(markup).toContain('tomate: requiere 1 kg; disponible 0.5 kg; faltan 0.5 kg');
-    expect(markup).toContain('aceite: requerimiento no cuantificable; inventario no verificable; faltante no calculable');
+    expect(markup).toContain('tomate: requiere 1 kg; registrado 0.5 kg (sin confirmar)');
+    expect(markup).toContain('aceite: requerimiento no cuantificable; sin cantidad registrada; no se asume cero');
   });
 
   it('labels AI-estimated ingredient quantities as estimates', () => {
@@ -217,7 +333,7 @@ describe('TodayRecommendations', () => {
     );
 
     expect(markup).toContain('Porciones originales no declaradas. Ingresá el dato de la receta para calcular.');
-    expect(markup).toContain('El estado de inventario refleja la receta original; no se recalcula con las porciones elegidas.');
+    expect(markup).toContain('Las cantidades registradas no se consideran verificadas hasta que confirmes lo que tenés ahora para esta decisión. Esta confirmación no se guarda.');
     expect(markup).toContain('for="today-original-servings-0"');
     expect(markup).toContain('for="today-target-servings-0"');
     expect(markup).toContain('Porciones originales desconocidas; ingresá el dato declarado para calcular.');
@@ -293,9 +409,9 @@ describe('TodayRecommendations', () => {
       />,
     );
 
-    expect(markup).toContain('Falta: </dt><dd class="inline text-[#6B5A50]">tomate</dd>');
-    expect(markup).toContain('Sin verificar: </dt><dd class="inline text-[#6B5A50]">aceite</dd>');
-    expect(markup).not.toContain('Falta: ningún ingrediente');
+    expect(markup).toContain('Datos de inventario reportados (sin confirmar): </dt><dd class="inline text-[#6B5A50]">arroz, tomate, aceite</dd>');
+    expect(markup).toContain('Disponibilidad para esta decisión: </dt><dd class="inline text-[#6B5A50]">desconocida</dd>');
+    expect(markup).not.toContain('Falta:');
   });
 
   it('renders legacy responses without unknownIngredients using non-assertive empty copy', () => {
@@ -308,9 +424,10 @@ describe('TodayRecommendations', () => {
       />,
     );
 
-    expect(markup).toContain('Falta: </dt><dd class="inline text-[#6B5A50]">sin faltantes confirmados</dd>');
+    expect(markup).toContain('Datos de inventario reportados (sin confirmar): </dt><dd class="inline text-[#6B5A50]">sin detalle disponible</dd>');
+    expect(markup).toContain('Disponibilidad para esta decisión: </dt><dd class="inline text-[#6B5A50]">desconocida</dd>');
     expect(markup).not.toContain('Sin verificar:');
-    expect(markup).not.toContain('Falta: </dt><dd class="inline text-[#6B5A50]">ningún ingrediente</dd>');
+    expect(markup).not.toContain('Falta:');
   });
 
   it('fails closed when a response option does not match the selected slot', () => {
