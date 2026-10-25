@@ -22,3 +22,7 @@
 - Do **not** use or invent the alias `cocinacore-prod` for this deployment.
 - Restrict operational actions to CocinaCore resources; never modify other hosted projects.
 - Before production migrations/deploy: validate VPS state, current recoverable backup, migration ledger and approval. Never put SSH keys/passwords/secrets into docs or logs.
+
+## GGA pre-commit checks
+
+For routine Guardian Angel pre-commit reviews, follow [docs/ops/gga-review-policy.md](docs/ops/gga-review-policy.md). This policy does not waive candidate-specific review, delivery, or production gates.
