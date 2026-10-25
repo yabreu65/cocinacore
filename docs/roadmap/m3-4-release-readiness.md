@@ -1,55 +1,53 @@
-# M3.4 Release Readiness — Draft
+# M3.4 Release Readiness
 
-**State:** Four stacked Draft PRs (#53–#56) are open under approved issue #52. CI passed on exact pre-document-update heads #53, #54, and #56; #55's frontend-quality job passed but its E2E job failed on an unrelated PDF.js locator. This documentation update changes PR #56's head, so a fresh CI dispatch for its new SHA is pending. U5's connected Today browser proof remains blocked.
-**Branch:** `feat/m3-4-inventario-porciones`, based on `origin/main` at `52dd9fd45b759677fe996a6c477951acd363733a`.
+**Current state (2026-10-25):** M3.4 product PRs #53–#56, correction PR #58, U5 PR #61, and GGA policy PR #59 are merged to `main` with ancestry-preserving merge commits. Main CI is green through PR #59. Post-PR59 main CI [40215516582](https://github.com/yabreu65/cocinacore/actions/runs/40215516582) completed SUCCESS on `bdfb97a64c5ad37cef6c2442efc4ff894233276e`; PR #60 remains the final readiness-document PR. Production deployment, production migrations, and production acceptance remain **not performed** and are separately gated; this document does not authorize them.
 
-## Local work units
+## Merged implementation and CI evidence
 
-| Slice | Commit | Scope | Changed lines |
-|---|---|---|---:|
-| U1 | `5eae3ae804ac324e9eca4d4fdd424acf69a05c22` | Quantitative Today availability details | 248 |
-| U2 | `b21b81c870ff43d34636ef05825ade1843aa3d2e` | Explicit target portions and scaling | 346 |
-| U3 | `ec83076c56ea27c4c3328e7a81174d91e483db91` | Structured quantity provenance | 286 |
-| U4 | `f151295461235590cae9f1ef7c3dc017d9d612d9` | Ephemeral user confirmation of current quantities | 306 |
-| **Total** | | Four focused, dependent work units | **1,186** |
+| PR | Scope | Merged commit | Main CI run | Result |
+| --- | --- | --- | --- | --- |
+| #53 | U1 — quantitative Today availability | `a10871706a702f1169ca8acc398ba30e823088ee` | [40150104612](https://github.com/yabreu65/cocinacore/actions/runs/40150104612) | SUCCESS |
+| #54 | U2 — explicit Today servings | `081bb88b7cfcce072bb35ff39128b92007d44484` | [40151001796](https://github.com/yabreu65/cocinacore/actions/runs/40151001796) | SUCCESS |
+| #55 | U3 — verified structured recipe quantities | `27409d113607a21e9f267f85efe95149c23ec1d9` | [40151927284](https://github.com/yabreu65/cocinacore/actions/runs/40151927284) | SUCCESS |
+| #56 | U4 — migration-free inventory confirmation | `c2f9a00833bc97eea66ce8acd726a875e0f82ed0` | [40152744480](https://github.com/yabreu65/cocinacore/actions/runs/40152744480) | SUCCESS |
+| #58 | R3 — inventory/portion correction | `a38f6dfb05fb7794218d2fdc2de187f86eaa923a` | [40153707725](https://github.com/yabreu65/cocinacore/actions/runs/40153707725) | SUCCESS |
+| #61 | U5 — hosted connected Today proof and test correction | `40d40a8bc58cac10f6a53912d9e4d2344a8ee748` | [40214765776](https://github.com/yabreu65/cocinacore/actions/runs/40214765776) | SUCCESS |
+| #59 | GGA review policy | `bdfb97a64c5ad37cef6c2442efc4ff894233276e` | [40215516582](https://github.com/yabreu65/cocinacore/actions/runs/40215516582) | SUCCESS (`frontend-quality`, `E2E Tests`; connected journey skipped in push CI) |
 
-Each code work unit is below 400 changed lines; the current U4-plus-readiness delta from U3 is 361 changed lines, within the review budget. Owner selected **Stacked PRs to main**, in order U1 → U2 → U3 → U4; later units build on earlier Today UI/API work. Issue #52 is OPEN with `status:approved` and `type:feature`, and authorizes M3.4 development/PRs only—not merge or production. Published chain (each PR is Draft, links #52, and has exactly one `type:feature` label): #53 U1 `feat/m3-4-u1-availability` → `main` (https://github.com/yabreu65/cocinacore/pull/53); #54 U2 `feat/m3-4-u2-portions` → U1 (https://github.com/yabreu65/cocinacore/pull/54); #55 U3 `feat/m3-4-u3-provenance` → U2 (https://github.com/yabreu65/cocinacore/pull/55); #56 U4 `feat/m3-4-u4-confirmation` → U3 (https://github.com/yabreu65/cocinacore/pull/56). PR #56 also carries this readiness document.
+The exact main-run heads are the merge commits shown above. The run IDs are recorded once; do not dispatch replacement runs. PR #60 is the remaining readiness-document PR.
 
-## Verification evidence
+## U5 verification and native review
 
-- U1: 74 focused Today tests; full suite at that commit 813 passed/8 skipped; TypeScript/build/lint and GGA passed; its exact native review was approved and acknowledged.
-- U2: 38 focused tests; full suite at that commit 831 passed/8 skipped; TypeScript/build/targeted ESLint/differential compatibility/GGA passed. Native ASSESS was unassessable due undeclared untracked ODD notes; no native reviewer run.
-- U3: 107 focused tests; full suite at that commit 837 passed/8 skipped; TypeScript/build/lint/GGA passed, with one existing lint warning. Native ASSESS was unassessable for the same untracked-note reason; no native reviewer run.
-- U4: 24 focused helper/UI tests; current full Vitest 845 passed/8 skipped; TypeScript, production build, and GGA passed. Full lint exited 0 with 0 errors and one existing warning at `frontend/src/next.config.test.ts:6`. Native ASSESS was unassessable because untracked ODD notes require explicit declaration; no candidate or `reviewDue` was returned, and no review transaction was started.
-- No production database, migration, acceptance workflow, deployment, or production write was used.
+- Connected Today workflow-dispatch run [40204398689](https://github.com/yabreu65/cocinacore/actions/runs/40204398689) completed **SUCCESS** on head `1233324ee757cd724e888c3e7ec89b1c2905cc52`; the connected Today Playwright journey ran and passed. This is distinct from the post-merge main CI, where the manual connected journey is skipped.
+- Standard PR CI [40204324702](https://github.com/yabreu65/cocinacore/actions/runs/40204324702) also completed **SUCCESS** on that exact U5 head.
+- Native RDD lineage `review-a65f7ae25849dd30`, target `sha256:c0e4dddf23ab06e15dfc5834e125cb715436d48abf5e7659d3e05bac90cca509`: the provider-frozen risk, readability, and reliability lenses were admitted once each; review closed **APPROVED** and the exact acknowledgement was completed/burned at revision `sha256:dbedca6b9c7f888644bd45d0924de2c1d5c7817443d804c1eebcdee4a7cc87c0`.
+- PR #59 was assessed on its actual tested base `a38f6dfb05fb7794218d2fdc2de187f86eaa923a`: `risk=medium`, `nativeRisk=medium`, `reviewDue=false`. Exact-head CI [40214453804](https://github.com/yabreu65/cocinacore/actions/runs/40214453804) passed both `frontend-quality` and `E2E Tests`; the PR was merged preserving ancestry. Its post-merge main CI completed SUCCESS on the exact merge commit; the connected Today manual journey is skipped by the push-triggered workflow. The separate connected workflow-dispatch journey passed on PR #61 as recorded above.
 
-### Hosted CI evidence
+## Supporting CI repair and duplicate PR disposition
 
-| PR | Run | Head SHA | Result |
-|---|---:|---|---|
-| #53 U1 | [39878747631](https://github.com/yabreu65/cocinacore/actions/runs/39878747631) | `5eae3ae804ac324e9eca4d4fdd424acf69a05c22` | success (`frontend-quality`, `E2E Tests`) |
-| #54 U2 | [39879011136](https://github.com/yabreu65/cocinacore/actions/runs/39879011136) | `b21b81c870ff43d34636ef05825ade1843aa3d2e` | success (`frontend-quality`, `E2E Tests`) |
-| #55 U3 | [39879014707](https://github.com/yabreu65/cocinacore/actions/runs/39879014707) | `ec83076c56ea27c4c3328e7a81174d91e483db91` | failure: `frontend-quality` passed; E2E failed in `e2e/specs/pdfjs-upload-compat.spec.ts:78` because `getByLabel('Título del libro global')` resolves two inputs (strict-mode violation); 37 passed, 2 skipped |
-| #56 U4 (before this doc update) | [39879018320](https://github.com/yabreu65/cocinacore/actions/runs/39879018320) | `0bf0daf8fcbf0ef858ce3d70215bee5f48e014ed` | success (`frontend-quality`, `E2E Tests`); this evidence-only change creates a new head requiring a fresh CI run |
+- PR #62 fixed the hosted E2E runner compatibility issue and merged as `1eee89dffd630bb069f8be2fb440be8128063bef`; main CI [40148014808](https://github.com/yabreu65/cocinacore/actions/runs/40148014808) succeeded on that merge commit.
+- PR #57 was the duplicate PDF.js fix and is **CLOSED**; it was superseded by merged PR #62 (`1eee89dffd630bb069f8be2fb440be8128063bef`). PR #58 is the separate R3 inventory/portion correction, merged as `a38f6dfb05fb7794218d2fdc2de187f86eaa923a`.
 
-All runs used hosted ephemeral Postgres/Redis; production workflows were not invoked. The connected Today synthetic-account test is skipped in these runs because the workflow does not set `COCINACORE_ISOLATED_E2E=1`; green E2E jobs do not close U5.
+## Earlier local verification
 
-## U5 browser proof — blocked
+The merged U1–U4 work units had focused/full tests, TypeScript, lint/build, and GGA evidence recorded during implementation. The bounded U5 test correction also passed its local connected Today Playwright journey against disposable test services before publication. Those historical local checks are supplemental; hosted exact-head and main-run results above are the current integration evidence.
 
-The React component tests exercise explicit confirmation, edits revoking confirmation, confirmed zero, duplicate ingredients, and unknown/estimated quantities. The regular Playwright configuration starts a provider server on port 4319 and an app server on port 4320, validates local E2E targets, and the connected Today journey creates a synthetic account/profile behind `COCINACORE_ISOLATED_E2E=1`. Local targets are unavailable: the existing Docker resources on 5433/5434/6379/6380 are original/BuildingOS and forbidden; E2E ports 5435/6381 are not running. Do not provision, clone, migrate, reset, or touch those databases.
+## Production status and release gates
 
-Static CI review found a safe hosted-runner path: `.github/workflows/ci.yml` creates ephemeral GitHub Actions Postgres/Redis services, runs migrations/bootstrap only on that runner, and runs Playwright there. It does not connect to local or production services. The connected Today synthetic-account test is skipped by the current workflow because `COCINACORE_ISOLATED_E2E` is not set, so CI will not by itself close the specific U5 browser-proof gap. The deploy, production migration, and production acceptance workflows are separate `workflow_dispatch` workflows gated to `main`; a CI dispatch does not invoke them.
+**Production remains untouched:** no M3.4 deployment, migration 016/017, production acceptance workflow, or production write has been run. No claim is made here that the current production migration ledger, backup, snapshot rollback, secrets, or application rollback have been verified.
 
-The PR workflow trigger filters `pull_request` to base `main`; therefore #53 received automatic CI and #54–#56 used explicit `workflow_dispatch` on exact branch refs. Results and exact SHAs are recorded above. #55's E2E failure is outside the U3 changed paths and remains an unrelated repository check failure; no out-of-scope fix or retry is included.
+Release planning and non-destructive preflight verification are authorized as part of this closeout. Before any production deployment or migration, record evidence for all of the following against the final `main` SHA:
 
-## Release gates still required
+1. Confirm the exact deployment/migration scope and satisfy the production runbook's applicable approval gate. This closeout authorizes planning and non-destructive preflight checks; it does not by itself prove production prerequisites are met.
+2. A current, recoverable CocinaCore backup and a verified snapshot/restore rollback path; validate without modifying other projects on the shared VPS.
+3. Exact migration-ledger correlation proving which M3.4 migrations (including 016/017, if applicable) are required and safe; do not invoke migrations without that evidence.
+4. Independent validation that required production secrets are present and correctly scoped, without exposing secret values.
+5. Required production acceptance checks and operational/cleanup steps from the runbook, with evidence tied to the same final SHA.
 
-- Resolve the isolated local Playwright target before claiming the full U5 browser proof; do not use the original/BuildingOS Docker resources.
-- The four stacked Draft PRs exist under approved issue #52; #53 targets `main`, later PRs target their immediate parent branches. Each is below 400 changed lines and has exactly one `type:feature` label.
-- Safe hosted CI was run on all four exact PR heads. #53, #54, and the pre-document-update #56 heads passed; #55 failed its unrelated PDF.js E2E locator. The documentation-only change in this PR creates a new #56 head and requires one fresh CI dispatch; record that result in the PR and ODD without another readiness-doc rewrite.
-- PR publication is complete; no PR is merged. No production action is authorized.
-- Before any future production work, separately authorize and verify backup, migration ledger, acceptance, cleanup, and deployment gates. No merge, migration, production acceptance/write, or deployment is authorized by this draft.
+Do not invoke production deploy or migration workflows unless these gates are evidenced and the production runbook's approval condition is satisfied. Passing CI and merging PR #60 do not prove backup, rollback, migration-ledger, secrets, or acceptance readiness.
 
-## Current non-goals
+## Remaining closeout sequence
 
-No M4 predictive work; no M3.3 planning/guided cooking/consumption/reconciliation; no database migration; no merge, production acceptance, or deployment.
+1. Run documentation-focused checks and the normal GGA pre-commit hook for this final CI-status update; commit through that hook and push the existing PR #60 branch without force-pushing.
+2. Validate PR #60 CI on the final exact head and run passive native ASSESS for that committed documentation candidate; merge with an exact-head guard only after all applicable gates pass.
+3. Complete the final-SHA non-destructive production preflight evidence above; stop if backup/restore, migration correlation, secret validation, or required acceptance proof is missing. No deployment or migration occurs as part of this documentation closeout.
