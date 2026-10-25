@@ -87,6 +87,7 @@ describe('/api/recipes', () => {
     });
     const body = await response.json() as { items: Array<Record<string, unknown>> };
     expect(body.items[0]).not.toHaveProperty('user_id');
+    expect(body.items[0]).not.toHaveProperty('current_version.source_recipe_history_id');
   });
 
   it('rejects invalid list bounds and maps repository failures safely', async () => {

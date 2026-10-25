@@ -7,12 +7,14 @@ export interface TodayHandoff {
   slot: TodayHandoffSlot;
   title: string;
   ingredients: string[];
+  targetServings?: number;
 }
 
 export interface TodayRecipeRequestFields {
   recipeName: string;
   mealType: string;
   ingredients: string[];
+  targetServings?: number;
 }
 
 export interface RecipeGenerationRequestInput {
@@ -34,7 +36,7 @@ export function buildRecipeGenerationRequestPayload(
     ...(input.todayFields
       ? { recipeName: input.recipeName.trim(), mealType: input.todayFields.mealType }
       : {}),
-    peopleCount: 4,
+    peopleCount: input.todayFields?.targetServings ?? 4,
     culinaryProfile: {
       level: 'Intermedio',
       identity: [],
@@ -63,7 +65,10 @@ function isTodaySlot(value: string): value is TodayHandoffSlot {
 export function parseTodayHandoff(params: URLSearchParams): (TodayHandoff & TodayRecipeRequestFields) | null {
   const slot = params.get('slot');
   const title = params.get('title')?.trim() ?? '';
+  const rawTargetServings = params.get('servings');
+  const targetServings = rawTargetServings === null ? undefined : Number(rawTargetServings);
   if (
+    (targetServings !== undefined && (!Number.isInteger(targetServings) || targetServings < 1 || targetServings > 100)) ||
     !slot ||
     !isTodaySlot(slot) ||
     !title ||
@@ -95,6 +100,7 @@ export function parseTodayHandoff(params: URLSearchParams): (TodayHandoff & Toda
     ingredients,
     recipeName: title,
     mealType: mealTypes[slot],
+    ...(targetServings === undefined ? {} : { targetServings }),
   };
 }
 
@@ -105,6 +111,7 @@ export function buildTodayRecipeRequestFields(params: URLSearchParams): TodayRec
     recipeName: handoff.recipeName,
     mealType: handoff.mealType,
     ingredients: handoff.ingredients,
+    ...(handoff.targetServings === undefined ? {} : { targetServings: handoff.targetServings }),
   };
 }
 
@@ -113,5 +120,6 @@ export function serializeTodayHandoff(option: TodayHandoff): string {
   params.set('slot', option.slot);
   params.set('title', option.title);
   option.ingredients.forEach((ingredient) => params.append('ingredient', ingredient));
+  if (option.targetServings !== undefined) params.set('servings', String(option.targetServings));
   return `/recipes/search?${params.toString()}`;
 }

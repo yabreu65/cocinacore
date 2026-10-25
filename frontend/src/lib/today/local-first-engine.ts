@@ -6,10 +6,12 @@ import {
   type InventoryComparableItem,
 } from '../inventory/recipe-requirements';
 import { normalizeInventoryName } from '../inventory/normalize-inventory';
+import type { NormalizedUnit } from '../inventory/quantity-normalization';
 import { rankOneSlotOptions, TODAY_SLOT_VALUES, type TodayOptionSource, type TodaySlot } from './one-slot';
 
 export type LocalFirstSource = TodayOptionSource | 'saved_recipe';
 export type LocalFirstAvailability = 'sufficient' | 'partial' | 'missing' | 'unknown';
+export type LocalFirstQuantityProvenance = 'ai_estimate' | 'unknown';
 
 export type LocalFirstIngredient = string | {
   name: string;
@@ -20,7 +22,14 @@ export type LocalFirstIngredient = string | {
 export interface LocalFirstIngredientAvailability {
   name: string;
   availability: LocalFirstAvailability;
+  quantityProvenance?: LocalFirstQuantityProvenance;
   present: boolean;
+  requiredQuantity: number | null;
+  requiredUnit: NormalizedUnit;
+  availableQuantity: number | null;
+  availableUnit: NormalizedUnit;
+  missingQuantity: number | null;
+  remainingQuantity: number | null;
 }
 
 export interface LocalFirstCandidate {
@@ -31,6 +40,7 @@ export interface LocalFirstCandidate {
   prepMinutes: number | null;
   servings?: number | null;
   source: LocalFirstSource;
+  quantityProvenance?: LocalFirstQuantityProvenance;
   identity?: { userId: string; tenantId: string };
   plannedDate?: string | null;
 }
@@ -128,6 +138,10 @@ function isSource(value: unknown): value is LocalFirstSource {
   return value === 'saved_recipe' || value === 'provider' || value === 'history' || value === 'saved_plan';
 }
 
+function isQuantityProvenance(value: unknown): value is LocalFirstQuantityProvenance {
+  return value === 'ai_estimate' || value === 'unknown';
+}
+
 function isIdentity(value: unknown): value is { userId: string; tenantId: string } {
   return isRecord(value) && typeof value.userId === 'string' && typeof value.tenantId === 'string';
 }
@@ -167,6 +181,7 @@ function parseCandidate(value: unknown, input: LocalFirstInput): LocalFirstCandi
   if (value.servings !== undefined && value.servings !== null &&
     (typeof value.servings !== 'number' || !Number.isFinite(value.servings) || value.servings <= 0)) return null;
   if (value.plannedDate !== undefined && value.plannedDate !== null && !isIsoDate(value.plannedDate)) return null;
+  if (value.quantityProvenance !== undefined && !isQuantityProvenance(value.quantityProvenance)) return null;
   return {
     id: value.id.trim(),
     title: value.title.trim(),
@@ -175,6 +190,7 @@ function parseCandidate(value: unknown, input: LocalFirstInput): LocalFirstCandi
     prepMinutes: value.prepMinutes,
     ...(value.servings === undefined ? {} : { servings: value.servings }),
     source: value.source,
+    ...(isQuantityProvenance(value.quantityProvenance) ? { quantityProvenance: value.quantityProvenance } : {}),
     ...(isIdentity(value.identity) ? {
       identity: { userId: value.identity.userId, tenantId: value.identity.tenantId },
     } : {}),
@@ -231,16 +247,69 @@ function availabilityFor(
   const currentInventory = inventory.filter((item) => item.expiresOn === undefined || item.expiresOn >= asOf);
   const ingredients = candidate.ingredients.map((ingredient): LocalFirstIngredientAvailability => {
     const name = ingredientName(ingredient);
+    const quantityProvenance = candidate.quantityProvenance;
     const requirement = normalizeRecipeIngredient(ingredient);
-    if (!requirement) return { name, availability: 'unknown', present: false };
+    if (!requirement) {
+      return {
+        name,
+        availability: 'unknown',
+        ...(quantityProvenance ? { quantityProvenance } : {}),
+        present: false,
+        requiredQuantity: null,
+        requiredUnit: 'unknown',
+        availableQuantity: null,
+        availableUnit: 'unknown',
+        missingQuantity: null,
+        remainingQuantity: null,
+      };
+    }
 
     const matching = currentInventory.filter((item) =>
       normalizeInventoryName(item.ingredient_name) === requirement.normalizedName
     );
-    if (matching.length === 0) return { name, availability: 'unknown', present: false };
+    if (quantityProvenance !== undefined) {
+      return {
+        name,
+        availability: 'unknown',
+        quantityProvenance,
+        present: matching.length > 0,
+        requiredQuantity: requirement.requiredQuantity,
+        requiredUnit: requirement.requiredUnit,
+        availableQuantity: null,
+        availableUnit: 'unknown',
+        missingQuantity: null,
+        remainingQuantity: null,
+      };
+    }
+    if (matching.length === 0) {
+      return {
+        name,
+        availability: 'unknown',
+        ...(quantityProvenance ? { quantityProvenance } : {}),
+        present: false,
+        requiredQuantity: requirement.requiredQuantity,
+        requiredUnit: requirement.requiredUnit,
+        availableQuantity: null,
+        availableUnit: 'unknown',
+        missingQuantity: null,
+        remainingQuantity: null,
+      };
+    }
 
     const compared = compareRecipeRequirementsToInventory([requirement], matching)[0];
-    return { name, availability: compared?.status ?? 'unknown', present: true };
+    return {
+      name,
+      availability: compared?.status ?? 'unknown',
+      ...(quantityProvenance ? { quantityProvenance } : {}),
+      present: true,
+      requiredQuantity: compared?.requiredQuantity ?? requirement.requiredQuantity,
+      requiredUnit: compared?.requiredUnit ?? requirement.requiredUnit,
+      availableQuantity:
+        compared?.availableUnit !== 'unknown' ? compared?.availableQuantity ?? null : null,
+      availableUnit: compared?.availableUnit ?? 'unknown',
+      missingQuantity: compared?.missingQuantity ?? null,
+      remainingQuantity: compared?.remainingQuantity ?? null,
+    };
   });
   const statuses: ComparedRequirement['status'][] = ingredients.map(({ availability }) => availability);
   if (statuses.length === 0 || statuses.includes('unknown')) return { availability: 'unknown', ingredients };
