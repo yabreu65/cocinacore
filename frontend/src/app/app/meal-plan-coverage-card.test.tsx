@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import { MealPlanCoveragePanel } from './meal-plan-coverage-card';
+import { loadCoverageAtCurrentHorizon, MealPlanCoveragePanel } from './meal-plan-coverage-card';
 import type { MealPlanCoverageForecast } from '@/lib/meal-planner/coverage-forecast';
 
 const unknownForecast: MealPlanCoverageForecast = {
@@ -66,6 +66,19 @@ function renderPanel(forecast: MealPlanCoverageForecast) {
     />
   );
 }
+
+describe('loadCoverageAtCurrentHorizon', () => {
+  it('uses the latest selected horizon when the schedule request completes', async () => {
+    const selectedHorizon: { current: 7 | 14 } = { current: 7 };
+    const loadCoverage = vi.fn(async (days: 7 | 14) => {
+      expect(days === 7 || days === 14).toBe(true);
+    });
+    selectedHorizon.current = 14;
+    await loadCoverageAtCurrentHorizon(selectedHorizon, loadCoverage);
+
+    expect(loadCoverage).toHaveBeenCalledWith(14);
+  });
+});
 
 describe('MealPlanCoveragePanel', () => {
   it('shows an honest unknown state and explicit date-confirmation CTA for legacy plans', () => {
