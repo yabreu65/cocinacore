@@ -19,6 +19,7 @@ import { humanCopy } from '@/lib/copy';
 import { safeFetch } from '@/lib/api';
 import { serializeTodayHandoff } from '@/lib/recipes/today-handoff';
 import TodayRecommendations, { type TodayOptionIntent } from './today-recommendations';
+import MealPlanCoverageCard from './meal-plan-coverage-card';
 
 type DashboardData = {
   userId: string | null;
@@ -135,6 +136,7 @@ export default function DashboardPage() {
           ) : null}
 
           <TodayRecommendations onChoose={handleChooseTodayOption} />
+          <MealPlanCoverageCard />
 
           {data ? (
             <div className="mt-6 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
