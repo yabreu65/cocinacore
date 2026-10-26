@@ -349,7 +349,21 @@ describe('POST /api/meal-plan', () => {
     expect(createMealPlanMock).not.toHaveBeenCalled();
   });
 
-  it('persists the canonical plan once with authenticated user and tenant scope', async () => {
+  it('instructs the model to express ingredient totals for the requested people count', async () => {
+    const response = await POST(
+      request({ mode: 'balanced_ai', peopleCount: 2 }) as unknown as NextRequest
+    );
+
+    expect(response.status).toBe(200);
+    expect(geminiPrompt()).toContain(
+      'Las cantidades numéricas deben ser el total para las 2 personas solicitadas, no una cantidad por persona.'
+    );
+    expect(geminiPrompt()).toContain(
+      'Para cantidades desconocidas usa quantity: null y unit: null; no inventes cantidades.'
+    );
+  });
+
+  it('persists a new plan without inheriting a prior schedule or portion confirmation', async () => {
     const response = await POST(
       request({
         mode: 'balanced_ai',

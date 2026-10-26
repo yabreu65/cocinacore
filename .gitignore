@@ -13,6 +13,8 @@ frontend/out/
 
 # Test and coverage output
 coverage/
+!frontend/src/app/api/meal-plan/coverage/
+!frontend/src/app/api/meal-plan/coverage/**
 frontend/coverage/
 playwright-report/
 frontend/playwright-report/
