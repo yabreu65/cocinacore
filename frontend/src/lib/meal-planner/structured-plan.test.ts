@@ -180,6 +180,62 @@ describe('parseStructuredMealPlanValue', () => {
     if (!result.success) return;
     expect(result.plan.days[0].label).toBe('Lunes');
     expect(result.plan.days.at(-1)?.label).toBe('Domingo');
+    expect(result.plan.schedule).toBeUndefined();
+  });
+
+  it('preserves explicitly confirmed schedule metadata on persisted plans', () => {
+    const rawPlan = {
+      ...candidate('week', 7),
+      schedule: {
+        startDate: '2026-10-26',
+        timeZone: 'America/Argentina/Buenos_Aires',
+        confirmedAt: '2026-10-25T12:00:00.000Z',
+      },
+    };
+
+    const result = parseStructuredMealPlanValue(rawPlan, 'week');
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.plan.schedule).toEqual(rawPlan.schedule);
+    expect(result.plan.days[0].label).toBe('Lunes');
+  });
+
+  it.each([
+    ['invalid calendar date', { startDate: '2026-02-30' }],
+    ['invalid IANA timezone', { timeZone: 'Not/A_Timezone' }],
+    ['invalid confirmation timestamp', { confirmedAt: '2026-02-30T12:00:00.000Z' }],
+  ])('rejects schedule metadata with an %s', (_label, override) => {
+    const value = {
+      ...candidate('week', 7),
+      schedule: {
+        startDate: '2026-10-26',
+        timeZone: 'UTC',
+        confirmedAt: '2026-10-25T12:00:00.000Z',
+        ...override,
+      },
+    };
+
+    expect(parseStructuredMealPlanValue(value, 'week')).toEqual({
+      success: false,
+      reason: 'schema_invalid',
+    });
+  });
+
+  it('rejects schedule metadata from the model-generated provider response', () => {
+    const value = {
+      ...candidate('week', 7),
+      schedule: {
+        startDate: '2026-10-26',
+        timeZone: 'UTC',
+        confirmedAt: '2026-10-25T12:00:00.000Z',
+      },
+    };
+
+    expect(parseStructuredMealPlanResponse(JSON.stringify(value), 'week')).toEqual({
+      success: false,
+      reason: 'schema_invalid',
+    });
   });
 
   it('accepts historical plans without estimates or a cap snapshot', () => {
