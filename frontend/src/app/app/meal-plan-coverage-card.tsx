@@ -30,6 +30,11 @@ type MealPlanCoveragePanelProps = {
   onConfirmSchedule: FormEventHandler<HTMLFormElement>;
 };
 
+export const loadCoverageAtCurrentHorizon = (
+  selectedHorizon: { current: 7 | 14 },
+  loadCoverage: (days: 7 | 14) => Promise<void>
+) => loadCoverage(selectedHorizon.current);
+
 const STATUS_LABELS = {
   sufficient: 'Suficiente',
   partial: 'Parcial',
@@ -303,6 +308,7 @@ export default function MealPlanCoverageCard() {
   const [isScheduling, setIsScheduling] = useState(false);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [scheduleMessage, setScheduleMessage] = useState<string | null>(null);
+  const horizonDaysRef = useRef(horizonDays);
   const requestVersion = useRef(0);
 
   const loadCoverage = useCallback(async (days: 7 | 14) => {
@@ -361,7 +367,7 @@ export default function MealPlanCoverageCard() {
       );
       if (!result.ok) throw new Error(result.error ?? 'No se pudo confirmar la agenda.');
       setScheduleMessage(`Agenda y porciones confirmadas para ${result.data.schedule.startDate}.`);
-      await loadCoverage(horizonDays);
+      await loadCoverageAtCurrentHorizon(horizonDaysRef, loadCoverage);
     } catch (scheduleFailure) {
       setScheduleError(
         scheduleFailure instanceof Error
@@ -371,6 +377,11 @@ export default function MealPlanCoverageCard() {
     } finally {
       setIsScheduling(false);
     }
+  };
+
+  const handleHorizonChange = (days: 7 | 14) => {
+    horizonDaysRef.current = days;
+    setHorizonDays(days);
   };
 
   return (
@@ -387,7 +398,7 @@ export default function MealPlanCoverageCard() {
       portionBasisConfirmed={portionBasisConfirmed}
       scheduleError={scheduleError}
       scheduleMessage={scheduleMessage}
-      onHorizonChange={setHorizonDays}
+      onHorizonChange={handleHorizonChange}
       onStartDateChange={setStartDate}
       onPortionBasisConfirmationChange={setPortionBasisConfirmed}
       onConfirmSchedule={onConfirmSchedule}
