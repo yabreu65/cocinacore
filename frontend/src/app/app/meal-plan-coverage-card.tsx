@@ -21,10 +21,12 @@ type MealPlanCoveragePanelProps = {
   startDate: string;
   timeZone: string;
   isScheduling: boolean;
+  portionBasisConfirmed: boolean;
   scheduleError: string | null;
   scheduleMessage: string | null;
   onHorizonChange: (horizonDays: 7 | 14) => void;
   onStartDateChange: (value: string) => void;
+  onPortionBasisConfirmationChange: (confirmed: boolean) => void;
   onConfirmSchedule: FormEventHandler<HTMLFormElement>;
 };
 
@@ -50,14 +52,18 @@ export function MealPlanCoveragePanel({
   startDate,
   timeZone,
   isScheduling,
+  portionBasisConfirmed,
   scheduleError,
   scheduleMessage,
   onHorizonChange,
   onStartDateChange,
+  onPortionBasisConfirmationChange,
   onConfirmSchedule,
 }: MealPlanCoveragePanelProps) {
   const needsSchedule =
     forecast?.status === 'unknown' && forecast.reason === 'schedule_not_confirmed';
+  const needsPortionConfirmation =
+    forecast?.status === 'unknown' && forecast.reason === 'portion_basis_not_confirmed';
   const hasNoPlan = forecast?.status === 'unknown' && forecast.reason === 'no_saved_plan';
   const planTooShort =
     forecast?.status === 'unknown' && forecast.reason === 'plan_does_not_cover_horizon';
@@ -122,17 +128,22 @@ export function MealPlanCoveragePanel({
           role="status"
           className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950"
         >
-          {needsSchedule ? (
+          {needsSchedule || needsPortionConfirmation ? (
             <>
-              <p>
-                Cobertura desconocida: este menú todavía no tiene una fecha futura confirmada. No
-                inferimos fechas ni suponemos que el inventario ausente sea cero.
-              </p>
+              {needsSchedule ? (
+                <p>
+                  Cobertura desconocida: este menú todavía no tiene una fecha futura confirmada. No
+                  inferimos fechas ni suponemos que el inventario ausente sea cero.
+                </p>
+              ) : (
+                <p>
+                  Cobertura desconocida: revisá las cantidades del menú guardado y confirmá que
+                  corresponden a {peopleCount ?? 'las'} porciones. No escalamos ni inferimos
+                  cantidades.
+                </p>
+              )}
               {mealPlanId ? (
-                <form
-                  onSubmit={onConfirmSchedule}
-                  className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end"
-                >
+                <form onSubmit={onConfirmSchedule} className="mt-4 grid gap-3">
                   <div className="grid gap-1">
                     <label htmlFor="meal-plan-start-date" className="font-semibold">
                       Fecha de inicio del plan
@@ -147,12 +158,28 @@ export function MealPlanCoveragePanel({
                     />
                     <span className="text-xs">Zona horaria: {timeZone}</span>
                   </div>
+                  <label htmlFor="meal-plan-portions-confirmed" className="flex items-start gap-2">
+                    <input
+                      id="meal-plan-portions-confirmed"
+                      type="checkbox"
+                      required
+                      checked={portionBasisConfirmed}
+                      onChange={(event) =>
+                        onPortionBasisConfirmationChange(event.target.checked)
+                      }
+                      className="mt-1 size-4 rounded border-[#C8B9AC]"
+                    />
+                    <span>
+                      Confirmo que revisé las cantidades del menú y corresponden a {peopleCount ?? 'las'}{' '}
+                      porciones.
+                    </span>
+                  </label>
                   <button
                     type="submit"
-                    disabled={!startDate || isScheduling}
+                    disabled={!startDate || !portionBasisConfirmed || isScheduling}
                     className="min-h-11 rounded-xl bg-[#A55412] px-4 py-2 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {isScheduling ? 'Guardando…' : 'Confirmar agenda'}
+                    {isScheduling ? 'Guardando…' : 'Confirmar agenda y porciones'}
                   </button>
                 </form>
               ) : null}
@@ -272,6 +299,7 @@ export default function MealPlanCoverageCard() {
   const [error, setError] = useState<string | null>(null);
   const [startDate, setStartDate] = useState('');
   const [timeZone] = useState(getBrowserTimeZone);
+  const [portionBasisConfirmed, setPortionBasisConfirmed] = useState(false);
   const [isScheduling, setIsScheduling] = useState(false);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [scheduleMessage, setScheduleMessage] = useState<string | null>(null);
@@ -310,7 +338,7 @@ export default function MealPlanCoverageCard() {
 
   const onConfirmSchedule: FormEventHandler<HTMLFormElement> = async (event) => {
     event.preventDefault();
-    if (!data?.mealPlanId || !startDate || isScheduling) return;
+    if (!data?.mealPlanId || !startDate || !portionBasisConfirmed || isScheduling) return;
 
     setIsScheduling(true);
     setScheduleError(null);
@@ -327,11 +355,12 @@ export default function MealPlanCoverageCard() {
             startDate,
             timeZone,
             confirmed: true,
+            portionBasisConfirmed: true,
           }),
         }
       );
       if (!result.ok) throw new Error(result.error ?? 'No se pudo confirmar la agenda.');
-      setScheduleMessage(`Agenda confirmada para ${result.data.schedule.startDate}.`);
+      setScheduleMessage(`Agenda y porciones confirmadas para ${result.data.schedule.startDate}.`);
       await loadCoverage(horizonDays);
     } catch (scheduleFailure) {
       setScheduleError(
@@ -355,10 +384,12 @@ export default function MealPlanCoverageCard() {
       startDate={startDate}
       timeZone={timeZone}
       isScheduling={isScheduling}
+      portionBasisConfirmed={portionBasisConfirmed}
       scheduleError={scheduleError}
       scheduleMessage={scheduleMessage}
       onHorizonChange={setHorizonDays}
       onStartDateChange={setStartDate}
+      onPortionBasisConfirmationChange={setPortionBasisConfirmed}
       onConfirmSchedule={onConfirmSchedule}
     />
   );

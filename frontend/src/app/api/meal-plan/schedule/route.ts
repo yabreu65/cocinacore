@@ -20,6 +20,7 @@ const ScheduleRequestSchema = z
     startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     timeZone: z.string().trim().min(1).max(100),
     confirmed: z.literal(true),
+    portionBasisConfirmed: z.literal(true),
   })
   .strict();
 
@@ -96,8 +97,19 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  const confirmedSchedule = parseStructuredMealPlanSchedule({
+    ...schedule,
+    portionConfirmation: {
+      peopleCount: persistedPlan.people_count,
+      confirmedAt: now.toISOString(),
+    },
+  });
+  if (!confirmedSchedule) {
+    return NextResponse.json({ error: 'La agenda no tiene un formato válido.' }, { status: 400 });
+  }
+
   const scheduledPlan = parseStructuredMealPlanValue(
-    { ...parsedPlan.plan, schedule },
+    { ...parsedPlan.plan, schedule: confirmedSchedule },
     persistedPlan.period
   );
   if (!scheduledPlan.success || !scheduledPlan.plan.schedule) {
@@ -124,7 +136,7 @@ export async function POST(request: NextRequest) {
     updatedPlan.calendar_payload,
     updatedPlan.period
   );
-  if (!confirmedPlan.success || !confirmedPlan.plan.schedule) {
+  if (!confirmedPlan.success || !confirmedPlan.plan.schedule?.portionConfirmation) {
     serverLogger.warn('meal_plan.schedule_update_invalid_result', { requestId, mealPlanId });
     return NextResponse.json({ error: 'No se pudo validar la agenda guardada.' }, { status: 500 });
   }

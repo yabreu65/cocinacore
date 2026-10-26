@@ -73,6 +73,20 @@ export async function GET(request: NextRequest) {
       forecast: createUnknownMealPlanCoverageForecast(horizonDays, 'schedule_not_confirmed'),
     });
   }
+  if (
+    !parsedPlan.plan.schedule.portionConfirmation ||
+    parsedPlan.plan.schedule.portionConfirmation.peopleCount !== persistedPlan.people_count
+  ) {
+    return NextResponse.json({
+      mealPlanId: persistedPlan.id,
+      peopleCount: persistedPlan.people_count,
+      forecast: createUnknownMealPlanCoverageForecast(
+        horizonDays,
+        'portion_basis_not_confirmed',
+        parsedPlan.plan.schedule.timeZone
+      ),
+    });
+  }
 
   let inventoryItems;
   try {

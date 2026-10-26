@@ -33,6 +33,10 @@ export interface StructuredMealPlanSchedule {
   startDate: string;
   timeZone: string;
   confirmedAt: string;
+  portionConfirmation?: {
+    peopleCount: number;
+    confirmedAt: string;
+  };
 }
 
 export interface StructuredMealPlan {
@@ -161,6 +165,7 @@ export const structuredMealPlanResponseJsonSchema = {
 
 export function buildStructuredMealPlanInstructions(
   period: MealPlanPeriod,
+  peopleCount: number,
   availableTimeMinutes: number | null = null
 ): string {
   const dayCount = getMealPlanDayCount(period);
@@ -175,6 +180,7 @@ Usa period como "${period}", dayCount ${dayCount}, y días con dayIndex consecut
 Cada día debe incluir exactamente un mealType breakfast, lunch y dinner.
 Cada comida debe incluir prepMinutes como estimación entera de minutos entre 1 y 240; no es una garantía de duración real.
 ${capInstruction}
+Las cantidades numéricas deben ser el total para las ${peopleCount} personas solicitadas, no una cantidad por persona.
 Para cantidades desconocidas usa quantity: null y unit: null; no inventes cantidades.`;
 }
 
@@ -229,6 +235,13 @@ const structuredMealPlanScheduleSchema = z
     startDate: z.string().refine(isValidIsoDate),
     timeZone: z.string().min(1).max(100).refine(isValidTimeZone),
     confirmedAt: z.string().refine(isValidUtcTimestamp),
+    portionConfirmation: z
+      .object({
+        peopleCount: z.number().int().min(1).max(100),
+        confirmedAt: z.string().refine(isValidUtcTimestamp),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

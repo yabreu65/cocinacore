@@ -213,7 +213,11 @@ export async function POST(request: NextRequest) {
   });
 
   const availableTimeMinutes = persistedProfileContextData?.availableTimeMinutes ?? null;
-  const structuredOutputInstructions = buildStructuredMealPlanInstructions(period, availableTimeMinutes);
+  const structuredOutputInstructions = buildStructuredMealPlanInstructions(
+    period,
+    peopleCount,
+    availableTimeMinutes
+  );
 
   const prompt =
     mode === 'inventory_to_menu'

@@ -27,6 +27,7 @@ import {
 export type MealPlanCoverageUnknownReason =
   | 'no_saved_plan'
   | 'schedule_not_confirmed'
+  | 'portion_basis_not_confirmed'
   | 'invalid_schedule'
   | 'invalid_horizon'
   | 'invalid_consumption'
@@ -232,6 +233,13 @@ export function buildMealPlanCoverageForecast(
   const schedule = parseStructuredMealPlanSchedule(plan.schedule);
   if (!schedule || !Number.isFinite(now.getTime())) {
     return createUnknownMealPlanCoverageForecast(horizonDays, 'invalid_schedule');
+  }
+  if (!schedule.portionConfirmation) {
+    return createUnknownMealPlanCoverageForecast(
+      horizonDays,
+      'portion_basis_not_confirmed',
+      schedule.timeZone
+    );
   }
 
   const today = getLocalDateInTimeZone(now, schedule.timeZone);

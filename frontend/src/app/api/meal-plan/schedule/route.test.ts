@@ -95,6 +95,7 @@ describe('POST /api/meal-plan/schedule', () => {
         mealPlanId: 'plan-1',
         startDate: '2026-10-26',
         timeZone: 'UTC',
+        portionBasisConfirmed: true,
       }) as unknown as NextRequest
     );
 
@@ -115,6 +116,7 @@ describe('POST /api/meal-plan/schedule', () => {
           mealPlanId: 'plan-1',
           ...scheduleInput,
           confirmed: true,
+          portionBasisConfirmed: true,
         }) as unknown as NextRequest
       );
 
@@ -123,6 +125,21 @@ describe('POST /api/meal-plan/schedule', () => {
     }
   );
 
+  it('requires explicit portion-basis confirmation before reading or updating a plan', async () => {
+    const response = await POST(
+      request({
+        mealPlanId: 'plan-1',
+        startDate: '2026-10-26',
+        timeZone: 'UTC',
+        confirmed: true,
+      }) as unknown as NextRequest
+    );
+
+    expect(response.status).toBe(400);
+    expect(mockFindMealPlanByIdForUserAndTenant).not.toHaveBeenCalled();
+    expect(mockUpdateMealPlanScheduleForUserAndTenant).not.toHaveBeenCalled();
+  });
+
   it('scopes plan lookup and schedule write to the authenticated user and tenant', async () => {
     const response = await POST(
       request({
@@ -130,6 +147,7 @@ describe('POST /api/meal-plan/schedule', () => {
         startDate: '2026-10-26',
         timeZone: 'America/Argentina/Buenos_Aires',
         confirmed: true,
+        portionBasisConfirmed: true,
       }) as unknown as NextRequest
     );
 
@@ -147,6 +165,10 @@ describe('POST /api/meal-plan/schedule', () => {
         startDate: '2026-10-26',
         timeZone: 'America/Argentina/Buenos_Aires',
         confirmedAt: '2026-10-25T12:00:00.000Z',
+        portionConfirmation: {
+          peopleCount: 2,
+          confirmedAt: '2026-10-25T12:00:00.000Z',
+        },
       },
     });
     expect(await response.json()).toMatchObject({
@@ -154,6 +176,10 @@ describe('POST /api/meal-plan/schedule', () => {
         startDate: '2026-10-26',
         timeZone: 'America/Argentina/Buenos_Aires',
         confirmedAt: '2026-10-25T12:00:00.000Z',
+        portionConfirmation: {
+          peopleCount: 2,
+          confirmedAt: '2026-10-25T12:00:00.000Z',
+        },
       },
     });
   });
@@ -167,6 +193,7 @@ describe('POST /api/meal-plan/schedule', () => {
         startDate: '2026-10-26',
         timeZone: 'UTC',
         confirmed: true,
+        portionBasisConfirmed: true,
       }) as unknown as NextRequest
     );
 
@@ -188,6 +215,7 @@ describe('POST /api/meal-plan/schedule', () => {
         startDate: '2026-10-26',
         timeZone: 'UTC',
         confirmed: true,
+        portionBasisConfirmed: true,
       }) as unknown as NextRequest
     );
 
@@ -204,6 +232,7 @@ describe('POST /api/meal-plan/schedule', () => {
         startDate: '2026-10-26',
         timeZone: 'UTC',
         confirmed: true,
+        portionBasisConfirmed: true,
       }) as unknown as NextRequest
     );
 
@@ -221,6 +250,7 @@ describe('POST /api/meal-plan/schedule', () => {
         startDate: '2026-10-26',
         timeZone: 'UTC',
         confirmed: true,
+        portionBasisConfirmed: true,
       }) as unknown as NextRequest
     );
 
@@ -242,6 +272,7 @@ describe('POST /api/meal-plan/schedule', () => {
         startDate: '2026-10-26',
         timeZone: 'UTC',
         confirmed: true,
+        portionBasisConfirmed: true,
       }) as unknown as NextRequest
     );
 
@@ -259,6 +290,7 @@ describe('POST /api/meal-plan/schedule', () => {
         startDate: '2026-10-26',
         timeZone: 'UTC',
         confirmed: true,
+        portionBasisConfirmed: true,
       }) as unknown as NextRequest
     );
 
@@ -276,6 +308,7 @@ describe('POST /api/meal-plan/schedule', () => {
         startDate: '2026-10-26',
         timeZone: 'UTC',
         confirmed: true,
+        portionBasisConfirmed: true,
       }) as unknown as NextRequest
     );
 

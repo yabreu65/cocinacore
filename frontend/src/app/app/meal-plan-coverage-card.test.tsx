@@ -56,10 +56,12 @@ function renderPanel(forecast: MealPlanCoverageForecast) {
       startDate=""
       timeZone="America/Argentina/Buenos_Aires"
       isScheduling={false}
+      portionBasisConfirmed={false}
       scheduleError={null}
       scheduleMessage={null}
       onHorizonChange={vi.fn()}
       onStartDateChange={vi.fn()}
+      onPortionBasisConfirmationChange={vi.fn()}
       onConfirmSchedule={vi.fn()}
     />
   );
@@ -76,6 +78,20 @@ describe('MealPlanCoveragePanel', () => {
     expect(markup).toContain('type="date"');
     expect(markup).toContain('disabled=""');
     expect(markup).not.toContain('stock suficiente');
+  });
+
+  it('requires an explicit portion review before presenting a forecast', () => {
+    const markup = renderPanel({
+      ...unknownForecast,
+      reason: 'portion_basis_not_confirmed',
+    });
+
+    expect(markup).toContain('las cantidades del menú');
+    expect(markup).toContain('4 porciones');
+    expect(markup).toContain('type="checkbox"');
+    expect(markup).toContain('required=""');
+    expect(markup).toContain('disabled=""');
+    expect(markup).not.toContain('Suficiente');
   });
 
   it('explains when the saved plan is shorter than the selected horizon', () => {

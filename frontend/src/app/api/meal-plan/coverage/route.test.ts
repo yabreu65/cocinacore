@@ -56,6 +56,10 @@ function planRow(overrides: Partial<UserMealPlanRow> = {}): UserMealPlanRow {
         startDate: '2026-10-25',
         timeZone: 'UTC',
         confirmedAt: '2026-10-24T12:00:00.000Z',
+        portionConfirmation: {
+          peopleCount: 2,
+          confirmedAt: '2026-10-24T12:00:00.000Z',
+        },
       },
     },
     consumption_payload: {},
@@ -123,6 +127,62 @@ describe('GET /api/meal-plan/coverage', () => {
 
     expect(response.status).toBe(400);
     expect(mockFindLatestMealPlanByUserAndTenant).not.toHaveBeenCalled();
+    expect(mockListInventoryItemsByTenant).not.toHaveBeenCalled();
+  });
+
+  it('returns unknown before inventory reads when saved plan portions are not confirmed', async () => {
+    const savedPlan = planRow();
+    mockFindLatestMealPlanByUserAndTenant.mockResolvedValue(
+      planRow({
+        calendar_payload: {
+          ...(savedPlan.calendar_payload as Record<string, unknown>),
+          schedule: {
+            startDate: '2026-10-25',
+            timeZone: 'UTC',
+            confirmedAt: '2026-10-24T12:00:00.000Z',
+          },
+        },
+      })
+    );
+    mockListInventoryItemsByTenant.mockResolvedValue([inventoryItem({ quantity: '100 kg' })]);
+
+    const response = await GET(request());
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      forecast: { status: 'unknown', reason: 'portion_basis_not_confirmed', items: [] },
+    });
+    expect(mockListInventoryItemsByTenant).not.toHaveBeenCalled();
+  });
+
+  it('rejects portion confirmation when the saved people count has changed', async () => {
+    const savedPlan = planRow();
+    mockFindLatestMealPlanByUserAndTenant.mockResolvedValue(
+      planRow({
+        people_count: 4,
+        calendar_payload: {
+          ...(savedPlan.calendar_payload as Record<string, unknown>),
+          schedule: {
+            startDate: '2026-10-25',
+            timeZone: 'UTC',
+            confirmedAt: '2026-10-24T12:00:00.000Z',
+            portionConfirmation: {
+              peopleCount: 2,
+              confirmedAt: '2026-10-24T12:00:00.000Z',
+            },
+          },
+        },
+      })
+    );
+    mockListInventoryItemsByTenant.mockResolvedValue([inventoryItem({ quantity: '100 kg' })]);
+
+    const response = await GET(request());
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      peopleCount: 4,
+      forecast: { status: 'unknown', reason: 'portion_basis_not_confirmed', items: [] },
+    });
     expect(mockListInventoryItemsByTenant).not.toHaveBeenCalled();
   });
 

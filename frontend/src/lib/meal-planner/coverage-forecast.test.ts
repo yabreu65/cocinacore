@@ -7,6 +7,16 @@ const schedule = {
   startDate: '2026-10-25',
   timeZone: 'UTC',
   confirmedAt: '2026-10-24T12:00:00.000Z',
+  portionConfirmation: {
+    peopleCount: 2,
+    confirmedAt: '2026-10-24T12:00:00.000Z',
+  },
+};
+
+const scheduleWithoutPortionConfirmation = {
+  startDate: '2026-10-25',
+  timeZone: 'UTC',
+  confirmedAt: '2026-10-24T12:00:00.000Z',
 };
 
 function day(
@@ -70,6 +80,26 @@ describe('buildMealPlanCoverageForecast', () => {
       status: 'unknown',
       reason: 'schedule_not_confirmed',
       items: [],
+    });
+  });
+
+  it('returns unknown rather than sufficient when ingredient portions lack explicit confirmation', () => {
+    const result = buildMealPlanCoverageForecast({
+      plan: plan(
+        Array.from({ length: 7 }, (_, index) => day(index + 1, [rice(100)])),
+        { schedule: scheduleWithoutPortionConfirmation }
+      ),
+      inventoryItems: [{ ingredient_name: 'Arroz', quantity: '100 kg', unit: null }],
+      consumptionPayload: {},
+      horizonDays: 7,
+      now,
+    });
+
+    expect(result).toMatchObject({
+      status: 'unknown',
+      reason: 'portion_basis_not_confirmed',
+      items: [],
+      summary: { sufficient: 0 },
     });
   });
 

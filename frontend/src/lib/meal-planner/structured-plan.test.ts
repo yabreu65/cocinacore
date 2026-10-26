@@ -190,6 +190,10 @@ describe('parseStructuredMealPlanValue', () => {
         startDate: '2026-10-26',
         timeZone: 'America/Argentina/Buenos_Aires',
         confirmedAt: '2026-10-25T12:00:00.000Z',
+        portionConfirmation: {
+          peopleCount: 4,
+          confirmedAt: '2026-10-25T12:00:00.000Z',
+        },
       },
     };
 
