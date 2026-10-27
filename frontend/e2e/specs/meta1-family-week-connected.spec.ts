@@ -280,7 +280,12 @@ test.describe('META 1 full family week', () => {
       await page.goto('/app');
       await page.getByRole('link', { name: 'Planificador', exact: true }).click();
       await expect(page).toHaveURL('/meal-planner');
-      await expect(page.getByText('No hay faltantes accionables para este menú.')).toBeVisible();
+      const remainingShortage = page
+        .locator('section[aria-busy]')
+        .locator('li')
+        .filter({ hasText: ingredientName });
+      await expect(remainingShortage).toContainText('Ya comprado');
+      await expect(remainingShortage).toContainText('Para comprar: 1.8 kg');
       await expect(page.locator('article').filter({ hasText: ingredientName })).toHaveCount(21);
 
       for (let dayIndex = 1; dayIndex <= 7; dayIndex += 1) {
@@ -335,10 +340,14 @@ test.describe('META 1 full family week', () => {
       );
       expect(purchasedRow.rows).toEqual([{ status: 'purchased', quantity: '0.7 kg' }]);
 
-      await expect(page.getByText('No hay faltantes accionables para este menú.')).toBeVisible();
+      await expect(
+        page.locator('section[aria-busy]').locator('li').filter({ hasText: ingredientName })
+      ).toContainText('Ya comprado');
       await page.reload();
       await expect(page.getByText('Cocinado', { exact: true })).toHaveCount(21);
-      await expect(page.getByText('No hay faltantes accionables para este menú.')).toBeVisible();
+      await expect(
+        page.locator('section[aria-busy]').locator('li').filter({ hasText: ingredientName })
+      ).toContainText('Ya comprado');
 
       const replay = await page.request.post('/api/meal-plan/consumption', {
         data: { mealPlanId: planId, dayIndex: 1, mealType: 'breakfast' },
