@@ -10,6 +10,7 @@ import {
   type MealPlanPublicResponse,
 } from '@/lib/meal-planner/rehydration';
 import type { StructuredMealPlan, StructuredMealType } from '@/lib/meal-planner/structured-plan';
+import type { AdaptivePlanProposal } from '@/lib/meal-planner/adaptive-planning';
 import { mapMealPlanLoadError } from '@/lib/meal-planner/meal-plan-load-error';
 import { normalizeInventoryName } from '@/lib/inventory/normalize-inventory';
 import {
@@ -55,6 +56,13 @@ export default function MealPlannerPage() {
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [plan, setPlan] = useState<StructuredMealPlan | null>(null);
   const [activePlanId, setActivePlanId] = useState<string | null>(null);
+  const [adaptiveProposal, setAdaptiveProposal] = useState<AdaptivePlanProposal | null>(null);
+  const [adaptiveExpectedUpdatedAt, setAdaptiveExpectedUpdatedAt] = useState<string | null>(null);
+  const [adaptiveSourceFingerprint, setAdaptiveSourceFingerprint] = useState<string | null>(null);
+  const [isLoadingAdaptive, setIsLoadingAdaptive] = useState(false);
+  const [isConfirmingAdaptive, setIsConfirmingAdaptive] = useState(false);
+  const [adaptiveMessage, setAdaptiveMessage] = useState<string | null>(null);
+  const [adaptiveError, setAdaptiveError] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<ShoppingSuggestion[]>([]);
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
@@ -157,6 +165,79 @@ export default function MealPlannerPage() {
     }
   }, []);
 
+  const onRequestAdaptiveProposal = async () => {
+    if (!activePlanId || isLoadingAdaptive || isConfirmingAdaptive) return;
+    setIsLoadingAdaptive(true);
+    setAdaptiveError(null);
+    setAdaptiveMessage(null);
+    try {
+      const result = await safeFetch<{
+        expectedUpdatedAt: string;
+        sourceFingerprint: string;
+        proposal: AdaptivePlanProposal;
+      }>('/api/meal-plan/adaptive-proposal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ mealPlanId: activePlanId }),
+      });
+      if (!result.ok) throw new Error(result.error ?? 'No se pudo preparar la propuesta.');
+      setAdaptiveProposal(result.data.proposal);
+      setAdaptiveExpectedUpdatedAt(result.data.expectedUpdatedAt);
+      setAdaptiveSourceFingerprint(result.data.sourceFingerprint);
+    } catch (error) {
+      setAdaptiveError(
+        error instanceof Error ? error.message : 'No se pudo preparar la propuesta.'
+      );
+    } finally {
+      setIsLoadingAdaptive(false);
+    }
+  };
+
+  const onConfirmAdaptiveProposal = async () => {
+    if (
+      !activePlanId ||
+      !adaptiveProposal ||
+      !adaptiveExpectedUpdatedAt ||
+      !adaptiveSourceFingerprint ||
+      isConfirmingAdaptive
+    )
+      return;
+    setIsConfirmingAdaptive(true);
+    setAdaptiveError(null);
+    setAdaptiveMessage(null);
+    try {
+      const result = await safeFetch<{ plan: StructuredMealPlan }>(
+        '/api/meal-plan/adaptive-proposal/confirm',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            mealPlanId: activePlanId,
+            expectedUpdatedAt: adaptiveExpectedUpdatedAt,
+            sourceFingerprint: adaptiveSourceFingerprint,
+            proposedPlan: adaptiveProposal.plan,
+          }),
+        }
+      );
+      if (!result.ok) throw new Error(result.error ?? 'La propuesta quedó desactualizada.');
+      setPlan(result.data.plan);
+      setAdaptiveProposal(null);
+      setAdaptiveExpectedUpdatedAt(null);
+      setAdaptiveSourceFingerprint(null);
+      setAdaptiveMessage(
+        'Propuesta confirmada. El menú guardado fue actualizado sin descontar inventario.'
+      );
+    } catch (error) {
+      setAdaptiveError(
+        error instanceof Error ? error.message : 'No se pudo confirmar la propuesta.'
+      );
+    } finally {
+      setIsConfirmingAdaptive(false);
+    }
+  };
+
   useEffect(() => {
     let active = true;
     componentActiveRef.current = true;
@@ -230,6 +311,11 @@ export default function MealPlannerPage() {
     setConsumptionMessage(null);
     setConsumptionError(null);
     setIsConfirming(false);
+    setAdaptiveProposal(null);
+    setAdaptiveExpectedUpdatedAt(null);
+    setAdaptiveSourceFingerprint(null);
+    setAdaptiveMessage(null);
+    setAdaptiveError(null);
     setIsGenerating(true);
     setGenerationError(null);
     setPlan(null);
@@ -510,6 +596,83 @@ export default function MealPlannerPage() {
                 {consumptionMessage}
               </p>
             ) : null}
+            <section className="mt-4 rounded-xl border border-[#E8DDD2] bg-white p-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h3 className="font-semibold">Adaptar menú con evidencia</h3>
+                  <p className="text-sm text-[#6B5A50]">
+                    Prepara una propuesta con inventario y preferencias reales. No guarda ni
+                    descuenta stock hasta que confirmes.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void onRequestAdaptiveProposal()}
+                  disabled={isLoadingAdaptive || isConfirmingAdaptive}
+                  className="h-10 rounded-lg border border-[#C56A1A] px-3 text-sm font-semibold text-[#A55412] disabled:opacity-60"
+                >
+                  {isLoadingAdaptive ? 'Analizando...' : 'Preparar propuesta'}
+                </button>
+              </div>
+              {adaptiveError ? (
+                <p role="alert" className="mt-2 text-sm text-red-700">
+                  {adaptiveError}
+                </p>
+              ) : null}
+              {adaptiveMessage ? (
+                <p role="status" className="mt-2 text-sm font-semibold text-green-800">
+                  {adaptiveMessage}
+                </p>
+              ) : null}
+              {adaptiveProposal ? (
+                <div className="mt-3 grid gap-3" data-testid="adaptive-proposal">
+                  <p className="text-sm text-[#6B5A50]">
+                    Confianza declarada: <strong>{adaptiveProposal.confidence}</strong>. Los cambios
+                    son temporales hasta confirmarlos.
+                  </p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {adaptiveProposal.evidence.map((item) => (
+                      <p
+                        key={item.label}
+                        className="rounded-lg bg-[#FAF6F1] p-2 text-xs text-[#6B5A50]"
+                      >
+                        <strong>{item.label}:</strong>{' '}
+                        {item.status === 'known' ? 'conocido' : 'desconocido'} — {item.detail}
+                      </p>
+                    ))}
+                  </div>
+                  {adaptiveProposal.changes.length === 0 ? (
+                    <p className="rounded-lg bg-[#F4F8F1] p-2 text-sm text-green-800">
+                      No hay una mejora justificable con la evidencia disponible. El menú no cambia.
+                    </p>
+                  ) : (
+                    <ul className="grid gap-2 text-sm">
+                      {adaptiveProposal.changes.map((change) => (
+                        <li
+                          key={`${change.slotKey}-${change.previousMeal}-${change.proposedMeal}`}
+                          className="rounded-lg border border-[#F0E7DE] p-2"
+                        >
+                          <strong>{change.slotKey}:</strong> {change.previousMeal} →{' '}
+                          {change.proposedMeal}
+                          <span className="block text-xs text-[#6B5A50]">{change.reason}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <p className="text-xs text-[#6B5A50]">{adaptiveProposal.limitations.join(' ')}</p>
+                  {adaptiveProposal.changes.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => void onConfirmAdaptiveProposal()}
+                      disabled={isConfirmingAdaptive}
+                      className="h-10 rounded-lg bg-[#C56A1A] px-3 text-sm font-semibold text-white disabled:opacity-60"
+                    >
+                      {isConfirmingAdaptive ? 'Guardando...' : 'Confirmar y guardar propuesta'}
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+            </section>
             <div className="mt-3 grid gap-3">
               {plan.days.map((day) => (
                 <section
