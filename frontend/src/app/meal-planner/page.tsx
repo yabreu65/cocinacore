@@ -99,7 +99,7 @@ export default function MealPlannerPage() {
   const userEditedRef = useRef(false);
 
   const loadSuggestions = useCallback(
-    async (mealPlanId: string, preserveMessage = false) => {
+    async (mealPlanId: string, preserveMessage = false, horizonDays: 7 | 14 = shoppingHorizon) => {
       const requestVersion = ++suggestionRequestVersionRef.current;
       setIsLoadingSuggestions(true);
       setShoppingError(null);
@@ -113,7 +113,7 @@ export default function MealPlannerPage() {
           sourceFingerprint: string;
           cost: ShoppingCost;
         }>(
-          `/api/meal-plan/shopping-suggestions?mealPlanId=${encodeURIComponent(mealPlanId)}&horizon=${shoppingHorizon}`,
+          `/api/meal-plan/shopping-suggestions?mealPlanId=${encodeURIComponent(mealPlanId)}&horizon=${horizonDays}`,
           { credentials: 'same-origin' }
         );
         if (!result.ok) throw new Error(result.error ?? 'No se pudieron cargar los faltantes.');
@@ -284,6 +284,7 @@ export default function MealPlannerPage() {
       setAdaptiveMessage(
         'Propuesta confirmada. El menú guardado fue actualizado sin descontar inventario.'
       );
+      void loadSuggestions(mealPlanId, true);
     } catch (error) {
       setAdaptiveError(
         error instanceof Error ? error.message : 'No se pudo confirmar la propuesta.'
@@ -855,6 +856,9 @@ export default function MealPlannerPage() {
                     setSelectedItems(new Set());
                     setShoppingMessage(null);
                     setShoppingError(null);
+                    if (activePlanIdRef.current) {
+                      void loadSuggestions(activePlanIdRef.current, false, nextHorizon);
+                    }
                   }}
                   disabled={isLoadingSuggestions || isConfirming || isGenerating}
                   className="h-10 rounded-lg border border-[#E8DDD2] bg-white px-2 font-normal"

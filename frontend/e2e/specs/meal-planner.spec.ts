@@ -36,6 +36,7 @@ test.describe('Meal Planner', () => {
   }) => {
     await injectAuth(page);
     let confirmationCalls = 0;
+    const shoppingHorizons: string[] = [];
     await page.route('/api/meal-plan', async (route) => {
       if (route.request().method() === 'GET') {
         await route.fulfill({
@@ -52,10 +53,19 @@ test.describe('Meal Planner', () => {
       });
     });
     await page.route('**/api/meal-plan/shopping-suggestions**', async (route) => {
+      if (route.request().method() === 'GET') {
+        shoppingHorizons.push(new URL(route.request().url()).searchParams.get('horizon') ?? '');
+      }
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ items: [] }),
+        body: JSON.stringify({
+          items: [],
+          status: 'ready',
+          expectedUpdatedAt: '2026-10-27T00:00:00.000Z',
+          sourceFingerprint: 'shopping-fixture',
+          cost: { status: 'complete', estimatedTotal: 0, knownItemCount: 0, itemCount: 0 },
+        }),
       });
     });
     await page.route('**/api/meal-plan/consumption**', async (route) => {
@@ -113,11 +123,14 @@ test.describe('Meal Planner', () => {
     await mealPlannerPage.goto();
     await mealPlannerPage.generatePlan();
     await expect(page.getByRole('heading', { name: 'Menú generado' })).toBeVisible();
+    await page.getByRole('combobox', { name: 'Horizonte' }).selectOption('14');
+    await expect.poll(() => shoppingHorizons).toContain('14');
     await page.getByRole('button', { name: 'Preparar propuesta' }).click();
     await expect(page.getByTestId('adaptive-proposal')).toBeVisible();
     expect(confirmationCalls).toBe(0);
     await page.getByRole('button', { name: 'Confirmar y guardar propuesta' }).click();
     await expect(page.getByText('Propuesta confirmada.', { exact: false })).toBeVisible();
+    await expect.poll(() => shoppingHorizons.filter((horizon) => horizon === '14')).toHaveLength(2);
     expect(confirmationCalls).toBe(1);
   });
 });
