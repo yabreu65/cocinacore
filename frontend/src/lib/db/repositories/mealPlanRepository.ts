@@ -8,6 +8,7 @@ import type {
 import {
   renderStructuredMealPlan,
   type StructuredMealPlan,
+  type StructuredMealPlanSchedule,
 } from '@/lib/meal-planner/structured-plan';
 
 export class MealPlanRepositoryError extends Error {
@@ -71,6 +72,27 @@ export async function findMealPlanByIdForUserAndTenant(
      where id = $1 and tenant_id = $2 and user_id = $3
      limit 1`,
     [id, tenantId, userId]
+  );
+  return mapSingleRow(result);
+}
+
+export interface UpdateMealPlanScheduleInput {
+  mealPlanId: string;
+  userId: string;
+  tenantId: string;
+  schedule: StructuredMealPlanSchedule;
+}
+
+export async function updateMealPlanScheduleForUserAndTenant(
+  input: UpdateMealPlanScheduleInput
+): Promise<UserMealPlanRow | null> {
+  const result = await query<UserMealPlanRow>(
+    `update public.user_meal_plans
+        set calendar_payload = jsonb_set(calendar_payload, '{schedule}', $1::jsonb, true),
+            updated_at = now()
+      where id = $2 and tenant_id = $3 and user_id = $4
+      returning *`,
+    [JSON.stringify(input.schedule), input.mealPlanId, input.tenantId, input.userId]
   );
   return mapSingleRow(result);
 }

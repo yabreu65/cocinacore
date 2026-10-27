@@ -29,11 +29,22 @@ export interface StructuredMealPlanDay {
   meals: StructuredMeal[];
 }
 
+export interface StructuredMealPlanSchedule {
+  startDate: string;
+  timeZone: string;
+  confirmedAt: string;
+  portionConfirmation?: {
+    peopleCount: number;
+    confirmedAt: string;
+  };
+}
+
 export interface StructuredMealPlan {
   period: MealPlanPeriod;
   dayCount: number;
   availableTimeMinutesSnapshot?: number | null;
   days: StructuredMealPlanDay[];
+  schedule?: StructuredMealPlanSchedule;
 }
 
 export type StructuredMealPlanParseResult =
@@ -154,6 +165,7 @@ export const structuredMealPlanResponseJsonSchema = {
 
 export function buildStructuredMealPlanInstructions(
   period: MealPlanPeriod,
+  peopleCount: number,
   availableTimeMinutes: number | null = null
 ): string {
   const dayCount = getMealPlanDayCount(period);
@@ -168,6 +180,7 @@ Usa period como "${period}", dayCount ${dayCount}, y días con dayIndex consecut
 Cada día debe incluir exactamente un mealType breakfast, lunch y dinner.
 Cada comida debe incluir prepMinutes como estimación entera de minutos entre 1 y 240; no es una garantía de duración real.
 ${capInstruction}
+Las cantidades numéricas deben ser el total para las ${peopleCount} personas solicitadas, no una cantidad por persona.
 Para cantidades desconocidas usa quantity: null y unit: null; no inventes cantidades.`;
 }
 
@@ -177,6 +190,64 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isUnknownArray(value: unknown): value is unknown[] {
   return Array.isArray(value);
+}
+
+function isValidIsoDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+function isValidTimeZone(value: string): boolean {
+  if (!value.trim()) return false;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value }).format(new Date(0));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function getLocalDateInTimeZone(date: Date, timeZone: string): string | null {
+  if (!Number.isFinite(date.getTime()) || !isValidTimeZone(timeZone)) return null;
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const partValues = new Map(parts.map((part) => [part.type, part.value]));
+  const year = partValues.get('year');
+  const month = partValues.get('month');
+  const day = partValues.get('day');
+  if (!year || !month || !day) return null;
+  return `${year.padStart(4, '0')}-${month}-${day}`;
+}
+
+function isValidUtcTimestamp(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return false;
+  const date = new Date(value);
+  return !Number.isNaN(date.getTime()) && date.toISOString() === value;
+}
+
+const structuredMealPlanScheduleSchema = z
+  .object({
+    startDate: z.string().refine(isValidIsoDate),
+    timeZone: z.string().min(1).max(100).refine(isValidTimeZone),
+    confirmedAt: z.string().refine(isValidUtcTimestamp),
+    portionConfirmation: z
+      .object({
+        peopleCount: z.number().int().min(1).max(100),
+        confirmedAt: z.string().refine(isValidUtcTimestamp),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+export function parseStructuredMealPlanSchedule(value: unknown): StructuredMealPlanSchedule | null {
+  const parsed = structuredMealPlanScheduleSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 function withoutPersistedDayLabel(day: unknown): unknown {
@@ -279,10 +350,18 @@ export function parseStructuredMealPlanValue(
     return { success: false, reason: 'schema_invalid' };
   }
 
+  let schedule: StructuredMealPlanSchedule | undefined;
+  if (valueRecord.schedule !== undefined && valueRecord.schedule !== null) {
+    const parsedSchedule = parseStructuredMealPlanSchedule(valueRecord.schedule);
+    if (!parsedSchedule) return { success: false, reason: 'schema_invalid' };
+    schedule = parsedSchedule;
+  }
+
   const candidate = {
     ...valueRecord,
     days: valueRecord.days.map(withoutPersistedDayLabel),
   };
+  delete (candidate as Record<string, unknown>).schedule;
   const snapshot = valueRecord.availableTimeMinutesSnapshot;
   if (
     snapshot !== undefined &&
@@ -306,6 +385,9 @@ export function parseStructuredMealPlanValue(
 
   if (parsedPlan.success && snapshot !== undefined) {
     parsedPlan.plan.availableTimeMinutesSnapshot = snapshot as number | null;
+  }
+  if (parsedPlan.success && schedule !== undefined) {
+    parsedPlan.plan.schedule = schedule;
   }
   return parsedPlan;
 }

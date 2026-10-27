@@ -13,6 +13,7 @@ const {
   createMealPlan,
   findLatestMealPlanByUserAndTenant,
   findMealPlanByIdForUserAndTenant,
+  updateMealPlanScheduleForUserAndTenant,
   MealPlanRepositoryError,
 } = await import('./mealPlanRepository');
 
@@ -137,6 +138,36 @@ describe('mealPlanRepository', () => {
     const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
     expect(sql).toMatch(/where id = \$1 and tenant_id = \$2 and user_id = \$3/);
     expect(params).toEqual(['meal-plan-1', 'tenant-1', 'user-1']);
+  });
+
+  it('adds confirmed schedule metadata without replacing the persisted plan JSON', async () => {
+    const plan = structuredPlan();
+    const schedule = {
+      startDate: '2026-10-26',
+      timeZone: 'America/Argentina/Buenos_Aires',
+      confirmedAt: '2026-10-25T12:00:00.000Z',
+    };
+    const updatedRow = mealPlanRow({ calendar_payload: { ...plan, schedule } });
+    queryMock.mockResolvedValue({ rows: [updatedRow] });
+
+    const updated = await updateMealPlanScheduleForUserAndTenant({
+      mealPlanId: 'meal-plan-1',
+      userId: 'user-1',
+      tenantId: 'tenant-1',
+      schedule,
+    });
+
+    expect(updated).toEqual(updatedRow);
+    expect(updated?.calendar_payload).toMatchObject({ ...plan, schedule });
+    const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain("jsonb_set(calendar_payload, '{schedule}', $1::jsonb, true)");
+    expect(sql).toMatch(/where id = \$2 and tenant_id = \$3 and user_id = \$4/);
+    expect(params).toEqual([
+      JSON.stringify(schedule),
+      'meal-plan-1',
+      'tenant-1',
+      'user-1',
+    ]);
   });
 
   it('throws a controlled error when an insert returns no row', async () => {
