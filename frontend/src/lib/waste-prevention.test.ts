@@ -272,6 +272,115 @@ describe('buildWastePreventionReport', () => {
     });
   });
 
+  it('does not mark repeated compatible ingredient requirements full when their sum exceeds stock', () => {
+    const report = buildWastePreventionReport({
+      ...baseInput,
+      inventoryItems: [lot({ quantity: '1', unit: 'kg' })],
+      recipes: [
+        recipe({
+          ingredients: [
+            { name: 'Tomato', quantity: '600', unit: 'g' },
+            { name: 'tomato', quantity: '0.6', unit: 'kg' },
+          ],
+        }),
+      ],
+    });
+
+    expect(report.suggestions[0]).toMatchObject({ coverage: 'partial' });
+    expect(report.suggestions[0]).toMatchObject({
+      requiredIngredientCount: 1,
+      ingredients: [
+        {
+          requiredQuantity: 1200,
+          requiredUnit: 'g',
+          availableQuantity: 1000,
+          status: 'partial',
+        },
+      ],
+    });
+  });
+
+  it('keeps repeated requirements unknown when one quantity is unknown', () => {
+    const report = buildWastePreventionReport({
+      ...baseInput,
+      inventoryItems: [lot({ quantity: '1', unit: 'kg' })],
+      recipes: [
+        recipe({
+          ingredients: [
+            { name: 'Tomato', quantity: '500', unit: 'g' },
+            { name: 'Tomato', quantity: null, unit: 'g' },
+          ],
+        }),
+      ],
+    });
+
+    expect(report.suggestions[0]).toMatchObject({
+      coverage: 'unknown',
+      requiredIngredientCount: 1,
+      ingredients: [{ status: 'unknown', requiredQuantity: null, requiredUnit: 'unknown' }],
+    });
+  });
+
+  it('keeps repeated requirements unknown when their units are incompatible', () => {
+    const report = buildWastePreventionReport({
+      ...baseInput,
+      inventoryItems: [lot({ quantity: '1', unit: 'kg' })],
+      recipes: [
+        recipe({
+          ingredients: [
+            { name: 'Tomato', quantity: '500', unit: 'g' },
+            { name: 'Tomato', quantity: '1', unit: 'l' },
+          ],
+        }),
+      ],
+    });
+
+    expect(report.suggestions[0]).toMatchObject({
+      coverage: 'unknown',
+      ingredients: [{ status: 'unknown', requiredQuantity: null, requiredUnit: 'unknown' }],
+    });
+  });
+
+  it('keeps a mixed fraction without a unit unknown', () => {
+    const report = buildWastePreventionReport({
+      ...baseInput,
+      inventoryItems: [lot({ quantity: '1 1/2', unit: null })],
+      recipes: [recipe({ ingredients: [{ name: 'Tomato', quantity: '1', unit: 'unidad' }] })],
+    });
+
+    expect(report.lots[0]).toMatchObject({ quantityStatus: 'unknown', parsedQuantity: null });
+    expect(report.suggestions[0]).toMatchObject({ coverage: 'unknown' });
+  });
+
+  it('parses mixed fractions when the unit is explicit and sums multiple lots safely', () => {
+    const report = buildWastePreventionReport({
+      ...baseInput,
+      inventoryItems: [
+        lot({ id: 'lot-today', quantity: '400', unit: 'g', expiration_date: '2026-10-26' }),
+        lot({ id: 'lot-soon', quantity: '0.3', unit: 'kg', expiration_date: '2026-10-27' }),
+      ],
+      recipes: [
+        recipe({
+          ingredients: [{ name: 'Tomato', quantity: '1 1/2', unit: 'kg' }],
+        }),
+      ],
+    });
+
+    expect(report.lots.every((item) => item.quantityStatus === 'known')).toBe(true);
+    expect(report.suggestions[0]).toMatchObject({
+      coverage: 'partial',
+      ingredients: [
+        {
+          requiredQuantity: 1.5,
+          requiredUnit: 'kg',
+          availableQuantity: 0.7,
+          availableUnit: 'kg',
+          matchedLotIds: ['lot-today', 'lot-soon'],
+        },
+      ],
+    });
+  });
+
   it('keeps unknown quantities unknown instead of assuming zero or sufficient stock', () => {
     const report = buildWastePreventionReport({
       ...baseInput,

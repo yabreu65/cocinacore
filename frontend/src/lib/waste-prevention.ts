@@ -272,8 +272,14 @@ function parseAmount(
   unit: string | null | undefined
 ): { value: number; unit: NormalizedUnit } | null {
   const quantityText = typeof quantity === 'number' ? String(quantity) : (quantity ?? '');
-  const hasExplicitUnit = Boolean(unit?.trim()) || /\s+\S/.test(quantityText.trim());
-  if (!hasExplicitUnit) return null;
+  const hasUnitField = Boolean(unit?.trim());
+  const explicitUnit = hasUnitField ? normalizeUnit(unit ?? null) : 'unknown';
+  const embeddedUnit = quantityText
+    .trim()
+    .split(/\s+/)
+    .map((token) => normalizeUnit(token))
+    .find((candidate) => candidate !== 'unknown');
+  if ((hasUnitField && explicitUnit === 'unknown') || (!hasUnitField && !embeddedUnit)) return null;
   const raw = [quantityText, unit ?? ''].filter(Boolean).join(' ').trim();
   const parsed = parseQuantity(raw);
   if (
@@ -285,6 +291,7 @@ function parseAmount(
   ) {
     return null;
   }
+  if (hasUnitField && parsed.unit !== explicitUnit) return null;
   return { value: parsed.value, unit: parsed.unit };
 }
 
@@ -340,6 +347,52 @@ function recipeRequirement(ingredient: WastePreventionRecipeIngredientRow) {
     requiredQuantity: amount?.value ?? null,
     requiredUnit: amount?.unit ?? 'unknown',
   };
+}
+
+type WasteRecipeRequirement = ReturnType<typeof recipeRequirement>;
+
+function consolidateRecipeRequirements(
+  requirements: readonly WasteRecipeRequirement[]
+): WasteRecipeRequirement[] {
+  const consolidated = new Map<string, WasteRecipeRequirement>();
+
+  for (const requirement of requirements) {
+    const existing = consolidated.get(requirement.normalizedName);
+    if (!existing) {
+      consolidated.set(requirement.normalizedName, { ...requirement });
+      continue;
+    }
+
+    if (
+      existing.requiredQuantity === null ||
+      requirement.requiredQuantity === null ||
+      existing.requiredUnit === 'unknown' ||
+      requirement.requiredUnit === 'unknown' ||
+      !canCompareUnits(existing.requiredUnit, requirement.requiredUnit)
+    ) {
+      existing.requiredQuantity = null;
+      existing.requiredUnit = 'unknown';
+      continue;
+    }
+
+    const converted =
+      requirement.requiredUnit === existing.requiredUnit
+        ? requirement.requiredQuantity
+        : convertQuantity(
+            requirement.requiredQuantity,
+            requirement.requiredUnit,
+            existing.requiredUnit
+          );
+    if (converted === null) {
+      existing.requiredQuantity = null;
+      existing.requiredUnit = 'unknown';
+      continue;
+    }
+
+    existing.requiredQuantity = Number((existing.requiredQuantity + converted).toFixed(4));
+  }
+
+  return [...consolidated.values()];
 }
 
 function unknownIngredientEvidence(
@@ -440,11 +493,12 @@ function buildRecipeSuggestion(
 ): WasteRecipeSuggestion | null {
   if (recipe.archived_at || recipe.title.trim() === '' || recipe.ingredients.length === 0)
     return null;
-  const requirements = recipe.ingredients.map(recipeRequirement);
+  const originalRequirements = recipe.ingredients.map(recipeRequirement);
+  const requirements = consolidateRecipeRequirements(originalRequirements);
   if (requirements.some((requirement) => !requirement.normalizedName)) return null;
 
   const restrictionAssessment = assessIngredientRestrictions(
-    requirements.map((requirement) => requirement.name),
+    originalRequirements.map((requirement) => requirement.name),
     restrictions
   );
   if (restrictionAssessment.status !== 'clear') return null;
@@ -483,7 +537,7 @@ function buildRecipeSuggestion(
   const dislikedIngredientCount = dislikedIngredients.filter(
     (disliked) =>
       assessIngredientRestrictions(
-        requirements.map((requirement) => requirement.name),
+        originalRequirements.map((requirement) => requirement.name),
         [disliked]
       ).status !== 'clear'
   ).length;
