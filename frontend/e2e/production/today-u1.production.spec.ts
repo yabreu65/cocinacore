@@ -63,7 +63,9 @@ function isTodayOption(value: unknown): boolean {
   return availabilityIsDisjoint && uncertaintyIsBoolean;
 }
 
-test('authenticated user receives read-only Today U1 lunch recommendations', async ({ request }) => {
+test('authenticated user receives read-only Today U1 lunch recommendations', async ({
+  request,
+}) => {
   const auth = readProductionAuthEnvironment(process.env);
   await authenticateProductionUser(request, auth);
 
@@ -86,32 +88,4 @@ test('authenticated user receives read-only Today U1 lunch recommendations', asy
   expect(statusIsKnown).toBe(true);
   expect(options.length).toBeGreaterThan(0);
   expect(options.every(isTodayOption)).toBe(true);
-
-  const sourceCounts: Record<TodaySource, number> = {
-    provider: 0,
-    history: 0,
-    saved_plan: 0,
-    saved_recipe: 0,
-  };
-  const availabilityCounts: Record<Availability, number> = {
-    sufficient: 0,
-    partial: 0,
-    missing: 0,
-    unknown: 0,
-  };
-  for (const option of options) {
-    if (!isRecord(option)) continue;
-    if (isTodaySource(option.source)) sourceCounts[option.source] += 1;
-    if (isAvailability(option.availability)) availabilityCounts[option.availability] += 1;
-  }
-
-  // Deliberately emit only bounded aggregate metadata; never log the response or user content.
-  console.info(
-    JSON.stringify({
-      status: statusIsKnown ? status : 'other',
-      optionCount: options.length,
-      sourceCounts,
-      availabilityCounts,
-    })
-  );
 });
