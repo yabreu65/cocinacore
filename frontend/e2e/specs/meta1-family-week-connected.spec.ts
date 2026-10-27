@@ -267,6 +267,7 @@ test.describe('META 1 full family week', () => {
       await page.getByPlaceholder('Ingrediente').fill(ingredientName);
       await page.getByPlaceholder('Cantidad').fill('0.7');
       await page.getByPlaceholder('Unidad').fill('kg');
+      await page.locator('input[type="date"]').fill('2999-12-31');
       await page.getByRole('button', { name: 'Agregar', exact: true }).click();
       await expect(page.getByText(ingredientName, { exact: true })).toHaveCount(2);
 
