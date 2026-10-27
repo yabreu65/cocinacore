@@ -274,8 +274,22 @@ test.describe('Connected full Meal Planner to Shopping List journey', () => {
       });
       await expect(returnedCheckbox).toBeDisabled();
 
+      const snapshotResponse = await page.request.get(
+        `/api/meal-plan/shopping-suggestions?mealPlanId=${encodeURIComponent(seed.planId)}&horizon=7`
+      );
+      expect(snapshotResponse.ok()).toBeTruthy();
+      const snapshot = (await snapshotResponse.json()) as {
+        expectedUpdatedAt: string;
+        sourceFingerprint: string;
+      };
       const idempotencyResponse = await page.request.post('/api/meal-plan/shopping-suggestions', {
-        data: { mealPlanId: seed.planId, selectedItems: [seed.shortageNormalizedName] },
+        data: {
+          mealPlanId: seed.planId,
+          horizonDays: 7,
+          selectedItems: [seed.shortageNormalizedName],
+          expectedUpdatedAt: snapshot.expectedUpdatedAt,
+          expectedFingerprint: snapshot.sourceFingerprint,
+        },
       });
       expect(idempotencyResponse.ok()).toBeTruthy();
       await expect(idempotencyResponse.json()).resolves.toMatchObject({
