@@ -202,6 +202,15 @@ describe('persistent recipe repository', () => {
     expect(clientQuery.mock.calls[1]?.[1]).toEqual(['tenant-1', 'user-1', '%soup%', 10, 5]);
   });
 
+  it('fetches one sentinel recipe when requested for safe projection bounds', async () => {
+    const clientQuery = vi.fn().mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] });
+    mockTransaction(clientQuery);
+
+    await listPersistentRecipes(recipeScope, { archived: 'active', limit: 100, includeSentinel: true });
+
+    expect(clientQuery.mock.calls[1]?.[1]).toEqual(['tenant-1', 'user-1', 101, 0]);
+  });
+
   it('returns duplicate-title candidates as advisory warnings without writes', async () => {
     const clientQuery = vi.fn()
       .mockResolvedValueOnce({ rows: [] })

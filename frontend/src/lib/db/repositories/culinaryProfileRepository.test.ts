@@ -56,6 +56,7 @@ vi.mock('@/lib/db', () => ({
 const {
   findCulinaryProfileByUserIdInTransaction,
   findCulinaryProfileTermsByUserIdInTransaction,
+  listWastePreventionCulinaryProfileTermsByUserId,
   lockCulinaryProfileUpdateInTransaction,
   ProfileTenantMismatchError,
   saveCulinaryProfile,
@@ -135,6 +136,26 @@ describe('transaction-scoped culinary profile reads and lock', () => {
       // @ts-expect-error Profile query mocks accept profile rows only.
       profileQueryMock.mockResolvedValueOnce(queryResult([term]));
     }
+  });
+});
+
+describe('waste-prevention profile term reads', () => {
+  beforeEach(() => globalQueryMock.mockReset());
+
+  it('scopes and bounds profile terms for the read-only projection', async () => {
+    const terms = [{
+      user_id: 'user-1', term_id: 'term-1', preference_type: 'avoid', weight: 1,
+      created_at: '2026-01-01T00:00:00.000Z', term_label: 'Maní',
+    }];
+    globalQueryMock.mockResolvedValueOnce(queryResult(terms));
+
+    await expect(listWastePreventionCulinaryProfileTermsByUserId('user-1', 500))
+      .resolves.toEqual(terms);
+
+    const [sql, params] = globalQueryMock.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('where profile_terms.user_id = $1');
+    expect(sql).toContain('limit $2');
+    expect(params).toEqual(['user-1', 101]);
   });
 });
 
