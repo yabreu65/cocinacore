@@ -65,11 +65,16 @@ export async function listTodayInventoryContextByTenant(
 }
 
 export async function listInventoryItemsByTenant(
-  tenantId: string
+  tenantId: string,
+  limit?: number
 ): Promise<RecipeInventoryItemRow[]> {
+  const boundedLimit =
+    typeof limit === 'number' && Number.isInteger(limit) && limit > 0 ? Math.min(limit, 501) : null;
   const result = await query<RecipeInventoryItemRow>(
-    'select * from public.recipe_inventory_items where tenant_id = $1 order by created_at desc',
-    [tenantId]
+    `select * from public.recipe_inventory_items
+     where tenant_id = $1
+     order by created_at desc${boundedLimit === null ? '' : ' limit $2'}`,
+    boundedLimit === null ? [tenantId] : [tenantId, boundedLimit]
   );
   return result.rows;
 }

@@ -86,6 +86,16 @@ describe('shoppingListRepository', () => {
     expect(params).toEqual(['tenant-1', 'user-1', 'pending']);
   });
 
+  it('bounds list reads when the caller requests a fail-closed sentinel', async () => {
+    queryMock.mockResolvedValue({ rows: [row] });
+
+    await listShoppingListItems('tenant-1', 'user-1', {}, 501);
+
+    const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
+    expect(sql).toMatch(/limit \$3/);
+    expect(params).toEqual(['tenant-1', 'user-1', 501]);
+  });
+
   it('creates only manually-sourced values without a premium recipe input', async () => {
     queryMock.mockResolvedValue({ rows: [row] });
 
@@ -148,6 +158,35 @@ describe('shoppingListRepository', () => {
       added: [{ ...row, id: 'shopping-2', ingredient_name: 'Sal', quantity: null }],
       alreadyPresent: [row],
     });
+  });
+
+  it('can lock and deduplicate against every source without modifying existing rows', async () => {
+    const existingManual = { ...row, source: 'manual' };
+    const clientQuery = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [existingManual] });
+    transactionMock.mockImplementation(
+      async (callback: (client: { query: typeof clientQuery }) => unknown) =>
+        callback({ query: clientQuery })
+    );
+
+    await expect(
+      addMealPlanShoppingItems({
+        tenantId: 'tenant-1',
+        userId: 'user-1',
+        source: 'meal-plan:plan-2',
+        dedupeScope: 'user',
+        items: [{ ingredientName: ' ARROZ ', quantity: '2 kg' }],
+      })
+    ).resolves.toEqual({ added: [], alreadyPresent: [existingManual] });
+
+    expect(clientQuery.mock.calls[0]?.[1]).toEqual(['tenant-1:user-1:shopping-list']);
+    expect(clientQuery.mock.calls[1]?.[0]).toEqual(
+      expect.stringContaining('where tenant_id = $1 and user_id = $2')
+    );
+    expect(clientQuery.mock.calls[1]?.[0]).not.toContain('source = $3');
+    expect(clientQuery).toHaveBeenCalledTimes(2);
   });
 
   it('propagates a transaction failure without performing follow-up writes', async () => {
