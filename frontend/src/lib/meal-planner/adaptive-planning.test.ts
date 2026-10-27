@@ -270,4 +270,82 @@ describe('buildAdaptiveMealPlanProposal', () => {
     expect(proposal.changes[0]?.previousMeal).toBe('Mismo título');
     expect(proposal.changes[0]?.proposedMeal).toBe('Mismo título');
   });
+
+  it('does not let an expired lot hide a usable near-expiry lot', () => {
+    const proposal = buildAdaptiveMealPlanProposal({
+      plan: plan(),
+      inventoryItems: [
+        inventory({ expiration_date: '2026-10-20' }),
+        inventory({ id: 'item-2', expiration_date: '2026-10-28' }),
+      ],
+      profile,
+      consumptionPayload: {},
+      now: new Date('2026-10-27T12:00:00.000Z'),
+    });
+
+    expect(proposal.plan.days[0].meals.find((entry) => entry.mealType === 'dinner')?.title).toBe(
+      'Tomate urgente'
+    );
+    expect(proposal.evidence.find((entry) => entry.label === 'Vencimientos')?.status).toBe('known');
+  });
+
+  it('keeps a meal before its ingredient deadline when urgency scores conflict', () => {
+    const source: StructuredMealPlan = {
+      ...plan(),
+      schedule: {
+        startDate: '2026-10-27',
+        timeZone: 'America/Caracas',
+        confirmedAt: '2026-10-26T12:00:00.000Z',
+      },
+      days: [
+        {
+          dayIndex: 1,
+          label: 'Día 1',
+          meals: [
+            { ...meal('Desayuno 1', 'Avena'), mealType: 'breakfast' },
+            { ...meal('Almuerzo 1', 'Arroz'), mealType: 'lunch' },
+            meal('Tomate vence hoy', 'Tomate'),
+          ],
+        },
+        {
+          dayIndex: 2,
+          label: 'Día 2',
+          meals: [
+            { ...meal('Desayuno 2', 'Avena'), mealType: 'breakfast' },
+            { ...meal('Almuerzo 2', 'Arroz'), mealType: 'lunch' },
+            {
+              ...meal('Cebolla urgente por volumen', 'Cebolla'),
+              ingredients: [
+                { name: 'Cebolla', quantity: 1, unit: 'kg' },
+                { name: 'Cebolla', quantity: 1, unit: 'kg' },
+                { name: 'Cebolla', quantity: 1, unit: 'kg' },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const proposal = buildAdaptiveMealPlanProposal({
+      plan: source,
+      inventoryItems: [
+        inventory({ expiration_date: '2026-10-27' }),
+        inventory({
+          id: 'item-2',
+          ingredient_name: 'Cebolla',
+          normalized_name: 'cebolla',
+          expiration_date: '2026-10-29',
+        }),
+      ],
+      profile,
+      consumptionPayload: {},
+      now: new Date('2026-10-27T12:00:00.000Z'),
+    });
+
+    expect(proposal.plan.days[0].meals.find((entry) => entry.mealType === 'dinner')?.title).toBe(
+      'Tomate vence hoy'
+    );
+    expect(proposal.plan.days[1].meals.find((entry) => entry.mealType === 'dinner')?.title).toBe(
+      'Cebolla urgente por volumen'
+    );
+  });
 });

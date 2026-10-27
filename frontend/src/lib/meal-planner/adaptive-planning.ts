@@ -136,7 +136,8 @@ function inventoryQuantity(item: RecipeInventoryItemRow) {
 
 function comparableInventoryForIngredient(
   ingredient: StructuredMeal['ingredients'][number],
-  inventoryItems: RecipeInventoryItemRow[]
+  inventoryItems: RecipeInventoryItemRow[],
+  now: Date
 ): { expiration: string | null; known: boolean } {
   const requiredUnit = normalizeUnit(ingredient.unit);
   if (ingredient.quantity === null || requiredUnit === 'unknown') {
@@ -169,6 +170,12 @@ function comparableInventoryForIngredient(
       hasUnknown = true;
       continue;
     }
+    const remaining = daysUntil(expiration, now);
+    if (remaining === null) {
+      hasUnknown = true;
+      continue;
+    }
+    if (remaining < 0) continue;
     if (!earliest || expiration < earliest) earliest = expiration;
   }
   return { expiration: earliest, known: !hasUnknown };
@@ -178,15 +185,17 @@ function mealFreshnessScore(
   meal: StructuredMeal,
   inventoryItems: RecipeInventoryItemRow[],
   now: Date
-): { score: number; known: boolean; urgent: boolean } {
+): { score: number; known: boolean; urgent: boolean; deadline: string | null } {
   let score = 0;
   let known = true;
   let urgent = false;
+  let deadline: string | null = null;
   for (const ingredient of meal.ingredients) {
-    const match = comparableInventoryForIngredient(ingredient, inventoryItems);
+    const match = comparableInventoryForIngredient(ingredient, inventoryItems, now);
     if (!match.known) known = false;
     if (!match.known) continue;
     if (!match.expiration) continue;
+    if (!deadline || match.expiration < deadline) deadline = match.expiration;
     const remaining = daysUntil(match.expiration, now);
     if (remaining === null) {
       known = false;
@@ -198,7 +207,7 @@ function mealFreshnessScore(
       score += 4 - remaining;
     }
   }
-  return { score, known, urgent };
+  return { score, known, urgent, deadline };
 }
 
 function metric(status: AdaptiveEvidenceStatus, unit: string | null = null): AdaptiveMetric {
@@ -206,9 +215,20 @@ function metric(status: AdaptiveEvidenceStatus, unit: string | null = null): Ada
 }
 
 function sortMovableMeals(
-  entries: Array<{ meal: StructuredMeal; score: number; urgent: boolean; index: number }>
+  entries: Array<{
+    meal: StructuredMeal;
+    score: number;
+    urgent: boolean;
+    deadline: string | null;
+    index: number;
+  }>
 ) {
   return [...entries].sort((left, right) => {
+    if (left.deadline !== right.deadline) {
+      if (left.deadline === null) return 1;
+      if (right.deadline === null) return -1;
+      return left.deadline.localeCompare(right.deadline);
+    }
     if (right.score !== left.score) return right.score - left.score;
     return left.index - right.index;
   });
@@ -238,9 +258,18 @@ export function buildAdaptiveMealPlanProposal({
   let urgentMeals = 0;
 
   for (const mealType of MEAL_TYPES) {
-    const movable: Array<{ meal: StructuredMeal; score: number; urgent: boolean; index: number }> =
-      [];
-    const targetSlots: Array<{ dayIndex: number; mealIndex: number }> = [];
+    const movable: Array<{
+      meal: StructuredMeal;
+      score: number;
+      urgent: boolean;
+      deadline: string | null;
+      index: number;
+    }> = [];
+    const targetSlots: Array<{
+      dayIndex: number;
+      mealIndex: number;
+      scheduledDate: string | null;
+    }> = [];
     for (const day of proposed.days) {
       const mealIndex = day.meals.findIndex((meal) => meal.mealType === mealType);
       if (mealIndex < 0) continue;
@@ -256,11 +285,24 @@ export function buildAdaptiveMealPlanProposal({
         meal: currentMeal,
         score: freshness.score,
         urgent: freshness.urgent,
+        deadline: freshness.deadline,
         index: day.dayIndex,
       });
-      targetSlots.push({ dayIndex: day.dayIndex, mealIndex });
+      targetSlots.push({
+        dayIndex: day.dayIndex,
+        mealIndex,
+        scheduledDate: plan.schedule
+          ? addCalendarDays(plan.schedule.startDate, day.dayIndex - 1)
+          : null,
+      });
     }
-    const sorted = sortMovableMeals(movable);
+    const sortedCandidate = sortMovableMeals(movable);
+    const sorted = sortedCandidate.every((entry, index) => {
+      const scheduledDate = targetSlots[index]?.scheduledDate;
+      return !entry.deadline || !scheduledDate || entry.deadline >= scheduledDate;
+    })
+      ? sortedCandidate
+      : movable;
     targetSlots.forEach(({ dayIndex, mealIndex }, index) => {
       const day = proposed.days.find((entry) => entry.dayIndex === dayIndex);
       const nextMeal = sorted[index]?.meal;

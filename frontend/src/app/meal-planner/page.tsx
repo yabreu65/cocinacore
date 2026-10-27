@@ -214,6 +214,10 @@ export default function MealPlannerPage() {
       isConfirmingAdaptive
     )
       return;
+    if (isLoadingConsumptions || consumingMealKeys.size > 0) {
+      setAdaptiveError('Esperá a que termine el registro de la comida antes de confirmar.');
+      return;
+    }
     const mealPlanId = activePlanId;
     const requestVersion = ++adaptiveRequestVersionRef.current;
     setIsConfirmingAdaptive(true);
@@ -688,7 +692,9 @@ export default function MealPlannerPage() {
                     <button
                       type="button"
                       onClick={() => void onConfirmAdaptiveProposal()}
-                      disabled={isConfirmingAdaptive}
+                      disabled={
+                        isConfirmingAdaptive || isLoadingConsumptions || consumingMealKeys.size > 0
+                      }
                       className="h-10 rounded-lg bg-[#C56A1A] px-3 text-sm font-semibold text-white disabled:opacity-60"
                     >
                       {isConfirmingAdaptive ? 'Guardando...' : 'Confirmar y guardar propuesta'}
@@ -748,7 +754,12 @@ export default function MealPlannerPage() {
                                   onClick={() =>
                                     void onConfirmMealConsumed(day.dayIndex, meal.mealType)
                                   }
-                                  disabled={isLoadingConsumptions || isGenerating || isConsuming}
+                                  disabled={
+                                    isLoadingConsumptions ||
+                                    isGenerating ||
+                                    isConsuming ||
+                                    isConfirmingAdaptive
+                                  }
                                   aria-label={`Ya cociné ${mealTypeLabels[meal.mealType]}: ${meal.title}`}
                                   className="h-9 rounded-lg border border-[#C56A1A] px-3 text-sm font-semibold text-[#A55412] disabled:opacity-60"
                                 >
