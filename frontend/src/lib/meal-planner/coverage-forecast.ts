@@ -96,6 +96,20 @@ function isValidIsoDate(value: string): boolean {
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
 
+function normalizeExpirationDate(value: string): string | null {
+  const trimmed = value.trim();
+  if (isValidIsoDate(trimmed)) return trimmed;
+
+  const timestampMatch =
+    /^(\d{4}-\d{2}-\d{2})(?:T| )\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}(?::?\d{2})?)$/.exec(
+      trimmed
+    );
+  if (!timestampMatch || !isValidIsoDate(timestampMatch[1])) return null;
+
+  const normalizedTimestamp = trimmed.replace(' ', 'T').replace(/([+-]\d{2})$/, '$1:00');
+  return Number.isNaN(new Date(normalizedTimestamp).getTime()) ? null : timestampMatch[1];
+}
+
 function isCanonicalUtcTimestamp(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return false;
   const date = new Date(value);
@@ -235,8 +249,11 @@ function selectInventoryForForecast(
 
   for (const item of inventoryItems) {
     const normalizedName = normalizeInventoryName(item.ingredient_name);
-    const expirationDate = item.expiration_date;
-    if (typeof expirationDate !== 'string' || !isValidIsoDate(expirationDate)) {
+    const expirationDate =
+      typeof item.expiration_date === 'string'
+        ? normalizeExpirationDate(item.expiration_date)
+        : null;
+    if (!expirationDate) {
       uncertainNames.add(normalizedName);
       continue;
     }

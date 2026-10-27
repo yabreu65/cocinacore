@@ -168,6 +168,18 @@ describe('buildMealPlanCoverageForecast', () => {
     expect(result.items[0]).toMatchObject({ status: 'sufficient', availableQuantity: 500 });
   });
 
+  it('accepts PostgreSQL timestamptz expiration values using their calendar date', () => {
+    const result = buildMealPlanCoverageForecast({
+      plan: completeWeek([day(1, [rice()])]),
+      inventoryItems: [inventory('Arroz', '500 g', null, '2026-10-31 00:00:00+00')],
+      consumptionPayload: {},
+      horizonDays: 7,
+      now,
+    });
+
+    expect(result.items[0]).toMatchObject({ status: 'sufficient', availableQuantity: 500 });
+  });
+
   it('keeps coverage unknown when a matching lot has no valid expiration date', () => {
     const result = buildMealPlanCoverageForecast({
       plan: completeWeek([day(1, [rice()])]),
