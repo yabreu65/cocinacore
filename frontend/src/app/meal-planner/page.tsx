@@ -873,7 +873,10 @@ export default function MealPlannerPage() {
               </p>
             ) : null}
             {!isLoadingSuggestions && shoppingStatus === 'unknown' ? (
-              <p role="status" className="mt-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
+              <p
+                aria-live="polite"
+                className="mt-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-900"
+              >
                 No se puede calcular este horizonte con seguridad
                 {shoppingReason ? ` (${shoppingReason}).` : '.'} Confirmá la agenda y las porciones
                 y asegurate de que el plan cubra el horizonte solicitado.
