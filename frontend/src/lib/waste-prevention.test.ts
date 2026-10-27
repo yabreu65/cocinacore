@@ -381,6 +381,32 @@ describe('buildWastePreventionReport', () => {
     });
   });
 
+  it('preserves calculation precision when consolidating fractional requirements', () => {
+    const report = buildWastePreventionReport({
+      ...baseInput,
+      inventoryItems: [lot({ quantity: '2/3', unit: 'taza' })],
+      recipes: [
+        recipe({
+          ingredients: [
+            { name: 'Tomato', quantity: '1/3', unit: 'taza' },
+            { name: 'Tomato', quantity: '1/3', unit: 'taza' },
+          ],
+        }),
+      ],
+    });
+
+    expect(report.suggestions[0]).toMatchObject({
+      coverage: 'full',
+      ingredients: [
+        {
+          requiredQuantity: 0.6667,
+          availableQuantity: 0.6667,
+          status: 'sufficient',
+        },
+      ],
+    });
+  });
+
   it('keeps unknown quantities unknown instead of assuming zero or sufficient stock', () => {
     const report = buildWastePreventionReport({
       ...baseInput,

@@ -351,6 +351,10 @@ function recipeRequirement(ingredient: WastePreventionRecipeIngredientRow) {
 
 type WasteRecipeRequirement = ReturnType<typeof recipeRequirement>;
 
+function roundQuantity(value: number | null): number | null {
+  return value === null ? null : Number(value.toFixed(4));
+}
+
 function consolidateRecipeRequirements(
   requirements: readonly WasteRecipeRequirement[]
 ): WasteRecipeRequirement[] {
@@ -389,7 +393,7 @@ function consolidateRecipeRequirements(
       continue;
     }
 
-    existing.requiredQuantity = Number((existing.requiredQuantity + converted).toFixed(4));
+    existing.requiredQuantity += converted;
   }
 
   return [...consolidated.values()];
@@ -403,7 +407,7 @@ function unknownIngredientEvidence(
   return {
     name: requirement.name,
     normalizedName: requirement.normalizedName,
-    requiredQuantity: requirement.requiredQuantity,
+    requiredQuantity: roundQuantity(requirement.requiredQuantity),
     requiredUnit: requirement.requiredUnit,
     status: 'unknown',
     availableQuantity: null,
@@ -433,7 +437,7 @@ function assessIngredientCoverage(
     return {
       name: requirement.name,
       normalizedName: requirement.normalizedName,
-      requiredQuantity: requirement.requiredQuantity,
+      requiredQuantity: roundQuantity(requirement.requiredQuantity),
       requiredUnit: requirement.requiredUnit,
       status: expiredLots.length > 0 ? 'expired' : 'missing',
       availableQuantity: null,
@@ -467,7 +471,7 @@ function assessIngredientCoverage(
   }
 
   const status: WasteRecipeIngredientStatus =
-    availableQuantity >= requirement.requiredQuantity
+    availableQuantity + Number.EPSILON >= requirement.requiredQuantity
       ? 'sufficient'
       : availableQuantity > 0
         ? 'partial'
@@ -475,7 +479,7 @@ function assessIngredientCoverage(
   return {
     name: requirement.name,
     normalizedName: requirement.normalizedName,
-    requiredQuantity: requirement.requiredQuantity,
+    requiredQuantity: roundQuantity(requirement.requiredQuantity),
     requiredUnit: requirement.requiredUnit,
     status,
     availableQuantity: Number(availableQuantity.toFixed(4)),
