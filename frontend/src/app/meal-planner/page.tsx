@@ -211,7 +211,8 @@ export default function MealPlannerPage() {
       !adaptiveProposal ||
       !adaptiveExpectedUpdatedAt ||
       !adaptiveSourceFingerprint ||
-      isConfirmingAdaptive
+      isConfirmingAdaptive ||
+      isLoadingAdaptive
     )
       return;
     if (isLoadingConsumptions || consumingMealKeys.size > 0) {
@@ -693,7 +694,10 @@ export default function MealPlannerPage() {
                       type="button"
                       onClick={() => void onConfirmAdaptiveProposal()}
                       disabled={
-                        isConfirmingAdaptive || isLoadingConsumptions || consumingMealKeys.size > 0
+                        isConfirmingAdaptive ||
+                        isLoadingAdaptive ||
+                        isLoadingConsumptions ||
+                        consumingMealKeys.size > 0
                       }
                       className="h-10 rounded-lg bg-[#C56A1A] px-3 text-sm font-semibold text-white disabled:opacity-60"
                     >
