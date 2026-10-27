@@ -23,9 +23,9 @@ function unauthorized() {
 async function readMealPlanId(request: NextRequest): Promise<string | null> {
   try {
     const body = (await request.json()) as { mealPlanId?: unknown };
-    return typeof body.mealPlanId === 'string' && body.mealPlanId.trim().length <= 100
-      ? body.mealPlanId.trim()
-      : null;
+    if (typeof body.mealPlanId !== 'string') return null;
+    const mealPlanId = body.mealPlanId.trim();
+    return mealPlanId.length > 0 && mealPlanId.length <= 100 ? mealPlanId : null;
   } catch {
     return null;
   }
