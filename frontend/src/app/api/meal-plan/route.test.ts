@@ -692,6 +692,7 @@ describe('GET /api/meal-plan', () => {
         'Domingo\nDesayuno: Avena con fruta (20 min estimados) (1 taza Avena)\nAlmuerzo: Arroz con verduras (30 min estimados) — Plato principal (Arroz real)\nCena: Sopa liviana (25 min estimados) (Calabaza)',
       id: 'meal-plan-1',
       createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
       peopleCount: 4,
       period: 'week',
       mode: 'inventory_to_menu',
