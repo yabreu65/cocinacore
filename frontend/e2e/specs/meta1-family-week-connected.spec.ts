@@ -42,9 +42,19 @@ async function authenticatedIdentity(page: Page): Promise<Identity> {
 
 function canonicalWeekPlan(ingredientName: string) {
   const labels = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+  const now = new Date();
   return {
     period: 'week',
     dayCount: 7,
+    schedule: {
+      startDate: now.toISOString().slice(0, 10),
+      timeZone: 'UTC',
+      confirmedAt: now.toISOString(),
+      portionConfirmation: {
+        peopleCount: 4,
+        confirmedAt: now.toISOString(),
+      },
+    },
     days: Array.from({ length: 7 }, (_, index) => ({
       dayIndex: index + 1,
       label: labels[index],
@@ -96,29 +106,37 @@ async function cleanupTestData(seed: CleanupSeed): Promise<void> {
   });
 
   for (const planId of planIds) {
-    await attempt(() => database.query(
-      `delete from public.inventory_movements
+    await attempt(() =>
+      database.query(
+        `delete from public.inventory_movements
         where tenant_id=$1 and user_id=$2 and source_meal_plan_id=$3`,
-      [tenantId, userId, planId]
-    ));
-    await attempt(() => database.query(
-      `delete from public.user_meal_plans where id=$1 and tenant_id=$2 and user_id=$3`,
-      [planId, tenantId, userId]
-    ));
+        [tenantId, userId, planId]
+      )
+    );
+    await attempt(() =>
+      database.query(
+        `delete from public.user_meal_plans where id=$1 and tenant_id=$2 and user_id=$3`,
+        [planId, tenantId, userId]
+      )
+    );
   }
   for (const source of sources) {
-    await attempt(() => database.query(
-      `delete from public.shopping_list_items
+    await attempt(() =>
+      database.query(
+        `delete from public.shopping_list_items
         where tenant_id=$1 and user_id=$2 and source=$3 and ingredient_name=$4`,
-      [tenantId, userId, source, seed.ingredientName]
-    ));
+        [tenantId, userId, source, seed.ingredientName]
+      )
+    );
   }
-  await attempt(() => database.query(
-    `delete from public.recipe_inventory_items
+  await attempt(() =>
+    database.query(
+      `delete from public.recipe_inventory_items
       where tenant_id=$1 and user_id=$2
         and (id=any($4::uuid[]) or ingredient_name=$3)`,
-    [tenantId, userId, seed.ingredientName, seed.inventoryIds]
-  ));
+      [tenantId, userId, seed.ingredientName, seed.inventoryIds]
+    )
+  );
 
   let leftovers: CleanupCounts | null = null;
   await attempt(async () => {
@@ -132,14 +150,22 @@ async function cleanupTestData(seed: CleanupSeed): Promise<void> {
            where tenant_id=$1 and user_id=$2 and (id=any($3::uuid[]) or ai_content=$6)) as plans,
          (select count(*)::text from public.recipe_inventory_items
            where tenant_id=$1 and user_id=$2 and ingredient_name=$5) as inventory`,
-      [tenantId, userId, Array.from(planIds), Array.from(sources), seed.ingredientName, seed.planMarker]
+      [
+        tenantId,
+        userId,
+        Array.from(planIds),
+        Array.from(sources),
+        seed.ingredientName,
+        seed.planMarker,
+      ]
     );
     leftovers = result.rows[0] ?? null;
   });
   if (!leftovers || Object.values(leftovers).some((count) => count !== '0')) {
     failures.push(new Error(`Test cleanup left scoped data behind: ${JSON.stringify(leftovers)}`));
   }
-  if (failures.length) throw new AggregateError(failures, 'Failed to clean up family-week E2E data.');
+  if (failures.length)
+    throw new AggregateError(failures, 'Failed to clean up family-week E2E data.');
 }
 
 test.describe('META 1 full family week', () => {
@@ -183,7 +209,12 @@ test.describe('META 1 full family week', () => {
          values ($1,$2,4,'week','balanced_ai','E2E','{}','media','{}',
                  '{"inventoryLines":[]}'::jsonb,$3::jsonb,$4,'{}'::jsonb)
          returning id`,
-        [identity.tenantId, identity.userId, JSON.stringify(canonicalWeekPlan(ingredientName)), planMarker]
+        [
+          identity.tenantId,
+          identity.userId,
+          JSON.stringify(canonicalWeekPlan(ingredientName)),
+          planMarker,
+        ]
       );
       const planId = plan.rows[0]?.id;
       if (!planId) throw new Error('Failed to seed the family week plan.');
@@ -363,12 +394,14 @@ test.describe('META 1 full family week', () => {
         [identity.tenantId, identity.userId, ingredientName, ingredientName.toLowerCase()]
       );
       seed.inventoryIds.push(...inventory.rows.map((row) => row.id));
-      await expect(database.query(
-        `insert into public.user_meal_plans
+      await expect(
+        database.query(
+          `insert into public.user_meal_plans
            (tenant_id, user_id, period, mode, ai_content)
          values ($1,$2,'invalid-period','balanced_ai',$3)`,
-        [identity.tenantId, identity.userId, seed.planMarker]
-      )).rejects.toThrow();
+          [identity.tenantId, identity.userId, seed.planMarker]
+        )
+      ).rejects.toThrow();
     } finally {
       await cleanupTestData(seed);
     }
