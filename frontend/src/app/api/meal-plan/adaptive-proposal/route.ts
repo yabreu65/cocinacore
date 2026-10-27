@@ -15,6 +15,7 @@ import {
 } from '@/lib/meal-planner/adaptive-planning';
 import { buildPersistedMealPlanProfileContext } from '@/lib/meal-planner/profile-context';
 import { parseStructuredMealPlanValue } from '@/lib/meal-planner/structured-plan';
+import { ShoppingListIdSchema } from '@/lib/validation';
 
 function unauthorized() {
   return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -25,7 +26,7 @@ async function readMealPlanId(request: NextRequest): Promise<string | null> {
     const body = (await request.json()) as { mealPlanId?: unknown };
     if (typeof body.mealPlanId !== 'string') return null;
     const mealPlanId = body.mealPlanId.trim();
-    return mealPlanId.length > 0 && mealPlanId.length <= 100 ? mealPlanId : null;
+    return ShoppingListIdSchema.safeParse(mealPlanId).success ? mealPlanId : null;
   } catch {
     return null;
   }

@@ -37,6 +37,8 @@ const user = {
   onboardingCompleted: true,
 };
 
+const planId = '00000000-0000-4000-8000-000000000001';
+
 function planPayload() {
   return {
     period: 'week',
@@ -56,7 +58,7 @@ function planPayload() {
 
 function row(): UserMealPlanRow {
   return {
-    id: 'plan-1',
+    id: planId,
     tenant_id: 'tenant-1',
     user_id: 'user-1',
     people_count: 2,
@@ -103,7 +105,7 @@ describe('POST /api/meal-plan/adaptive-proposal/confirm', () => {
     mockFindMealPlan.mockResolvedValue(current);
     const response = await POST(
       request({
-        mealPlanId: 'plan-1',
+        mealPlanId: planId,
         expectedUpdatedAt: '2026-10-27T00:00:00.000Z',
         sourceFingerprint: 'source-fingerprint',
         proposedPlan: planPayload(),
@@ -117,7 +119,7 @@ describe('POST /api/meal-plan/adaptive-proposal/confirm', () => {
   it('persists only after explicit confirmation and passes the authenticated scope', async () => {
     const response = await POST(
       request({
-        mealPlanId: 'plan-1',
+        mealPlanId: planId,
         expectedUpdatedAt: '2026-10-27T00:00:00.000Z',
         sourceFingerprint: 'source-fingerprint',
         proposedPlan: planPayload(),
@@ -127,11 +129,26 @@ describe('POST /api/meal-plan/adaptive-proposal/confirm', () => {
     expect(response.status).toBe(200);
     expect(mockReplaceMealPlan).toHaveBeenCalledWith(
       expect.objectContaining({
-        mealPlanId: 'plan-1',
+        mealPlanId: planId,
         userId: 'user-1',
         tenantId: 'tenant-1',
         expectedUpdatedAt: '2026-10-27T00:00:00.000Z',
       })
     );
+  });
+
+  it('rejects a malformed plan id before any persistence lookup', async () => {
+    const response = await POST(
+      request({
+        mealPlanId: 'not-a-uuid',
+        expectedUpdatedAt: '2026-10-27T00:00:00.000Z',
+        sourceFingerprint: 'source-fingerprint',
+        proposedPlan: planPayload(),
+      }) as unknown as NextRequest
+    );
+
+    expect(response.status).toBe(400);
+    expect(mockFindMealPlan).not.toHaveBeenCalled();
+    expect(mockReplaceMealPlan).not.toHaveBeenCalled();
   });
 });
