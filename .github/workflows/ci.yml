@@ -63,6 +63,12 @@ jobs:
       - name: Validate E2E runner compatibility
         run: sh ../scripts/tests/test-ci-e2e-runner-contract.sh
 
+      - name: Validate Docker application route context
+        run: sh ../scripts/tests/test-dockerignore-route-contract.sh
+
+      - name: Build and inspect Docker application routes
+        run: sh ../scripts/tests/test-docker-image-route-contract.sh
+
       - name: Test bootstrap and migrator PostgreSQL boundary
         run: sh ../scripts/test-bootstrap-migrator-integration.sh
 

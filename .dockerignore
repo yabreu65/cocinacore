@@ -4,11 +4,13 @@ npm-debug.log
 .next
 **/.next
 out
-coverage
-**/coverage
+/coverage
+/frontend/coverage
+/frontend/playwright-report
+/frontend/test-results
 *.tsbuildinfo
-playwright-report
-test-results
+/playwright-report
+/test-results
 .env.local
 .env.*.local
 *.log
