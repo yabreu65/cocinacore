@@ -8,7 +8,12 @@ import {
 import type { RecipeInventoryItemRow } from '@/lib/db/types';
 import { parseMealConsumptionPayload } from './consumption';
 import type { PersistedMealPlanProfileContext } from './profile-context';
-import type { StructuredMeal, StructuredMealPlan, StructuredMealType } from './structured-plan';
+import {
+  getLocalDateInTimeZone,
+  type StructuredMeal,
+  type StructuredMealPlan,
+  type StructuredMealType,
+} from './structured-plan';
 
 export type AdaptiveEvidenceStatus = 'known' | 'unknown';
 
@@ -107,6 +112,22 @@ function daysUntil(expiration: string, now: Date): number | null {
   const expiry = Date.parse(`${expiration}T00:00:00.000Z`);
   if (Number.isNaN(expiry)) return null;
   return Math.round((expiry - current) / 86_400_000);
+}
+
+function addCalendarDays(date: string, days: number): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isInteger(days)) return null;
+  const result = new Date(`${date}T00:00:00.000Z`);
+  if (Number.isNaN(result.getTime())) return null;
+  result.setUTCDate(result.getUTCDate() + days);
+  return result.toISOString().slice(0, 10);
+}
+
+function isPastScheduledDay(plan: StructuredMealPlan, dayIndex: number, now: Date): boolean {
+  if (!plan.schedule) return false;
+  const today = getLocalDateInTimeZone(now, plan.schedule.timeZone);
+  const scheduledDate = addCalendarDays(plan.schedule.startDate, dayIndex - 1);
+  if (!today || !scheduledDate) return true;
+  return scheduledDate < today;
 }
 
 function inventoryQuantity(item: RecipeInventoryItemRow) {
@@ -225,6 +246,7 @@ export function buildAdaptiveMealPlanProposal({
       if (mealIndex < 0) continue;
       const key = slotKey(day.dayIndex, mealType);
       if (lockedSlotKeys.includes(key)) continue;
+      if (isPastScheduledDay(plan, day.dayIndex, now)) continue;
       const currentMeal = day.meals[mealIndex];
       const freshness = mealFreshnessScore(currentMeal, inventoryItems, now);
       if (freshness.known && freshness.score > 0) knownFreshness = true;
@@ -245,7 +267,7 @@ export function buildAdaptiveMealPlanProposal({
       if (!day || !nextMeal) return;
       const previousMeal = day.meals[mealIndex];
       day.meals[mealIndex] = nextMeal;
-      if (previousMeal && previousMeal.title !== nextMeal.title) {
+      if (previousMeal && mealFingerprint(previousMeal) !== mealFingerprint(nextMeal)) {
         changes.push({
           slotKey: slotKey(dayIndex, mealType),
           previousMeal: previousMeal.title,

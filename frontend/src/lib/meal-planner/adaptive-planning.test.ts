@@ -195,4 +195,79 @@ describe('buildAdaptiveMealPlanProposal', () => {
       reason: 'meal_content_changed',
     });
   });
+
+  it('does not move a meal into a scheduled day that is already in the past', () => {
+    const source: StructuredMealPlan = {
+      ...plan(),
+      dayCount: 3,
+      days: [
+        ...plan().days,
+        {
+          dayIndex: 3,
+          label: 'Día 3',
+          meals: [
+            { ...meal('Desayuno 3', 'Avena'), mealType: 'breakfast' },
+            { ...meal('Almuerzo 3', 'Arroz'), mealType: 'lunch' },
+            meal('Tomate urgente', 'Tomate'),
+          ],
+        },
+      ],
+      schedule: {
+        startDate: '2026-10-25',
+        timeZone: 'America/Caracas',
+        confirmedAt: '2026-10-24T12:00:00.000Z',
+      },
+    };
+    const proposal = buildAdaptiveMealPlanProposal({
+      plan: source,
+      inventoryItems: [inventory()],
+      profile,
+      consumptionPayload: {},
+      now: new Date('2026-10-27T15:00:00.000Z'),
+    });
+
+    expect(proposal.plan.days[0].meals.find((entry) => entry.mealType === 'dinner')?.title).toBe(
+      'Arroz posterior'
+    );
+    expect(proposal.plan.days[2].meals.find((entry) => entry.mealType === 'dinner')?.title).toBe(
+      'Tomate urgente'
+    );
+  });
+
+  it('reports changes when meals share a title but differ in content', () => {
+    const source: StructuredMealPlan = {
+      ...plan(),
+      days: [
+        {
+          dayIndex: 1,
+          label: 'Día 1',
+          meals: [
+            { ...meal('Mismo título', 'Arroz'), mealType: 'breakfast' },
+            { ...meal('Almuerzo 1', 'Arroz'), mealType: 'lunch' },
+            meal('Mismo título', 'Arroz'),
+          ],
+        },
+        {
+          dayIndex: 2,
+          label: 'Día 2',
+          meals: [
+            { ...meal('Desayuno 2', 'Avena'), mealType: 'breakfast' },
+            { ...meal('Almuerzo 2', 'Arroz'), mealType: 'lunch' },
+            meal('Mismo título', 'Tomate'),
+          ],
+        },
+      ],
+    };
+    const proposal = buildAdaptiveMealPlanProposal({
+      plan: source,
+      inventoryItems: [inventory()],
+      profile,
+      consumptionPayload: {},
+      now: new Date('2026-10-27T12:00:00.000Z'),
+    });
+
+    expect(proposal.changes).toHaveLength(2);
+    expect(proposal.changes[0]?.previousMeal).toBe('Mismo título');
+    expect(proposal.changes[0]?.proposedMeal).toBe('Mismo título');
+  });
 });

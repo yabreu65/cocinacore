@@ -78,6 +78,7 @@ export default function MealPlannerPage() {
   const activePlanIdRef = useRef<string | null>(null);
   const suggestionRequestVersionRef = useRef(0);
   const consumptionRequestVersionRef = useRef(0);
+  const adaptiveRequestVersionRef = useRef(0);
   const componentActiveRef = useRef(true);
   const userEditedRef = useRef(false);
 
@@ -167,6 +168,8 @@ export default function MealPlannerPage() {
 
   const onRequestAdaptiveProposal = async () => {
     if (!activePlanId || isLoadingAdaptive || isConfirmingAdaptive) return;
+    const mealPlanId = activePlanId;
+    const requestVersion = ++adaptiveRequestVersionRef.current;
     setIsLoadingAdaptive(true);
     setAdaptiveError(null);
     setAdaptiveMessage(null);
@@ -182,6 +185,12 @@ export default function MealPlannerPage() {
         body: JSON.stringify({ mealPlanId: activePlanId }),
       });
       if (!result.ok) throw new Error(result.error ?? 'No se pudo preparar la propuesta.');
+      if (
+        !componentActiveRef.current ||
+        activePlanIdRef.current !== mealPlanId ||
+        adaptiveRequestVersionRef.current !== requestVersion
+      )
+        return;
       setAdaptiveProposal(result.data.proposal);
       setAdaptiveExpectedUpdatedAt(result.data.expectedUpdatedAt);
       setAdaptiveSourceFingerprint(result.data.sourceFingerprint);
@@ -190,7 +199,9 @@ export default function MealPlannerPage() {
         error instanceof Error ? error.message : 'No se pudo preparar la propuesta.'
       );
     } finally {
-      setIsLoadingAdaptive(false);
+      if (componentActiveRef.current && adaptiveRequestVersionRef.current === requestVersion) {
+        setIsLoadingAdaptive(false);
+      }
     }
   };
 
@@ -203,6 +214,8 @@ export default function MealPlannerPage() {
       isConfirmingAdaptive
     )
       return;
+    const mealPlanId = activePlanId;
+    const requestVersion = ++adaptiveRequestVersionRef.current;
     setIsConfirmingAdaptive(true);
     setAdaptiveError(null);
     setAdaptiveMessage(null);
@@ -222,6 +235,12 @@ export default function MealPlannerPage() {
         }
       );
       if (!result.ok) throw new Error(result.error ?? 'La propuesta quedó desactualizada.');
+      if (
+        !componentActiveRef.current ||
+        activePlanIdRef.current !== mealPlanId ||
+        adaptiveRequestVersionRef.current !== requestVersion
+      )
+        return;
       setPlan(result.data.plan);
       setAdaptiveProposal(null);
       setAdaptiveExpectedUpdatedAt(null);
@@ -234,7 +253,9 @@ export default function MealPlannerPage() {
         error instanceof Error ? error.message : 'No se pudo confirmar la propuesta.'
       );
     } finally {
-      setIsConfirmingAdaptive(false);
+      if (componentActiveRef.current && adaptiveRequestVersionRef.current === requestVersion) {
+        setIsConfirmingAdaptive(false);
+      }
     }
   };
 
@@ -297,6 +318,7 @@ export default function MealPlannerPage() {
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
     generationStartedRef.current = true;
+    adaptiveRequestVersionRef.current += 1;
     suggestionRequestVersionRef.current += 1;
     consumptionRequestVersionRef.current += 1;
     activePlanIdRef.current = null;
@@ -316,6 +338,8 @@ export default function MealPlannerPage() {
     setAdaptiveSourceFingerprint(null);
     setAdaptiveMessage(null);
     setAdaptiveError(null);
+    setIsLoadingAdaptive(false);
+    setIsConfirmingAdaptive(false);
     setIsGenerating(true);
     setGenerationError(null);
     setPlan(null);
