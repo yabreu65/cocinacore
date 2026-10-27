@@ -13,6 +13,7 @@ const {
   createMealPlan,
   findLatestMealPlanByUserAndTenant,
   findMealPlanByIdForUserAndTenant,
+  replaceMealPlanForAdaptiveProposal,
   updateMealPlanScheduleForUserAndTenant,
   MealPlanRepositoryError,
 } = await import('./mealPlanRepository');
@@ -50,12 +51,14 @@ function structuredPlan(): StructuredMealPlan {
 
 function expectedStoredContent(plan: StructuredMealPlan): string {
   return plan.days
-    .map((day) => [
-      day.label,
-      'Desayuno: Avena (tiempo no estimado) (1 taza Avena)',
-      'Almuerzo: Arroz (tiempo no estimado) (Arroz)',
-      'Cena: Sopa (tiempo no estimado) (Calabaza)',
-    ].join('\n'))
+    .map((day) =>
+      [
+        day.label,
+        'Desayuno: Avena (tiempo no estimado) (1 taza Avena)',
+        'Almuerzo: Arroz (tiempo no estimado) (Arroz)',
+        'Cena: Sopa (tiempo no estimado) (Calabaza)',
+      ].join('\n')
+    )
     .join('\n\n');
 }
 
@@ -133,7 +136,9 @@ describe('mealPlanRepository', () => {
     const row = mealPlanRow();
     queryMock.mockResolvedValue({ rows: [row] });
 
-    await expect(findMealPlanByIdForUserAndTenant('meal-plan-1', 'user-1', 'tenant-1')).resolves.toEqual(row);
+    await expect(
+      findMealPlanByIdForUserAndTenant('meal-plan-1', 'user-1', 'tenant-1')
+    ).resolves.toEqual(row);
 
     const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
     expect(sql).toMatch(/where id = \$1 and tenant_id = \$2 and user_id = \$3/);
@@ -162,12 +167,7 @@ describe('mealPlanRepository', () => {
     const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain("jsonb_set(calendar_payload, '{schedule}', $1::jsonb, true)");
     expect(sql).toMatch(/where id = \$2 and tenant_id = \$3 and user_id = \$4/);
-    expect(params).toEqual([
-      JSON.stringify(schedule),
-      'meal-plan-1',
-      'tenant-1',
-      'user-1',
-    ]);
+    expect(params).toEqual([JSON.stringify(schedule), 'meal-plan-1', 'tenant-1', 'user-1']);
   });
 
   it('throws a controlled error when an insert returns no row', async () => {
@@ -201,5 +201,39 @@ describe('mealPlanRepository', () => {
     expect(sql).toMatch(/order by created_at desc, id desc/);
     expect(sql).toMatch(/limit 1/);
     expect(params).toEqual(['tenant-1', 'user-1']);
+  });
+
+  it('uses tenant ownership, exact snapshot and updated_at for an atomic adaptive replacement', async () => {
+    const plan = structuredPlan();
+    const updatedRow = mealPlanRow({
+      calendar_payload: plan,
+      updated_at: '2026-01-01T00:01:00.000Z',
+    });
+    queryMock.mockResolvedValue({ rows: [updatedRow] });
+
+    await expect(
+      replaceMealPlanForAdaptiveProposal({
+        mealPlanId: 'meal-plan-1',
+        userId: 'user-1',
+        tenantId: 'tenant-1',
+        expectedUpdatedAt: '2026-01-01T00:00:00.000Z',
+        expectedCalendarPayload: plan,
+        structuredPlan: plan,
+      })
+    ).resolves.toEqual(updatedRow);
+
+    const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('and updated_at = $6::timestamptz');
+    expect(sql).toContain('and calendar_payload = $7::jsonb');
+    expect(sql).toContain('tenant_id = $4 and user_id = $5');
+    expect(params).toEqual([
+      JSON.stringify(plan),
+      expectedStoredContent(plan),
+      'meal-plan-1',
+      'tenant-1',
+      'user-1',
+      '2026-01-01T00:00:00.000Z',
+      JSON.stringify(plan),
+    ]);
   });
 });

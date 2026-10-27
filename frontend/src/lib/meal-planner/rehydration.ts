@@ -5,6 +5,7 @@ import type { StructuredMealPlan } from './structured-plan';
 export interface MealPlanPublicResponse {
   id?: string;
   createdAt?: string;
+  updatedAt?: string;
   plan: StructuredMealPlan | null;
   content: string | null;
   peopleCount?: number;
@@ -60,11 +61,7 @@ export function shouldApplyMealPlannerSuggestions({
   activePlanId,
   mealPlanId,
 }: MealPlannerSuggestionsGuard): boolean {
-  return (
-    componentActive &&
-    requestVersion === latestRequestVersion &&
-    activePlanId === mealPlanId
-  );
+  return componentActive && requestVersion === latestRequestVersion && activePlanId === mealPlanId;
 }
 
 function normalizeRestrictionList(values: string[] | undefined): string {
@@ -84,9 +81,7 @@ function normalizeRestrictionList(values: string[] | undefined): string {
 }
 
 /** Converts the safe GET payload into the page's editable state without generating a new plan. */
-export function rehydrateMealPlanner(
-  response: MealPlanPublicResponse
-): MealPlannerRehydratedState {
+export function rehydrateMealPlanner(response: MealPlanPublicResponse): MealPlannerRehydratedState {
   if (!response.plan) return { plan: null, ...DEFAULT_STATE };
 
   return {

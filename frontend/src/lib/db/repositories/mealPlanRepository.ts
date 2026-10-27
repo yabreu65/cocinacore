@@ -83,6 +83,41 @@ export interface UpdateMealPlanScheduleInput {
   schedule: StructuredMealPlanSchedule;
 }
 
+export interface ReplaceMealPlanAdaptiveInput {
+  mealPlanId: string;
+  userId: string;
+  tenantId: string;
+  expectedUpdatedAt: string;
+  expectedCalendarPayload: unknown;
+  structuredPlan: StructuredMealPlan;
+}
+
+/** Replaces only an unchanged, tenant-scoped plan after explicit user confirmation. */
+export async function replaceMealPlanForAdaptiveProposal(
+  input: ReplaceMealPlanAdaptiveInput
+): Promise<UserMealPlanRow | null> {
+  const result = await query<UserMealPlanRow>(
+    `update public.user_meal_plans
+        set calendar_payload = $1::jsonb,
+            ai_content = $2,
+            updated_at = now()
+      where id = $3 and tenant_id = $4 and user_id = $5
+        and updated_at = $6::timestamptz
+        and calendar_payload = $7::jsonb
+      returning *`,
+    [
+      JSON.stringify(input.structuredPlan),
+      renderStructuredMealPlan(input.structuredPlan),
+      input.mealPlanId,
+      input.tenantId,
+      input.userId,
+      input.expectedUpdatedAt,
+      JSON.stringify(input.expectedCalendarPayload),
+    ]
+  );
+  return mapSingleRow(result);
+}
+
 export async function updateMealPlanScheduleForUserAndTenant(
   input: UpdateMealPlanScheduleInput
 ): Promise<UserMealPlanRow | null> {

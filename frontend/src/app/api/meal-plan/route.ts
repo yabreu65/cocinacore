@@ -95,7 +95,9 @@ function getPublicMealPlanSettings(persistedPlan: {
         ? persistedPlan.fusion_intensity
         : 'media',
     restrictions: Array.isArray(persistedPlan.restrictions)
-      ? normalizeRestrictions(persistedPlan.restrictions.filter((value): value is string => typeof value === 'string'))
+      ? normalizeRestrictions(
+          persistedPlan.restrictions.filter((value): value is string => typeof value === 'string')
+        )
       : [],
   };
 }
@@ -180,7 +182,9 @@ export async function POST(request: NextRequest) {
     user.id,
     tenantId
   );
-  const persistedProfileContext = formatPersistedMealPlanProfileContext(persistedProfileContextData);
+  const persistedProfileContext = formatPersistedMealPlanProfileContext(
+    persistedProfileContextData
+  );
   const peopleCount =
     typeof body.peopleCount === 'number' &&
     Number.isFinite(body.peopleCount) &&
@@ -323,7 +327,10 @@ Reglas:
         period,
         reason: 'empty_response',
       });
-      return NextResponse.json({ error: 'El proveedor IA devolvió un plan inválido.' }, { status: 502 });
+      return NextResponse.json(
+        { error: 'El proveedor IA devolvió un plan inválido.' },
+        { status: 502 }
+      );
     }
 
     const parsedPlan = parseStructuredMealPlanResponse(candidateText, period);
@@ -334,15 +341,21 @@ Reglas:
         period,
         reason: parsedPlan.reason,
       });
-      return NextResponse.json({ error: 'El proveedor IA devolvió un plan inválido.' }, { status: 502 });
+      return NextResponse.json(
+        { error: 'El proveedor IA devolvió un plan inválido.' },
+        { status: 502 }
+      );
     }
 
     const exceedsAvailableTime =
       availableTimeMinutes !== null &&
       parsedPlan.plan.days.some((day) =>
-        day.meals.some((meal) => meal.prepMinutes === null ||
-          meal.prepMinutes === undefined ||
-          meal.prepMinutes > availableTimeMinutes)
+        day.meals.some(
+          (meal) =>
+            meal.prepMinutes === null ||
+            meal.prepMinutes === undefined ||
+            meal.prepMinutes > availableTimeMinutes
+        )
       );
     if (exceedsAvailableTime) {
       serverLogger.warn('meal_plan.invalid_provider_response', {
@@ -351,7 +364,10 @@ Reglas:
         period,
         reason: 'available_time_exceeded',
       });
-      return NextResponse.json({ error: 'El proveedor IA devolvió un plan inválido.' }, { status: 502 });
+      return NextResponse.json(
+        { error: 'El proveedor IA devolvió un plan inválido.' },
+        { status: 502 }
+      );
     }
     parsedPlan.plan.availableTimeMinutesSnapshot = availableTimeMinutes;
 
@@ -370,7 +386,10 @@ Reglas:
         period,
         reason: 'restricted_ingredient',
       });
-      return NextResponse.json({ error: 'El proveedor IA devolvió un plan inválido.' }, { status: 502 });
+      return NextResponse.json(
+        { error: 'El proveedor IA devolvió un plan inválido.' },
+        { status: 502 }
+      );
     }
 
     let persistedPlan;
@@ -457,7 +476,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'No se pudo recuperar el menú guardado.' }, { status: 500 });
   }
 
-  const parsedPlan = parseStructuredMealPlanValue(persistedPlan.calendar_payload, persistedPlan.period);
+  const parsedPlan = parseStructuredMealPlanValue(
+    persistedPlan.calendar_payload,
+    persistedPlan.period
+  );
   if (!parsedPlan.success) {
     serverLogger.warn('meal_plan.invalid_persisted_plan', {
       requestId,
@@ -512,6 +534,7 @@ export async function GET(request: NextRequest) {
     content: renderStructuredMealPlan(parsedPlan.plan),
     id: persistedPlan.id,
     createdAt: persistedPlan.created_at,
+    updatedAt: persistedPlan.updated_at,
     ...settings,
   });
 }
