@@ -42,14 +42,25 @@ async function authenticatedIdentity(page: Page): Promise<Identity> {
   };
   const userId = payload.user?.id;
   const tenantId = payload.user?.tenant?.tenantId;
-  if (!userId || !tenantId) throw new Error('Authenticated E2E identity is missing user or tenant.');
+  if (!userId || !tenantId)
+    throw new Error('Authenticated E2E identity is missing user or tenant.');
   return { userId, tenantId };
 }
 
 function canonicalPlan(shortageName: string, coveredName: string) {
+  const now = new Date();
   return {
     period: 'week',
     dayCount: 7,
+    schedule: {
+      startDate: now.toISOString().slice(0, 10),
+      timeZone: 'UTC',
+      confirmedAt: now.toISOString(),
+      portionConfirmation: {
+        peopleCount: 2,
+        confirmedAt: now.toISOString(),
+      },
+    },
     days: Array.from({ length: 7 }, (_, index) => ({
       dayIndex: index + 1,
       label: ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'][index],
@@ -58,21 +69,32 @@ function canonicalPlan(shortageName: string, coveredName: string) {
           mealType: 'breakfast',
           title: 'Desayuno conectado',
           description: null,
-          ingredients: index === 0
-            ? [{ name: shortageName, quantity: 1, unit: 'kg' }, { name: coveredName, quantity: 0.1, unit: 'kg' }]
-            : [{ name: coveredName, quantity: 0.1, unit: 'kg' }],
+          ingredients:
+            index === 0
+              ? [
+                  { name: shortageName, quantity: 1, unit: 'kg' },
+                  { name: coveredName, quantity: 0.1, unit: 'kg' },
+                ]
+              : [{ name: coveredName, quantity: 0.1, unit: 'kg' }],
         },
-        { mealType: 'lunch', title: 'Almuerzo conectado', description: null, ingredients: [{ name: coveredName, quantity: 0.1, unit: 'kg' }] },
-        { mealType: 'dinner', title: 'Cena conectada', description: null, ingredients: [{ name: coveredName, quantity: 0.1, unit: 'kg' }] },
+        {
+          mealType: 'lunch',
+          title: 'Almuerzo conectado',
+          description: null,
+          ingredients: [{ name: coveredName, quantity: 0.1, unit: 'kg' }],
+        },
+        {
+          mealType: 'dinner',
+          title: 'Cena conectada',
+          description: null,
+          ingredients: [{ name: coveredName, quantity: 0.1, unit: 'kg' }],
+        },
       ],
     })),
   };
 }
 
-async function ownedInventory(
-  identity: Identity,
-  inventoryIds: string[]
-): Promise<InventoryRow[]> {
+async function ownedInventory(identity: Identity, inventoryIds: string[]): Promise<InventoryRow[]> {
   if (inventoryIds.length === 0) return [];
   const result = await database.query<InventoryRow>(
     `select * from public.recipe_inventory_items
@@ -88,7 +110,9 @@ test.describe('Connected full Meal Planner to Shopping List journey', () => {
     await database.end();
   });
 
-  test('confirms, purchases, reloads, and rehydrates one planner shortage without mutating inventory', async ({ page }) => {
+  test('confirms, purchases, reloads, and rehydrates one planner shortage without mutating inventory', async ({
+    page,
+  }) => {
     const identity = await authenticatedIdentity(page);
     const unique = `e2e-m1-5-4-${randomUUID()}`;
     const shortageName = `${unique} shortage ingredient`;
@@ -100,9 +124,9 @@ test.describe('Connected full Meal Planner to Shopping List journey', () => {
     try {
       const inventoryResult = await database.query<{ id: string }>(
         `insert into public.recipe_inventory_items
-           (tenant_id, user_id, ingredient_name, quantity, unit, category, normalized_name)
-         values ($1, $2, $3, '0.25', 'kg', 'e2e', $3),
-                ($1, $2, $4, '1000', 'kg', 'e2e', $4)
+           (tenant_id, user_id, ingredient_name, quantity, unit, category, normalized_name, expiration_date)
+         values ($1, $2, $3, '0.25', 'kg', 'e2e', $3, '2999-12-31'),
+                ($1, $2, $4, '1000', 'kg', 'e2e', $4, '2999-12-31')
          returning id`,
         [identity.tenantId, identity.userId, shortageName, coveredName]
       );
@@ -116,7 +140,11 @@ test.describe('Connected full Meal Planner to Shopping List journey', () => {
          values ($1, $2, 2, 'week', 'balanced_ai', 'E2E', '{}', 'media', '{}',
                  '{"inventoryLines":[]}'::jsonb, $3::jsonb, 'E2E connected canonical plan')
          returning id`,
-        [identity.tenantId, identity.userId, JSON.stringify(canonicalPlan(shortageName, coveredName))]
+        [
+          identity.tenantId,
+          identity.userId,
+          JSON.stringify(canonicalPlan(shortageName, coveredName)),
+        ]
       );
       const planId = planResult.rows[0]?.id;
       if (!planId) throw new Error('Failed to seed the canonical meal plan.');
@@ -144,21 +172,25 @@ test.describe('Connected full Meal Planner to Shopping List journey', () => {
       await expect(page.getByRole('heading', { name: 'Planificador de menú' })).toBeVisible();
       await expect(page.getByRole('heading', { name: 'Menú generado' })).toBeVisible();
       const suggestions = page.locator('section[aria-busy]');
-      await expect(suggestions.getByRole('heading', { name: 'Faltantes para este menú' })).toBeVisible();
+      await expect(suggestions.getByRole('heading', { name: 'Compras anticipadas' })).toBeVisible();
       const shortageCard = suggestions.locator('li').filter({ hasText: shortageName });
       await expect(shortageCard).toHaveCount(1);
       await expect(shortageCard.getByText(shortageName, { exact: true })).toBeVisible();
       await expect(shortageCard.getByText('Requerido: 1 kg · Disponible: 0.25 kg')).toBeVisible();
       await expect(shortageCard.getByText('Para comprar: 0.75 kg')).toBeVisible();
 
-      const shortageCheckbox = shortageCard.getByRole('checkbox', { name: new RegExp(shortageName, 'i') });
+      const shortageCheckbox = shortageCard.getByRole('checkbox', {
+        name: new RegExp(shortageName, 'i'),
+      });
       await expect(shortageCheckbox).toBeChecked();
       await shortageCheckbox.uncheck();
       await expect(shortageCheckbox).not.toBeChecked();
       await shortageCheckbox.check();
       await expect(shortageCheckbox).toBeChecked();
 
-      const addButton = suggestions.getByRole('button', { name: 'Agregar seleccionados a compras' });
+      const addButton = suggestions.getByRole('button', {
+        name: 'Agregar seleccionados a compras',
+      });
       await addButton.click();
       await expect(page.getByText('Se agregaron 1 artículo.', { exact: true })).toBeVisible();
 
@@ -232,22 +264,42 @@ test.describe('Connected full Meal Planner to Shopping List journey', () => {
       await page.getByRole('link', { name: 'Planificador', exact: true }).click();
       await expect(page).toHaveURL('/meal-planner');
       const returnedSuggestions = page.locator('section[aria-busy]');
-      const returnedShortageCard = returnedSuggestions.locator('li').filter({ hasText: shortageName });
+      const returnedShortageCard = returnedSuggestions
+        .locator('li')
+        .filter({ hasText: shortageName });
       await expect(returnedShortageCard).toHaveCount(1);
       await expect(returnedShortageCard.getByText('Ya comprado', { exact: true })).toBeVisible();
-      const returnedCheckbox = returnedShortageCard.getByRole('checkbox', { name: new RegExp(shortageName, 'i') });
+      const returnedCheckbox = returnedShortageCard.getByRole('checkbox', {
+        name: new RegExp(shortageName, 'i'),
+      });
       await expect(returnedCheckbox).toBeDisabled();
 
+      const snapshotResponse = await page.request.get(
+        `/api/meal-plan/shopping-suggestions?mealPlanId=${encodeURIComponent(seed.planId)}&horizon=7`
+      );
+      expect(snapshotResponse.ok()).toBeTruthy();
+      const snapshot = (await snapshotResponse.json()) as {
+        expectedUpdatedAt: string;
+        sourceFingerprint: string;
+      };
       const idempotencyResponse = await page.request.post('/api/meal-plan/shopping-suggestions', {
-        data: { mealPlanId: seed.planId, selectedItems: [seed.shortageNormalizedName] },
+        data: {
+          mealPlanId: seed.planId,
+          horizonDays: 7,
+          selectedItems: [seed.shortageNormalizedName],
+          expectedUpdatedAt: snapshot.expectedUpdatedAt,
+          expectedFingerprint: snapshot.sourceFingerprint,
+        },
       });
       expect(idempotencyResponse.ok()).toBeTruthy();
       await expect(idempotencyResponse.json()).resolves.toMatchObject({
         added: [],
-        alreadyPresent: [expect.objectContaining({
-          ingredient_name: shortageName,
-          status: 'purchased',
-        })],
+        alreadyPresent: [
+          expect.objectContaining({
+            ingredient_name: shortageName,
+            status: 'purchased',
+          }),
+        ],
         ignored: [],
       });
 

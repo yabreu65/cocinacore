@@ -45,6 +45,7 @@ export interface AddMealPlanShoppingItemsInput {
   userId: string;
   source: string;
   items: MealPlanShoppingItemInput[];
+  dedupeScope?: 'source' | 'user';
 }
 
 export interface AddMealPlanShoppingItemsResult {
@@ -55,15 +56,19 @@ export interface AddMealPlanShoppingItemsResult {
 export async function listShoppingListItems(
   tenantId: string,
   userId: string,
-  filter: ShoppingListFilter = {}
+  filter: ShoppingListFilter = {},
+  limit?: number
 ): Promise<ShoppingListItemRow[]> {
   const values: unknown[] = [tenantId, userId];
   const statusClause = filter.status ? ` and status = $${values.push(filter.status)}` : '';
+  const boundedLimit =
+    typeof limit === 'number' && Number.isInteger(limit) && limit > 0 ? Math.min(limit, 501) : null;
+  const limitClause = boundedLimit === null ? '' : ` limit $${values.push(boundedLimit)}`;
 
   const result = await query<ShoppingListItemRow>(
     `select * from public.shopping_list_items
      where tenant_id = $1 and user_id = $2${statusClause}
-     order by created_at desc, id desc`,
+     order by created_at desc, id desc${limitClause}`,
     values
   );
   return result.rows;
@@ -89,12 +94,19 @@ export async function addMealPlanShoppingItems(
   input: AddMealPlanShoppingItemsInput
 ): Promise<AddMealPlanShoppingItemsResult> {
   return transaction(async (client) => {
-    const lockKey = `${input.tenantId}:${input.userId}:${input.source}`;
+    const dedupeScope = input.dedupeScope ?? 'source';
+    const lockKey = `${input.tenantId}:${input.userId}:${dedupeScope === 'user' ? 'shopping-list' : input.source}`;
     await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [lockKey]);
+    const existingScope =
+      dedupeScope === 'user'
+        ? 'tenant_id = $1 and user_id = $2'
+        : 'tenant_id = $1 and user_id = $2 and source = $3';
     const existingResult = await client.query<ShoppingListItemRow>(
       `select * from public.shopping_list_items
-       where tenant_id = $1 and user_id = $2 and source = $3`,
-      [input.tenantId, input.userId, input.source]
+       where ${existingScope}`,
+      dedupeScope === 'user'
+        ? [input.tenantId, input.userId]
+        : [input.tenantId, input.userId, input.source]
     );
     const byIdentity = new Map(
       existingResult.rows.map((row) => [normalizeInventoryName(row.ingredient_name), row])

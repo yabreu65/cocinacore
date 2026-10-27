@@ -17,14 +17,25 @@ async function authenticatedIdentity(page: Parameters<typeof injectAuth>[0]): Pr
   };
   const userId = payload.user?.id;
   const tenantId = payload.user?.tenant?.tenantId;
-  if (!userId || !tenantId) throw new Error('Authenticated E2E identity is missing user or tenant.');
+  if (!userId || !tenantId)
+    throw new Error('Authenticated E2E identity is missing user or tenant.');
   return { userId, tenantId };
 }
 
 function structuredPlan(names: Record<string, string>) {
+  const now = new Date();
   return {
     period: 'week',
     dayCount: 7,
+    schedule: {
+      startDate: now.toISOString().slice(0, 10),
+      timeZone: 'UTC',
+      confirmedAt: now.toISOString(),
+      portionConfirmation: {
+        peopleCount: 2,
+        confirmedAt: now.toISOString(),
+      },
+    },
     days: Array.from({ length: 7 }, (_, index) => ({
       dayIndex: index + 1,
       label: ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'][index],
@@ -33,17 +44,28 @@ function structuredPlan(names: Record<string, string>) {
           mealType: 'breakfast',
           title: 'Desayuno de prueba',
           description: null,
-          ingredients: index === 0
-            ? [
-                { name: names.covered, quantity: 1, unit: 'kg' },
-                { name: names.partial, quantity: 1, unit: 'kg' },
-                { name: names.missing, quantity: 1, unit: 'kg' },
-                { name: names.unknown, quantity: null, unit: null },
-              ]
-            : [{ name: names.covered, quantity: 0.1, unit: 'kg' }],
+          ingredients:
+            index === 0
+              ? [
+                  { name: names.covered, quantity: 1, unit: 'kg' },
+                  { name: names.partial, quantity: 1, unit: 'kg' },
+                  { name: names.missing, quantity: 1, unit: 'kg' },
+                  { name: names.unknown, quantity: null, unit: null },
+                ]
+              : [{ name: names.covered, quantity: 0.1, unit: 'kg' }],
         },
-        { mealType: 'lunch', title: 'Almuerzo', description: null, ingredients: [{ name: names.covered, quantity: 0.1, unit: 'kg' }] },
-        { mealType: 'dinner', title: 'Cena', description: null, ingredients: [{ name: names.covered, quantity: 0.1, unit: 'kg' }] },
+        {
+          mealType: 'lunch',
+          title: 'Almuerzo',
+          description: null,
+          ingredients: [{ name: names.covered, quantity: 0.1, unit: 'kg' }],
+        },
+        {
+          mealType: 'dinner',
+          title: 'Cena',
+          description: null,
+          ingredients: [{ name: names.covered, quantity: 0.1, unit: 'kg' }],
+        },
       ],
     })),
   };
@@ -54,7 +76,9 @@ test.describe('Connected Meal Planner shopping confirmation', () => {
     await database.end();
   });
 
-  test('shows persisted shortages and writes only explicit selection, then reloads idempotently', async ({ page }, testInfo) => {
+  test('shows persisted shortages and writes only explicit selection, then reloads idempotently', async ({
+    page,
+  }, testInfo) => {
     const identity = await authenticatedIdentity(page);
     const unique = `e2e-${Date.now()}-${testInfo.workerIndex}-${Math.random().toString(36).slice(2, 8)}`;
     const names = {
@@ -68,9 +92,9 @@ test.describe('Connected Meal Planner shopping confirmation', () => {
     try {
       const inventory = await database.query<{ id: string }>(
         `insert into public.recipe_inventory_items
-           (tenant_id, user_id, ingredient_name, quantity, unit, normalized_name)
-         values ($1, $2, $3, '1000', 'kg', $3),
-                ($1, $2, $4, '0.25', 'kg', $4)
+           (tenant_id, user_id, ingredient_name, quantity, unit, normalized_name, expiration_date)
+         values ($1, $2, $3, '1000', 'kg', $3, '2999-12-31'),
+                ($1, $2, $4, '0.25', 'kg', $4, '2999-12-31')
          returning id`,
         [identity.tenantId, identity.userId, names.covered, names.partial]
       );
@@ -99,18 +123,24 @@ test.describe('Connected Meal Planner shopping confirmation', () => {
       await expect(page.getByRole('heading', { name: 'Planificador de menú' })).toBeVisible();
       await expect(page.getByRole('heading', { name: 'Menú generado' })).toBeVisible();
       const suggestionsSection = page.locator('section[aria-busy]');
-      await expect(suggestionsSection.getByRole('heading', { name: 'Faltantes para este menú' })).toBeVisible();
+      await expect(
+        suggestionsSection.getByRole('heading', { name: 'Compras anticipadas' })
+      ).toBeVisible();
       await expect(suggestionsSection.getByText(names.covered, { exact: false })).toHaveCount(0);
       await expect(suggestionsSection.getByText(names.partial, { exact: false })).toBeVisible();
       await expect(suggestionsSection.getByText(names.missing, { exact: false })).toBeVisible();
       await expect(suggestionsSection.getByText(names.unknown, { exact: false })).toBeVisible();
-      await expect(suggestionsSection.getByText('Requerido: 1 kg · Disponible: 0.25 kg')).toBeVisible();
+      await expect(
+        suggestionsSection.getByText('Requerido: 1 kg · Disponible: 0.25 kg')
+      ).toBeVisible();
       await expect(suggestionsSection.getByText('Para comprar: 0.75 kg')).toBeVisible();
-      await expect(suggestionsSection.getByText(/Lunes · Desayuno · Desayuno de prueba/).first()).toBeVisible();
+      await expect(suggestionsSection.getByText(/Desayuno de prueba/).first()).toBeVisible();
       await expect(suggestionsSection.getByText('Comprar', { exact: true }).first()).toBeVisible();
-      await expect(suggestionsSection.getByText('Revisar', { exact: true })).toBeVisible();
+      await expect(suggestionsSection.getByText(/^Revisar:/)).toBeVisible();
 
-      const addButton = suggestionsSection.getByRole('button', { name: 'Agregar seleccionados a compras' });
+      const addButton = suggestionsSection.getByRole('button', {
+        name: 'Agregar seleccionados a compras',
+      });
       await expect(addButton).toBeVisible();
       const confirmationRows = await database.query<{ count: string }>(
         'select count(*)::text as count from public.shopping_list_items where tenant_id = $1 and user_id = $2 and source = $3',
@@ -120,14 +150,23 @@ test.describe('Connected Meal Planner shopping confirmation', () => {
 
       await page.getByRole('checkbox', { name: new RegExp(names.partial, 'i') }).check();
       await page.getByRole('checkbox', { name: new RegExp(names.missing, 'i') }).uncheck();
-      await expect(page.getByRole('checkbox', { name: new RegExp(names.missing, 'i') })).not.toBeChecked();
-      await expect(page.getByRole('checkbox', { name: new RegExp(names.unknown, 'i') })).not.toBeChecked();
+      await expect(
+        page.getByRole('checkbox', { name: new RegExp(names.missing, 'i') })
+      ).not.toBeChecked();
+      await expect(
+        page.getByRole('checkbox', { name: new RegExp(names.unknown, 'i') })
+      ).not.toBeChecked();
       await addButton.click();
       await expect(page.getByText(/Se agregaron 1 artículo/)).toBeVisible();
 
       const persisted = await database.query<{
-        id: string; tenant_id: string; user_id: string; source: string;
-        ingredient_name: string; quantity: string | null; status: string;
+        id: string;
+        tenant_id: string;
+        user_id: string;
+        source: string;
+        ingredient_name: string;
+        quantity: string | null;
+        status: string;
       }>(
         `select id, tenant_id, user_id, source, ingredient_name, quantity, status
          from public.shopping_list_items where tenant_id = $1 and user_id = $2 and source = $3`,
@@ -144,12 +183,28 @@ test.describe('Connected Meal Planner shopping confirmation', () => {
       });
 
       await page.reload();
-      await expect(page.getByRole('heading', { name: 'Faltantes para este menú' })).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Compras anticipadas' })).toBeVisible();
       await expect(page.getByText('Ya está en compras', { exact: true })).toBeVisible();
-      await expect(page.getByRole('checkbox', { name: new RegExp(names.partial, 'i') })).not.toBeChecked();
+      await expect(
+        page.getByRole('checkbox', { name: new RegExp(names.partial, 'i') })
+      ).not.toBeChecked();
 
+      const snapshotResponse = await page.request.get(
+        `/api/meal-plan/shopping-suggestions?mealPlanId=${encodeURIComponent(seed.planId)}&horizon=7`
+      );
+      expect(snapshotResponse.ok()).toBeTruthy();
+      const snapshot = (await snapshotResponse.json()) as {
+        expectedUpdatedAt: string;
+        sourceFingerprint: string;
+      };
       const replay = await page.request.post('/api/meal-plan/shopping-suggestions', {
-        data: { mealPlanId: seed.planId, selectedItems: [names.partial.toLocaleLowerCase()] },
+        data: {
+          mealPlanId: seed.planId,
+          horizonDays: 7,
+          selectedItems: [names.partial.toLocaleLowerCase()],
+          expectedUpdatedAt: snapshot.expectedUpdatedAt,
+          expectedFingerprint: snapshot.sourceFingerprint,
+        },
       });
       expect(replay.ok()).toBeTruthy();
       const replayBody = (await replay.json()) as {
@@ -159,7 +214,9 @@ test.describe('Connected Meal Planner shopping confirmation', () => {
       };
       expect(replayBody).toMatchObject({
         added: [],
-        alreadyPresent: [expect.objectContaining({ ingredient_name: names.partial, status: 'pending' })],
+        alreadyPresent: [
+          expect.objectContaining({ ingredient_name: names.partial, status: 'pending' }),
+        ],
         ignored: [],
       });
       const afterReplay = await database.query<{ count: string }>(

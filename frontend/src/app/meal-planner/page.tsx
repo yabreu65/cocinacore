@@ -30,8 +30,18 @@ type ShoppingSuggestion = {
   unit: string;
   status: 'buy' | 'review';
   usedInRecipes: string[];
+  estimatedCost: number | null;
   alreadyPresent: boolean;
   shoppingStatus: 'pending' | 'purchased' | null;
+  transferCompleted: boolean;
+  existingShoppingSources: string[];
+};
+
+type ShoppingCost = {
+  status: 'complete' | 'partial' | 'unknown';
+  estimatedTotal: number | null;
+  knownItemCount: number;
+  itemCount: number;
 };
 
 type ConfirmationItem = {
@@ -69,6 +79,12 @@ export default function MealPlannerPage() {
   const [isConfirming, setIsConfirming] = useState(false);
   const [shoppingMessage, setShoppingMessage] = useState<string | null>(null);
   const [shoppingError, setShoppingError] = useState<string | null>(null);
+  const [shoppingHorizon, setShoppingHorizon] = useState<7 | 14>(7);
+  const [shoppingStatus, setShoppingStatus] = useState<'ready' | 'unknown'>('ready');
+  const [shoppingReason, setShoppingReason] = useState<string | null>(null);
+  const [shoppingExpectedUpdatedAt, setShoppingExpectedUpdatedAt] = useState<string | null>(null);
+  const [shoppingFingerprint, setShoppingFingerprint] = useState<string | null>(null);
+  const [shoppingCost, setShoppingCost] = useState<ShoppingCost | null>(null);
   const [consumptions, setConsumptions] = useState<MealConsumptionPayload>({});
   const [isLoadingConsumptions, setIsLoadingConsumptions] = useState(false);
   const [consumingMealKeys, setConsumingMealKeys] = useState<Set<string>>(new Set());
@@ -82,51 +98,66 @@ export default function MealPlannerPage() {
   const componentActiveRef = useRef(true);
   const userEditedRef = useRef(false);
 
-  const loadSuggestions = useCallback(async (mealPlanId: string) => {
-    const requestVersion = ++suggestionRequestVersionRef.current;
-    setIsLoadingSuggestions(true);
-    setShoppingError(null);
-    setShoppingMessage(null);
-    try {
-      const result = await safeFetch<{ items: ShoppingSuggestion[] }>(
-        `/api/meal-plan/shopping-suggestions?mealPlanId=${encodeURIComponent(mealPlanId)}`,
-        { credentials: 'same-origin' }
-      );
-      if (!result.ok) throw new Error(result.error ?? 'No se pudieron cargar los faltantes.');
-      if (
-        !shouldApplyMealPlannerSuggestions({
-          componentActive: componentActiveRef.current,
-          requestVersion,
-          latestRequestVersion: suggestionRequestVersionRef.current,
-          activePlanId: activePlanIdRef.current,
-          mealPlanId,
-        })
-      )
-        return;
-      setSuggestions(result.data.items);
-      setSelectedItems(
-        new Set(
-          result.data.items
-            .filter((item) => item.status === 'buy' && !item.alreadyPresent)
-            .map((item) => item.normalizedName)
-        )
-      );
-    } catch (error) {
-      if (
-        componentActiveRef.current &&
-        suggestionRequestVersionRef.current === requestVersion &&
-        activePlanIdRef.current === mealPlanId
-      ) {
-        setShoppingError(
-          error instanceof Error ? error.message : 'No se pudieron cargar los faltantes.'
+  const loadSuggestions = useCallback(
+    async (mealPlanId: string, preserveMessage = false, horizonDays: 7 | 14 = shoppingHorizon) => {
+      const requestVersion = ++suggestionRequestVersionRef.current;
+      setIsLoadingSuggestions(true);
+      setShoppingError(null);
+      if (!preserveMessage) setShoppingMessage(null);
+      try {
+        const result = await safeFetch<{
+          items: ShoppingSuggestion[];
+          status: 'ready' | 'unknown';
+          reason?: string;
+          expectedUpdatedAt: string;
+          sourceFingerprint: string;
+          cost: ShoppingCost;
+        }>(
+          `/api/meal-plan/shopping-suggestions?mealPlanId=${encodeURIComponent(mealPlanId)}&horizon=${horizonDays}`,
+          { credentials: 'same-origin' }
         );
+        if (!result.ok) throw new Error(result.error ?? 'No se pudieron cargar los faltantes.');
+        if (
+          !shouldApplyMealPlannerSuggestions({
+            componentActive: componentActiveRef.current,
+            requestVersion,
+            latestRequestVersion: suggestionRequestVersionRef.current,
+            activePlanId: activePlanIdRef.current,
+            mealPlanId,
+          })
+        )
+          return;
+        setShoppingStatus(result.data.status);
+        setShoppingReason(result.data.reason ?? null);
+        setShoppingExpectedUpdatedAt(result.data.expectedUpdatedAt);
+        setShoppingFingerprint(result.data.sourceFingerprint);
+        setShoppingCost(result.data.cost);
+        setSuggestions(result.data.items);
+        setSelectedItems(
+          new Set(
+            result.data.items
+              .filter((item) => item.status === 'buy' && !item.alreadyPresent)
+              .map((item) => item.normalizedName)
+          )
+        );
+      } catch (error) {
+        if (
+          componentActiveRef.current &&
+          suggestionRequestVersionRef.current === requestVersion &&
+          activePlanIdRef.current === mealPlanId
+        ) {
+          setShoppingError(
+            error instanceof Error ? error.message : 'No se pudieron cargar los faltantes.'
+          );
+        }
+      } finally {
+        if (componentActiveRef.current && suggestionRequestVersionRef.current === requestVersion) {
+          setIsLoadingSuggestions(false);
+        }
       }
-    } finally {
-      if (componentActiveRef.current && suggestionRequestVersionRef.current === requestVersion) {
-        setIsLoadingSuggestions(false);
-      }
-    }
-  }, []);
+    },
+    [shoppingHorizon]
+  );
 
   const loadConsumptions = useCallback(async (mealPlanId: string) => {
     const requestVersion = ++consumptionRequestVersionRef.current;
@@ -253,6 +284,7 @@ export default function MealPlannerPage() {
       setAdaptiveMessage(
         'Propuesta confirmada. El menú guardado fue actualizado sin descontar inventario.'
       );
+      void loadSuggestions(mealPlanId, true);
     } catch (error) {
       setAdaptiveError(
         error instanceof Error ? error.message : 'No se pudo confirmar la propuesta.'
@@ -332,6 +364,11 @@ export default function MealPlannerPage() {
     setSelectedItems(new Set());
     setShoppingMessage(null);
     setShoppingError(null);
+    setShoppingStatus('ready');
+    setShoppingReason(null);
+    setShoppingExpectedUpdatedAt(null);
+    setShoppingFingerprint(null);
+    setShoppingCost(null);
     setConsumptions({});
     setIsLoadingConsumptions(false);
     setConsumingMealKeys(new Set());
@@ -394,7 +431,14 @@ export default function MealPlannerPage() {
   };
 
   const onConfirmSelected = async () => {
-    if (!activePlanId || selectedItems.size === 0 || isConfirming) return;
+    if (
+      !activePlanId ||
+      selectedItems.size === 0 ||
+      isConfirming ||
+      !shoppingExpectedUpdatedAt ||
+      !shoppingFingerprint
+    )
+      return;
     const mealPlanId = activePlanId;
     const requestVersion = ++suggestionRequestVersionRef.current;
     setIsConfirming(true);
@@ -409,7 +453,13 @@ export default function MealPlannerPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
-        body: JSON.stringify({ mealPlanId, selectedItems: [...selectedItems] }),
+        body: JSON.stringify({
+          mealPlanId,
+          horizonDays: shoppingHorizon,
+          selectedItems: [...selectedItems],
+          expectedUpdatedAt: shoppingExpectedUpdatedAt,
+          expectedFingerprint: shoppingFingerprint,
+        }),
       });
       if (!result.ok) throw new Error(result.error ?? 'No se pudieron agregar los artículos.');
       if (
@@ -446,6 +496,7 @@ export default function MealPlannerPage() {
         parts.push(`Se ignoraron claves desactualizadas: ${result.data.ignored.join(', ')}.`);
       }
       setShoppingMessage(parts.join(' ') || 'No hubo artículos nuevos para agregar.');
+      void loadSuggestions(mealPlanId, true);
     } catch (error) {
       if (componentActiveRef.current && activePlanIdRef.current === mealPlanId) {
         setShoppingError(
@@ -787,16 +838,55 @@ export default function MealPlannerPage() {
             className="mt-6 rounded-xl border border-[#E8DDD2] bg-white p-4"
             aria-busy={isLoadingSuggestions || isConfirming}
           >
-            <h2 className="font-semibold">Faltantes para este menú</h2>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <h2 className="font-semibold">Compras anticipadas</h2>
+                <p className="mt-1 text-sm text-[#6B5A50]">
+                  Calculadas sólo con agenda, porciones, inventario y comidas confirmadas.
+                </p>
+              </div>
+              <label className="grid gap-1 text-sm font-semibold text-[#6B5A50]">
+                Horizonte
+                <select
+                  value={shoppingHorizon}
+                  onChange={(event) => {
+                    const nextHorizon = event.target.value === '14' ? 14 : 7;
+                    setShoppingHorizon(nextHorizon);
+                    setSuggestions([]);
+                    setSelectedItems(new Set());
+                    setShoppingMessage(null);
+                    setShoppingError(null);
+                    if (activePlanIdRef.current) {
+                      void loadSuggestions(activePlanIdRef.current, false, nextHorizon);
+                    }
+                  }}
+                  disabled={isLoadingSuggestions || isConfirming || isGenerating}
+                  className="h-10 rounded-lg border border-[#E8DDD2] bg-white px-2 font-normal"
+                >
+                  <option value="7">7 días</option>
+                  <option value="14">14 días</option>
+                </select>
+              </label>
+            </div>
             {isLoadingSuggestions ? (
-              <p className="mt-2 text-sm text-[#6B5A50]">Cargando faltantes...</p>
+              <p className="mt-2 text-sm text-[#6B5A50]">Calculando compras...</p>
             ) : null}
             {shoppingError ? (
               <p role="alert" className="mt-2 text-sm text-red-700">
                 {shoppingError}
               </p>
             ) : null}
-            {!isLoadingSuggestions && suggestions.length === 0 ? (
+            {!isLoadingSuggestions && shoppingStatus === 'unknown' ? (
+              <p
+                aria-live="polite"
+                className="mt-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-900"
+              >
+                No se puede calcular este horizonte con seguridad
+                {shoppingReason ? ` (${shoppingReason}).` : '.'} Confirmá la agenda y las porciones
+                y asegurate de que el plan cubra el horizonte solicitado.
+              </p>
+            ) : null}
+            {!isLoadingSuggestions && shoppingStatus === 'ready' && suggestions.length === 0 ? (
               <p className="mt-2 text-sm text-[#6B5A50]">
                 No hay faltantes accionables para este menú.
               </p>
@@ -826,7 +916,8 @@ export default function MealPlannerPage() {
                             isLoadingSuggestions ||
                             isConfirming ||
                             isGenerating ||
-                            Boolean(existingLabel)
+                            Boolean(existingLabel) ||
+                            item.status !== 'buy'
                           }
                           onChange={(event) =>
                             setSelectedItems((current) => {
@@ -845,9 +936,26 @@ export default function MealPlannerPage() {
                             {quantity(item.availableQuantity)}
                           </span>
                           <span>Para comprar: {quantity(item.quantityToBuy)}</span>
+                          {item.estimatedCost !== null ? (
+                            <span>
+                              Costo estimado del artículo: {item.estimatedCost.toFixed(2)}
+                            </span>
+                          ) : (
+                            <span>Costo: desconocido</span>
+                          )}
                           <span className="font-semibold">
-                            {existingLabel ?? (item.status === 'buy' ? 'Comprar' : 'Revisar')}
+                            {existingLabel ??
+                              (item.status === 'buy'
+                                ? item.transferCompleted
+                                  ? 'Ya transferido; verificar inventario'
+                                  : 'Comprar'
+                                : 'Revisar: cantidad o unidad desconocida')}
                           </span>
+                          {item.existingShoppingSources.length > 0 ? (
+                            <span className="text-[#6B5A50]">
+                              Ya existe en: {item.existingShoppingSources.join(', ')}.
+                            </span>
+                          ) : null}
                           <span className="text-[#6B5A50]">
                             Usado en: {item.usedInRecipes.join('; ')}
                           </span>
@@ -863,11 +971,26 @@ export default function MealPlannerPage() {
                 {shoppingMessage}
               </p>
             ) : null}
+            {shoppingCost && shoppingCost.itemCount > 0 ? (
+              <p className="mt-3 text-sm text-[#6B5A50]">
+                {shoppingCost.status === 'complete'
+                  ? `Costo estimado total verificable: ${shoppingCost.estimatedTotal?.toFixed(2) ?? '0.00'}.`
+                  : shoppingCost.status === 'partial'
+                    ? `Costo estimado parcial: ${shoppingCost.estimatedTotal?.toFixed(2) ?? 'desconocido'}; faltan precios o cantidades para completar el total.`
+                    : 'Costo total desconocido: faltan precios o cantidades verificables.'}
+              </p>
+            ) : null}
             <button
               type="button"
               onClick={() => void onConfirmSelected()}
               disabled={
-                isLoadingSuggestions || isConfirming || isGenerating || selectedItems.size === 0
+                isLoadingSuggestions ||
+                isConfirming ||
+                isGenerating ||
+                shoppingStatus !== 'ready' ||
+                !shoppingExpectedUpdatedAt ||
+                !shoppingFingerprint ||
+                selectedItems.size === 0
               }
               className="mt-4 h-11 rounded-xl bg-[#C56A1A] px-4 font-semibold text-white disabled:opacity-60"
             >

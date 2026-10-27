@@ -76,6 +76,15 @@ function persistedPlan(overrides: Partial<UserMealPlanRow> = {}): UserMealPlanRo
           },
         ],
       })),
+      schedule: {
+        startDate: '2026-10-27',
+        timeZone: 'America/Caracas',
+        confirmedAt: '2026-10-27T12:00:00.000Z',
+        portionConfirmation: {
+          peopleCount: 50,
+          confirmedAt: '2026-10-27T12:00:00.000Z',
+        },
+      },
     },
     consumption_payload: {},
     ai_content: null,
@@ -94,12 +103,12 @@ function inventoryItem(ingredient_name: string, quantity: string, unit: string) 
     quantity,
     unit,
     category: null,
-    expiration_date: null,
     estimated_unit_price: null,
     purchase_location: null,
     low_stock_threshold: null,
     normalized_name: null,
     notes: null,
+    expiration_date: '2026-11-20',
     created_at: '2026-01-01T00:00:00.000Z',
     updated_at: '2026-01-01T00:00:00.000Z',
   };
@@ -114,7 +123,7 @@ function request(id = planId): NextRequest {
 function consumedBreakfastPayload() {
   return {
     '1:breakfast': {
-      consumedAt: '2026-09-30T20:00:00.000Z',
+      consumedAt: '2026-10-27T14:00:00.000Z',
       dayIndex: 1,
       mealType: 'breakfast',
       mealTitle: 'Avena del día',
@@ -146,8 +155,8 @@ describe('GET /api/meal-plan/shopping-suggestions', () => {
     const response = await GET(request() as unknown as NextRequest);
     expect(response.status).toBe(200);
     expect(findMealPlanByIdForUserAndTenantMock).toHaveBeenCalledWith(planId, 'user-1', 'tenant-1');
-    expect(listInventoryItemsByTenantMock).toHaveBeenCalledWith('tenant-1');
-    expect(listShoppingListItemsMock).toHaveBeenCalledWith('tenant-1', 'user-1');
+    expect(listInventoryItemsByTenantMock).toHaveBeenCalledWith('tenant-1', 501);
+    expect(listShoppingListItemsMock).toHaveBeenCalledWith('tenant-1', 'user-1', {}, 501);
     const body = (await response.json()) as { items: Array<Record<string, unknown>> };
     expect(body.items).toEqual(
       expect.arrayContaining([
@@ -156,9 +165,7 @@ describe('GET /api/meal-plan/shopping-suggestions', () => {
           status: 'buy',
           quantityToBuy: 1.5,
           unit: 'kg',
-          usedInRecipes: expect.arrayContaining<string>([
-            'Lunes · Desayuno · Avena del día',
-          ]) as unknown,
+          usedInRecipes: expect.arrayContaining<string>(['Avena del día · 2026-10-27']) as unknown,
         }),
         expect.objectContaining({ normalizedName: 'sal', status: 'review', quantityToBuy: null }),
       ])
@@ -174,7 +181,7 @@ describe('GET /api/meal-plan/shopping-suggestions', () => {
     expect(JSON.stringify(body)).not.toContain('do-not-use-snapshot');
   });
 
-  it('marks only exact-source normalized shopping rows with their current status', async () => {
+  it('marks matching shopping rows from every source without exposing ownership data', async () => {
     listShoppingListItemsMock.mockResolvedValue([
       {
         id: 'private-row',
@@ -268,6 +275,25 @@ describe('GET /api/meal-plan/shopping-suggestions', () => {
     expect(body.items.some((item) => item.normalizedName === 'sal')).toBe(false);
     expect(body.items.some((item) => item.normalizedName === 'papa')).toBe(true);
   });
+
+  it('fails closed without a confirmed schedule or portions', async () => {
+    const currentPlan = persistedPlan();
+    findMealPlanByIdForUserAndTenantMock.mockResolvedValue(
+      persistedPlan({
+        calendar_payload: {
+          ...(currentPlan.calendar_payload as Record<string, unknown>),
+          schedule: undefined,
+        },
+      })
+    );
+    const response = await GET(request() as unknown as NextRequest);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      status: 'unknown',
+      reason: 'schedule_not_confirmed',
+      items: [],
+    });
+  });
 });
 
 function postRequest(body: unknown): NextRequest {
@@ -278,6 +304,21 @@ function postRequest(body: unknown): NextRequest {
   }) as unknown as NextRequest;
 }
 
+async function confirmationBody(selectedItems: string[] = ['arroz']) {
+  const response = await GET(request());
+  const snapshot = (await response.json()) as {
+    expectedUpdatedAt: string;
+    sourceFingerprint: string;
+  };
+  return {
+    mealPlanId: planId,
+    horizonDays: 7,
+    selectedItems,
+    expectedUpdatedAt: snapshot.expectedUpdatedAt,
+    expectedFingerprint: snapshot.sourceFingerprint,
+  };
+}
+
 describe('POST /api/meal-plan/shopping-suggestions', () => {
   beforeEach(() => {
     requireUserMock.mockReset();
@@ -285,6 +326,7 @@ describe('POST /api/meal-plan/shopping-suggestions', () => {
     listInventoryItemsByTenantMock.mockReset();
     addMealPlanShoppingItemsMock.mockReset();
     listShoppingListItemsMock.mockReset();
+    listShoppingListItemsMock.mockResolvedValue([]);
     requireUserMock.mockResolvedValue({ id: 'user-1', tenant: { tenantId: 'tenant-1' } });
     findMealPlanByIdForUserAndTenantMock.mockResolvedValue(persistedPlan());
     listInventoryItemsByTenantMock.mockResolvedValue([
@@ -296,21 +338,21 @@ describe('POST /api/meal-plan/shopping-suggestions', () => {
   });
 
   it('recomputes current candidates and persists only selected actionable keys with server-owned data', async () => {
-    const response = await POST(
-      postRequest({ mealPlanId: planId, selectedItems: ['arroz', 'sal', 'harina'] })
-    );
+    const response = await POST(postRequest(await confirmationBody(['arroz', 'sal', 'harina'])));
     expect(response.status).toBe(200);
-    expect(listInventoryItemsByTenantMock).toHaveBeenCalledWith('tenant-1');
+    expect(listInventoryItemsByTenantMock).toHaveBeenCalledWith('tenant-1', 501);
     expect(addMealPlanShoppingItemsMock).toHaveBeenCalledWith({
       tenantId: 'tenant-1',
       userId: 'user-1',
       source: `meal-plan:${planId}`,
-      items: [
-        { ingredientName: 'Arroz', quantity: '1.5 kg' },
-        { ingredientName: 'Sal', quantity: null },
-      ],
+      dedupeScope: 'user',
+      items: [{ ingredientName: 'Arroz', quantity: '1.5 kg' }],
     });
-    expect(await response.json()).toEqual({ added: [], alreadyPresent: [], ignored: ['harina'] });
+    expect(await response.json()).toEqual({
+      added: [],
+      alreadyPresent: [],
+      ignored: ['sal', 'harina'],
+    });
   });
 
   it('rejects malformed, empty, invalid, and spoofed confirmation bodies', async () => {
@@ -331,13 +373,18 @@ describe('POST /api/meal-plan/shopping-suggestions', () => {
   });
 
   it('returns 401 before reads and generic 404 for an unavailable plan', async () => {
+    const validBody = {
+      mealPlanId: planId,
+      horizonDays: 7,
+      selectedItems: ['arroz'],
+      expectedUpdatedAt: '2026-01-01T00:00:00.000Z',
+      expectedFingerprint: 'a'.repeat(64),
+    };
     requireUserMock.mockRejectedValueOnce(new Error('Unauthorized'));
-    expect((await POST(postRequest({ mealPlanId: planId, selectedItems: ['arroz'] }))).status).toBe(
-      401
-    );
+    expect((await POST(postRequest(validBody))).status).toBe(401);
     expect(findMealPlanByIdForUserAndTenantMock).not.toHaveBeenCalled();
     findMealPlanByIdForUserAndTenantMock.mockResolvedValueOnce(null);
-    const response = await POST(postRequest({ mealPlanId: planId, selectedItems: ['arroz'] }));
+    const response = await POST(postRequest(validBody));
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({ error: 'Menú no encontrado.' });
     expect(listInventoryItemsByTenantMock).not.toHaveBeenCalled();
@@ -348,9 +395,7 @@ describe('POST /api/meal-plan/shopping-suggestions', () => {
       added: [],
       alreadyPresent: [{ id: 'existing', ingredient_name: 'Arroz', status: 'purchased' }],
     });
-    const response = await POST(
-      postRequest({ mealPlanId: planId, selectedItems: ['stale', 'arroz'] })
-    );
+    const response = await POST(postRequest(await confirmationBody(['stale', 'arroz'])));
     expect(await response.json()).toEqual({
       added: [],
       alreadyPresent: [{ id: 'existing', ingredient_name: 'Arroz', status: 'purchased' }],
@@ -358,11 +403,23 @@ describe('POST /api/meal-plan/shopping-suggestions', () => {
     });
   });
 
+  it('rejects a stale proposal before any shopping write', async () => {
+    const body = await confirmationBody();
+    const response = await POST(
+      postRequest({ ...body, expectedFingerprint: 'b'.repeat(body.expectedFingerprint.length) })
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: 'La propuesta está desactualizada. Prepará una nueva propuesta.',
+    });
+    expect(addMealPlanShoppingItemsMock).not.toHaveBeenCalled();
+  });
+
   it('treats a consumed-meal ingredient as stale during confirmation recomputation', async () => {
     findMealPlanByIdForUserAndTenantMock.mockResolvedValue(
       persistedPlan({ consumption_payload: consumedBreakfastPayload() })
     );
-    const response = await POST(postRequest({ mealPlanId: planId, selectedItems: ['arroz'] }));
+    const response = await POST(postRequest(await confirmationBody()));
     expect(response.status).toBe(200);
     expect(addMealPlanShoppingItemsMock).not.toHaveBeenCalled();
     expect(await response.json()).toEqual({ added: [], alreadyPresent: [], ignored: ['arroz'] });
