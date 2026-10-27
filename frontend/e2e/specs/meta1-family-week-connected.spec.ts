@@ -194,8 +194,8 @@ test.describe('META 1 full family week', () => {
     try {
       const inventory = await database.query<{ id: string }>(
         `insert into public.recipe_inventory_items
-           (tenant_id, user_id, ingredient_name, quantity, unit, category, normalized_name)
-         values ($1,$2,$3,'1.4','kg','e2e',$4)
+           (tenant_id, user_id, ingredient_name, quantity, unit, category, normalized_name, expiration_date)
+         values ($1,$2,$3,'1.4','kg','e2e',$4,'2999-12-31')
          returning id`,
         [identity.tenantId, identity.userId, ingredientName, normalizedName]
       );
