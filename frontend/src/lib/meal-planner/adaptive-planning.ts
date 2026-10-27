@@ -105,10 +105,14 @@ function validDate(value: string | null): string | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
 }
 
-function daysUntil(expiration: string, now: Date): number | null {
+function daysUntil(expiration: string, now: Date, timeZone?: string): number | null {
   const today = new Date(now);
   if (Number.isNaN(today.getTime())) return null;
-  const current = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  const localToday = timeZone ? getLocalDateInTimeZone(today, timeZone) : null;
+  const current = localToday
+    ? Date.parse(`${localToday}T00:00:00.000Z`)
+    : Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  if (Number.isNaN(current)) return null;
   const expiry = Date.parse(`${expiration}T00:00:00.000Z`);
   if (Number.isNaN(expiry)) return null;
   return Math.round((expiry - current) / 86_400_000);
@@ -137,7 +141,8 @@ function inventoryQuantity(item: RecipeInventoryItemRow) {
 function comparableInventoryForIngredient(
   ingredient: StructuredMeal['ingredients'][number],
   inventoryItems: RecipeInventoryItemRow[],
-  now: Date
+  now: Date,
+  timeZone?: string
 ): { expiration: string | null; known: boolean } {
   const requiredUnit = normalizeUnit(ingredient.unit);
   if (ingredient.quantity === null || requiredUnit === 'unknown') {
@@ -170,7 +175,7 @@ function comparableInventoryForIngredient(
       hasUnknown = true;
       continue;
     }
-    const remaining = daysUntil(expiration, now);
+    const remaining = daysUntil(expiration, now, timeZone);
     if (remaining === null) {
       hasUnknown = true;
       continue;
@@ -184,19 +189,20 @@ function comparableInventoryForIngredient(
 function mealFreshnessScore(
   meal: StructuredMeal,
   inventoryItems: RecipeInventoryItemRow[],
-  now: Date
+  now: Date,
+  timeZone?: string
 ): { score: number; known: boolean; urgent: boolean; deadline: string | null } {
   let score = 0;
   let known = true;
   let urgent = false;
   let deadline: string | null = null;
   for (const ingredient of meal.ingredients) {
-    const match = comparableInventoryForIngredient(ingredient, inventoryItems, now);
+    const match = comparableInventoryForIngredient(ingredient, inventoryItems, now, timeZone);
     if (!match.known) known = false;
     if (!match.known) continue;
     if (!match.expiration) continue;
     if (!deadline || match.expiration < deadline) deadline = match.expiration;
-    const remaining = daysUntil(match.expiration, now);
+    const remaining = daysUntil(match.expiration, now, timeZone);
     if (remaining === null) {
       known = false;
       continue;
@@ -253,6 +259,7 @@ export function buildAdaptiveMealPlanProposal({
     );
   });
   const changes: AdaptivePlanChange[] = [];
+  const scheduleTimeZone = plan.schedule?.timeZone;
   let knownFreshness = false;
   let unknownFreshness = false;
   let urgentMeals = 0;
@@ -277,7 +284,7 @@ export function buildAdaptiveMealPlanProposal({
       if (lockedSlotKeys.includes(key)) continue;
       if (isPastScheduledDay(plan, day.dayIndex, now)) continue;
       const currentMeal = day.meals[mealIndex];
-      const freshness = mealFreshnessScore(currentMeal, inventoryItems, now);
+      const freshness = mealFreshnessScore(currentMeal, inventoryItems, now, scheduleTimeZone);
       if (freshness.known && freshness.score > 0) knownFreshness = true;
       else unknownFreshness = true;
       if (freshness.urgent) urgentMeals += 1;

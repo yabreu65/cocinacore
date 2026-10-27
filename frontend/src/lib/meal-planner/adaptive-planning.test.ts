@@ -338,7 +338,7 @@ describe('buildAdaptiveMealPlanProposal', () => {
       ],
       profile,
       consumptionPayload: {},
-      now: new Date('2026-10-27T12:00:00.000Z'),
+      now: new Date('2026-10-28T01:00:00.000Z'),
     });
 
     expect(proposal.plan.days[0].meals.find((entry) => entry.mealType === 'dinner')?.title).toBe(
