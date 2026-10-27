@@ -199,9 +199,9 @@ function mealFreshnessScore(
   for (const ingredient of meal.ingredients) {
     const match = comparableInventoryForIngredient(ingredient, inventoryItems, now, timeZone);
     if (!match.known) known = false;
-    if (!match.known) continue;
     if (!match.expiration) continue;
     if (!deadline || match.expiration < deadline) deadline = match.expiration;
+    if (!match.known) continue;
     const remaining = daysUntil(match.expiration, now, timeZone);
     if (remaining === null) {
       known = false;
@@ -226,14 +226,15 @@ function sortMovableMeals(
     score: number;
     urgent: boolean;
     deadline: string | null;
+    sortDeadline: string | null;
     index: number;
   }>
 ) {
   return [...entries].sort((left, right) => {
-    if (left.deadline !== right.deadline) {
-      if (left.deadline === null) return 1;
-      if (right.deadline === null) return -1;
-      return left.deadline.localeCompare(right.deadline);
+    if (left.sortDeadline !== right.sortDeadline) {
+      if (left.sortDeadline === null) return 1;
+      if (right.sortDeadline === null) return -1;
+      return left.sortDeadline.localeCompare(right.sortDeadline);
     }
     if (right.score !== left.score) return right.score - left.score;
     return left.index - right.index;
@@ -270,6 +271,7 @@ export function buildAdaptiveMealPlanProposal({
       score: number;
       urgent: boolean;
       deadline: string | null;
+      sortDeadline: string | null;
       index: number;
     }> = [];
     const targetSlots: Array<{
@@ -293,6 +295,7 @@ export function buildAdaptiveMealPlanProposal({
         score: freshness.score,
         urgent: freshness.urgent,
         deadline: freshness.deadline,
+        sortDeadline: freshness.known ? freshness.deadline : null,
         index: day.dayIndex,
       });
       targetSlots.push({

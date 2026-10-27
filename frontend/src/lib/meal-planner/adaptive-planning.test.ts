@@ -348,4 +348,32 @@ describe('buildAdaptiveMealPlanProposal', () => {
       'Cebolla urgente por volumen'
     );
   });
+
+  it('preserves known deadlines when another lot has unknown quantity', () => {
+    const source: StructuredMealPlan = {
+      ...plan(),
+      schedule: {
+        startDate: '2026-10-27',
+        timeZone: 'America/Caracas',
+        confirmedAt: '2026-10-26T12:00:00.000Z',
+      },
+    };
+    const proposal = buildAdaptiveMealPlanProposal({
+      plan: source,
+      inventoryItems: [
+        inventory({ expiration_date: '2026-10-27' }),
+        inventory({ id: 'item-2', quantity: null, unit: null, expiration_date: '2026-10-27' }),
+      ],
+      profile,
+      consumptionPayload: {},
+      now: new Date('2026-10-27T12:00:00.000Z'),
+    });
+
+    expect(proposal.plan.days[0].meals.find((entry) => entry.mealType === 'dinner')?.title).toBe(
+      'Arroz posterior'
+    );
+    expect(proposal.evidence.find((entry) => entry.label === 'Vencimientos')?.status).toBe(
+      'unknown'
+    );
+  });
 });
