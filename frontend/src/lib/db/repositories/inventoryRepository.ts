@@ -26,6 +26,24 @@ export interface TodayInventoryContextRow {
 }
 
 const MAX_TODAY_INVENTORY_LIMIT = 50;
+export const MAX_WASTE_PREVENTION_INVENTORY_LIMIT = 100;
+
+export async function listWastePreventionInventoryByTenant(
+  tenantId: string,
+  limit = MAX_WASTE_PREVENTION_INVENTORY_LIMIT
+): Promise<RecipeInventoryItemRow[]> {
+  const boundedLimit = Number.isFinite(limit)
+    ? Math.min(MAX_WASTE_PREVENTION_INVENTORY_LIMIT, Math.max(1, Math.floor(limit)))
+    : MAX_WASTE_PREVENTION_INVENTORY_LIMIT;
+  const result = await query<RecipeInventoryItemRow>(
+    `select * from public.recipe_inventory_items
+     where tenant_id = $1
+     order by expiration_date asc nulls last, created_at asc, id asc
+     limit $2`,
+    [tenantId, Math.min(MAX_WASTE_PREVENTION_INVENTORY_LIMIT + 1, boundedLimit + 1)]
+  );
+  return result.rows;
+}
 
 export async function listTodayInventoryContextByTenant(
   tenantId: string,

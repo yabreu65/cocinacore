@@ -167,6 +167,7 @@ export interface PersistentRecipeListOptions {
   archived?: 'active' | 'archived' | 'all';
   limit?: number;
   offset?: number;
+  includeSentinel?: boolean;
 }
 
 export interface DuplicateRecipeCandidate {
@@ -279,7 +280,10 @@ export async function listPersistentRecipes(
       values.push(`%${options.search.trim()}%`);
       conditions.push(`current_version.title ilike $${values.length}`);
     }
-    values.push(Math.min(100, Math.max(1, Math.floor(options.limit ?? 50))));
+    const requestedLimit = Math.max(1, Math.floor(options.limit ?? 50));
+    const maxLimit = options.includeSentinel ? 101 : 100;
+    const limit = Math.min(maxLimit, requestedLimit + (options.includeSentinel ? 1 : 0));
+    values.push(limit);
     const limitParam = values.length;
     values.push(Math.max(0, Math.floor(options.offset ?? 0)));
     const offsetParam = values.length;

@@ -129,6 +129,27 @@ export async function findCulinaryProfileTermsByUserId(
   return result.rows;
 }
 
+export const MAX_WASTE_PREVENTION_PROFILE_TERMS = 100;
+
+export async function listWastePreventionCulinaryProfileTermsByUserId(
+  userId: string,
+  limit = MAX_WASTE_PREVENTION_PROFILE_TERMS
+): Promise<UserCulinaryProfileTermWithLabel[]> {
+  const boundedLimit = Number.isFinite(limit)
+    ? Math.min(MAX_WASTE_PREVENTION_PROFILE_TERMS, Math.max(1, Math.floor(limit)))
+    : MAX_WASTE_PREVENTION_PROFILE_TERMS;
+  const result = await query<UserCulinaryProfileTermWithLabel>(
+    `select profile_terms.*, terms.label as term_label
+     from public.user_culinary_profile_terms as profile_terms
+     join public.culinary_terms as terms on terms.id = profile_terms.term_id
+     where profile_terms.user_id = $1
+     order by profile_terms.created_at desc, profile_terms.term_id
+     limit $2`,
+    [userId, Math.min(MAX_WASTE_PREVENTION_PROFILE_TERMS + 1, boundedLimit + 1)]
+  );
+  return result.rows;
+}
+
 export interface UpsertProfileInput {
   userId: string;
   tenantId: string;
