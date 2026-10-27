@@ -79,7 +79,7 @@ function inventoryItem(overrides: Partial<RecipeInventoryItemRow> = {}): RecipeI
     quantity: '750 g',
     unit: null,
     category: null,
-    expiration_date: null,
+    expiration_date: '2026-11-07',
     estimated_unit_price: null,
     purchase_location: null,
     low_stock_threshold: null,
@@ -200,6 +200,40 @@ describe('GET /api/meal-plan/coverage', () => {
         horizonDays: 7,
         timeZone: 'UTC',
         items: [{ normalizedName: 'arroz', status: 'partial', requiredTotalQuantity: 3000 }],
+      },
+    });
+  });
+
+  it('forwards expiration dates and excludes stock that expires before the horizon ends', async () => {
+    mockListInventoryItemsByTenant.mockResolvedValue([
+      inventoryItem({ expiration_date: '2026-10-30', quantity: '100 kg' }),
+      inventoryItem({ id: 'valid-lot', expiration_date: '2026-10-31', quantity: '750 g' }),
+    ]);
+
+    const response = await GET(request('7'));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      forecast: {
+        status: 'ready',
+        items: [{ availableQuantity: 750, status: 'partial', missingQuantity: 2250 }],
+      },
+    });
+  });
+
+  it('keeps coverage unknown when inventory freshness is absent or invalid', async () => {
+    mockListInventoryItemsByTenant.mockResolvedValue([
+      inventoryItem({ expiration_date: null, quantity: '100 kg' }),
+      inventoryItem({ id: 'invalid-date', expiration_date: 'not-a-date', quantity: '100 kg' }),
+    ]);
+
+    const response = await GET(request('7'));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      forecast: {
+        status: 'ready',
+        items: [{ status: 'unknown', availableQuantity: null, missingQuantity: null }],
       },
     });
   });

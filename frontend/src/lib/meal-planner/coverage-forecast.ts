@@ -4,6 +4,7 @@ import {
 } from '@/lib/inventory/meal-plan-projection';
 import {
   type InventoryComparableItem,
+  groupRequirementsByIngredient,
   type RecipeRequirement,
 } from '@/lib/inventory/recipe-requirements';
 import {
@@ -54,11 +55,15 @@ export type MealPlanCoverageForecast = {
 
 export interface BuildMealPlanCoverageForecastInput {
   plan: StructuredMealPlan;
-  inventoryItems: InventoryComparableItem[];
+  inventoryItems: MealPlanCoverageInventoryItem[];
   consumptionPayload: unknown;
   horizonDays: number;
   now: Date;
 }
+
+export type MealPlanCoverageInventoryItem = InventoryComparableItem & {
+  expiration_date: string | null;
+};
 
 function emptySummary() {
   return { sufficient: 0, partial: 0, missing: 0, unknown: 0 };
@@ -183,6 +188,64 @@ function buildRequirements(
   return { requirements, scheduledMealCount, consumedMealCount };
 }
 
+function groupCoverageRequirements(requirements: RecipeRequirement[]): RecipeRequirement[] {
+  const groups = new Map<string, RecipeRequirement[]>();
+  for (const requirement of requirements) {
+    const group = groups.get(requirement.normalizedName) ?? [];
+    group.push(requirement);
+    groups.set(requirement.normalizedName, group);
+  }
+
+  const grouped: RecipeRequirement[] = [];
+  for (const group of groups.values()) {
+    const first = group[0];
+    if (!first) continue;
+
+    const usedInRecipes = Array.from(
+      new Set(group.flatMap((requirement) => requirement.usedInRecipes))
+    );
+    const hasUnknownNeed = group.some(
+      (requirement) =>
+        requirement.requiredQuantity === null || requirement.requiredUnit === 'unknown'
+    );
+
+    if (hasUnknownNeed) {
+      grouped.push({
+        ...first,
+        requiredQuantity: null,
+        requiredUnit: 'unknown',
+        usedInRecipes,
+      });
+      continue;
+    }
+
+    const knownGroup = groupRequirementsByIngredient(group)[0];
+    if (knownGroup) grouped.push({ ...knownGroup, usedInRecipes });
+  }
+
+  return grouped.sort((a, b) => a.normalizedName.localeCompare(b.normalizedName));
+}
+
+function selectInventoryForForecast(
+  inventoryItems: MealPlanCoverageInventoryItem[],
+  throughDate: string
+): { eligibleItems: InventoryComparableItem[]; uncertainNames: Set<string> } {
+  const eligibleItems: InventoryComparableItem[] = [];
+  const uncertainNames = new Set<string>();
+
+  for (const item of inventoryItems) {
+    const normalizedName = normalizeInventoryName(item.ingredient_name);
+    const expirationDate = item.expiration_date;
+    if (typeof expirationDate !== 'string' || !isValidIsoDate(expirationDate)) {
+      uncertainNames.add(normalizedName);
+      continue;
+    }
+    if (expirationDate >= throughDate) eligibleItems.push(item);
+  }
+
+  return { eligibleItems, uncertainNames };
+}
+
 function markUnquantifiedInventoryUnknown(
   items: MealPlanProjectionItem[],
   inventoryItems: InventoryComparableItem[]
@@ -207,6 +270,15 @@ function markUnquantifiedInventoryUnknown(
     });
     return allRowsComparable ? item : asUnknown(item);
   });
+}
+
+function markUncertainInventoryUnknown(
+  items: MealPlanProjectionItem[],
+  uncertainNames: Set<string>
+): MealPlanProjectionItem[] {
+  return items.map((item) =>
+    uncertainNames.has(item.normalizedName) && item.status !== 'sufficient' ? asUnknown(item) : item
+  );
 }
 
 function asUnknown(item: MealPlanProjectionItem): MealPlanProjectionItem {
@@ -278,12 +350,14 @@ export function buildMealPlanCoverageForecast(
     );
   }
 
-  const { requirements, scheduledMealCount, consumedMealCount } = buildRequirements(
+  const rawRequirements = buildRequirements(
     plan,
     forecastFromDate,
     throughDateExclusive,
     parsedConsumption.records
   );
+  const requirements = groupCoverageRequirements(rawRequirements.requirements);
+  const { scheduledMealCount, consumedMealCount } = rawRequirements;
   if (scheduledMealCount === 0) {
     return createUnknownMealPlanCoverageForecast(
       horizonDays,
@@ -294,8 +368,12 @@ export function buildMealPlanCoverageForecast(
     );
   }
 
-  const projection = buildMealPlanInventoryProjection(requirements, inventoryItems);
-  const items = markUnquantifiedInventoryUnknown(projection.items, inventoryItems);
+  const { eligibleItems, uncertainNames } = selectInventoryForForecast(inventoryItems, throughDate);
+  const projection = buildMealPlanInventoryProjection(requirements, eligibleItems);
+  const items = markUncertainInventoryUnknown(
+    markUnquantifiedInventoryUnknown(projection.items, eligibleItems),
+    uncertainNames
+  );
   return {
     status: 'ready',
     horizonDays,

@@ -65,12 +65,22 @@ function completeWeek(existingDays: StructuredMealPlanDay[]): StructuredMealPlan
 }
 
 const now = new Date('2026-10-25T12:00:00.000Z');
+const validThroughSevenDayHorizon = '2026-10-31';
+
+function inventory(
+  ingredient_name: string,
+  quantity: string | null,
+  unit: string | null,
+  expiration_date: string | null = validThroughSevenDayHorizon
+) {
+  return { ingredient_name, quantity, unit, expiration_date };
+}
 
 describe('buildMealPlanCoverageForecast', () => {
   it('keeps legacy plans unknown until an explicit schedule is confirmed', () => {
     const result = buildMealPlanCoverageForecast({
       plan: plan([day(1, [rice()])], { schedule: undefined }),
-      inventoryItems: [{ ingredient_name: 'Arroz', quantity: '1 kg', unit: null }],
+      inventoryItems: [inventory('Arroz', '1 kg', null)],
       consumptionPayload: {},
       horizonDays: 7,
       now,
@@ -89,7 +99,7 @@ describe('buildMealPlanCoverageForecast', () => {
         Array.from({ length: 7 }, (_, index) => day(index + 1, [rice(100)])),
         { schedule: scheduleWithoutPortionConfirmation }
       ),
-      inventoryItems: [{ ingredient_name: 'Arroz', quantity: '100 kg', unit: null }],
+      inventoryItems: [inventory('Arroz', '100 kg', null)],
       consumptionPayload: {},
       horizonDays: 7,
       now,
@@ -109,7 +119,7 @@ describe('buildMealPlanCoverageForecast', () => {
         day(index + 1, [rice(index === 0 || index === 7 ? 500 : 0)])
       )
     );
-    const inventoryItems = [{ ingredient_name: 'Arroz', quantity: '750 g', unit: null }];
+    const inventoryItems = [inventory('Arroz', '750 g', null, '2026-11-07')];
 
     const sevenDays = buildMealPlanCoverageForecast({
       plan: scheduledPlan,
@@ -134,10 +144,70 @@ describe('buildMealPlanCoverageForecast', () => {
     });
   });
 
+  it('does not use a lot that expires before the inclusive horizon end', () => {
+    const result = buildMealPlanCoverageForecast({
+      plan: completeWeek([day(1, [rice()])]),
+      inventoryItems: [inventory('Arroz', '100 kg', null, '2026-10-30')],
+      consumptionPayload: {},
+      horizonDays: 7,
+      now,
+    });
+
+    expect(result.items[0]).toMatchObject({ status: 'unknown', availableQuantity: null });
+  });
+
+  it('accepts a lot whose expiration date reaches the inclusive horizon end', () => {
+    const result = buildMealPlanCoverageForecast({
+      plan: completeWeek([day(1, [rice()])]),
+      inventoryItems: [inventory('Arroz', '500 g', null, '2026-10-31')],
+      consumptionPayload: {},
+      horizonDays: 7,
+      now,
+    });
+
+    expect(result.items[0]).toMatchObject({ status: 'sufficient', availableQuantity: 500 });
+  });
+
+  it('keeps coverage unknown when a matching lot has no valid expiration date', () => {
+    const result = buildMealPlanCoverageForecast({
+      plan: completeWeek([day(1, [rice()])]),
+      inventoryItems: [
+        inventory('Arroz', '100 kg', null, null),
+        inventory('Arroz', '100 kg', null, '2026-02-30'),
+      ],
+      consumptionPayload: {},
+      horizonDays: 7,
+      now,
+    });
+
+    expect(result.items[0]).toMatchObject({
+      status: 'unknown',
+      availableQuantity: null,
+      missingQuantity: null,
+    });
+  });
+
+  it('keeps same-ingredient coverage unknown when any scheduled need is unquantified', () => {
+    const result = buildMealPlanCoverageForecast({
+      plan: completeWeek([day(1, [rice(500)]), day(2, [rice(null, null)])]),
+      inventoryItems: [inventory('Arroz', '500 g', null)],
+      consumptionPayload: {},
+      horizonDays: 7,
+      now,
+    });
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toMatchObject({
+      status: 'unknown',
+      requiredTotalQuantity: null,
+      missingQuantity: null,
+    });
+  });
+
   it('returns unknown when the explicit plan does not cover the entire selected horizon', () => {
     const result = buildMealPlanCoverageForecast({
       plan: plan(Array.from({ length: 7 }, (_, index) => day(index + 1, [rice()]))),
-      inventoryItems: [{ ingredient_name: 'Arroz', quantity: '10 kg', unit: null }],
+      inventoryItems: [inventory('Arroz', '10 kg', null, '2026-11-07')],
       consumptionPayload: {},
       horizonDays: 14,
       now,
@@ -156,7 +226,7 @@ describe('buildMealPlanCoverageForecast', () => {
         Array.from({ length: 7 }, (_, index) => day(index + 1, [rice()])),
         { schedule: { ...schedule, startDate: '2026-10-27' } }
       ),
-      inventoryItems: [{ ingredient_name: 'Arroz', quantity: '10 kg', unit: null }],
+      inventoryItems: [inventory('Arroz', '10 kg', null, '2026-11-02')],
       consumptionPayload: {},
       horizonDays: 7,
       now,
@@ -181,7 +251,7 @@ describe('buildMealPlanCoverageForecast', () => {
           },
         }
       ),
-      inventoryItems: [{ ingredient_name: 'Arroz', quantity: '10 kg', unit: null }],
+      inventoryItems: [inventory('Arroz', '10 kg', null, '2026-11-07')],
       consumptionPayload: {},
       horizonDays: 7,
       now,
@@ -205,7 +275,7 @@ describe('buildMealPlanCoverageForecast', () => {
 
     const result = buildMealPlanCoverageForecast({
       plan: scheduledPlan,
-      inventoryItems: [{ ingredient_name: 'Arroz', quantity: '500 g', unit: null }],
+      inventoryItems: [inventory('Arroz', '500 g', null)],
       consumptionPayload,
       horizonDays: 7,
       now,
@@ -265,7 +335,7 @@ describe('buildMealPlanCoverageForecast', () => {
   it('converts comparable inventory units without changing the scheduled requirement', () => {
     const result = buildMealPlanCoverageForecast({
       plan: completeWeek([day(1, [rice(750, 'g')])]),
-      inventoryItems: [{ ingredient_name: 'Arroz', quantity: '1', unit: 'kg' }],
+      inventoryItems: [inventory('Arroz', '1', 'kg')],
       consumptionPayload: {},
       horizonDays: 7,
       now,
@@ -284,7 +354,7 @@ describe('buildMealPlanCoverageForecast', () => {
   it('keeps incompatible inventory units unknown', () => {
     const result = buildMealPlanCoverageForecast({
       plan: completeWeek([day(1, [{ name: 'Leche', quantity: 1, unit: 'l' }])]),
-      inventoryItems: [{ ingredient_name: 'Leche', quantity: '500 g', unit: null }],
+      inventoryItems: [inventory('Leche', '500 g', null)],
       consumptionPayload: {},
       horizonDays: 7,
       now,
@@ -311,7 +381,7 @@ describe('buildMealPlanCoverageForecast', () => {
         ...completeWeek([day(1, [rice()])]),
         schedule: { ...schedule, startDate: '2026-10-27' },
       },
-      inventoryItems: [{ ingredient_name: 'Arroz', quantity: '10 kg', unit: null }],
+      inventoryItems: [inventory('Arroz', '10 kg', null, '2026-11-02')],
       consumptionPayload: {
         '1:lunch': {
           consumedAt: '2026-02-30T12:00:00.000Z',
@@ -338,7 +408,7 @@ describe('buildMealPlanCoverageForecast', () => {
   it('returns unknown when consumption evidence is malformed', () => {
     const result = buildMealPlanCoverageForecast({
       plan: completeWeek([day(1, [rice()])]),
-      inventoryItems: [{ ingredient_name: 'Arroz', quantity: '1 kg', unit: null }],
+      inventoryItems: [inventory('Arroz', '1 kg', null)],
       consumptionPayload: { '1:lunch': { consumedAt: 'not-a-date' } },
       horizonDays: 7,
       now,

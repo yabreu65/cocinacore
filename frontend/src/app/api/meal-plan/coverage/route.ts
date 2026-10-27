@@ -104,6 +104,7 @@ export async function GET(request: NextRequest) {
         ingredient_name: item.ingredient_name,
         quantity: item.quantity,
         unit: item.unit,
+        expiration_date: item.expiration_date,
       })),
     consumptionPayload: persistedPlan.consumption_payload,
     horizonDays,
