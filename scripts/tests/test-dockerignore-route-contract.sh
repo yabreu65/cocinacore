@@ -11,17 +11,17 @@ fail() {
 
 [ -f "$DOCKERIGNORE" ] || fail '.dockerignore is missing'
 
-for forbidden in coverage '**/coverage'; do
-  if grep -Fqx "$forbidden" "$DOCKERIGNORE"; then
-    fail "broad coverage exclusion '$forbidden' can remove application routes"
-  fi
-done
+if grep -Eq '^(\*\*/)?coverage/?$' "$DOCKERIGNORE"; then
+  fail 'broad coverage exclusion can remove application routes'
+fi
 
 for required in \
   '/coverage' \
   '/frontend/coverage' \
   '/frontend/playwright-report' \
-  '/frontend/test-results'; do
+  '/frontend/test-results' \
+  '/playwright-report' \
+  '/test-results'; do
   grep -Fqx "$required" "$DOCKERIGNORE" || fail "missing report exclusion '$required'"
 done
 
