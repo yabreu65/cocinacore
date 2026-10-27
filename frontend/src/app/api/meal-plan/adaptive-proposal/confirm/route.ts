@@ -20,6 +20,7 @@ import {
   parseStructuredMealPlanValue,
   renderStructuredMealPlan,
 } from '@/lib/meal-planner/structured-plan';
+import { ShoppingListIdSchema } from '@/lib/validation';
 
 function unauthorized() {
   return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -55,6 +56,7 @@ export async function POST(request: NextRequest) {
   if (
     !body ||
     typeof body.mealPlanId !== 'string' ||
+    !ShoppingListIdSchema.safeParse(body.mealPlanId).success ||
     typeof body.expectedUpdatedAt !== 'string' ||
     typeof body.sourceFingerprint !== 'string' ||
     !body.proposedPlan

@@ -45,9 +45,11 @@ const user = {
   onboardingCompleted: true,
 };
 
+const planId = '00000000-0000-4000-8000-000000000001';
+
 function planRow(): UserMealPlanRow {
   return {
-    id: 'plan-1',
+    id: planId,
     tenant_id: 'tenant-1',
     user_id: 'user-1',
     people_count: 2,
@@ -99,7 +101,7 @@ describe('POST /api/meal-plan/adaptive-proposal', () => {
 
   it('requires an authenticated tenant and never reads or writes without one', async () => {
     mockRequireUser.mockResolvedValue({ ...user, tenant: null });
-    const response = await POST(request({ mealPlanId: 'plan-1' }) as unknown as NextRequest);
+    const response = await POST(request({ mealPlanId: planId }) as unknown as NextRequest);
 
     expect(response.status).toBe(401);
     expect(mockFindMealPlan).not.toHaveBeenCalled();
@@ -107,13 +109,13 @@ describe('POST /api/meal-plan/adaptive-proposal', () => {
   });
 
   it('scopes the proposal to the authenticated plan and performs no persistence', async () => {
-    const response = await POST(request({ mealPlanId: 'plan-1' }) as unknown as NextRequest);
+    const response = await POST(request({ mealPlanId: planId }) as unknown as NextRequest);
 
     expect(response.status).toBe(200);
-    expect(mockFindMealPlan).toHaveBeenCalledWith('plan-1', 'user-1', 'tenant-1');
+    expect(mockFindMealPlan).toHaveBeenCalledWith(planId, 'user-1', 'tenant-1');
     expect(mockListInventory).toHaveBeenCalledWith('tenant-1');
     expect(await response.json()).toMatchObject({
-      mealPlanId: 'plan-1',
+      mealPlanId: planId,
       expectedUpdatedAt: '2026-10-27T00:00:00.000Z',
       sourceFingerprint: 'source-fingerprint',
     });
@@ -121,6 +123,13 @@ describe('POST /api/meal-plan/adaptive-proposal', () => {
 
   it('rejects a malformed request before looking up plan data', async () => {
     const response = await POST(request({}) as unknown as NextRequest);
+
+    expect(response.status).toBe(400);
+    expect(mockFindMealPlan).not.toHaveBeenCalled();
+  });
+
+  it('rejects a malformed plan id before reaching the database', async () => {
+    const response = await POST(request({ mealPlanId: 'not-a-uuid' }) as unknown as NextRequest);
 
     expect(response.status).toBe(400);
     expect(mockFindMealPlan).not.toHaveBeenCalled();
