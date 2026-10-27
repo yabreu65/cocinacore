@@ -136,7 +136,7 @@ test.describe('Connected Meal Planner shopping confirmation', () => {
       await expect(suggestionsSection.getByText('Para comprar: 0.75 kg')).toBeVisible();
       await expect(suggestionsSection.getByText(/Desayuno de prueba/).first()).toBeVisible();
       await expect(suggestionsSection.getByText('Comprar', { exact: true }).first()).toBeVisible();
-      await expect(suggestionsSection.getByText('Revisar', { exact: true })).toBeVisible();
+      await expect(suggestionsSection.getByText(/^Revisar:/)).toBeVisible();
 
       const addButton = suggestionsSection.getByRole('button', {
         name: 'Agregar seleccionados a compras',
