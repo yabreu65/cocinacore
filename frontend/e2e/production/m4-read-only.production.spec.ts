@@ -186,12 +186,16 @@ test.describe('M4 production read-only acceptance', () => {
       '/api/meal-plan/coverage?horizonDays=14',
       '/api/waste-prevention',
       '/api/meal-plan',
-      '/api/meal-plan/adaptive-proposal',
       '/api/meal-plan/shopping-suggestions?mealPlanId=00000000-0000-0000-0000-000000000000&horizon=7',
     ];
     for (const path of paths) {
       const response = await request.get(path);
       expect([401, 403]).toContain(response.status());
     }
+
+    const adaptiveResponse = await request.post('/api/meal-plan/adaptive-proposal', {
+      data: { mealPlanId: '00000000-0000-0000-0000-000000000000' },
+    });
+    expect([401, 403]).toContain(adaptiveResponse.status());
   });
 });
