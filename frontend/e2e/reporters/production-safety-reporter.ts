@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { FullResult, Reporter, TestCase, TestResult } from '@playwright/test/reporter';
+import type { Reporter, TestCase, TestResult } from '@playwright/test/reporter';
 
 export const PRODUCTION_MODULES = [
   'today',
@@ -66,9 +66,7 @@ function resultForTest(result: {
   if (result.status === 'skipped' || result.status === 'did_not_run') return INITIAL_RESULT;
   if (result.status !== 'passed') return { status: 'FAIL', reason: 'TEST_FAILED' };
 
-  const partial = (result.annotations ?? []).find(
-    (annotation) => annotation.type === 'partial'
-  );
+  const partial = (result.annotations ?? []).find((annotation) => annotation.type === 'partial');
   return partial
     ? { status: 'PARTIAL', reason: reasonForAnnotation(partial.description ?? '') }
     : { status: 'PASS', reason: 'ASSERTIONS_PASSED' };
@@ -100,7 +98,7 @@ export default class ProductionSafetyReporter implements Reporter {
     this.tests.push({ title: test.title, status: result.status, annotations: result.annotations });
   }
 
-  async onEnd(_result: FullResult): Promise<void> {
+  async onEnd(): Promise<void> {
     const summary = summarizeProductionTests(this.tests);
     const outputPath =
       process.env.PRODUCTION_ACCEPTANCE_SUMMARY_PATH ??
