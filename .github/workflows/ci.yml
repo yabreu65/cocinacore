@@ -66,6 +66,9 @@ jobs:
       - name: Validate Docker application route context
         run: sh ../scripts/tests/test-dockerignore-route-contract.sh
 
+      - name: Validate GitHub Actions expressions with pinned actionlint
+        run: bash ../scripts/ci/run-actionlint.sh
+
       - name: Build and inspect Docker application routes
         run: sh ../scripts/tests/test-docker-image-route-contract.sh
 
