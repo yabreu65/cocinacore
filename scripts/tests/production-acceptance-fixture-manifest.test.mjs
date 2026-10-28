@@ -127,6 +127,80 @@ test("renews an expired QA lot on the same identity", () => {
   assert.equal(selection.existing.id, "lot-1");
 });
 
+test("renews both expired QA lots for their distinct expiry purposes", () => {
+  const now = new Date("2026-10-28T16:00:00.000Z");
+  const marker = "m4-acceptance-fixture-issue-84";
+  const items = [
+    {
+      id: "lot-near",
+      user_id: "user-1",
+      tenant_id: "tenant-1",
+      ingredient_name: "Tomate",
+      quantity: "1",
+      unit: "kg",
+      expiration_date: "2026-10-01 00:00:00+00",
+      notes: marker,
+    },
+    {
+      id: "lot-later",
+      user_id: "user-1",
+      tenant_id: "tenant-1",
+      ingredient_name: "Cebolla",
+      quantity: "2",
+      unit: "unidad",
+      expiration_date: "2026-10-01 00:00:00+00",
+      notes: marker,
+    },
+  ];
+  const common = {
+    items,
+    marker,
+    userId: "user-1",
+    tenantId: "tenant-1",
+    now,
+  };
+  const first = selectFixtureLot({ ...common, ingredientName: "Tomate" });
+  const second = selectFixtureLot({ ...common, ingredientName: "Cebolla" });
+  assert.equal(first.kind, "renew");
+  assert.equal(second.kind, "renew");
+  assert.deepEqual(
+    [first.existing.id, second.existing.id],
+    ["lot-near", "lot-later"],
+  );
+
+  const firstDate = classifyFixtureExpiration("2026-10-30", { now });
+  const secondDate = classifyFixtureExpiration("2026-11-18", { now });
+  assert.equal(firstDate.status, "due_soon");
+  assert.equal(secondDate.status, "valid");
+
+  const manifest = createManifest({ userId: "user-1", tenantId: "tenant-1" });
+  recordOperation(manifest, "inventory:Tomate", "completed", {
+    recordId: first.existing.id,
+    operation: "renew",
+    renewalResult: "due_soon_or_today",
+  });
+  recordOperation(manifest, "inventory:Cebolla", "started", {
+    recordId: second.existing.id,
+    operation: "renew",
+  });
+  recordOperation(manifest, "inventory:Cebolla", "failed", {
+    code: "FIXTURE_WRITE_NO_GO",
+  });
+  assert.deepEqual(manifest.created.inventory, []);
+  assert.equal(
+    manifest.operations.find(
+      (operation) => operation.name === "inventory:Tomate",
+    ).recordId,
+    "lot-near",
+  );
+  assert.equal(
+    manifest.operations.find(
+      (operation) => operation.name === "inventory:Cebolla",
+    ).recordId,
+    "lot-later",
+  );
+});
+
 test("rejects foreign, incompatible, and duplicate QA lots closed", () => {
   const base = {
     id: "lot-1",

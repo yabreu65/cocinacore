@@ -464,11 +464,20 @@ async function main() {
         renewed.expiration_date ?? renewed.expirationDate,
         { now: new Date(), timeZone: "America/Caracas" },
       );
+      const expectedExpiration = classifyFixtureExpiration(expirationDate, {
+        now: new Date(),
+        timeZone: "America/Caracas",
+      });
+      const expirationPurposeSatisfied =
+        renewedExpiration.calendarDate === expectedExpiration.calendarDate &&
+        (index === 0
+          ? ["due_today", "due_soon"].includes(renewedExpiration.status)
+          : renewedExpiration.status === "valid");
       if (
         renewed.notes !== QA_MARKER ||
         renewed.tenant_id !== tenantId ||
         renewed.user_id !== userId ||
-        !["due_today", "due_soon"].includes(renewedExpiration.status) ||
+        !expirationPurposeSatisfied ||
         typeof renewed.quantity !== "string" ||
         !renewed.quantity.trim() ||
         typeof renewed.unit !== "string" ||
