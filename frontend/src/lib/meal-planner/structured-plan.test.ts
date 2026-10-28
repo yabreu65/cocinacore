@@ -12,7 +12,7 @@ function candidate(period: MealPlanPeriod, dayCount: number) {
     title: `  ${mealType} del día  `,
     prepMinutes: 20,
     description: '  Preparación simple  ',
-    ingredients: [{ name: '  Arroz integral  ', quantity: 1 as number | null, unit: ' taza '}],
+    ingredients: [{ name: '  Arroz integral  ', quantity: 1 as number | null, unit: ' taza ' }],
   });
 
   return {
@@ -31,7 +31,10 @@ describe('parseStructuredMealPlanResponse', () => {
     ['fortnight', 14],
     ['month', 30],
   ] as const)('accepts a valid %s plan with %i days', (period, dayCount) => {
-    const result = parseStructuredMealPlanResponse(JSON.stringify(candidate(period, dayCount)), period);
+    const result = parseStructuredMealPlanResponse(
+      JSON.stringify(candidate(period, dayCount)),
+      period
+    );
 
     expect(result.success).toBe(true);
     if (!result.success) return;
@@ -129,6 +132,26 @@ describe('parseStructuredMealPlanResponse', () => {
     });
   });
 
+  it('preserves an exact recipe reference attached to a meal slot', () => {
+    const plan = candidate('week', 7);
+    Object.assign(plan.days[0].meals[1], {
+      recipeRef: {
+        recipeId: '00000000-0000-4000-8000-000000000001',
+        versionId: '00000000-0000-4000-8000-000000000002',
+      },
+    });
+
+    const result = parseStructuredMealPlanResponse(JSON.stringify(plan), 'week');
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.plan.days[0].meals[1].recipeRef).toEqual({
+        recipeId: '00000000-0000-4000-8000-000000000001',
+        versionId: '00000000-0000-4000-8000-000000000002',
+      });
+    }
+  });
+
   it('rejects empty or oversized normalized fields', () => {
     const oversizedTitlePlan = candidate('week', 7);
     oversizedTitlePlan.days[0].meals[0].title = 'x'.repeat(161);
@@ -145,10 +168,12 @@ describe('parseStructuredMealPlanResponse', () => {
       success: false,
       reason: 'schema_invalid',
     });
-    expect(parseStructuredMealPlanResponse(JSON.stringify(missingIngredientsPlan), 'week')).toEqual({
-      success: false,
-      reason: 'schema_invalid',
-    });
+    expect(parseStructuredMealPlanResponse(JSON.stringify(missingIngredientsPlan), 'week')).toEqual(
+      {
+        success: false,
+        reason: 'schema_invalid',
+      }
+    );
   });
 
   it('rejects duplicate or missing day indices', () => {
