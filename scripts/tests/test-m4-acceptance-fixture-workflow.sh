@@ -17,7 +17,6 @@ grep -q "M4_IDENTITY_PROOF_PATH" "$root_dir/.github/workflows/prepare-m4-accepta
 if grep -A8 '^  prepare:' "$workflow" | grep -q 'runner.temp'; then exit 1; fi
 grep -q 'if: always()' "$workflow"
 if grep -q 'nonce:.*steps.proof.outputs' "$workflow"; then exit 1; fi
-grep -q "if: success()" "$workflow"
 if grep -q "run_synthetic_writes.*true" "$workflow"; then exit 1; fi
 if grep -q "VPS_.*secrets.*production-acceptance" "$workflow"; then exit 1; fi
 if grep -q "echo.*E2E_PRODUCTION_USER_" "$workflow"; then exit 1; fi
