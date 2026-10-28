@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { safeFetch } from '@/lib/api';
 import type { MealPlanPublicResponse } from '@/lib/meal-planner/rehydration';
 import type { StructuredMealType } from '@/lib/meal-planner/structured-plan';
@@ -39,6 +39,7 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
   const [loading, setLoading] = useState(false);
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState('');
+  const loadStarted = useRef(false);
 
   const slots = useMemo<Slot[]>(
     () =>
@@ -54,7 +55,12 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
   );
 
   useEffect(() => {
-    if (!open || loading || plan) return;
+    if (!open) {
+      loadStarted.current = false;
+      return;
+    }
+    if (loadStarted.current || loading || plan) return;
+    loadStarted.current = true;
     setLoading(true);
     const stored = window.sessionStorage.getItem(storageKey(recipeId, versionId));
     const load = stored
