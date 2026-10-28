@@ -71,6 +71,8 @@ jobs:
 
       - name: Test production acceptance manifest recovery
         run: node ../scripts/tests/production-acceptance-fixture-manifest.test.mjs
+      - name: Test production acceptance safety gates
+        run: node ../scripts/tests/production-acceptance-safety.test.mjs
 
       - name: Validate protected M4 fixture workflow
         run: bash ../scripts/tests/test-m4-acceptance-fixture-workflow.sh

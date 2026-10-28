@@ -8,6 +8,7 @@ import {
   stableInventoryCandidates,
   verifyPreparationIdentity,
 } from "./fixture-manifest.mjs";
+import { validateProductionOrigin } from "./production-origin.mjs";
 
 const QA_MARKER = "m4-acceptance-fixture-issue-84";
 const SAFE_CODES = new Set([
@@ -16,6 +17,7 @@ const SAFE_CODES = new Set([
   "FIXTURE_READ_NO_GO",
   "FIXTURE_WRITE_NO_GO",
   "FIXTURE_IDENTITY_NO_GO",
+  "FIXTURE_PARTIAL",
 ]);
 
 function safe(code) {
@@ -37,11 +39,19 @@ async function persistManifest() {
 }
 
 async function fail(code) {
-  if (activeManifest) {
-    markManifest(activeManifest, "failed");
-    await persistManifest();
+  try {
+    if (activeManifest) {
+      markManifest(
+        activeManifest,
+        code === "FIXTURE_PARTIAL" ? "partial" : "failed",
+      );
+      await persistManifest();
+    }
+  } catch {
+    // Keep the public result safe even if private recovery persistence fails.
   }
   safe(code);
+  process.exitCode = 1;
 }
 
 async function api(baseUrl, cookie, path, init = {}) {
@@ -55,6 +65,58 @@ async function api(baseUrl, cookie, path, init = {}) {
   });
   const body = await response.json().catch(() => null);
   return { response, body };
+}
+
+function fixtureEvidence({ coverage, waste, proposal, shopping }) {
+  const coverageReady = coverage.every(
+    (result) =>
+      result.response.ok &&
+      result.body?.forecast?.status === "ready" &&
+      (result.body?.forecast?.horizonDays === 7 ||
+        result.body?.forecast?.horizonDays === 14) &&
+      result.body.forecast.scheduledMealCount > 0 &&
+      Array.isArray(result.body.forecast.items) &&
+      result.body.forecast.items.every((item) => item.status !== "unknown"),
+  );
+  const wasteReady =
+    waste.response.ok &&
+    waste.body?.report?.status === "ready" &&
+    Array.isArray(waste.body.report.lots) &&
+    waste.body.report.lots.some(
+      (lot) =>
+        typeof lot.expirationDate === "string" &&
+        /^\d{4}-\d{2}-\d{2}$/.test(lot.expirationDate),
+    );
+  const proposalReady =
+    proposal.response.ok &&
+    typeof proposal.body?.mealPlanId === "string" &&
+    typeof proposal.body?.expectedUpdatedAt === "string" &&
+    typeof proposal.body?.sourceFingerprint === "string" &&
+    Array.isArray(proposal.body?.proposal?.changes) &&
+    isRecord(proposal.body?.proposal?.plan) &&
+    Array.isArray(proposal.body?.proposal?.limitations);
+  const shoppingReady = shopping.every(
+    (result) =>
+      result.response.ok &&
+      result.body?.status === "ready" &&
+      (result.body?.horizonDays === 7 || result.body?.horizonDays === 14) &&
+      result.body.scheduledMealCount > 0 &&
+      result.body?.cost?.status !== "unknown" &&
+      Array.isArray(result.body?.items) &&
+      result.body.items.every(
+        (item) =>
+          typeof item.ingredientName === "string" &&
+          typeof item.normalizedName === "string" &&
+          (item.quantityToBuy === null ||
+            (typeof item.quantityToBuy === "number" &&
+              Number.isFinite(item.quantityToBuy))),
+      ),
+  );
+  return { coverageReady, wasteReady, proposalReady, shoppingReady };
+}
+
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isFortnightPlan(body) {
@@ -79,13 +141,78 @@ function ingredientNames(plan) {
   ];
 }
 
+const UNIT_ALIASES = new Map([
+  ["u", "unidad"],
+  ["und", "unidad"],
+  ["unidad", "unidad"],
+  ["unidades", "unidad"],
+  ["g", "g"],
+  ["gr", "g"],
+  ["gramo", "g"],
+  ["gramos", "g"],
+  ["kg", "kg"],
+  ["kilo", "kg"],
+  ["kilos", "kg"],
+  ["kilogramo", "kg"],
+  ["kilogramos", "kg"],
+  ["ml", "ml"],
+  ["mililitro", "ml"],
+  ["mililitros", "ml"],
+  ["l", "l"],
+  ["litro", "l"],
+  ["litros", "l"],
+  ["paquete", "paquete"],
+  ["paquetes", "paquete"],
+  ["cda", "cucharada"],
+  ["cucharada", "cucharada"],
+  ["cucharadas", "cucharada"],
+  ["cdta", "cucharadita"],
+  ["cucharadita", "cucharadita"],
+  ["cucharaditas", "cucharadita"],
+  ["taza", "taza"],
+  ["tazas", "taza"],
+]);
+
+function ingredientRequirements(plan) {
+  const requirements = new Map();
+  for (const day of plan.days) {
+    for (const meal of day.meals) {
+      for (const ingredient of meal.ingredients) {
+        const name =
+          typeof ingredient.name === "string" ? ingredient.name.trim() : "";
+        const rawUnit =
+          typeof ingredient.unit === "string"
+            ? ingredient.unit.trim().toLocaleLowerCase()
+            : "";
+        const unit = UNIT_ALIASES.get(rawUnit);
+        const quantity = ingredient.quantity;
+        if (
+          name &&
+          typeof quantity === "number" &&
+          Number.isFinite(quantity) &&
+          quantity > 0 &&
+          unit
+        ) {
+          requirements.set(name.toLocaleLowerCase(), { quantity, unit });
+        }
+      }
+    }
+  }
+  return requirements;
+}
+
 function isoDate(daysFromNow) {
   const date = new Date(Date.now() + daysFromNow * 86_400_000);
   return date.toISOString().slice(0, 10);
 }
 
 async function main() {
-  const baseUrl = process.env.E2E_PRODUCTION_URL?.replace(/\/$/, "");
+  let baseUrl;
+  try {
+    baseUrl = validateProductionOrigin(process.env.E2E_PRODUCTION_URL);
+  } catch {
+    return fail("FIXTURE_NO_GO");
+  }
   const email = process.env.E2E_PRODUCTION_USER_EMAIL;
   const password = process.env.E2E_PRODUCTION_USER_PASSWORD;
   const manifestPath = process.env.M4_FIXTURE_MANIFEST_PATH;
@@ -227,6 +354,7 @@ async function main() {
     ingredientNames(plan.plan),
     inventory.body.items ?? [],
   );
+  const requirements = ingredientRequirements(plan.plan);
   const expiryOffsets = [2, 21];
   for (let index = 0; index < candidates.length; index += 1) {
     const candidate = candidates[index];
@@ -240,12 +368,14 @@ async function main() {
       await persistManifest();
       continue;
     }
+    const requirement = requirements.get(candidate.name.toLocaleLowerCase());
+    if (!requirement) return fail("FIXTURE_PARTIAL");
     const createdItem = await api(baseUrl, cookie, "/api/inventory", {
       method: "POST",
       body: JSON.stringify({
         ingredientName: candidate.name,
-        quantity: "1",
-        unit: "kg",
+        quantity: String(requirement.quantity),
+        unit: requirement.unit,
         expirationDate: isoDate(expiryOffsets[index]),
         notes: QA_MARKER,
       }),
@@ -259,6 +389,41 @@ async function main() {
     await persistManifest();
   }
 
+  const evidence = await Promise.all([
+    Promise.all(
+      [7, 14].map((horizonDays) =>
+        api(
+          baseUrl,
+          cookie,
+          `/api/meal-plan/coverage?horizonDays=${horizonDays}`,
+        ),
+      ),
+    ),
+    api(baseUrl, cookie, "/api/waste-prevention"),
+    api(baseUrl, cookie, "/api/meal-plan/adaptive-proposal", {
+      method: "POST",
+      body: JSON.stringify({ mealPlanId: plan.id }),
+    }),
+    Promise.all(
+      [7, 14].map((horizonDays) =>
+        api(
+          baseUrl,
+          cookie,
+          `/api/meal-plan/shopping-suggestions?mealPlanId=${encodeURIComponent(plan.id)}&horizon=${horizonDays}`,
+        ),
+      ),
+    ),
+  ]);
+  const evidenceStatus = fixtureEvidence({
+    coverage: evidence[0],
+    waste: evidence[1],
+    proposal: evidence[2],
+    shopping: evidence[3],
+  });
+  if (Object.values(evidenceStatus).some((value) => !value)) {
+    return fail("FIXTURE_PARTIAL");
+  }
+
   markManifest(activeManifest, "completed");
   await persistManifest();
   const serialized = JSON.stringify(activeManifest, null, 2);
@@ -268,7 +433,9 @@ async function main() {
   safe("FIXTURE_PASS");
 }
 
-main().catch(async () => {
-  await fail("FIXTURE_NO_GO");
-  process.exitCode = 1;
-});
+if (import.meta.url === `file://${process.argv[1]}`)
+  main().catch(async () => {
+    await fail("FIXTURE_NO_GO");
+  });
+
+export { fixtureEvidence };

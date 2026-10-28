@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { validateProductionOrigin } from "./production-origin.mjs";
 
 const SAFE_CODES = new Set([
   "IDENTITY_PASS",
@@ -51,7 +52,14 @@ async function requestJson(url, init) {
 }
 
 async function main() {
-  const baseUrl = process.env.E2E_PRODUCTION_URL?.replace(/\/$/, "");
+  let baseUrl;
+  try {
+    baseUrl = validateProductionOrigin(process.env.E2E_PRODUCTION_URL);
+  } catch {
+    safeCode("IDENTITY_NO_GO");
+    process.exitCode = 1;
+    return;
+  }
   const email = process.env.E2E_PRODUCTION_USER_EMAIL;
   const password = process.env.E2E_PRODUCTION_USER_PASSWORD;
   const expectedUserId = process.env.E2E_PRODUCTION_USER_ID;

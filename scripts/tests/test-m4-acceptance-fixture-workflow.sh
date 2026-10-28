@@ -14,6 +14,10 @@ grep -q "m4-identity-proof-" "$workflow"
 grep -q "actions/download-artifact@v4" "$workflow"
 test "$(grep -c "actions/download-artifact@v4" "$workflow")" -eq 2
 grep -q "M4_IDENTITY_PROOF_PATH" "$root_dir/.github/workflows/prepare-m4-acceptance-fixture.yml"
+grep -q "production-origin.mjs" "$root_dir/scripts/production-acceptance/identity.mjs"
+grep -q "production-origin.mjs" "$root_dir/scripts/production-acceptance/prepare-fixture.mjs"
+grep -q "FIXTURE_PARTIAL" "$root_dir/scripts/production-acceptance/prepare-fixture.mjs"
+grep -q "process.exitCode = 1" "$root_dir/scripts/production-acceptance/prepare-fixture.mjs"
 if grep -A8 '^  prepare:' "$workflow" | grep -q 'runner.temp'; then exit 1; fi
 grep -q 'if: always()' "$workflow"
 if grep -q 'nonce:.*steps.proof.outputs' "$workflow"; then exit 1; fi
