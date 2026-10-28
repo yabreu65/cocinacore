@@ -105,6 +105,15 @@ describe('POST /api/meal-plan/recipe-selection', () => {
     });
   });
 
+  it('rejects a slot whose agenda and portions are not confirmed', async () => {
+    mocks.attachRecipeToMealPlanSlot.mockResolvedValue({ status: 'schedule_not_confirmed' });
+    const response = await POST(request(validBody()));
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: 'La agenda y las porciones deben estar confirmadas.',
+    });
+  });
+
   it('does not reveal an inaccessible recipe or plan', async () => {
     mocks.attachRecipeToMealPlanSlot.mockResolvedValue({ status: 'recipe_not_found' });
     const response = await POST(request(validBody()));
