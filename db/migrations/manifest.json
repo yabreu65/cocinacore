@@ -509,6 +509,207 @@
           "identity": "user_recipes.idx_user_recipes_tenant_user_archived_at"
         }
       ]
+    },
+    {
+      "id": "018",
+      "filename": "018_cooking_sessions.sql",
+      "lane": "migration",
+      "sha256": "b5e25bb76feed66fec8d767968aead734912d97e9cd6c98206edc99400c2cd7d",
+      "byteLength": 6681,
+      "transactional": "required",
+      "legacyChecksumBackfillAllowed": false,
+      "catalogAdditions": [
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "user_meal_plans.user_meal_plans_id_tenant_id_user_id_key"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "user_meal_plans.user_meal_plans_id_tenant_id_user_id_key"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "user_recipe_versions.user_recipe_versions_id_recipe_id_tenant_id_user_id_key"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "user_recipe_versions.user_recipe_versions_id_recipe_id_tenant_id_user_id_key"
+        },
+        {
+          "kind": "table",
+          "schema": "public",
+          "identity": "public.cooking_sessions"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "cooking_sessions.cooking_sessions_pkey"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "cooking_sessions.cooking_sessions_id_tenant_id_user_id_key"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "cooking_sessions.cooking_sessions_one_open_slot"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "cooking_sessions.idx_cooking_sessions_tenant_user_updated_at"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "cooking_sessions.idx_cooking_sessions_meal_plan_slot"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "cooking_sessions.cooking_sessions_pkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "cooking_sessions.cooking_sessions_day_index_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "cooking_sessions.cooking_sessions_meal_type_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "cooking_sessions.cooking_sessions_status_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "cooking_sessions.cooking_sessions_current_step_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "cooking_sessions.cooking_sessions_total_steps_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "cooking_sessions.cooking_sessions_instruction_snapshot_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "cooking_sessions.cooking_sessions_source_hash_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "cooking_sessions.cooking_sessions_version_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "cooking_sessions.cooking_sessions_lifecycle_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "cooking_sessions.cooking_sessions_plan_owner_fkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "cooking_sessions.cooking_sessions_recipe_owner_fkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "cooking_sessions.cooking_sessions_version_owner_fkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "cooking_sessions.cooking_sessions_id_tenant_id_user_id_key"
+        },
+        {
+          "kind": "table",
+          "schema": "public",
+          "identity": "public.cooking_session_events"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "cooking_session_events.cooking_session_events_pkey"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "cooking_session_events.cooking_session_events_session_id_idempotency_key_key"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "cooking_session_events.idx_cooking_session_events_session_created_at"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "cooking_session_events.cooking_session_events_pkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "cooking_session_events.cooking_session_events_operation_type_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "cooking_session_events.cooking_session_events_previous_step_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "cooking_session_events.cooking_session_events_next_step_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "cooking_session_events.cooking_session_events_previous_status_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "cooking_session_events.cooking_session_events_next_status_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "cooking_session_events.cooking_session_events_idempotency_key_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "cooking_session_events.cooking_session_events_payload_hash_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "cooking_session_events.cooking_session_events_session_owner_fkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "cooking_session_events.cooking_session_events_session_id_idempotency_key_key"
+        }
+      ]
     }
   ],
   "baselineObjects": {
@@ -2171,14 +2372,14 @@
     },
     "expectedCounts": {
       "transferable": 38,
-      "applicationTables": 28,
+      "applicationTables": 30,
       "ledgerTables": 1,
       "applicationFunctions": 7,
       "standaloneSequences": 0,
       "applicationTypes": 0,
-      "indexes": 94,
-      "constraints": 112,
-      "dependentTypes": 61,
+      "indexes": 104,
+      "constraints": 138,
+      "dependentTypes": 65,
       "triggers": 0,
       "views": 0,
       "materializedViews": 0,
