@@ -235,7 +235,14 @@ export interface UserRecipeDetailDto extends UserRecipeRow {
 export interface UserRecipeListDto extends UserRecipeRow {
   current_version: Pick<
     UserRecipeVersionRow,
-    'id' | 'version_number' | 'title' | 'instructions' | 'servings' | 'ingredients' | 'source_recipe_history_id' | 'created_at'
+    | 'id'
+    | 'version_number'
+    | 'title'
+    | 'instructions'
+    | 'servings'
+    | 'ingredients'
+    | 'source_recipe_history_id'
+    | 'created_at'
   >;
 }
 
@@ -275,6 +282,46 @@ export interface UserMealPlanRow {
   ai_content: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export type CookingSessionStatus = 'active' | 'paused' | 'completed' | 'cancelled';
+
+export interface CookingSessionRow {
+  id: string;
+  tenant_id: string;
+  user_id: string;
+  meal_plan_id: string;
+  day_index: number;
+  meal_type: 'breakfast' | 'lunch' | 'dinner';
+  recipe_id: string;
+  recipe_version_id: string;
+  status: CookingSessionStatus;
+  current_step: number;
+  total_steps: number;
+  instruction_snapshot: unknown;
+  source_updated_at: string;
+  source_calendar_payload_hash: string;
+  version: number;
+  started_at: string;
+  updated_at: string;
+  completed_at: string | null;
+  cancelled_at: string | null;
+  retention_until: string | null;
+}
+
+export interface CookingSessionEventRow {
+  id: string;
+  session_id: string;
+  tenant_id: string;
+  user_id: string;
+  operation_type: 'start' | 'resume' | 'pause' | 'advance' | 'complete' | 'cancel';
+  previous_step: number;
+  next_step: number;
+  previous_status: CookingSessionStatus;
+  next_status: CookingSessionStatus;
+  idempotency_key: string;
+  payload_hash: string;
+  created_at: string;
 }
 
 export interface BookChunkRow {
