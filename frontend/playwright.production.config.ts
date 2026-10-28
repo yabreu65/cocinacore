@@ -9,7 +9,7 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   retries: 0,
-  reporter: 'line',
+  reporter: [['dot'], ['./e2e/reporters/production-safety-reporter.ts']],
   use: {
     ...devices['Desktop Chrome'],
     baseURL: production.baseURL,
