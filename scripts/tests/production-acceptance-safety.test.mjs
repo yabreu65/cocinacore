@@ -66,7 +66,7 @@ test("fixture evidence follows the functional U1-U4 contracts", () => {
             lotId: "lot-fixture",
             status: "due_soon",
             quantityStatus: "known",
-            expirationDate: "2026-10-30T04:00:00.000Z",
+            expirationDate: "2026-10-30 00:00:00+00",
           },
         ],
       },
