@@ -72,6 +72,9 @@ jobs:
       - name: Validate protected M4 fixture workflow
         run: bash ../scripts/tests/test-m4-acceptance-fixture-workflow.sh
 
+      - name: Validate GitHub Actions expressions with pinned actionlint
+        run: bash ../scripts/ci/run-actionlint.sh
+
       - name: Build and inspect Docker application routes
         run: sh ../scripts/tests/test-docker-image-route-contract.sh
 
