@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NextRequest } from 'next/server';
 import type { UserMealPlanRow } from '@/lib/db/types';
 
@@ -23,6 +23,11 @@ vi.mock('@/lib/db/repositories/shoppingListRepository', () => ({
 const { GET, POST } = await import('./route');
 
 const planId = '123e4567-e89b-42d3-a456-426614174000';
+const fixtureNow = new Date('2026-10-27T16:00:00.000Z');
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function persistedPlan(overrides: Partial<UserMealPlanRow> = {}): UserMealPlanRow {
   return {
@@ -135,6 +140,7 @@ function consumedBreakfastPayload() {
 
 describe('GET /api/meal-plan/shopping-suggestions', () => {
   beforeEach(() => {
+    vi.useFakeTimers({ now: fixtureNow });
     requireUserMock.mockReset();
     findMealPlanByIdForUserAndTenantMock.mockReset();
     listInventoryItemsByTenantMock.mockReset();
@@ -294,6 +300,17 @@ describe('GET /api/meal-plan/shopping-suggestions', () => {
       items: [],
     });
   });
+
+  it('classifies an insufficient horizon as unknown after the seven-day fixture ends', async () => {
+    vi.setSystemTime(new Date('2026-10-28T16:00:00.000Z'));
+    const response = await GET(request() as unknown as NextRequest);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      status: 'unknown',
+      reason: 'plan_does_not_cover_horizon',
+      items: [],
+    });
+  });
 });
 
 function postRequest(body: unknown): NextRequest {
@@ -321,6 +338,7 @@ async function confirmationBody(selectedItems: string[] = ['arroz']) {
 
 describe('POST /api/meal-plan/shopping-suggestions', () => {
   beforeEach(() => {
+    vi.useFakeTimers({ now: fixtureNow });
     requireUserMock.mockReset();
     findMealPlanByIdForUserAndTenantMock.mockReset();
     listInventoryItemsByTenantMock.mockReset();
