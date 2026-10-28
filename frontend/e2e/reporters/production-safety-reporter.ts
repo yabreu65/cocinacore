@@ -99,6 +99,13 @@ export default class ProductionSafetyReporter implements Reporter {
   }
 
   async onEnd(): Promise<void> {
+    const syntheticWrites = process.env.E2E_PRODUCTION_SYNTHETIC_WRITES ?? 'disabled';
+    if (syntheticWrites !== 'disabled') {
+      throw new Error(
+        'Safe production acceptance summary requires synthetic writes to be disabled'
+      );
+    }
+
     const summary = summarizeProductionTests(this.tests);
     const outputPath =
       process.env.PRODUCTION_ACCEPTANCE_SUMMARY_PATH ??

@@ -54,7 +54,7 @@ jobs:
           E2E_PRODUCTION_USER_ID: ${{ secrets.E2E_PRODUCTION_USER_ID }}
           E2E_PRODUCTION_TENANT_ID: ${{ secrets.E2E_PRODUCTION_TENANT_ID }}
           E2E_PRODUCTION_SYNTHETIC_WRITES: ${{ inputs.run_synthetic_writes && 'approved' || 'disabled' }}
-        run: npm run test:e2e:production -- --reporter=dot
+        run: npm run test:e2e:production
 
       - name: Publish safe acceptance summary
         if: always()
