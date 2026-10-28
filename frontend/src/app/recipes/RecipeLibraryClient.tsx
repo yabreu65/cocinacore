@@ -11,6 +11,7 @@ import {
   type Recipe,
 } from './recipe-ui';
 import RecipePlanSelection from './RecipePlanSelection';
+import CookingSessionPanel from './CookingSessionPanel';
 
 export type Draft = {
   title: string;
@@ -367,6 +368,9 @@ export default function RecipeLibraryClient() {
               )}
               {!recipe.archived_at && (
                 <RecipePlanSelection recipeId={recipe.id} versionId={recipe.current_version.id} />
+              )}
+              {!recipe.archived_at && (
+                <CookingSessionPanel recipeId={recipe.id} versionId={recipe.current_version.id} />
               )}
               {recipe.archived_at && (
                 <span className="ml-2 rounded-full bg-[#F4E8DD] px-2 py-1 text-xs">Archivada</span>
