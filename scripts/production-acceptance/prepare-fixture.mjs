@@ -3,8 +3,10 @@ import { dirname } from "node:path";
 import { createHash } from "node:crypto";
 import {
   createManifest,
+  classifyFixtureExpiration,
   markManifest,
   recordOperation,
+  selectFixtureLot,
   stableInventoryCandidates,
   verifyPreparationIdentity,
 } from "./fixture-manifest.mjs";
@@ -225,6 +227,42 @@ function isoDate(daysFromNow) {
   return date.toISOString().slice(0, 10);
 }
 
+function preservedInventoryField(item, snake, camel) {
+  const value = item[snake] ?? item[camel];
+  return value == null ? undefined : String(value);
+}
+
+function renewalBody(item, expirationDate) {
+  return {
+    id: String(item.id),
+    ingredientName: preservedInventoryField(
+      item,
+      "ingredient_name",
+      "ingredientName",
+    ),
+    quantity: preservedInventoryField(item, "quantity", "quantity"),
+    unit: preservedInventoryField(item, "unit", "unit"),
+    category: preservedInventoryField(item, "category", "category"),
+    expirationDate,
+    estimatedUnitPrice: preservedInventoryField(
+      item,
+      "estimated_unit_price",
+      "estimatedUnitPrice",
+    ),
+    purchaseLocation: preservedInventoryField(
+      item,
+      "purchase_location",
+      "purchaseLocation",
+    ),
+    lowStockThreshold: preservedInventoryField(
+      item,
+      "low_stock_threshold",
+      "lowStockThreshold",
+    ),
+    notes: QA_MARKER,
+  };
+}
+
 async function main() {
   let baseUrl;
   try {
@@ -381,8 +419,69 @@ async function main() {
     recordOperation(activeManifest, operationName, "started");
     await persistManifest();
     if (!candidate.shouldCreate) {
-      recordOperation(activeManifest, operationName, "reused", {
-        recordId: candidate.existing?.id,
+      const selected = selectFixtureLot({
+        items: inventory.body.items ?? [],
+        ingredientName: candidate.name,
+        marker: QA_MARKER,
+        userId,
+        tenantId,
+        now: new Date(),
+        timeZone: "America/Caracas",
+      });
+      if (selected.kind === "invalid" || selected.kind === "create")
+        return fail("FIXTURE_NO_GO");
+      if (selected.kind === "reuse") {
+        recordOperation(activeManifest, operationName, "reused", {
+          recordId: selected.existing.id,
+          operation: "reuse",
+          previousExpiration: selected.existing.expiration_date ?? null,
+          previousStatus: selected.expiration.status,
+        });
+        await persistManifest();
+        continue;
+      }
+      const expirationDate = isoDate(expiryOffsets[index]);
+      const previousExpiration =
+        selected.existing.expiration_date ?? selected.existing.expirationDate;
+      recordOperation(activeManifest, operationName, "renewing", {
+        recordId: selected.existing.id,
+        operation: "renew",
+        previousExpiration,
+        previousStatus: selected.expiration.status,
+      });
+      await persistManifest();
+      const renewedItem = await api(baseUrl, cookie, "/api/inventory", {
+        method: "POST",
+        body: JSON.stringify(renewalBody(selected.existing, expirationDate)),
+      });
+      if (
+        !renewedItem.response.ok ||
+        renewedItem.body?.item?.id !== selected.existing.id
+      )
+        return fail("FIXTURE_WRITE_NO_GO");
+      const renewed = renewedItem.body.item;
+      const renewedExpiration = classifyFixtureExpiration(
+        renewed.expiration_date ?? renewed.expirationDate,
+        { now: new Date(), timeZone: "America/Caracas" },
+      );
+      if (
+        renewed.notes !== QA_MARKER ||
+        renewed.tenant_id !== tenantId ||
+        renewed.user_id !== userId ||
+        !["due_today", "due_soon"].includes(renewedExpiration.status) ||
+        typeof renewed.quantity !== "string" ||
+        !renewed.quantity.trim() ||
+        typeof renewed.unit !== "string" ||
+        !renewed.unit.trim()
+      ) {
+        return fail("FIXTURE_WRITE_NO_GO");
+      }
+      recordOperation(activeManifest, operationName, "completed", {
+        recordId: renewed.id,
+        operation: "renew",
+        previousExpiration,
+        previousStatus: selected.expiration.status,
+        renewalResult: "due_soon_or_today",
       });
       await persistManifest();
       continue;
