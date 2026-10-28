@@ -67,25 +67,42 @@ async function api(baseUrl, cookie, path, init = {}) {
   return { response, body };
 }
 
-function fixtureEvidence({ coverage, waste, proposal, shopping }) {
-  const coverageReady = coverage.every(
-    (result) =>
-      result.response.ok &&
-      result.body?.forecast?.status === "ready" &&
-      (result.body?.forecast?.horizonDays === 7 ||
-        result.body?.forecast?.horizonDays === 14) &&
-      result.body.forecast.scheduledMealCount > 0 &&
-      Array.isArray(result.body.forecast.items) &&
-      result.body.forecast.items.every((item) => item.status !== "unknown"),
+function fixtureEvidence({
+  coverage,
+  waste,
+  proposal,
+  shopping,
+  fixtureInventoryIds = new Set(),
+}) {
+  const coverageHorizons = coverage.map(
+    (result) => result.body?.forecast?.horizonDays,
   );
+  const coverageReady =
+    coverage.length === 2 &&
+    new Set(coverageHorizons).size === 2 &&
+    coverage.every(
+      (result) =>
+        result.response.ok &&
+        result.body?.forecast?.status === "ready" &&
+        (result.body?.forecast?.horizonDays === 7 ||
+          result.body?.forecast?.horizonDays === 14) &&
+        result.body.forecast.scheduledMealCount > 0 &&
+        Array.isArray(result.body.forecast.items) &&
+        typeof result.body.forecast.timeZone === "string" &&
+        typeof result.body.forecast.fromDate === "string" &&
+        typeof result.body.forecast.throughDate === "string",
+    );
   const wasteReady =
     waste.response.ok &&
     waste.body?.report?.status === "ready" &&
     Array.isArray(waste.body.report.lots) &&
     waste.body.report.lots.some(
       (lot) =>
+        fixtureInventoryIds.has(lot.lotId) &&
+        (lot.status === "due_today" || lot.status === "due_soon") &&
+        lot.quantityStatus === "known" &&
         typeof lot.expirationDate === "string" &&
-        /^\d{4}-\d{2}-\d{2}$/.test(lot.expirationDate),
+        !Number.isNaN(Date.parse(lot.expirationDate)),
     );
   const proposalReady =
     proposal.response.ok &&
@@ -101,12 +118,14 @@ function fixtureEvidence({ coverage, waste, proposal, shopping }) {
       result.body?.status === "ready" &&
       (result.body?.horizonDays === 7 || result.body?.horizonDays === 14) &&
       result.body.scheduledMealCount > 0 &&
-      result.body?.cost?.status !== "unknown" &&
+      ["complete", "partial", "unknown"].includes(result.body?.cost?.status) &&
       Array.isArray(result.body?.items) &&
       result.body.items.every(
         (item) =>
           typeof item.ingredientName === "string" &&
           typeof item.normalizedName === "string" &&
+          ["buy", "review"].includes(item.status) &&
+          typeof item.alreadyPresent === "boolean" &&
           (item.quantityToBuy === null ||
             (typeof item.quantityToBuy === "number" &&
               Number.isFinite(item.quantityToBuy))),
@@ -389,6 +408,26 @@ async function main() {
     await persistManifest();
   }
 
+  const fixtureInventoryIds = new Set(
+    activeManifest.operations
+      .filter(
+        (operation) =>
+          operation.name.startsWith("inventory:") &&
+          ["completed", "reused"].includes(operation.status) &&
+          typeof operation.recordId === "string",
+      )
+      .filter((operation) => {
+        const candidate = candidates.find(
+          (item) => `inventory:${item.name}` === operation.name,
+        );
+        return (
+          operation.status === "completed" ||
+          candidate?.existing?.notes === QA_MARKER
+        );
+      })
+      .map((operation) => operation.recordId),
+  );
+
   const evidence = await Promise.all([
     Promise.all(
       [7, 14].map((horizonDays) =>
@@ -419,6 +458,7 @@ async function main() {
     waste: evidence[1],
     proposal: evidence[2],
     shopping: evidence[3],
+    fixtureInventoryIds,
   });
   if (Object.values(evidenceStatus).some((value) => !value)) {
     return fail("FIXTURE_PARTIAL");

@@ -32,7 +32,7 @@ test("production origin accepts only the configured HTTPS origin", () => {
   }
 });
 
-test("fixture evidence requires real, bounded evidence for every module", () => {
+test("fixture evidence follows the functional U1-U4 contracts", () => {
   const base = {
     coverage: [
       response({
@@ -40,7 +40,10 @@ test("fixture evidence requires real, bounded evidence for every module", () => 
           status: "ready",
           horizonDays: 7,
           scheduledMealCount: 1,
-          items: [{ status: "sufficient" }],
+          timeZone: "America/Caracas",
+          fromDate: "2026-10-28",
+          throughDate: "2026-11-03",
+          items: [{ status: "unknown" }],
         },
       }),
       response({
@@ -48,12 +51,25 @@ test("fixture evidence requires real, bounded evidence for every module", () => 
           status: "ready",
           horizonDays: 14,
           scheduledMealCount: 1,
+          timeZone: "America/Caracas",
+          fromDate: "2026-10-28",
+          throughDate: "2026-11-11",
           items: [{ status: "partial" }],
         },
       }),
     ],
     waste: response({
-      report: { status: "ready", lots: [{ expirationDate: "2026-10-30" }] },
+      report: {
+        status: "ready",
+        lots: [
+          {
+            lotId: "lot-fixture",
+            status: "due_soon",
+            quantityStatus: "known",
+            expirationDate: "2026-10-30T04:00:00.000Z",
+          },
+        ],
+      },
     }),
     proposal: response({
       mealPlanId: "plan",
@@ -66,8 +82,16 @@ test("fixture evidence requires real, bounded evidence for every module", () => 
         status: "ready",
         horizonDays: 7,
         scheduledMealCount: 1,
-        cost: { status: "complete" },
-        items: [],
+        cost: { status: "unknown" },
+        items: [
+          {
+            ingredientName: "Tomato",
+            normalizedName: "tomato",
+            status: "review",
+            alreadyPresent: false,
+            quantityToBuy: null,
+          },
+        ],
       }),
       response({
         status: "ready",
@@ -78,16 +102,30 @@ test("fixture evidence requires real, bounded evidence for every module", () => 
       }),
     ],
   };
-  assert.deepEqual(fixtureEvidence(base), {
+  const evidence = fixtureEvidence({
+    ...base,
+    fixtureInventoryIds: new Set(["lot-fixture"]),
+  });
+  assert.deepEqual(evidence, {
     coverageReady: true,
     wasteReady: true,
     proposalReady: true,
     shoppingReady: true,
   });
 
-  const partial = structuredClone(base);
-  partial.coverage[1].body.forecast.items[0].status = "unknown";
-  assert.equal(fixtureEvidence(partial).coverageReady, false);
+  assert.equal(
+    fixtureEvidence({ ...base, fixtureInventoryIds: new Set() }).wasteReady,
+    false,
+  );
+  const invalidCoverage = structuredClone(base);
+  invalidCoverage.coverage[1].body.forecast.horizonDays = 7;
+  assert.equal(
+    fixtureEvidence({
+      ...invalidCoverage,
+      fixtureInventoryIds: new Set(["lot-fixture"]),
+    }).coverageReady,
+    false,
+  );
 });
 
 test("missing configuration fails the fixture process instead of reporting success", async () => {
