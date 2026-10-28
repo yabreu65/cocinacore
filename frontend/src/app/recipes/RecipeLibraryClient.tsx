@@ -10,6 +10,7 @@ import {
   type Ingredient,
   type Recipe,
 } from './recipe-ui';
+import RecipePlanSelection from './RecipePlanSelection';
 
 export type Draft = {
   title: string;
@@ -363,6 +364,9 @@ export default function RecipeLibraryClient() {
                 >
                   Revisar preparación
                 </Link>
+              )}
+              {!recipe.archived_at && (
+                <RecipePlanSelection recipeId={recipe.id} versionId={recipe.current_version.id} />
               )}
               {recipe.archived_at && (
                 <span className="ml-2 rounded-full bg-[#F4E8DD] px-2 py-1 text-xs">Archivada</span>
