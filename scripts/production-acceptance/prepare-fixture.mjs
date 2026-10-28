@@ -1,7 +1,13 @@
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createHash } from "node:crypto";
-import { verifyIdentityProof } from "./identity.mjs";
+import {
+  createManifest,
+  markManifest,
+  recordOperation,
+  stableInventoryCandidates,
+  verifyPreparationIdentity,
+} from "./fixture-manifest.mjs";
 
 const QA_MARKER = "m4-acceptance-fixture-issue-84";
 const SAFE_CODES = new Set([
@@ -15,6 +21,27 @@ const SAFE_CODES = new Set([
 function safe(code) {
   if (!SAFE_CODES.has(code)) throw new Error("unsafe fixture code");
   console.log(code);
+}
+
+let activeManifest = null;
+let activeManifestPath = null;
+
+async function persistManifest() {
+  if (!activeManifest || !activeManifestPath) return;
+  const serialized = JSON.stringify(activeManifest, null, 2);
+  await writeFile(activeManifestPath, serialized, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  await chmod(activeManifestPath, 0o600);
+}
+
+async function fail(code) {
+  if (activeManifest) {
+    markManifest(activeManifest, "failed");
+    await persistManifest();
+  }
+  safe(code);
 }
 
 async function api(baseUrl, cookie, path, init = {}) {
@@ -64,7 +91,7 @@ async function main() {
   const manifestPath = process.env.M4_FIXTURE_MANIFEST_PATH;
   const proofPath = process.env.M4_IDENTITY_PROOF_PATH;
   if (!baseUrl || !email || !password || !manifestPath || !proofPath)
-    return safe("FIXTURE_NO_GO");
+    return fail("FIXTURE_NO_GO");
   const proofText = await readFile(proofPath, "utf8").catch(() => null);
   const proof = proofText
     ? Object.fromEntries(
@@ -75,7 +102,7 @@ async function main() {
       )
     : null;
   if (!proof?.IDENTITY_NONCE || !proof.IDENTITY_COMMITMENT)
-    return safe("FIXTURE_IDENTITY_NO_GO");
+    return fail("FIXTURE_IDENTITY_NO_GO");
 
   const loginResponse = await fetch(`${baseUrl}/api/auth/login`, {
     method: "POST",
@@ -83,7 +110,7 @@ async function main() {
     body: JSON.stringify({ email, password }),
   });
   const cookie = loginResponse.headers.get("set-cookie")?.split(";", 1)[0];
-  if (!loginResponse.ok || !cookie) return safe("FIXTURE_READ_NO_GO");
+  if (!loginResponse.ok || !cookie) return fail("FIXTURE_READ_NO_GO");
 
   const session = await api(baseUrl, cookie, "/api/auth/session");
   const userId = session.body?.user?.id;
@@ -93,27 +120,37 @@ async function main() {
     typeof userId !== "string" ||
     typeof tenantId !== "string"
   )
-    return safe("FIXTURE_READ_NO_GO");
+    return fail("FIXTURE_READ_NO_GO");
   if (
-    !verifyIdentityProof({
+    !verifyPreparationIdentity({
       userId,
       tenantId,
       nonce: proof.IDENTITY_NONCE,
       commitment: proof.IDENTITY_COMMITMENT,
     })
   )
-    return safe("FIXTURE_IDENTITY_NO_GO");
+    return fail("FIXTURE_IDENTITY_NO_GO");
 
+  activeManifestPath = manifestPath;
+  await mkdir(dirname(manifestPath), { recursive: true });
+  activeManifest = createManifest({ userId, tenantId });
+  await persistManifest();
+
+  recordOperation(activeManifest, "baseline-read", "started");
+  await persistManifest();
   const [profile, mealPlan, inventory] = await Promise.all([
     api(baseUrl, cookie, "/api/profile"),
     api(baseUrl, cookie, "/api/meal-plan"),
     api(baseUrl, cookie, "/api/inventory"),
   ]);
   if (!profile.response.ok || !mealPlan.response.ok || !inventory.response.ok)
-    return safe("FIXTURE_READ_NO_GO");
+    return fail("FIXTURE_READ_NO_GO");
+  recordOperation(activeManifest, "baseline-read", "completed");
+  await persistManifest();
 
-  const created = { profile: false, mealPlan: false, inventory: [] };
   if (!profile.body?.profile) {
+    recordOperation(activeManifest, "profile", "started");
+    await persistManifest();
     const updatedProfile = await api(baseUrl, cookie, "/api/profile", {
       method: "PUT",
       body: JSON.stringify({
@@ -124,13 +161,20 @@ async function main() {
         householdMembers: [],
       }),
     });
-    if (!updatedProfile.response.ok) return safe("FIXTURE_WRITE_NO_GO");
-    created.profile = true;
+    if (!updatedProfile.response.ok) return fail("FIXTURE_WRITE_NO_GO");
+    activeManifest.created.profile = true;
+    recordOperation(activeManifest, "profile", "completed", { changed: true });
+    await persistManifest();
+  } else {
+    recordOperation(activeManifest, "profile", "reused");
+    await persistManifest();
   }
 
   let plan = mealPlan.body;
   if (!isFortnightPlan(plan)) {
-    if (plan?.id) return safe("FIXTURE_NO_GO");
+    if (plan?.id) return fail("FIXTURE_NO_GO");
+    recordOperation(activeManifest, "meal-plan", "started");
+    await persistManifest();
     const generated = await api(baseUrl, cookie, "/api/meal-plan", {
       method: "POST",
       body: JSON.stringify({
@@ -147,11 +191,22 @@ async function main() {
       !generated.body?.id ||
       generated.body?.plan?.days?.length !== 14
     )
-      return safe("FIXTURE_WRITE_NO_GO");
+      return fail("FIXTURE_WRITE_NO_GO");
     plan = { ...generated.body, period: "fortnight" };
-    created.mealPlan = true;
+    activeManifest.created.mealPlan = true;
+    recordOperation(activeManifest, "meal-plan", "completed", {
+      recordId: plan.id,
+    });
+    await persistManifest();
+  } else {
+    recordOperation(activeManifest, "meal-plan", "reused", {
+      recordId: plan.id,
+    });
+    await persistManifest();
   }
 
+  recordOperation(activeManifest, "schedule", "started", { recordId: plan.id });
+  await persistManifest();
   const schedule = await api(baseUrl, cookie, "/api/meal-plan/schedule", {
     method: "POST",
     body: JSON.stringify({
@@ -162,25 +217,33 @@ async function main() {
       portionBasisConfirmed: true,
     }),
   });
-  if (!schedule.response.ok) return safe("FIXTURE_WRITE_NO_GO");
+  if (!schedule.response.ok) return fail("FIXTURE_WRITE_NO_GO");
+  recordOperation(activeManifest, "schedule", "completed", {
+    recordId: plan.id,
+  });
+  await persistManifest();
 
-  const existingNames = new Set(
-    (inventory.body.items ?? []).map((item) =>
-      String(item.ingredient_name ?? "")
-        .trim()
-        .toLowerCase(),
-    ),
+  const candidates = stableInventoryCandidates(
+    ingredientNames(plan.plan),
+    inventory.body.items ?? [],
   );
-  const names = ingredientNames(plan.plan)
-    .slice(0, 2)
-    .filter((name) => !existingNames.has(name.toLowerCase()))
-    .slice(0, 2);
   const expiryOffsets = [2, 21];
-  for (let index = 0; index < names.length; index += 1) {
+  for (let index = 0; index < candidates.length; index += 1) {
+    const candidate = candidates[index];
+    const operationName = `inventory:${candidate.name}`;
+    recordOperation(activeManifest, operationName, "started");
+    await persistManifest();
+    if (!candidate.shouldCreate) {
+      recordOperation(activeManifest, operationName, "reused", {
+        recordId: candidate.existing?.id,
+      });
+      await persistManifest();
+      continue;
+    }
     const createdItem = await api(baseUrl, cookie, "/api/inventory", {
       method: "POST",
       body: JSON.stringify({
-        ingredientName: names[index],
+        ingredientName: candidate.name,
         quantity: "1",
         unit: "kg",
         expirationDate: isoDate(expiryOffsets[index]),
@@ -188,32 +251,24 @@ async function main() {
       }),
     });
     if (!createdItem.response.ok || !createdItem.body?.item?.id)
-      return safe("FIXTURE_WRITE_NO_GO");
-    created.inventory.push(createdItem.body.item.id);
+      return fail("FIXTURE_WRITE_NO_GO");
+    activeManifest.created.inventory.push(createdItem.body.item.id);
+    recordOperation(activeManifest, operationName, "completed", {
+      recordId: createdItem.body.item.id,
+    });
+    await persistManifest();
   }
 
-  await mkdir(dirname(manifestPath), { recursive: true });
-  const manifest = {
-    version: 1,
-    issue: 84,
-    userId,
-    tenantId,
-    createdAt: new Date().toISOString(),
-    marker: QA_MARKER,
-    created,
-    cleanup: { inventoryDeleteAllowed: true, mealPlanDeleteSupported: false },
-    retention: "reuse-only; do not create a second plan",
-  };
-  const serialized = JSON.stringify(manifest, null, 2);
-  await writeFile(manifestPath, serialized, { encoding: "utf8", mode: 0o600 });
-  await chmod(manifestPath, 0o600);
+  markManifest(activeManifest, "completed");
+  await persistManifest();
+  const serialized = JSON.stringify(activeManifest, null, 2);
   console.log(
     `FIXTURE_MANIFEST_SHA256=${createHash("sha256").update(serialized).digest("hex")}`,
   );
   safe("FIXTURE_PASS");
 }
 
-main().catch(() => {
-  safe("FIXTURE_NO_GO");
+main().catch(async () => {
+  await fail("FIXTURE_NO_GO");
   process.exitCode = 1;
 });
