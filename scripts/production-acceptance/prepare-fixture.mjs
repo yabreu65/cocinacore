@@ -13,6 +13,7 @@ import {
 import { validateProductionOrigin } from "./production-origin.mjs";
 
 const QA_MARKER = "m4-acceptance-fixture-issue-84";
+const FIXTURE_TIME_ZONE = "America/Caracas";
 const SAFE_CODES = new Set([
   "FIXTURE_PASS",
   "FIXTURE_NO_GO",
@@ -396,7 +397,7 @@ async function main() {
     body: JSON.stringify({
       mealPlanId: plan.id,
       startDate: isoDate(0),
-      timeZone: "America/Caracas",
+      timeZone: FIXTURE_TIME_ZONE,
       confirmed: true,
       portionBasisConfirmed: true,
     }),
@@ -426,7 +427,7 @@ async function main() {
         userId,
         tenantId,
         now: new Date(),
-        timeZone: "America/Caracas",
+        timeZone: FIXTURE_TIME_ZONE,
       });
       if (selected.kind === "invalid" || selected.kind === "create")
         return fail("FIXTURE_NO_GO");
@@ -462,11 +463,11 @@ async function main() {
       const renewed = renewedItem.body.item;
       const renewedExpiration = classifyFixtureExpiration(
         renewed.expiration_date ?? renewed.expirationDate,
-        { now: new Date(), timeZone: "America/Caracas" },
+        { now: new Date(), timeZone: FIXTURE_TIME_ZONE },
       );
       const expectedExpiration = classifyFixtureExpiration(expirationDate, {
         now: new Date(),
-        timeZone: "America/Caracas",
+        timeZone: FIXTURE_TIME_ZONE,
       });
       const expirationPurposeSatisfied =
         renewedExpiration.calendarDate === expectedExpiration.calendarDate &&
@@ -546,7 +547,11 @@ async function main() {
         ),
       ),
     ),
-    api(baseUrl, cookie, "/api/waste-prevention"),
+    api(
+      baseUrl,
+      cookie,
+      `/api/waste-prevention?timeZone=${encodeURIComponent(FIXTURE_TIME_ZONE)}`,
+    ),
     api(baseUrl, cookie, "/api/meal-plan/adaptive-proposal", {
       method: "POST",
       body: JSON.stringify({ mealPlanId: plan.id }),
@@ -586,4 +591,4 @@ if (import.meta.url === `file://${process.argv[1]}`)
     await fail("FIXTURE_NO_GO");
   });
 
-export { fixtureEvidence };
+export { FIXTURE_TIME_ZONE, fixtureEvidence };

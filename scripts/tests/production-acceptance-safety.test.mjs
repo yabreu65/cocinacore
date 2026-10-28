@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import test from "node:test";
-import { fixtureEvidence } from "../production-acceptance/prepare-fixture.mjs";
+import {
+  FIXTURE_TIME_ZONE,
+  fixtureEvidence,
+} from "../production-acceptance/prepare-fixture.mjs";
+import { classifyFixtureExpiration } from "../production-acceptance/fixture-manifest.mjs";
 import {
   PRODUCTION_ORIGIN,
   validateProductionOrigin,
@@ -30,6 +34,16 @@ test("production origin accepts only the configured HTTPS origin", () => {
       /authorized production origin/,
     );
   }
+});
+
+test("classifies near-midnight UTC expiry in the fixture timezone", () => {
+  assert.equal(FIXTURE_TIME_ZONE, "America/Caracas");
+  const result = classifyFixtureExpiration("2026-10-29T03:00:00.000Z", {
+    now: new Date("2026-10-29T02:00:00.000Z"),
+    timeZone: FIXTURE_TIME_ZONE,
+  });
+  assert.equal(result.calendarDate, "2026-10-28");
+  assert.equal(result.status, "due_today");
 });
 
 test("fixture evidence follows the functional U1-U4 contracts", () => {
