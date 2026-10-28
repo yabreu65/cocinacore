@@ -71,7 +71,7 @@ contains "$WORKFLOW" 'git show-ref --verify --quiet refs/remotes/origin/main' 'w
 not_contains "$WORKFLOW" 'git fetch --no-tags origin' 'workflow must not perform an unauthenticated second fetch after checkout'
 ! grep -Eq '^[[:space:]]+(push|pull_request|schedule):' "$WORKFLOW" || fail 'production migration must not have an automatic trigger'
 contains "$WORKFLOW" 'environment: production' 'migration job must use the protected production environment'
-contains "$WORKFLOW" 'group: deploy-production' 'migration must share deploy concurrency group'
+contains "$WORKFLOW" 'group: cocinacore-production-operations' 'migration must share production operations concurrency group'
 contains "$WORKFLOW" 'cancel-in-progress: false' 'migration concurrency must not cancel an active run'
 
 # Trust is pinned with a supplied known_hosts entry; SSH must fail closed.

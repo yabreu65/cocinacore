@@ -1,0 +1,155 @@
+name: Prepare M4 acceptance fixture
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type PREPARE_M4_ACCEPTANCE_FIXTURE
+        required: true
+        type: string
+      sha:
+        description: Full main SHA to verify before any protected step
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cocinacore-production-operations
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - id: sha
+        shell: bash
+        env:
+          REQUESTED_SHA: ${{ inputs.sha }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$CONFIRMATION" = PREPARE_M4_ACCEPTANCE_FIXTURE
+          test "$REQUESTED_SHA" = "$(git rev-parse HEAD)"
+          test "$(git rev-parse origin/main)" = "$REQUESTED_SHA"
+          echo "sha=$REQUESTED_SHA" >> "$GITHUB_OUTPUT"
+
+  identity:
+    needs: validate
+    environment: production-acceptance
+    runs-on: ubuntu-latest
+    env:
+      E2E_RUN_MODE: production
+      E2E_ALLOW_SIGNUP: "false"
+      E2E_PRODUCTION_URL: ${{ secrets.E2E_PRODUCTION_URL }}
+      E2E_PRODUCTION_USER_EMAIL: ${{ secrets.E2E_PRODUCTION_USER_EMAIL }}
+      E2E_PRODUCTION_USER_PASSWORD: ${{ secrets.E2E_PRODUCTION_USER_PASSWORD }}
+      E2E_PRODUCTION_USER_ID: ${{ secrets.E2E_PRODUCTION_USER_ID }}
+      E2E_PRODUCTION_TENANT_ID: ${{ secrets.E2E_PRODUCTION_TENANT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.3
+      - id: proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          output=$(node scripts/production-acceptance/identity.mjs)
+          nonce=$(printf '%s\n' "$output" | sed -n 's/^IDENTITY_NONCE=//p')
+          commitment=$(printf '%s\n' "$output" | sed -n 's/^IDENTITY_COMMITMENT=//p')
+          test "${#nonce}" = 64
+          test "${#commitment}" = 64
+          echo "::add-mask::$nonce"
+          echo "::add-mask::$commitment"
+          printf 'IDENTITY_COMMITMENT=%s\nIDENTITY_NONCE=%s\n' "$commitment" "$nonce" > "$RUNNER_TEMP/identity-proof.env"
+      - name: Store ephemeral proof artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: m4-identity-proof-${{ github.run_id }}
+          path: ${{ runner.temp }}/identity-proof.env
+          retention-days: 1
+          if-no-files-found: error
+
+  isolation:
+    needs: [validate, identity]
+    environment: production
+    runs-on: ubuntu-latest
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+      VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+      - name: Retrieve ephemeral identity proof
+        uses: actions/download-artifact@v4
+        with:
+          name: m4-identity-proof-${{ github.run_id }}
+          path: ${{ runner.temp }}/identity-proof
+      - name: Configure temporary SSH
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 700 -d "$RUNNER_TEMP/ssh"
+          printf '%s\n' "$VPS_SSH_KEY" > "$RUNNER_TEMP/ssh/key"
+          printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > "$RUNNER_TEMP/ssh/known_hosts"
+          chmod 600 "$RUNNER_TEMP/ssh/key" "$RUNNER_TEMP/ssh/known_hosts"
+      - name: Verify tenant isolation without writes
+        shell: bash
+        run: |
+          set -euo pipefail
+          source "$RUNNER_TEMP/identity-proof/identity-proof.env"
+          echo "::add-mask::$IDENTITY_NONCE"
+          echo "::add-mask::$IDENTITY_COMMITMENT"
+          {
+            printf 'IDENTITY_COMMITMENT=%s\n' "$IDENTITY_COMMITMENT"
+            printf 'IDENTITY_NONCE=%s\n' "$IDENTITY_NONCE"
+            cat scripts/production-acceptance/isolation.sh
+          } | ssh -o BatchMode=yes -o IdentitiesOnly=yes -i "$RUNNER_TEMP/ssh/key" -o UserKnownHostsFile="$RUNNER_TEMP/ssh/known_hosts" "$VPS_USER@$VPS_HOST" bash -s
+
+  prepare:
+    needs: [validate, isolation]
+    environment: production-acceptance
+    runs-on: ubuntu-latest
+    env:
+      E2E_PRODUCTION_URL: ${{ secrets.E2E_PRODUCTION_URL }}
+      E2E_PRODUCTION_USER_EMAIL: ${{ secrets.E2E_PRODUCTION_USER_EMAIL }}
+      E2E_PRODUCTION_USER_PASSWORD: ${{ secrets.E2E_PRODUCTION_USER_PASSWORD }}
+      M4_FIXTURE_MANIFEST_PATH: ${{ runner.temp }}/m4-acceptance-fixture-manifest.json
+      M4_IDENTITY_PROOF_PATH: ${{ runner.temp }}/identity-proof/identity-proof.env
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+      - name: Retrieve ephemeral identity proof
+        uses: actions/download-artifact@v4
+        with:
+          name: m4-identity-proof-${{ github.run_id }}
+          path: ${{ runner.temp }}/identity-proof
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.3
+      - name: Prepare bounded fixture through normal APIs
+        run: node scripts/production-acceptance/prepare-fixture.mjs
+      - name: Upload private fixture manifest
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m4-acceptance-fixture-manifest-${{ github.run_id }}
+          path: ${{ runner.temp }}/m4-acceptance-fixture-manifest.json
+          retention-days: 7
+          if-no-files-found: error

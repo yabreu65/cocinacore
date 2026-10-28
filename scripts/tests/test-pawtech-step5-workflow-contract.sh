@@ -38,7 +38,7 @@ grep -Eq '^[[:space:]]+required:[[:space:]]*true[[:space:]]*$' "$WORKFLOW" || fa
 grep -Eq '^[[:space:]]+type:[[:space:]]*string[[:space:]]*$' "$WORKFLOW" || fail 'dispatch SHA input must be a string'
 grep -Fq '[0-9a-fA-F]{40}' "$WORKFLOW" || fail 'dispatch SHA must be validated as exactly 40 hexadecimal characters'
 grep -Fq 'git merge-base --is-ancestor "$DEPLOY_SHA" origin/main' "$WORKFLOW" || fail 'requested SHA must be an ancestor of origin/main'
-grep -Eq '^  group:[[:space:]]*deploy-production[[:space:]]*$' "$WORKFLOW" || fail 'production deploy concurrency group is missing'
+grep -Eq '^  group:[[:space:]]*cocinacore-production-operations[[:space:]]*$' "$WORKFLOW" || fail 'production deploy concurrency group is missing'
 grep -Eq '^  cancel-in-progress:[[:space:]]*false[[:space:]]*$' "$WORKFLOW" || fail 'production deploys must be serialized without cancellation'
 grep -Eq '^[[:space:]]+environment:[[:space:]]*production[[:space:]]*$' "$WORKFLOW" || fail 'deploy job must target the production environment'
 grep -Eq 'node-version:[[:space:]]*"?22\.22\.3"?[[:space:]]*$' "$WORKFLOW" || fail 'Node must be pinned to 22.22.3'
