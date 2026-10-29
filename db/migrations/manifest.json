@@ -710,6 +710,467 @@
           "identity": "cooking_session_events.cooking_session_events_session_id_idempotency_key_key"
         }
       ]
+    },
+    {
+      "id": "019",
+      "filename": "019_real_consumption_reconciliation.sql",
+      "lane": "migration",
+      "sha256": "509ec1b9ad8bd4f480d3a78ddb6e167647b0d54231bb68e9eb947882b560d587",
+      "byteLength": 18798,
+      "transactional": "required",
+      "legacyChecksumBackfillAllowed": false,
+      "catalogAdditions": [
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "recipe_inventory_items.recipe_inventory_items_id_tenant_id_user_id_key"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "recipe_inventory_items.recipe_inventory_items_id_tenant_id_user_id_key"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "inventory_movements.inventory_movements_id_tenant_id_user_id_key"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "inventory_movements.inventory_movements_id_tenant_id_user_id_key"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "cooking_sessions.cooking_sessions_reconciliation_identity_key"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "cooking_sessions.cooking_sessions_reconciliation_identity_key"
+        },
+        {
+          "kind": "table",
+          "schema": "public",
+          "identity": "public.real_consumption_operations"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "real_consumption_operations.real_consumption_operations_pkey"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "real_consumption_operations.real_consumption_operations_id_tenant_id_user_id_key"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "real_consumption_operations.real_consumption_operations_idempotency_key_key"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "real_consumption_operations.real_consumption_operations_session_key"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "real_consumption_operations.real_consumption_operations_aggregate_status_key"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "real_consumption_operations.real_consumption_operations_confirmed_slot_key"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "real_consumption_operations.idx_real_consumption_operations_tenant_user_created_at"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_operations.real_consumption_operations_pkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_operations.real_consumption_operations_id_tenant_id_user_id_key"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_operations.real_consumption_operations_idempotency_key_key"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_operations.real_consumption_operations_session_key"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_operations.real_consumption_operations_aggregate_status_key"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_operations.real_consumption_operations_day_index_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_operations.real_consumption_operations_meal_type_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_operations.real_consumption_operations_idempotency_key_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_operations.real_consumption_operations_request_hash_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_operations.real_consumption_operations_source_hash_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_operations.real_consumption_operations_status_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_operations.real_consumption_operations_confirmation_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_operations.real_consumption_operations_session_aggregate_fkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_operations.real_consumption_operations_plan_owner_fkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_operations.real_consumption_operations_recipe_owner_fkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_operations.real_consumption_operations_version_owner_fkey"
+        },
+        {
+          "kind": "table",
+          "schema": "public",
+          "identity": "public.meal_consumption_claims"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "meal_consumption_claims.meal_consumption_claims_pkey"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "meal_consumption_claims.meal_consumption_claims_slot_key"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "meal_consumption_claims.meal_consumption_claims_operation_key"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "meal_consumption_claims.idx_meal_consumption_claims_operation_id"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "meal_consumption_claims.meal_consumption_claims_pkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "meal_consumption_claims.meal_consumption_claims_slot_key"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "meal_consumption_claims.meal_consumption_claims_operation_key"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "meal_consumption_claims.meal_consumption_claims_day_index_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "meal_consumption_claims.meal_consumption_claims_meal_type_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "meal_consumption_claims.meal_consumption_claims_mode_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "meal_consumption_claims.meal_consumption_claims_mode_operation_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "meal_consumption_claims.meal_consumption_claims_operation_status_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "meal_consumption_claims.meal_consumption_claims_plan_owner_fkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "meal_consumption_claims.meal_consumption_claims_operation_owner_fkey"
+        },
+        {
+          "kind": "table",
+          "schema": "public",
+          "identity": "public.real_consumption_items"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "real_consumption_items.real_consumption_items_pkey"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "real_consumption_items.real_consumption_items_id_operation_owner_key"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "real_consumption_items.real_consumption_items_original_key"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "real_consumption_items.idx_real_consumption_items_operation_id"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_items.real_consumption_items_pkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_items.real_consumption_items_id_operation_owner_key"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_items.real_consumption_items_original_key"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_items.real_consumption_items_operation_owner_fkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_items.real_consumption_items_inventory_owner_fkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_items.real_consumption_items_outcome_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_items.real_consumption_items_quantity_status_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_items.real_consumption_items_quantity_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_items.real_consumption_items_quantity_outcome_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_items.real_consumption_items_outcome_data_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_items.real_consumption_items_ingredient_bounds_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_items.real_consumption_items_effective_bounds_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_items.real_consumption_items_normalized_effective_bounds_check"
+        },
+        {
+          "kind": "table",
+          "schema": "public",
+          "identity": "public.real_consumption_substitutions"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "real_consumption_substitutions.real_consumption_substitutions_pkey"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "real_consumption_substitutions.real_consumption_substitutions_item_key"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_substitutions.real_consumption_substitutions_pkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_substitutions.real_consumption_substitutions_item_owner_fkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_substitutions.real_consumption_substitutions_operation_owner_fkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_substitutions.real_consumption_substitutions_inventory_owner_fkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_substitutions.real_consumption_substitutions_bounds_check"
+        },
+        {
+          "kind": "table",
+          "schema": "public",
+          "identity": "public.real_consumption_movement_links"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "real_consumption_movement_links.real_consumption_movement_links_pkey"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "real_consumption_movement_links.real_consumption_movement_links_movement_key"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "real_consumption_movement_links.idx_real_consumption_movement_links_operation_id"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_movement_links.real_consumption_movement_links_pkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_movement_links.real_consumption_movement_links_movement_key"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_movement_links.real_consumption_movement_links_operation_owner_fkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_movement_links.real_consumption_movement_links_item_owner_fkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_movement_links.real_consumption_movement_links_movement_owner_fkey"
+        },
+        {
+          "kind": "function",
+          "schema": "public",
+          "identity": "public.reject_real_consumption_mutation"
+        },
+        {
+          "kind": "function",
+          "schema": "public",
+          "identity": "public.validate_real_consumption_substitution"
+        },
+        {
+          "kind": "function",
+          "schema": "public",
+          "identity": "public.validate_real_consumption_movement_link"
+        },
+        {
+          "kind": "trigger",
+          "schema": "public",
+          "identity": "real_consumption_operations.real_consumption_operations_append_only"
+        },
+        {
+          "kind": "trigger",
+          "schema": "public",
+          "identity": "real_consumption_items.real_consumption_items_append_only"
+        },
+        {
+          "kind": "trigger",
+          "schema": "public",
+          "identity": "real_consumption_substitutions.real_consumption_substitutions_consistency"
+        },
+        {
+          "kind": "trigger",
+          "schema": "public",
+          "identity": "real_consumption_substitutions.real_consumption_substitutions_append_only"
+        },
+        {
+          "kind": "trigger",
+          "schema": "public",
+          "identity": "real_consumption_movement_links.real_consumption_movement_links_consistency"
+        },
+        {
+          "kind": "trigger",
+          "schema": "public",
+          "identity": "real_consumption_movement_links.real_consumption_movement_links_append_only"
+        },
+        {
+          "kind": "trigger",
+          "schema": "public",
+          "identity": "meal_consumption_claims.meal_consumption_claims_append_only"
+        }
+      ]
     }
   ],
   "baselineObjects": {

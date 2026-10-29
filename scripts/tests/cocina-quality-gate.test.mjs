@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { runQualityGate, runTests } from '../cocina-quality-gate.mjs';
 
 const root = '/repo';
+const guardianPath = path.join(root, '.githooks', 'gga-codex-pre-commit');
 const nvmrc = '22.22.3\n';
 const validReportData = {
   success: true,
@@ -26,7 +27,10 @@ const validReportData = {
 const validReport = JSON.stringify(validReportData);
 
 function harness({ version = 'v22.22.3', testResult = { status: 0 }, report = validReport, guardianResult = { status: 0 }, hookExists = true } = {}) {
-  const files = new Map([[path.join(root, '.nvmrc'), nvmrc]]);
+  const files = new Map([
+    [path.join(root, '.nvmrc'), nvmrc],
+    [guardianPath, '#!/bin/sh\nGGA_PROVIDER=codex gga run --no-cache\n'],
+  ]);
   const calls = [];
   const reports = new Map();
   let reportCounter = 0;
@@ -38,16 +42,15 @@ function harness({ version = 'v22.22.3', testResult = { status: 0 }, report = va
     mkdtempSync(prefix) { return `${prefix}${++reportCounter}`; },
     writeFileSync(file, contents) { reports.set(file, contents); files.set(file, contents); },
     rmSync() {},
-    existsSync(file) { return hookExists && file === '/shared/hooks/pre-commit'; },
+    existsSync(file) { return hookExists && file === guardianPath; },
     accessSync(file) {
-      if (!hookExists || file !== '/shared/hooks/pre-commit') throw new Error('not executable');
+      if (!hookExists || file !== guardianPath) throw new Error('not executable');
     },
     realpathSync(file) { return file; },
   };
   const spawnSync = (command, args, options) => {
     calls.push({ command, args, options });
-    if (command === 'git') return { status: 0, stdout: '/shared\n' };
-    if (command === '/shared/hooks/pre-commit') return guardianResult;
+    if (command === guardianPath) return guardianResult;
     if (command === process.execPath) {
       if (testResult.onSpawn) return testResult.onSpawn({ args, options, reports });
       if (report !== null) {
@@ -76,7 +79,7 @@ function harness({ version = 'v22.22.3', testResult = { status: 0 }, report = va
   };
 }
 
-const guardianCalls = (h) => h.calls.filter((call) => call.command === '/shared/hooks/pre-commit').length;
+const guardianCalls = (h) => h.calls.filter((call) => call.command === guardianPath).length;
 
 test('Vitest-only stage passes without authorizing or invoking Guardian', () => {
   const h = harness();
@@ -199,7 +202,7 @@ test('each runner invocation gets a fresh report path and cannot reuse stale out
     mkdtempSync: (...args) => fs.mkdtempSync(...args),
     writeFileSync: (...args) => fs.writeFileSync(...args),
     rmSync: (...args) => fs.rmSync(...args),
-    existsSync: (file) => file.endsWith('/hooks/pre-commit'),
+    existsSync: (file) => file.endsWith('/.githooks/gga-codex-pre-commit'),
     accessSync: () => {},
     realpathSync: (file) => file,
   };
@@ -211,8 +214,7 @@ test('each runner invocation gets a fresh report path and cannot reuse stale out
     osApi: { tmpdir: () => temporaryRoot },
     spawnSync: (command, args, spawnOptions) => {
       calls.push({ command, args, options: spawnOptions });
-      if (command === 'git') return { status: 0, stdout: '.git\n' };
-      if (command === path.join(cwd, '.git', 'hooks', 'pre-commit')) return { status: 0 };
+      if (command === path.join(cwd, '.githooks', 'gga-codex-pre-commit')) return { status: 0 };
       if (command !== process.execPath) throw new Error(`unexpected process: ${command}`);
       runnerInvocations += 1;
       const reportArgument = args.find((argument) => argument.startsWith('--outputFile='));
@@ -324,6 +326,7 @@ test('Vitest receives a unique temporary config, report, and cache location', as
   assert.ok(vitest.args.includes('run'));
   assert.ok(vitest.args.includes('--reporter=json'));
   assert.ok(vitest.args.includes('--passWithNoTests'));
+  assert.match(vitest.options.env.NODE_OPTIONS, /--experimental-require-module/);
   const configArgument = vitest.args.find((argument) => argument.startsWith('--config='));
   const reportArgument = vitest.args.find((argument) => argument.startsWith('--outputFile='));
   assert.ok(configArgument);
@@ -368,7 +371,7 @@ test('generated config preserves fixture options and isolates config, report, an
     writeFileSync: (...args) => fs.writeFileSync(...args),
     // Keep the actual generated config alive for inspection after the controlled spawn.
     rmSync: () => {},
-    existsSync: (file) => file.endsWith('/hooks/pre-commit') || fs.existsSync(file),
+    existsSync: (file) => file.endsWith('/.githooks/gga-codex-pre-commit') || fs.existsSync(file),
     accessSync: () => {},
     realpathSync: (file) => file,
   };
@@ -380,8 +383,7 @@ test('generated config preserves fixture options and isolates config, report, an
     pathApi: path,
     osApi: { tmpdir: () => temporaryRoot },
     spawnSync: (command, args, spawnOptions) => {
-      if (command === 'git') return { status: 0, stdout: '.git\n' };
-      if (command.endsWith('/hooks/pre-commit')) return { status: 0 };
+      if (command.endsWith('/.githooks/gga-codex-pre-commit')) return { status: 0 };
       spawned.push({ command, args, spawnOptions });
       const configPath = args.find((argument) => argument.startsWith('--config='))?.slice('--config='.length);
       const reportPath = args.find((argument) => argument.startsWith('--outputFile='))?.slice('--outputFile='.length);

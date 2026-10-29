@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+attempts="${GGA_CODEX_ATTEMPTS:-2}"
+timeout="${GGA_TIMEOUT:-300}"
+readonly codex_model='gpt-5.6-luna'
+readonly codex_reasoning_effort='medium'
+local_bin="$(cd "$(dirname "$0")" && pwd)/bin"
+readonly local_bin
+
+if ! codex_executable="$(command -v codex)"; then
+  echo "Codex executable is unavailable; refusing to continue" >&2
+  exit 1
+fi
+codex_executable="$(realpath "$codex_executable")"
+if [[ "$codex_executable" == "$local_bin/codex" ]]; then
+  echo "Codex shim resolution would recurse; refusing to continue" >&2
+  exit 1
+fi
+export COCINACORE_CODEX_EXECUTABLE="$codex_executable"
+export PATH="$local_bin:$PATH"
+if ! ledger_path="${GGA_CODEX_LEDGER:-$(git rev-parse --git-path gga-codex-attempts.log 2>/dev/null)}"; then
+  echo "Unable to resolve the Codex GGA ledger path; refusing to continue" >&2
+  exit 1
+fi
+if [[ -z "$ledger_path" ]]; then
+  echo "Codex GGA ledger path is empty; refusing to continue" >&2
+  exit 1
+fi
+
+if [[ ! "$attempts" =~ ^[1-2]$ ]]; then
+  echo "GGA Codex attempt budget must be 1 or 2; refusing to continue" >&2
+  exit 1
+fi
+if [[ ! "$timeout" =~ ^[1-9][0-9]*$ ]]; then
+  echo "GGA Codex timeout must be a positive integer; refusing to continue" >&2
+  exit 1
+fi
+if (( timeout > 300 )); then
+  echo "GGA Codex timeout must be at most 300 seconds; refusing to continue" >&2
+  exit 1
+fi
+
+record_attempt() {
+  local attempt="$1"
+  local result="$2"
+  printf '%s provider=codex attempt=%s result=%s head=%s branch=%s\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    "$attempt" "$result" "$(git rev-parse HEAD)" "$(git branch --show-current)" >> "$ledger_path"
+}
+
+for ((attempt = 1; attempt <= attempts; attempt += 1)); do
+  echo "GGA Codex attempt ${attempt}/${attempts} model=${codex_model} reasoning=${codex_reasoning_effort} timeout=${timeout}s"
+  if GGA_PROVIDER=codex GGA_TIMEOUT="$timeout" gga run --no-cache; then
+    record_attempt "$attempt" PASS
+    echo "GGA Codex PASS"
+    exit 0
+  fi
+  record_attempt "$attempt" FAIL
+  echo "GGA Codex attempt ${attempt}/${attempts} failed" >&2
+done
+
+echo "GGA Codex BLOCKED: no approved review result" >&2
+exit 1

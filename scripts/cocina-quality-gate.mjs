@@ -108,6 +108,11 @@ export function runTests({ cwd, processInfo, fsApi, pathApi, osApi, spawn, origi
       '',
     ].join('\n');
     fsApi.writeFileSync(configPath, tempConfig, 'utf8');
+    const inheritedEnv = processInfo.env ?? process.env;
+    const inheritedNodeOptions = inheritedEnv.NODE_OPTIONS?.trim() ?? '';
+    const nodeOptions = inheritedNodeOptions.includes('--experimental-require-module')
+      ? inheritedNodeOptions
+      : `${inheritedNodeOptions} --experimental-require-module`.trim();
     const child = spawn(processInfo.execPath, [
       pathApi.join(cwd, 'frontend', 'node_modules', 'vitest', 'vitest.mjs'),
       'run',
@@ -115,7 +120,13 @@ export function runTests({ cwd, processInfo, fsApi, pathApi, osApi, spawn, origi
       '--reporter=json',
       `--outputFile=${reportPath}`,
       '--passWithNoTests',
-    ], { cwd: pathApi.join(cwd, 'frontend'), encoding: 'utf8', timeout: GATE_TIMEOUT_MS, stdio: 'inherit' });
+    ], {
+      cwd: pathApi.join(cwd, 'frontend'),
+      encoding: 'utf8',
+      timeout: GATE_TIMEOUT_MS,
+      stdio: 'inherit',
+      env: { ...inheritedEnv, NODE_OPTIONS: nodeOptions },
+    });
     if (child.error || child.signal) {
       const detail = child.error?.code || child.signal || child.error?.message || 'unknown child-process failure';
       result = infra(`Vitest did not complete: ${detail}`);
@@ -152,37 +163,26 @@ export function runTests({ cwd, processInfo, fsApi, pathApi, osApi, spawn, origi
   return result ?? infra('Vitest gate did not produce a result');
 }
 
-function runGuardian({ cwd, fsApi, pathApi, spawn, wrapperPath }) {
-  let commonDirResult;
+function runGuardian({ cwd, fsApi, pathApi, spawn, wrapperPath, guardianPath }) {
+  const hookPath = guardianPath ?? pathApi.join(cwd, '.githooks', 'gga-codex-pre-commit');
   try {
-    commonDirResult = spawn('git', ['rev-parse', '--git-common-dir'], { cwd, encoding: 'utf8', timeout: 10_000 });
-  } catch (error) {
-    return { status: 'GUARDIAN_FAIL', reason: `Unable to resolve Git common directory: ${error.message}` };
-  }
-  if (commonDirResult.error || commonDirResult.signal || commonDirResult.status !== 0) {
-    return { status: 'GUARDIAN_FAIL', reason: 'Unable to resolve Git common directory' };
-  }
-
-  const commonDir = pathApi.resolve(cwd, commonDirResult.stdout.trim());
-  const hookPath = pathApi.join(commonDir, 'hooks', 'pre-commit');
-  try {
-    if (!fsApi.existsSync(hookPath)) throw new Error('shared hook is missing');
+    if (!fsApi.existsSync(hookPath)) throw new Error('Codex guardian wrapper is missing');
     fsApi.accessSync(hookPath, fsApi.constants?.X_OK ?? 1);
     if (fsApi.realpathSync(hookPath) === fsApi.realpathSync(wrapperPath)) {
-      throw new Error('shared hook resolves to this project wrapper');
+      throw new Error('Codex guardian wrapper resolves to this project wrapper');
     }
   } catch (error) {
-    return { status: 'GUARDIAN_FAIL', reason: `Invalid shared Guardian hook: ${error.message}` };
+    return { status: 'GUARDIAN_FAIL', reason: `Invalid Codex Guardian wrapper: ${error.message}` };
   }
 
   let result;
   try {
     result = spawn(hookPath, [], { cwd, encoding: 'utf8', timeout: GUARDIAN_TIMEOUT_MS, stdio: 'inherit' });
   } catch (error) {
-    return { status: 'GUARDIAN_FAIL', reason: `Unable to start shared Guardian hook: ${error.message}` };
+    return { status: 'GUARDIAN_FAIL', reason: `Unable to start Codex Guardian wrapper: ${error.message}` };
   }
   if (result.error || result.signal || result.status !== 0) {
-    return { status: 'GUARDIAN_FAIL', reason: `Shared Guardian hook failed (${result.error?.code || result.signal || result.status})` };
+    return { status: 'GUARDIAN_FAIL', reason: `Codex Guardian wrapper failed (${result.error?.code || result.signal || result.status})` };
   }
   return { status: 'GUARDIAN_PASS', reason: null };
 }
@@ -206,6 +206,7 @@ export async function runQualityGate(options = {}) {
     pathApi,
     spawn,
     wrapperPath: options.wrapperPath ?? pathApi.join(cwd, '.githooks', 'pre-commit'),
+    guardianPath: options.guardianPath ?? pathApi.join(cwd, '.githooks', 'gga-codex-pre-commit'),
   });
   return {
     testStatus: 'TEST_PASS',

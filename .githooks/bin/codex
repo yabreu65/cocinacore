@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly real_codex="${COCINACORE_CODEX_EXECUTABLE:-}"
+if [[ -z "$real_codex" || ! -x "$real_codex" ]]; then
+  echo "CocinaCore Codex executable is unavailable; refusing to continue" >&2
+  exit 1
+fi
+if [[ "${1:-}" == "exec" ]]; then
+  shift
+  exec "$real_codex" exec \
+    -m gpt-5.6-luna \
+    -c 'model_reasoning_effort="medium"' \
+    "$@"
+fi
+exec "$real_codex" "$@"

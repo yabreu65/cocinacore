@@ -1,29 +1,41 @@
 # Guardian Angel pre-commit review policy
 
-## Purpose and scope
+## Provider and execution model
 
-Routine Guardian Angel (GGA) reviews invoked by CocinaCore's existing native Git pre-commit hook are preauthorized for the expected files in an approved work unit, within that work unit's applicable attempt budget. This removes per-attempt permission prompts; it does not expand the approved work or replace any other gate.
+CocinaCore uses **Codex-only** for its Guardian Angel (GGA) review path. OpenCode is not an allowed provider for CocinaCore commits.
+
+The active worktree path is:
+
+1. `.githooks/pre-commit`
+2. `scripts/cocina-quality-gate.mjs` (mandatory Vitest gate)
+3. `.githooks/gga-codex-pre-commit` (mandatory Codex review)
+
+The worktree-local `core.hooksPath=.githooks` keeps this policy scoped to the CocinaCore worktree being committed. The shared default hook and global Git hooks are not used by this path and are not modified.
+
+The Codex wrapper prepends `.githooks/bin` only for the GGA child process. Its local `codex` shim invokes the authenticated Codex executable with model `gpt-5.6-luna` and `model_reasoning_effort="medium"`. It does not change the user's global Codex configuration or authentication.
 
 ## Attempt budgets and failure handling
 
-- A commit/candidate is limited to four effective attempts through the existing hook: up to two Codex attempts followed by up to two configured OpenCode attempts.
-- If the hook fails, stop that commit and record the failure. Never disable or modify the hook, use `--no-verify`, force approval, or otherwise bypass the gate.
-- The owner-authorized M3.4 cap is 16 attempts total across exactly four candidates: R3, U5, PR #55, and readiness. At the time of the owner's decision, five attempts had already been consumed (1 + 1 + 2 + 1), leaving eleven; this cap cannot be reset implicitly. The policy document's own GGA gate is charged to the same cap and does not enlarge it. Check the current ODD attempt ledger before each new hook.
-- For a future M milestone that the owner explicitly opens, propose a visible per-phase ceiling in its plan and record actual consumption. Do not infer unlimited authorization or reinterpret the M3.4 cap.
+- Each candidate has an explicit budget of **one or two Codex attempts**. The wrapper accepts only `GGA_CODEX_ATTEMPTS=1` or `2`; there is no unlimited mode.
+- The CocinaCore wrapper defaults to `GGA_TIMEOUT=300` seconds and rejects values above 300 seconds. The GGA provider timeout is therefore 300 seconds, below the 600-second `scripts/cocina-quality-gate.mjs` Guardian child-process limit.
+- The current M5 U4 migration candidate is authorized for exactly **one additional Codex attempt**.
+- Each attempt runs `gga run --no-cache` with `GGA_PROVIDER=codex`.
+- A nonzero result, timeout, missing provider response, invalid budget, or ledger failure blocks the commit.
+- The wrapper records timestamp, provider, attempt number, result, HEAD, and branch in the worktree-local GGA ledger returned by `git rev-parse --git-path gga-codex-attempts.log`.
+- Never use `--no-verify`, force approval, disable the wrapper, or bypass the Vitest gate.
 
-## Pre-hook scope and evidence
+## Mandatory quality gates
 
-Before each GGA invocation:
+1. The quality gate validates the repository `.nvmrc` and executes Vitest with a fresh JSON report and isolated temporary cache.
+2. The quality gate adds `--experimental-require-module` to `NODE_OPTIONS` when needed for the installed Node/Vitest ESM boundary.
+3. Guardian review starts only after a valid, non-empty, fully passing Vitest report.
+4. The Codex wrapper must be present, executable, and distinct from `.githooks/pre-commit`.
+5. Any failed or unavailable gate exits nonzero and prevents the commit.
 
-1. Stage only the files allowed for the approved work unit.
-2. Inspect the staged paths for accidental inclusions and secrets; confirm untracked artifacts are not staged.
-3. Record the candidate/base and commit SHAs, provider, effective attempt count, result, and any failures in the applicable ODD record.
-4. Preserve logs and other review evidence.
+## Scope and history
 
-Do not alter `.git/hooks/pre-commit`, `.atl/skill-registry.md`, or provider configuration to avoid or weaken the gate. If the hook creates unrelated secondary files, preserve and resolve them safely, and report any findings rather than hiding them.
+The worktree-specific hook configuration affects only this CocinaCore worktree. Other repositories and global hooks are outside this policy. Other CocinaCore worktrees retain their own Git worktree configuration and are not changed by this candidate.
 
-## Separate approvals remain in force
+Historical GGA records, including earlier OpenCode attempts from older candidates, remain historical evidence and are not deleted or replayed. They do not authorize OpenCode in the current CocinaCore flow.
 
-This GGA authorization grants no new native RDD reviewer runs or captures and does not change candidate-specific RDD scope, forecast, consent, or acknowledgement requirements. It also does not by itself authorize destructive or production tests, sensitive/production access, push, merge, deployment, or other delivery actions. Follow the applicable owner and repository gates for those actions.
-
-Request fresh owner authorization only when the applicable attempt budget is exhausted, the candidate materially expands, sensitive/production access is required, or the provider requires a human decision.
+Before each candidate, stage only the approved files, inspect staged paths for accidental inclusions and secrets, and preserve the wrapper ledger and review output. A new candidate or material post-review change requires a new explicitly authorized Codex budget.
