@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const GATE_TIMEOUT_MS = 10 * 60 * 1000;
-const GUARDIAN_TIMEOUT_MS = 10 * 60 * 1000;
+const GUARDIAN_TIMEOUT_MS = 11 * 60 * 1000;
 const scriptPath = fileURLToPath(import.meta.url);
 const repositoryRoot = path.resolve(path.dirname(scriptPath), '..');
 

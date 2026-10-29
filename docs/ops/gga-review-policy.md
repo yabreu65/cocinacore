@@ -12,13 +12,14 @@ The active worktree path is:
 
 The worktree-local `core.hooksPath=.githooks` keeps this policy scoped to the CocinaCore worktree being committed. The shared default hook and global Git hooks are not used by this path and are not modified.
 
-The Codex wrapper prepends `.githooks/bin` only for the GGA child process. Its local `codex` shim invokes the authenticated Codex executable with model `gpt-5.6-luna` and `model_reasoning_effort="medium"`. It does not change the user's global Codex configuration or authentication.
+The GGA invocation does not set a model or reasoning override. GGA calls the authenticated `codex exec` CLI directly, so model and reasoning inherit the effective Codex CLI configuration. OpenCode is not an allowed fallback.
 
 ## Attempt budgets and failure handling
 
-- Each candidate has an explicit budget of **one or two Codex attempts**. The wrapper accepts only `GGA_CODEX_ATTEMPTS=1` or `2`; there is no unlimited mode.
-- The CocinaCore wrapper defaults to `GGA_TIMEOUT=300` seconds and rejects values above 300 seconds. The GGA provider timeout is therefore 300 seconds, below the 600-second `scripts/cocina-quality-gate.mjs` Guardian child-process limit.
-- The current M5 U4 migration candidate is authorized for exactly **one additional Codex attempt**.
+- Each candidate has an explicit budget of **one Codex attempt**. The wrapper defaults to and accepts only `GGA_CODEX_ATTEMPTS=1`; any other value is rejected.
+- The wrapper requires an unused append-only ledger authorization matching the current HEAD, branch, staged tree, provider, timeout, and one-attempt budget before invoking GGA. A consumed or missing authorization blocks the commit.
+- The global GGA timeout is `600` seconds. The CocinaCore wrapper defaults to and caps `GGA_TIMEOUT=600` seconds. The Node quality gate allows 660 seconds for the Guardian child process, leaving a finite parent grace period for cleanup and result propagation.
+- The current M5 U4 administrative candidate is authorized for exactly **one additional Codex attempt**.
 - Each attempt runs `gga run --no-cache` with `GGA_PROVIDER=codex`.
 - A nonzero result, timeout, missing provider response, invalid budget, or ledger failure blocks the commit.
 - The wrapper records timestamp, provider, attempt number, result, HEAD, and branch in the worktree-local GGA ledger returned by `git rev-parse --git-path gga-codex-attempts.log`.

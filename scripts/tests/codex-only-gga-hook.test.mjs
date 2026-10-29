@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import test from "node:test";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
@@ -12,7 +12,27 @@ const wrapperPath = path.join(
   "gga-codex-pre-commit",
 );
 
-const runWrapper = async ({ exitCode, attempts }) => {
+const currentCandidate = () => ({
+  head: execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+  }).trim(),
+  branch: execFileSync("git", ["branch", "--show-current"], {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+  }).trim(),
+  tree: execFileSync("git", ["write-tree"], {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+  }).trim(),
+});
+
+const runWrapper = async ({
+  exitCode,
+  attempts,
+  authorized = true,
+  consumed = false,
+}) => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "cocina-codex-gga-hook-"),
   );
@@ -27,23 +47,40 @@ const runWrapper = async ({ exitCode, attempts }) => {
     "utf8",
   );
   await chmod(fakeGga, 0o755);
+  if (authorized) {
+    const candidate = currentCandidate();
+    await writeFile(
+      ledgerPath,
+      `${new Date().toISOString()} cycle=test provider=codex authorized_attempts=1 timeout=600 status=AUTHORIZED head=${candidate.head} branch=${candidate.branch} tree=${candidate.tree} staged_files=6\n`,
+      "utf8",
+    );
+    if (consumed) {
+      await writeFile(
+        ledgerPath,
+        `${await readFile(ledgerPath, "utf8")}2026-01-01T00:00:00Z provider=codex attempt=1 result=FAIL head=${candidate.head} branch=${candidate.branch}\n`,
+        "utf8",
+      );
+    }
+  }
+  const environment = {
+    ...process.env,
+    PATH: `${fakeBin}:${process.env.PATH}`,
+    GGA_CODEX_LEDGER: ledgerPath,
+    GGA_FAKE_EXIT: String(exitCode),
+    GGA_LOG: logPath,
+  };
+  if (attempts === undefined) delete environment.GGA_CODEX_ATTEMPTS;
+  else environment.GGA_CODEX_ATTEMPTS = String(attempts);
   const result = await new Promise((resolve) => {
     const child = spawn(wrapperPath, [], {
       cwd: repositoryRoot,
-      env: {
-        ...process.env,
-        PATH: `${fakeBin}:${process.env.PATH}`,
-        GGA_CODEX_ATTEMPTS: String(attempts),
-        GGA_CODEX_LEDGER: ledgerPath,
-        GGA_FAKE_EXIT: String(exitCode),
-        GGA_LOG: logPath,
-      },
+      env: environment,
       stdio: "ignore",
     });
     child.on("close", (code, signal) => resolve({ code, signal }));
   });
-  const log = await readFile(logPath, "utf8");
-  const ledger = await readFile(ledgerPath, "utf8");
+  const log = await readFile(logPath, "utf8").catch(() => "");
+  const ledger = await readFile(ledgerPath, "utf8").catch(() => "");
   await rm(directory, { recursive: true, force: true });
   return { result, log, ledger };
 };
@@ -55,27 +92,56 @@ test("Codex-only wrapper never contains or invokes OpenCode", async () => {
   assert.match(source, /gga run --no-cache/);
 });
 
-test("successful Codex review records one PASS attempt", async () => {
+test("missing attempt override defaults to one authorized PASS attempt", async () => {
   const { result, log, ledger } = await runWrapper({
     exitCode: 0,
-    attempts: 1,
   });
   assert.equal(result.code, 0);
   assert.equal(result.signal, null);
-  assert.match(log, /^codex\|300\|run --no-cache\n$/);
+  assert.match(log, /^codex\|600\|run --no-cache\n$/);
   assert.match(ledger, /provider=codex attempt=1 result=PASS/);
 });
 
-test("Codex failure fails closed and records every bounded attempt", async () => {
+test("GGA_CODEX_ATTEMPTS=1 is accepted and failure never retries", async () => {
   const { result, log, ledger } = await runWrapper({
     exitCode: 1,
-    attempts: 2,
+    attempts: 1,
   });
   assert.equal(result.code, 1);
   assert.equal(result.signal, null);
-  assert.equal(log.trim().split("\n").length, 2);
+  assert.equal(log.trim().split("\n").length, 1);
   assert.match(ledger, /provider=codex attempt=1 result=FAIL/);
-  assert.match(ledger, /provider=codex attempt=2 result=FAIL/);
+});
+
+test("a timeout-like provider failure never retries", async () => {
+  const { result, log, ledger } = await runWrapper({ exitCode: 124 });
+  assert.equal(result.code, 1);
+  assert.equal(result.signal, null);
+  assert.equal(log.trim().split("\n").length, 1);
+  assert.match(ledger, /provider=codex attempt=1 result=FAIL/);
+});
+
+test("authorization remains append-only before the attempt result", async () => {
+  const { result, ledger } = await runWrapper({ exitCode: 0 });
+  assert.equal(result.code, 0);
+  const lines = ledger.trim().split("\n");
+  assert.equal(lines.length, 2);
+  assert.match(lines[0], /status=AUTHORIZED/);
+  assert.match(lines[1], /provider=codex attempt=1 result=PASS/);
+});
+
+test("missing authorization fails closed before invoking GGA", async () => {
+  const { result, log } = await runWrapper({ exitCode: 0, authorized: false });
+  assert.equal(result.code, 1);
+  assert.equal(result.signal, null);
+  assert.equal(log, "");
+});
+
+test("a consumed authorization fails closed before invoking GGA", async () => {
+  const { result, log } = await runWrapper({ exitCode: 0, consumed: true });
+  assert.equal(result.code, 1);
+  assert.equal(result.signal, null);
+  assert.equal(log, "");
 });
 
 test("timeout above the parent-safe limit fails before invoking GGA", async () => {
@@ -95,7 +161,7 @@ test("timeout above the parent-safe limit fails before invoking GGA", async () =
       env: {
         ...process.env,
         PATH: `${fakeBin}:${process.env.PATH}`,
-        GGA_TIMEOUT: "301",
+        GGA_TIMEOUT: "601",
         GGA_CODEX_LEDGER: ledgerPath,
         GGA_LOG: logPath,
       },
@@ -109,61 +175,48 @@ test("timeout above the parent-safe limit fails before invoking GGA", async () =
   await rm(directory, { recursive: true, force: true });
 });
 
-test("local Codex shim pins model and medium reasoning without invoking a provider", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "cocina-codex-shim-"));
-  const fakeCodex = path.join(directory, "real-codex");
-  const argsPath = path.join(directory, "args.log");
-  await writeFile(
-    fakeCodex,
-    '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$COCINA_ARGS_LOG"\n',
-    "utf8",
+test("Codex invocation inherits CLI model and reasoning without local overrides", async () => {
+  const source = await readFile(wrapperPath, "utf8");
+  assert.doesNotMatch(source, /gpt-5\.6-luna|model_reasoning_effort|medium/);
+  assert.doesNotMatch(source, /\.githooks\/bin|COCINACORE_CODEX_EXECUTABLE/);
+  await assert.rejects(
+    readFile(path.join(repositoryRoot, ".githooks", "bin", "codex")),
   );
-  await chmod(fakeCodex, 0o755);
-  const result = spawnSync(
-    path.join(repositoryRoot, ".githooks", "bin", "codex"),
-    ["exec", "--output-last-message", "/tmp/last-message", "-"],
-    {
-      cwd: repositoryRoot,
-      env: {
-        ...process.env,
-        COCINACORE_CODEX_EXECUTABLE: fakeCodex,
-        COCINA_ARGS_LOG: argsPath,
-      },
-      encoding: "utf8",
-    },
-  );
-  assert.equal(result.status, 0, result.stderr);
-  const args = (await readFile(argsPath, "utf8")).trim().split("\n");
-  assert.deepEqual(args.slice(0, 6), [
-    "exec",
-    "-m",
-    "gpt-5.6-luna",
-    "-c",
-    'model_reasoning_effort="medium"',
-    "--output-last-message",
-  ]);
-  await rm(directory, { recursive: true, force: true });
 });
 
-test("invalid attempt budgets fail before invoking the provider", async () => {
-  const directory = await mkdtemp(
-    path.join(os.tmpdir(), "cocina-codex-gga-budget-"),
-  );
-  const ledgerPath = path.join(directory, "ledger.log");
-  const result = await new Promise((resolve) => {
-    const child = spawn(wrapperPath, [], {
-      cwd: repositoryRoot,
-      env: {
-        ...process.env,
-        GGA_CODEX_ATTEMPTS: "3",
-        GGA_CODEX_LEDGER: ledgerPath,
-      },
-      stdio: "ignore",
+test("zero, two, negative, and non-numeric budgets fail closed", async () => {
+  for (const attempts of ["0", "2", "-1", "invalid"]) {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "cocina-codex-gga-budget-"),
+    );
+    const ledgerPath = path.join(directory, "ledger.log");
+    const logPath = path.join(directory, "gga.log");
+    const fakeBin = path.join(directory, "bin");
+    await (await import("node:fs/promises")).mkdir(fakeBin);
+    const fakeGga = path.join(fakeBin, "gga");
+    await writeFile(
+      fakeGga,
+      '#!/bin/sh\nprintf invoked >> "$GGA_LOG"\n',
+      "utf8",
+    );
+    await chmod(fakeGga, 0o755);
+    const result = await new Promise((resolve) => {
+      const child = spawn(wrapperPath, [], {
+        cwd: repositoryRoot,
+        env: {
+          ...process.env,
+          PATH: `${fakeBin}:${process.env.PATH}`,
+          GGA_CODEX_ATTEMPTS: attempts,
+          GGA_CODEX_LEDGER: ledgerPath,
+          GGA_LOG: logPath,
+        },
+        stdio: "ignore",
+      });
+      child.on("close", (code, signal) => resolve({ code, signal }));
     });
-    child.on("close", (code, signal) => resolve({ code, signal }));
-  });
-  assert.equal(result.code, 1);
-  assert.equal(result.signal, null);
-  await assert.rejects(readFile(ledgerPath, "utf8"));
-  await rm(directory, { recursive: true, force: true });
+    assert.equal(result.code, 1);
+    assert.equal(result.signal, null);
+    await assert.rejects(readFile(logPath, "utf8"));
+    await rm(directory, { recursive: true, force: true });
+  }
 });
