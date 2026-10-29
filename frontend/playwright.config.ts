@@ -1,8 +1,20 @@
+import { randomUUID } from 'node:crypto';
 import { defineConfig, devices } from '@playwright/test';
 import { applyValidatedTargetsToRunner } from './e2e/database-target';
+import { requireE2EExecutionId } from './e2e/fixtures/isolation';
 import { buildStandaloneServerFixtureEnv } from './e2e/standalone-server-env';
 
 const targets = applyValidatedTargetsToRunner(process.env);
+const configuredExecutionId = process.env.COCINACORE_E2E_EXECUTION_ID;
+if (configuredExecutionId && !/^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/.test(configuredExecutionId)) {
+  throw new Error('COCINACORE_E2E_EXECUTION_ID must be a safe lane identifier.');
+}
+const executionId = configuredExecutionId ?? `pw-${Date.now()}-${randomUUID().slice(0, 8)}`;
+process.env.COCINACORE_E2E_EXECUTION_ID = executionId;
+process.env.COCINACORE_E2E_CACHE_NAMESPACE = executionId;
+process.env.COCINACORE_E2E_DISPOSABLE = 'true';
+process.env.COCINACORE_E2E_WORKERS = '1';
+requireE2EExecutionId(process.env);
 const configuredAppPort = process.env.E2E_APP_PORT ?? '4320';
 const appPort = Number(configuredAppPort);
 const configuredProviderPort = process.env.E2E_PROVIDER_PORT ?? '4319';

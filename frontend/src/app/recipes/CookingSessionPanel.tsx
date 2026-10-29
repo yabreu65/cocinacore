@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { safeFetch } from '@/lib/api';
+import { normalizeInventoryName } from '@/lib/inventory/normalize-inventory';
 import type { MealPlanPublicResponse } from '@/lib/meal-planner/rehydration';
 import type { StructuredMealType } from '@/lib/meal-planner/structured-plan';
 
@@ -24,12 +25,45 @@ type Session = {
   version: number;
 };
 type Slot = { dayIndex: number; mealType: StructuredMealType; title: string };
+type ReconciliationOutcome = 'used' | 'omitted' | 'unknown' | 'substituted';
+type ReconciliationItem = {
+  originalIngredient: string;
+  outcome: ReconciliationOutcome;
+  effectiveIngredient: string | null;
+  quantity: number | null;
+  unit: string | null;
+  inventoryItemId: string | null;
+  substituteIngredient: string | null;
+  substituteInventoryItemId: string | null;
+};
+type InventoryOption = {
+  id: string;
+  ingredientName: string;
+  normalizedName: string | null;
+  quantity: string | null;
+  unit: string | null;
+  expirationDate: string | null;
+};
 
 const storageKey = (recipeId: string, versionId: string) =>
   `cooking-session:${recipeId}:${versionId}`;
 
 const startIdempotencyKey = (recipeId: string, versionId: string) =>
   `${storageKey(recipeId, versionId)}:start`;
+const reconciliationIdempotencyKey = (sessionId: string) => `cooking-reconciliation:${sessionId}`;
+
+function initialReconciliationItems(session: Session): ReconciliationItem[] {
+  return session.instructionSnapshot.ingredients.map((ingredient) => ({
+    originalIngredient: ingredient.name,
+    outcome: 'unknown',
+    effectiveIngredient: null,
+    quantity: null,
+    unit: null,
+    inventoryItemId: null,
+    substituteIngredient: null,
+    substituteInventoryItemId: null,
+  }));
+}
 
 export default function CookingSessionPanel({ recipeId, versionId }: Props) {
   const [open, setOpen] = useState(false);
@@ -39,6 +73,10 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
   const [loading, setLoading] = useState(false);
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState('');
+  const [reconciliationItems, setReconciliationItems] = useState<ReconciliationItem[]>([]);
+  const [inventoryOptions, setInventoryOptions] = useState<InventoryOption[]>([]);
+  const [reconciliationWorking, setReconciliationWorking] = useState(false);
+  const [reconciliationMessage, setReconciliationMessage] = useState('');
   const loadStarted = useRef(false);
 
   const slots = useMemo<Slot[]>(
@@ -96,6 +134,22 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
       .finally(() => setLoading(false));
   }, [loading, open, plan, recipeId, versionId]);
 
+  useEffect(() => {
+    if (!session || session.status !== 'completed') return;
+    setReconciliationItems((current) =>
+      current.length === session.instructionSnapshot.ingredients.length
+        ? current
+        : initialReconciliationItems(session)
+    );
+    void safeFetch<{ inventory: InventoryOption[] }>(
+      `/api/cooking-sessions/${encodeURIComponent(session.id)}/reconciliation`,
+      { credentials: 'same-origin' }
+    ).then((result) => {
+      if (result.ok) setInventoryOptions(result.data.inventory);
+      else setReconciliationMessage(result.error);
+    });
+  }, [session]);
+
   const start = async () => {
     if (!plan?.id || !plan.updatedAt || !plan.plan || !selectedSlot) return;
     const [dayIndexText, mealType] = selectedSlot.split(':');
@@ -148,6 +202,58 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
     if (result.ok) setSession(result.data.session);
     else setMessage(result.error);
     setWorking(false);
+  };
+
+  const updateReconciliationItem = (index: number, patch: Partial<ReconciliationItem>) => {
+    setReconciliationItems((current) =>
+      current.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item))
+    );
+  };
+
+  const setReconciliationOutcome = (index: number, outcome: ReconciliationOutcome) => {
+    const current = reconciliationItems[index];
+    if (!current) return;
+    updateReconciliationItem(index, {
+      outcome,
+      effectiveIngredient: outcome === 'used' ? current.originalIngredient : null,
+      quantity: null,
+      unit: null,
+      inventoryItemId: null,
+      substituteIngredient: null,
+      substituteInventoryItemId: null,
+    });
+  };
+
+  const submitReconciliation = async () => {
+    if (!session || session.status !== 'completed') return;
+    const idempotencyKey =
+      window.sessionStorage.getItem(reconciliationIdempotencyKey(session.id)) ??
+      crypto.randomUUID();
+    window.sessionStorage.setItem(reconciliationIdempotencyKey(session.id), idempotencyKey);
+    setReconciliationWorking(true);
+    setReconciliationMessage('');
+    const result = await safeFetch<{ status: string; movementCount: number }>(
+      `/api/cooking-sessions/${encodeURIComponent(session.id)}/reconciliation`,
+      {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          expectedVersion: session.version,
+          idempotencyKey,
+          confirmed: true,
+          items: reconciliationItems,
+        }),
+      }
+    );
+    if (result.ok) {
+      setReconciliationMessage(
+        result.data.status === 'already_applied'
+          ? 'La reconciliación ya estaba registrada.'
+          : `Uso real registrado. Movimientos de inventario: ${result.data.movementCount}.`
+      );
+    } else setReconciliationMessage(result.error);
+    setReconciliationWorking(false);
   };
 
   return (
@@ -282,6 +388,153 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
                   </button>
                 )}
               </div>
+              {session.status === 'completed' && (
+                <fieldset className="grid gap-3 rounded-xl bg-white p-3">
+                  <legend className="px-1 font-semibold">Reconciliar uso real</legend>
+                  <p className="text-sm text-slate-700">
+                    Confirmá qué ocurrió con cada ingrediente. Esta operación no registra consumo
+                    hasta que la envíes y no puede deshacer un movimiento confirmado.
+                  </p>
+                  <div className="grid gap-3">
+                    {reconciliationItems.map((item, index) => {
+                      const matchingInventory = inventoryOptions.filter((option) => {
+                        const name = item.effectiveIngredient ?? item.originalIngredient;
+                        return option.normalizedName === normalizeInventoryName(name);
+                      });
+                      return (
+                        <div
+                          key={item.originalIngredient}
+                          className="grid gap-2 rounded-xl border border-[#D8E5D4] p-3"
+                        >
+                          <p className="font-medium">{item.originalIngredient}</p>
+                          <label className="grid gap-1 text-sm">
+                            Resultado
+                            <select
+                              className="rounded-xl border border-[#D8E5D4] px-3 py-2"
+                              value={item.outcome}
+                              onChange={(event) =>
+                                setReconciliationOutcome(
+                                  index,
+                                  event.target.value as ReconciliationOutcome
+                                )
+                              }
+                            >
+                              <option value="used">Usado</option>
+                              <option value="omitted">Omitido</option>
+                              <option value="substituted">Sustituido</option>
+                              <option value="unknown">Desconocido</option>
+                            </select>
+                          </label>
+                          {(item.outcome === 'used' || item.outcome === 'substituted') && (
+                            <>
+                              <label className="grid gap-1 text-sm">
+                                Ingrediente efectivo
+                                <input
+                                  className="rounded-xl border border-[#D8E5D4] px-3 py-2"
+                                  value={item.effectiveIngredient ?? ''}
+                                  onChange={(event) =>
+                                    updateReconciliationItem(index, {
+                                      effectiveIngredient: event.target.value,
+                                    })
+                                  }
+                                />
+                              </label>
+                              <div className="grid gap-2 sm:grid-cols-2">
+                                <label className="grid gap-1 text-sm">
+                                  Cantidad efectiva
+                                  <input
+                                    type="number"
+                                    min="0.0001"
+                                    step="any"
+                                    className="rounded-xl border border-[#D8E5D4] px-3 py-2"
+                                    value={item.quantity ?? ''}
+                                    onChange={(event) =>
+                                      updateReconciliationItem(index, {
+                                        quantity: event.target.value
+                                          ? Number(event.target.value)
+                                          : null,
+                                      })
+                                    }
+                                  />
+                                </label>
+                                <label className="grid gap-1 text-sm">
+                                  Unidad
+                                  <input
+                                    className="rounded-xl border border-[#D8E5D4] px-3 py-2"
+                                    value={item.unit ?? ''}
+                                    onChange={(event) =>
+                                      updateReconciliationItem(index, {
+                                        unit: event.target.value || null,
+                                      })
+                                    }
+                                  />
+                                </label>
+                              </div>
+                              <label className="grid gap-1 text-sm">
+                                Lote de inventario
+                                <select
+                                  className="rounded-xl border border-[#D8E5D4] px-3 py-2"
+                                  value={item.inventoryItemId ?? ''}
+                                  onChange={(event) =>
+                                    updateReconciliationItem(index, {
+                                      inventoryItemId: event.target.value || null,
+                                      ...(item.outcome === 'substituted'
+                                        ? { substituteInventoryItemId: event.target.value || null }
+                                        : {}),
+                                    })
+                                  }
+                                >
+                                  <option value="">Seleccioná un lote</option>
+                                  {(matchingInventory.length > 0
+                                    ? matchingInventory
+                                    : inventoryOptions
+                                  ).map((option) => (
+                                    <option key={option.id} value={option.id}>
+                                      {option.ingredientName} · {option.quantity ?? '—'}{' '}
+                                      {option.unit ?? ''}
+                                      {option.expirationDate
+                                        ? ` · vence ${option.expirationDate}`
+                                        : ''}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                            </>
+                          )}
+                          {item.outcome === 'substituted' && (
+                            <label className="grid gap-1 text-sm">
+                              Sustituto real
+                              <input
+                                className="rounded-xl border border-[#D8E5D4] px-3 py-2"
+                                value={item.substituteIngredient ?? ''}
+                                onChange={(event) =>
+                                  updateReconciliationItem(index, {
+                                    substituteIngredient: event.target.value,
+                                    effectiveIngredient: event.target.value,
+                                  })
+                                }
+                              />
+                            </label>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <button
+                    type="button"
+                    disabled={reconciliationWorking}
+                    onClick={() => void submitReconciliation()}
+                    className="rounded-xl bg-[#4F6F52] px-3 py-2 font-semibold text-white disabled:opacity-50"
+                  >
+                    {reconciliationWorking ? 'Registrando…' : 'Confirmar uso real'}
+                  </button>
+                  {reconciliationMessage && (
+                    <p role="status" className="text-sm text-slate-700">
+                      {reconciliationMessage}
+                    </p>
+                  )}
+                </fieldset>
+              )}
             </>
           )}
           {message && (

@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { expect, test, type Page } from '@playwright/test';
 import { Pool } from 'pg';
 import { validateE2ETargets } from '../database-target';
-import { injectAuth } from '../fixtures/auth';
+import { signupIsolatedE2EUser } from '../fixtures/auth';
+import {
+  assertE2EDisposableIsolation,
+  closeE2EDatabase,
+  hasAppendOnlyE2EReferences,
+} from '../fixtures/database';
 
 const database = new Pool({
   connectionString: validateE2ETargets(process.env).databaseUrl,
@@ -14,7 +19,7 @@ const database = new Pool({
 type Identity = { userId: string; tenantId: string };
 
 async function authenticatedIdentity(page: Page): Promise<Identity> {
-  await injectAuth(page, undefined, { allowSignup: false });
+  await signupIsolatedE2EUser(page, 'shopping-consumption');
   const response = await page.goto('/api/profile');
   expect(response?.ok()).toBeTruthy();
   const payload = JSON.parse((await page.locator('body').innerText()) ?? '') as {
@@ -64,11 +69,13 @@ function mealPlan(trackedName: string, mealTitle: string) {
 test.describe('Shopping purchase to inventory to Ya cociné', () => {
   test.afterAll(async () => {
     await database.end();
+    await closeE2EDatabase();
   });
 
   test('transfers legacy purchased rows with structured quantities and rejects unstructured quantities', async ({
     page,
   }) => {
+    await assertE2EDisposableIsolation(database);
     const identity = await authenticatedIdentity(page);
     const unique = `e2e-shopping-legacy-${randomUUID()}`;
     const rows = [
@@ -307,6 +314,12 @@ test.describe('Shopping purchase to inventory to Ya cociné', () => {
       throw error;
     } finally {
       try {
+        if (
+          planId &&
+          (await hasAppendOnlyE2EReferences(database, identity.tenantId, identity.userId, [planId]))
+        ) {
+          return;
+        }
         if (planId)
           await database.query(
             'delete from public.user_meal_plans where id=$1 and tenant_id=$2 and user_id=$3',

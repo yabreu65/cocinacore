@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { expect, test, type Page } from '@playwright/test';
 import { Pool } from 'pg';
 import { validateE2ETargets } from '../database-target';
-import { injectAuth } from '../fixtures/auth';
+import { injectAuth, signupIsolatedE2EUser } from '../fixtures/auth';
+import {
+  assertE2EDisposableIsolation,
+  closeE2EDatabase,
+  hasAppendOnlyE2EReferences,
+} from '../fixtures/database';
 
 const database = new Pool({ connectionString: validateE2ETargets(process.env).databaseUrl });
 
@@ -17,7 +22,8 @@ type Seed = {
 };
 
 async function authenticatedIdentity(page: Page): Promise<Identity> {
-  await injectAuth(page, undefined, { allowSignup: true });
+  await assertE2EDisposableIsolation(database);
+  await signupIsolatedE2EUser(page, 'm4-u5');
   const response = await page.request.get('/api/profile');
   expect(response.ok()).toBeTruthy();
   const payload = (await response.json()) as {
@@ -77,6 +83,7 @@ function integratedPlan(ingredientNames: { soon: string; missing: string }) {
 async function cleanup(seed: Seed): Promise<void> {
   const { tenantId, userId } = seed.identity;
   if (seed.planId) {
+    if (await hasAppendOnlyE2EReferences(database, tenantId, userId, [seed.planId])) return;
     await database.query(
       'delete from public.inventory_movements where tenant_id = $1 and user_id = $2 and source_meal_plan_id = $3',
       [tenantId, userId, seed.planId]
@@ -109,7 +116,10 @@ async function cleanup(seed: Seed): Promise<void> {
 }
 
 test.describe('M4 U5 integrated connected quality', () => {
-  test.afterAll(async () => database.end());
+  test.afterAll(async () => {
+    await database.end();
+    await closeE2EDatabase();
+  });
 
   test('connects auth, profile-scoped inventory, U1-U4, purchase transfer, and consumption', async ({
     page,

@@ -1,6 +1,6 @@
-import type { PoolClient } from 'pg';
 import { query, transaction } from '@/lib/db';
 import type { RecipeInventoryItemRow, UserMealPlanRow } from '@/lib/db/types';
+import type { DbTransactionClient } from '@/lib/db/transaction-client';
 import { normalizeInventoryName } from '@/lib/inventory/normalize-inventory';
 import {
   canCompareUnits,
@@ -19,6 +19,7 @@ import {
   parseStructuredMealPlanValue,
   type StructuredMealType,
 } from '@/lib/meal-planner/structured-plan';
+import { claimPlannedMealInTransaction } from '@/lib/db/repositories/realConsumptionRepository';
 
 export type ConsumePlannedMealInput = {
   mealPlanId: string;
@@ -35,7 +36,7 @@ export type ConsumePlannedMealResult = {
 
 export class MealPlanConsumptionError extends Error {
   constructor(
-    public readonly code: 'not_found' | 'invalid_plan' | 'invalid_meal',
+    public readonly code: 'not_found' | 'invalid_plan' | 'invalid_meal' | 'already_claimed',
     message: string
   ) {
     super(message);
@@ -44,9 +45,7 @@ export class MealPlanConsumptionError extends Error {
 }
 
 function parseInventoryQuantity(item: RecipeInventoryItemRow) {
-  return parseQuantity(
-    [item.quantity ?? '', item.unit ?? ''].filter(Boolean).join(' ').trim()
-  );
+  return parseQuantity([item.quantity ?? '', item.unit ?? ''].filter(Boolean).join(' ').trim());
 }
 
 function amountInUnit(
@@ -63,7 +62,7 @@ function normalizedInventoryName(item: RecipeInventoryItemRow): string {
 }
 
 async function lockPlan(
-  client: PoolClient,
+  client: DbTransactionClient,
   input: ConsumePlannedMealInput
 ): Promise<UserMealPlanRow> {
   const result = await client.query<UserMealPlanRow>(
@@ -77,19 +76,23 @@ async function lockPlan(
   return plan;
 }
 
-async function lockInventory(client: PoolClient, tenantId: string): Promise<RecipeInventoryItemRow[]> {
+async function lockInventory(
+  client: DbTransactionClient,
+  tenantId: string,
+  userId: string
+): Promise<RecipeInventoryItemRow[]> {
   const result = await client.query<RecipeInventoryItemRow>(
     `select * from public.recipe_inventory_items
-      where tenant_id=$1
+      where tenant_id=$1 and user_id=$2
       order by expiration_date asc nulls last, created_at asc, id asc
       for update`,
-    [tenantId]
+    [tenantId, userId]
   );
   return result.rows;
 }
 
 async function decrementInventoryRow(
-  client: PoolClient,
+  client: DbTransactionClient,
   row: RecipeInventoryItemRow,
   quantity: number,
   unit: NormalizedUnit,
@@ -103,8 +106,8 @@ async function decrementInventoryRow(
   await client.query(
     `update public.recipe_inventory_items
         set quantity=$1, updated_at=now()
-      where id=$2 and tenant_id=$3`,
-    [storedQuantity, row.id, input.tenantId]
+      where id=$2 and tenant_id=$3 and user_id=$4`,
+    [storedQuantity, row.id, input.tenantId, input.userId]
   );
   row.quantity = storedQuantity;
 
@@ -129,7 +132,7 @@ async function decrementInventoryRow(
 }
 
 async function consumeIngredient(
-  client: PoolClient,
+  client: DbTransactionClient,
   inventory: RecipeInventoryItemRow[],
   ingredient: { name: string; quantity: number | null; unit: string | null },
   input: ConsumePlannedMealInput,
@@ -171,7 +174,8 @@ async function consumeIngredient(
       parsed.value <= 0 ||
       parsed.unit === 'unknown' ||
       !canCompareUnits(parsed.unit, requiredUnit)
-    ) continue;
+    )
+      continue;
 
     const availableInRequired = amountInUnit(parsed.value, parsed.unit, requiredUnit);
     if (availableInRequired === null || availableInRequired <= 0) continue;
@@ -212,51 +216,67 @@ async function consumeIngredient(
 }
 
 export async function consumePlannedMealInTransaction(
-  client: PoolClient,
+  client: DbTransactionClient,
   input: ConsumePlannedMealInput
 ): Promise<ConsumePlannedMealResult> {
-    const persistedPlan = await lockPlan(client, input);
-    if (!['week', 'fortnight', 'month'].includes(persistedPlan.period)) {
-      throw new MealPlanConsumptionError('invalid_plan', 'Meal plan period is invalid');
-    }
-    const parsedPlan = parseStructuredMealPlanValue(
-      persistedPlan.calendar_payload,
-      persistedPlan.period
+  const persistedPlan = await lockPlan(client, input);
+  if (!['week', 'fortnight', 'month'].includes(persistedPlan.period)) {
+    throw new MealPlanConsumptionError('invalid_plan', 'Meal plan period is invalid');
+  }
+  const parsedPlan = parseStructuredMealPlanValue(
+    persistedPlan.calendar_payload,
+    persistedPlan.period
+  );
+  if (!parsedPlan.success) {
+    throw new MealPlanConsumptionError('invalid_plan', 'Meal plan payload is invalid');
+  }
+
+  const day = parsedPlan.plan.days.find((entry) => entry.dayIndex === input.dayIndex);
+  const meal = day?.meals.find((entry) => entry.mealType === input.mealType);
+  if (!meal) throw new MealPlanConsumptionError('invalid_meal', 'Meal is not part of the plan');
+
+  const payload = parseMealConsumptionPayload(persistedPlan.consumption_payload);
+  const key = mealConsumptionKey(input.dayIndex, input.mealType);
+  const existing = payload[key];
+  if (existing) return { alreadyConsumed: true, record: existing };
+
+  const claim = await claimPlannedMealInTransaction(client, {
+    tenantId: input.tenantId,
+    userId: input.userId,
+    mealPlanId: input.mealPlanId,
+    dayIndex: input.dayIndex,
+    mealType: input.mealType,
+  });
+  if (claim.status === 'already_claimed') {
+    throw new MealPlanConsumptionError(
+      'already_claimed',
+      claim.mode === 'real_reconciliation'
+        ? 'Meal slot already reconciled.'
+        : 'Meal slot already consumed.'
     );
-    if (!parsedPlan.success) {
-      throw new MealPlanConsumptionError('invalid_plan', 'Meal plan payload is invalid');
-    }
+  }
 
-    const day = parsedPlan.plan.days.find((entry) => entry.dayIndex === input.dayIndex);
-    const meal = day?.meals.find((entry) => entry.mealType === input.mealType);
-    if (!meal) throw new MealPlanConsumptionError('invalid_meal', 'Meal is not part of the plan');
+  const record: MealConsumptionRecord = {
+    consumedAt: new Date().toISOString(),
+    dayIndex: input.dayIndex,
+    mealType: input.mealType,
+    mealTitle: meal.title,
+    decrements: [],
+    skipped: [],
+  };
+  const inventory = await lockInventory(client, input.tenantId, input.userId);
+  for (const ingredient of meal.ingredients) {
+    await consumeIngredient(client, inventory, ingredient, input, meal.title, record);
+  }
 
-    const payload = parseMealConsumptionPayload(persistedPlan.consumption_payload);
-    const key = mealConsumptionKey(input.dayIndex, input.mealType);
-    const existing = payload[key];
-    if (existing) return { alreadyConsumed: true, record: existing };
-
-    const record: MealConsumptionRecord = {
-      consumedAt: new Date().toISOString(),
-      dayIndex: input.dayIndex,
-      mealType: input.mealType,
-      mealTitle: meal.title,
-      decrements: [],
-      skipped: [],
-    };
-    const inventory = await lockInventory(client, input.tenantId);
-    for (const ingredient of meal.ingredients) {
-      await consumeIngredient(client, inventory, ingredient, input, meal.title, record);
-    }
-
-    payload[key] = record;
-    await client.query(
-      `update public.user_meal_plans
+  payload[key] = record;
+  await client.query(
+    `update public.user_meal_plans
           set consumption_payload=$1::jsonb, updated_at=now()
         where id=$2 and tenant_id=$3 and user_id=$4`,
-      [JSON.stringify(payload), input.mealPlanId, input.tenantId, input.userId]
-    );
-    return { alreadyConsumed: false, record };
+    [JSON.stringify(payload), input.mealPlanId, input.tenantId, input.userId]
+  );
+  return { alreadyConsumed: false, record };
 }
 
 export async function consumePlannedMeal(

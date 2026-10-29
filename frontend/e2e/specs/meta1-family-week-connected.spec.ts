@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { expect, test, type Page } from '@playwright/test';
 import { Pool } from 'pg';
 import { validateE2ETargets } from '../database-target';
-import { injectAuth } from '../fixtures/auth';
+import { signupIsolatedE2EUser } from '../fixtures/auth';
+import {
+  assertE2EDisposableIsolation,
+  closeE2EDatabase,
+  hasAppendOnlyE2EReferences,
+} from '../fixtures/database';
 
 const database = new Pool({
   connectionString: validateE2ETargets(process.env).databaseUrl,
@@ -27,7 +32,7 @@ const mealLabels = {
 const mealTypes = ['breakfast', 'lunch', 'dinner'] as const;
 
 async function authenticatedIdentity(page: Page): Promise<Identity> {
-  await injectAuth(page, undefined, { allowSignup: true });
+  await signupIsolatedE2EUser(page, 'meta1-family');
   const response = await page.request.get('/api/profile');
   expect(response.ok()).toBeTruthy();
   const payload = (await response.json()) as {
@@ -106,6 +111,7 @@ async function cleanupTestData(seed: CleanupSeed): Promise<void> {
   });
 
   for (const planId of planIds) {
+    if (await hasAppendOnlyE2EReferences(database, tenantId, userId, [planId])) return;
     await attempt(() =>
       database.query(
         `delete from public.inventory_movements
@@ -171,11 +177,13 @@ async function cleanupTestData(seed: CleanupSeed): Promise<void> {
 test.describe('META 1 full family week', () => {
   test.afterAll(async () => {
     await database.end();
+    await closeE2EDatabase();
   });
 
   test('completes a seven-day household loop from shortage to purchase, stock intake, cooking, and exact final inventory', async ({
     page,
   }) => {
+    await assertE2EDisposableIsolation(database);
     const identity = await authenticatedIdentity(page);
     const unique = `e2e-m1-7-${randomUUID()}`;
     const ingredientName = `${unique} arroz familiar`;

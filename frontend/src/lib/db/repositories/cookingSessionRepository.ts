@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import type { PoolClient } from 'pg';
 import { transaction } from '@/lib/db';
+import type { DbTransactionClient } from '@/lib/db/transaction-client';
 import type {
   CookingSessionEventRow,
   CookingSessionRow,
@@ -71,7 +71,7 @@ function hashPayload(value: unknown): string {
   return createHash('sha256').update(stableJson(value)).digest('hex');
 }
 
-async function setRlsContext(client: PoolClient, tenantId: string, userId: string) {
+async function setRlsContext(client: DbTransactionClient, tenantId: string, userId: string) {
   await client.query(
     "select set_config('app.tenant_id', $1, true), set_config('app.user_id', $2, true)",
     [tenantId, userId]
@@ -79,7 +79,7 @@ async function setRlsContext(client: PoolClient, tenantId: string, userId: strin
 }
 
 async function lockPlan(
-  client: PoolClient,
+  client: DbTransactionClient,
   input: CreateCookingSessionInput
 ): Promise<UserMealPlanRow | null> {
   const result = await client.query<UserMealPlanRow>(
@@ -92,7 +92,7 @@ async function lockPlan(
 }
 
 async function validateSource(
-  client: PoolClient,
+  client: DbTransactionClient,
   input: CreateCookingSessionInput,
   plan: UserMealPlanRow
 ): Promise<
@@ -145,7 +145,7 @@ async function validateSource(
 }
 
 async function existingIdempotentSession(
-  client: PoolClient,
+  client: DbTransactionClient,
   tenantId: string,
   userId: string,
   idempotencyKey: string,
@@ -238,7 +238,7 @@ export async function createCookingSession(
 }
 
 async function loadSession(
-  client: PoolClient,
+  client: DbTransactionClient,
   tenantId: string,
   userId: string,
   sessionId: string
@@ -251,7 +251,7 @@ async function loadSession(
 }
 
 async function revalidateSessionSource(
-  client: PoolClient,
+  client: DbTransactionClient,
   session: CookingSessionRow
 ): Promise<boolean> {
   const plan = await client.query<UserMealPlanRow>(
@@ -290,6 +290,13 @@ async function revalidateSessionSource(
   return Boolean(version.rows[0]);
 }
 
+export async function revalidateCookingSessionSourceInTransaction(
+  client: DbTransactionClient,
+  session: CookingSessionRow
+): Promise<boolean> {
+  return revalidateSessionSource(client, session);
+}
+
 export async function getCookingSession(
   sessionId: string,
   tenantId: string,
@@ -306,7 +313,7 @@ export async function getCookingSession(
 }
 
 export async function transitionCookingSessionInTransaction(
-  client: PoolClient,
+  client: DbTransactionClient,
   input: TransitionCookingSessionInput
 ): Promise<CookingSessionOperationResult> {
   const session = await loadSession(client, input.tenantId, input.userId, input.sessionId);

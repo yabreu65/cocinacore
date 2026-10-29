@@ -1,10 +1,30 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import type { QueryResultRow } from 'pg';
 import type { RecipeInventoryItemRow, UserMealPlanRow } from '@/lib/db/types';
-import { consumePlannedMealInTransaction } from './mealPlanConsumptionRepository';
+import type { DbTransactionClient } from '@/lib/db/transaction-client';
+import {
+  consumePlannedMealInTransaction,
+  MealPlanConsumptionError,
+} from './mealPlanConsumptionRepository';
 
 const PLAN_ID = '11111111-1111-4111-8111-111111111111';
 const TENANT_ID = '22222222-2222-4222-8222-222222222222';
 const USER_ID = '33333333-3333-4333-8333-333333333333';
+
+function mockClient(handler: (sql: string, params?: unknown[]) => QueryResultRow[]): {
+  client: DbTransactionClient;
+  queries: Array<{ sql: string; params?: unknown[] }>;
+} {
+  const queries: Array<{ sql: string; params?: unknown[] }> = [];
+  const query: DbTransactionClient['query'] = async <Row extends QueryResultRow>(
+    sql: string,
+    params?: unknown[]
+  ): Promise<{ rows: Row[] }> => {
+    queries.push({ sql, params });
+    return { rows: handler(sql, params) as Row[] };
+  };
+  return { client: { query }, queries };
+}
 
 function plan(consumptionPayload: unknown = {}): UserMealPlanRow {
   return {
@@ -27,9 +47,27 @@ function plan(consumptionPayload: unknown = {}): UserMealPlanRow {
         dayIndex: index + 1,
         label: ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'][index],
         meals: [
-          { mealType: 'breakfast', title: 'Desayuno', description: null, ingredients: index === 0 ? [{ name: 'Arroz', quantity: 1, unit: 'kg' }] : [{ name: 'Avena', quantity: 1, unit: 'taza' }] },
-          { mealType: 'lunch', title: 'Almuerzo', description: null, ingredients: [{ name: 'Papa', quantity: 1, unit: 'kg' }] },
-          { mealType: 'dinner', title: 'Cena', description: null, ingredients: [{ name: 'Sopa', quantity: 1, unit: 'l' }] },
+          {
+            mealType: 'breakfast',
+            title: 'Desayuno',
+            description: null,
+            ingredients:
+              index === 0
+                ? [{ name: 'Arroz', quantity: 1, unit: 'kg' }]
+                : [{ name: 'Avena', quantity: 1, unit: 'taza' }],
+          },
+          {
+            mealType: 'lunch',
+            title: 'Almuerzo',
+            description: null,
+            ingredients: [{ name: 'Papa', quantity: 1, unit: 'kg' }],
+          },
+          {
+            mealType: 'dinner',
+            title: 'Cena',
+            description: null,
+            ingredients: [{ name: 'Sopa', quantity: 1, unit: 'l' }],
+          },
         ],
       })),
     },
@@ -62,17 +100,13 @@ function inventory(quantity = '2', unit = 'kg'): RecipeInventoryItemRow {
 
 describe('consumePlannedMeal', () => {
   it('decrements exact compatible stock and persists one audited consumption marker', async () => {
-    const queries: Array<{ sql: string; params?: unknown[] }> = [];
     const row = inventory();
-    const client = {
-      query: vi.fn(async (sql: string, params?: unknown[]) => {
-        queries.push({ sql, params });
-        if (sql.includes('select * from public.user_meal_plans')) return { rows: [plan()] };
-        if (sql.includes('select * from public.recipe_inventory_items')) return { rows: [row] };
-        return { rows: [] };
-      }),
-    };
-    const result = await consumePlannedMealInTransaction(client as never, {
+    const { client, queries } = mockClient((sql) => {
+      if (sql.includes('select * from public.user_meal_plans')) return [plan()];
+      if (sql.includes('select * from public.recipe_inventory_items')) return [row];
+      return [];
+    });
+    const result = await consumePlannedMealInTransaction(client, {
       mealPlanId: PLAN_ID,
       tenantId: TENANT_ID,
       userId: USER_ID,
@@ -81,10 +115,18 @@ describe('consumePlannedMeal', () => {
     });
 
     expect(result.alreadyConsumed).toBe(false);
-    expect(result.record.decrements).toEqual([{ inventoryItemId: row.id, ingredientName: 'Arroz', quantity: 1, unit: 'kg' }]);
+    expect(result.record.decrements).toEqual([
+      { inventoryItemId: row.id, ingredientName: 'Arroz', quantity: 1, unit: 'kg' },
+    ]);
     expect(result.record.skipped).toEqual([]);
     expect(row.quantity).toBe('1');
     expect(queries.some((entry) => entry.sql.includes("'recipe_consumption'"))).toBe(true);
+    expect(
+      queries.find((entry) => entry.sql.includes('from public.recipe_inventory_items'))?.params
+    ).toEqual([TENANT_ID, USER_ID]);
+    expect(
+      queries.find((entry) => entry.sql.includes('update public.recipe_inventory_items'))?.params
+    ).toEqual(['1', row.id, TENANT_ID, USER_ID]);
     expect(queries.at(-1)?.sql).toContain('set consumption_payload=$1::jsonb');
   });
 
@@ -97,15 +139,13 @@ describe('consumePlannedMeal', () => {
       decrements: [{ inventoryItemId: 'item-1', ingredientName: 'Arroz', quantity: 1, unit: 'kg' }],
       skipped: [],
     };
-    const client = {
-      query: vi.fn(async (sql: string) => {
-        if (sql.includes('select * from public.user_meal_plans')) {
-          return { rows: [plan({ '1:breakfast': existing })] };
-        }
-        throw new Error(`unexpected query: ${sql}`);
-      }),
-    };
-    const result = await consumePlannedMealInTransaction(client as never, {
+    const { client, queries } = mockClient((sql) => {
+      if (sql.includes('select * from public.user_meal_plans')) {
+        return [plan({ '1:breakfast': existing })];
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    const result = await consumePlannedMealInTransaction(client, {
       mealPlanId: PLAN_ID,
       tenantId: TENANT_ID,
       userId: USER_ID,
@@ -114,19 +154,17 @@ describe('consumePlannedMeal', () => {
     });
 
     expect(result).toEqual({ alreadyConsumed: true, record: existing });
-    expect(client.query).toHaveBeenCalledTimes(1);
+    expect(queries).toHaveLength(1);
   });
 
   it('does not go negative and records the untracked shortfall', async () => {
     const row = inventory('250', 'g');
-    const client = {
-      query: vi.fn(async (sql: string) => {
-        if (sql.includes('select * from public.user_meal_plans')) return { rows: [plan()] };
-        if (sql.includes('select * from public.recipe_inventory_items')) return { rows: [row] };
-        return { rows: [] };
-      }),
-    };
-    const result = await consumePlannedMealInTransaction(client as never, {
+    const { client } = mockClient((sql) => {
+      if (sql.includes('select * from public.user_meal_plans')) return [plan()];
+      if (sql.includes('select * from public.recipe_inventory_items')) return [row];
+      return [];
+    });
+    const result = await consumePlannedMealInTransaction(client, {
       mealPlanId: PLAN_ID,
       tenantId: TENANT_ID,
       userId: USER_ID,
@@ -137,7 +175,38 @@ describe('consumePlannedMeal', () => {
     expect(row.quantity).toBe('0');
     expect(result.record.decrements[0]).toMatchObject({ quantity: 250, unit: 'g' });
     expect(result.record.skipped).toEqual([
-      { ingredientName: 'Arroz', quantity: 0.75, unit: 'kg', reason: 'insufficient_tracked_quantity' },
+      {
+        ingredientName: 'Arroz',
+        quantity: 0.75,
+        unit: 'kg',
+        reason: 'insufficient_tracked_quantity',
+      },
     ]);
+  });
+
+  it('does not let legacy consumption bypass a real reconciliation claim', async () => {
+    const { client, queries } = mockClient((sql) => {
+      if (sql.includes('select * from public.user_meal_plans')) return [plan()];
+      if (sql.includes('select mode from public.meal_consumption_claims')) {
+        return [{ mode: 'real_reconciliation' }];
+      }
+      return [];
+    });
+
+    await expect(
+      consumePlannedMealInTransaction(client, {
+        mealPlanId: PLAN_ID,
+        tenantId: TENANT_ID,
+        userId: USER_ID,
+        dayIndex: 1,
+        mealType: 'breakfast',
+      })
+    ).rejects.toMatchObject({
+      constructor: MealPlanConsumptionError,
+      code: 'already_claimed',
+    });
+    expect(
+      queries.some((entry) => entry.sql.includes('select * from public.recipe_inventory_items'))
+    ).toBe(false);
   });
 });
