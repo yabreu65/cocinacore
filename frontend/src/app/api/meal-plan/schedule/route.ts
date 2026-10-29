@@ -13,6 +13,7 @@ import {
   parseStructuredMealPlanSchedule,
   parseStructuredMealPlanValue,
 } from '@/lib/meal-planner/structured-plan';
+import { validateOperationalMealPlanRequest } from '@/lib/operational-domain';
 
 const ScheduleRequestSchema = z
   .object({
@@ -93,6 +94,17 @@ export async function POST(request: NextRequest) {
     });
     return NextResponse.json(
       { error: 'El menú guardado no tiene un formato válido.' },
+      { status: 409 }
+    );
+  }
+
+  const operationalValidation = validateOperationalMealPlanRequest(user.tenant, {
+    period: persistedPlan.period,
+    peopleCount: persistedPlan.people_count,
+  });
+  if (!operationalValidation.success) {
+    return NextResponse.json(
+      { error: 'Saved meal plan exceeds operational limits', code: operationalValidation.code },
       { status: 409 }
     );
   }
