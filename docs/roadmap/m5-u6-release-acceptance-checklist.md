@@ -6,17 +6,31 @@ This document prepares the release and acceptance gates for M5 without performin
 
 **Local U6 preparation: READY.** M5 U6 is a release-and-acceptance unit, not a new product feature. No application code, migration, or production state is changed by this checklist.
 
-The exact release candidate currently under review is:
+### 2026-10-29 local audit addendum
 
-| Field | Value |
-| --- | --- |
-| Repository | `yabreu65/cocinacore` |
-| Local branch | `feat/m5-u5` |
-| Candidate SHA | `2f8dd3c98bd9cfbc79be22e09e11455d24325274` |
-| U6 worktree branch | `feat/m5-u6` |
-| U6 base | `2f8dd3c98bd9cfbc79be22e09e11455d24325274` |
-| New migration in U6 | None |
-| Production operation performed | None |
+This addendum records the completed local audit rather than replacing the historical evidence listed below. The audited branch is `feat/m5-u6` at `a91135e0f4afe3698610733d43375725dbd8c40d`; the unrelated `.atl/skill-registry.md` modification remains outside the candidate.
+
+- A fresh disposable PostgreSQL 16/pgvector and Redis 7 stack was created with loopback-only ports 5435/6381, tmpfs storage, unique names, and no volumes. Migrations 001–019, ledger verification, bootstrap, schema checks, and cleanup all passed. Only the two named disposable containers were removed; persistent Docker resources were untouched.
+- The ten formerly skipped database tests executed and passed: five profile-field constraint tests, two profile-update atomicity tests, one statement-timeout test, and two cooking-session repository integration tests.
+- Full Vitest with the database flags enabled passed **1052/1052** tests with no skips. TypeScript, build, lint, and `git diff --check` passed. Lint retains one pre-existing unused-parameter warning in `frontend/src/next.config.test.ts`.
+- Playwright executed all 47 collected tests against the disposable stack: **45 passed and 2 skipped**. The skips are the owner-only health and PDF.js scenarios, which require explicit platform-owner credentials; no failure occurred.
+- The M5-added documentation files were formatted. Three remaining targeted Prettier failures (`db/migrations/manifest.json`, `scripts/cocina-quality-gate.mjs`, and `scripts/tests/cocina-quality-gate.test.mjs`) also fail on the `main` baseline and therefore predate M5. The CI quality workflow does not run `format:check`; this is recorded as a historical baseline exception, not hidden or reformatted. The full local formatter still reports baseline/generated-file debt.
+- The host had approximately 4.7 GiB free before the disposable run and 3.8 GiB after it. No persistent database, Redis service, volume, worktree, migration, application code, remote state, or production state was modified.
+
+With the documented baseline exception, all executable local M5 gates now pass. The current audit classification is **GO FINAL LOCAL**. Remote integration and production remain pending separate authorization and live evidence.
+
+The exact release candidate currently under review is the M5 U6 administrative candidate. The earlier U5 candidate remains the historical implementation base and is not discarded by this closure record.
+
+| Field                             | Value                                                         |
+| --------------------------------- | ------------------------------------------------------------- |
+| Repository                        | `yabreu65/cocinacore`                                         |
+| Final candidate branch            | `feat/m5-u6`                                                  |
+| HEAD before documentation commit  | `a91135e0f4afe3698610733d43375725dbd8c40d`                    |
+| Candidate status                  | GO FINAL LOCAL; administrative closure pending GGA and commit |
+| Historical U5 implementation base | `2f8dd3c98bd9cfbc79be22e09e11455d24325274`                    |
+| U6 worktree branch                | `feat/m5-u6`                                                  |
+| New migration in U6               | None                                                          |
+| Production operation performed    | None                                                          |
 
 ## Roadmap scope
 
@@ -32,15 +46,15 @@ U6 does not add household, restaurant, bakery, pastry, or catering functionality
 
 ## M5 unit closure matrix
 
-| Unit | Local status | Evidence boundary |
-| --- | --- | --- |
-| U0 | LOCAL GO | Roadmap, vocabulary, threat model, ownership, and migration boundary were approved locally. |
-| U1 | LOCAL GO | Deterministic read-only cooking-intent preview and regression coverage. |
-| U2 | LOCAL GO | Explicit recipe/version-to-slot association with conflict, idempotency, and tenant checks. |
-| U3 | LOCAL GO FINAL | Durable cooking sessions, migration 018, API/UI, PostgreSQL concurrency tests, and E2E evidence. |
-| U4 | LOCAL GO FINAL | Real-consumption reconciliation, migration 019, idempotency, append-only audit, and U4 E2E evidence. |
-| U5 | LOCAL GO FINAL | Household-first operational-domain contracts, bounded payloads, role/tenant validation, U5 E2E, and the PDF.js locator correction. |
-| U6 | LOCAL READY | This release/acceptance checklist and separation of local, remote, and production gates. |
+| Unit | Local status   | Evidence boundary                                                                                                                  |
+| ---- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| U0   | LOCAL GO       | Roadmap, vocabulary, threat model, ownership, and migration boundary were approved locally.                                        |
+| U1   | LOCAL GO       | Deterministic read-only cooking-intent preview and regression coverage.                                                            |
+| U2   | LOCAL GO       | Explicit recipe/version-to-slot association with conflict, idempotency, and tenant checks.                                         |
+| U3   | LOCAL GO FINAL | Durable cooking sessions, migration 018, API/UI, PostgreSQL concurrency tests, and E2E evidence.                                   |
+| U4   | LOCAL GO FINAL | Real-consumption reconciliation, migration 019, idempotency, append-only audit, and U4 E2E evidence.                               |
+| U5   | LOCAL GO FINAL | Household-first operational-domain contracts, bounded payloads, role/tenant validation, U5 E2E, and the PDF.js locator correction. |
+| U6   | LOCAL READY    | This release/acceptance checklist and separation of local, remote, and production gates.                                           |
 
 The unit statuses above are prior local evidence carried into U6; U6 does not re-run or fabricate the prior GGA, CI, or production evidence.
 
@@ -53,7 +67,7 @@ The unit statuses above are prior local evidence carried into U6; U6 does not re
 - [x] No U6 migration is required by the roadmap or current implementation.
 - [x] Migrations 001–019 and their manifest remain the database boundary for this candidate.
 - [x] The U5 worktree's unrelated `.atl/skill-registry.md` change remains outside the candidate.
-- [x] GGA history and Codex-only policy are preserved; U6 does not request another review.
+- [x] GGA history and Codex-only policy are preserved; this administrative closure candidate is subject to one final authorized review before commit.
 
 ### Local evidence carried forward
 
@@ -61,7 +75,8 @@ The unit statuses above are prior local evidence carried into U6; U6 does not re
 - [x] U5 connected E2E: 2/2 passed.
 - [x] PDF.js focused E2E: 1/1 passed.
 - [x] General Playwright E2E: 45 passed, 0 failed, 2 legitimate isolated-run skips.
-- [x] TypeScript, ESLint, Prettier, Next.js build, and diff checks passed for the U5 candidate.
+- [x] TypeScript, ESLint, Next.js build, and diff checks passed for the U5 candidate.
+- [x] Prettier passed for the two M5 documentation files; the three historical baseline exceptions remain explicitly listed in the local audit addendum.
 - [x] PostgreSQL migrations 001–019, ledger verification, and disposable bootstrap passed.
 - [x] Disposable PostgreSQL/Redis resources were removed after testing.
 
@@ -131,10 +146,10 @@ Stop the release path if any of the following occurs:
 
 ## Final classification
 
-| Boundary | Status | Meaning |
-| --- | --- | --- |
-| Local | **READY** | U5 evidence is recorded and the U6 release checklist is prepared locally. |
-| Remote | **PENDING** | CI, review, merge, and exact-head verification were not executed. |
-| Production | **PENDING** | Backup, deploy, smoke, rollback, and read-only acceptance require a separate authorization and live evidence. |
+| Boundary   | Status      | Meaning                                                                                                                      |
+| ---------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Local      | **READY**   | M5 U0–U6 evidence is current; all executable local gates pass, with only the documented pre-M5 formatter baseline exception. |
+| Remote     | **PENDING** | CI, review, merge, and exact-head verification were not executed.                                                            |
+| Production | **PENDING** | Backup, deploy, smoke, rollback, and read-only acceptance require a separate authorization and live evidence.                |
 
 **M5 is not declared deployed or productively closed by this document.**

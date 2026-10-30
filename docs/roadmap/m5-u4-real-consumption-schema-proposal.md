@@ -1,6 +1,15 @@
 # M5 U4 — Real Consumption Reconciliation Schema Proposal
 
-**Status: SCHEMA DESIGN GO for review; implementation and migration execution NOT AUTHORIZED.**
+**Status: HISTORICAL SCHEMA PROPOSAL; migration 019 is implemented and locally validated; no production migration was executed.**
+
+### Current implementation state
+
+The design below is retained as the historical U4 proposal and rationale. The implementation now exists in `db/migrations/019_real_consumption_reconciliation.sql` and was validated locally on a disposable PostgreSQL instance:
+
+- Migrations 001–019 executed successfully, including ledger and schema checks.
+- RLS, idempotency, concurrency, and rollback controls were verified according to the executed local checks.
+- Migration checksums are consistent with `db/migrations/manifest.json`.
+- No migration was executed in production.
 
 U4 is the explicit reconciliation of what was actually used after a guided cooking session. It must remain separate from M4's planned-consumption ledger and from U3's session-progress tables. This proposal defines the additive persistence boundary required before U4 endpoints or inventory writes can be implemented.
 
@@ -31,7 +40,7 @@ type RealConsumptionReconciliation = {
   idempotencyKey: string;
   items: Array<{
     originalIngredient: string;
-    outcome: 'used' | 'omitted' | 'unknown' | 'substituted';
+    outcome: "used" | "omitted" | "unknown" | "substituted";
     quantity: number | null;
     unit: string | null;
     inventoryItemId: string | null;
@@ -52,7 +61,7 @@ Rules:
 - Empty items, duplicate originals, duplicate substitutions, unsupported fields, oversized payloads, incompatible units, stale versions, and mismatched slot references are rejected before any write.
 - The response is a sanitized operation result; it does not expose foreign-resource existence or raw request data.
 
-## Proposed migration 019 (design only; not executable)
+## Migration 019 design retained from the historical proposal
 
 The design uses a slot claim guard, an immutable operation header, normalized detail rows, substitutions, and movement links. The guard is necessary because the legacy endpoint currently stores its idempotency marker only inside JSON and cannot otherwise be atomically coordinated with U4.
 
@@ -219,19 +228,19 @@ The operation must reject quantities above available stock rather than silently 
 
 ## Required invariants
 
-| Risk | Control |
-|---|---|
-| Simultaneous double discount | Plan/session locks plus one unique slot claim and deterministic inventory locks. |
-| Retry double discount | Unique `(tenant_id, user_id, idempotency_key)` plus canonical payload hash. |
-| Legacy/U4 double discount | Both paths must acquire the same `meal_consumption_claims` row; legacy JSON alone is not sufficient. |
-| Unknown quantity consumed | `quantity_status = unknown`, `quantity IS NULL`, no inventory item, no movement. |
-| Invalid conversion | Reuse `normalizeUnit`, `canCompareUnits`, and `convertQuantity`; incompatible units remain rejected/unknown. |
-| Foreign inventory | Auth-derived tenant/user, RLS, tenant-safe FK, ownership check under lock. |
-| Excess quantity | Lock rows, compare normalized available totals, reject before mutation. |
-| Stale session/source | Completed U3 session, expected version, exact source hash and recipe/version revalidation. |
-| Partial writes | One transaction; no externally visible operation until all inserts and updates commit. |
-| Contradictory retry | Same key with different canonical hash returns conflict and performs no write. |
-| Recipe/plan mutation | U4 never updates recipe, version, plan calendar, or `consumption_payload`. |
+| Risk                         | Control                                                                                                      |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Simultaneous double discount | Plan/session locks plus one unique slot claim and deterministic inventory locks.                             |
+| Retry double discount        | Unique `(tenant_id, user_id, idempotency_key)` plus canonical payload hash.                                  |
+| Legacy/U4 double discount    | Both paths must acquire the same `meal_consumption_claims` row; legacy JSON alone is not sufficient.         |
+| Unknown quantity consumed    | `quantity_status = unknown`, `quantity IS NULL`, no inventory item, no movement.                             |
+| Invalid conversion           | Reuse `normalizeUnit`, `canCompareUnits`, and `convertQuantity`; incompatible units remain rejected/unknown. |
+| Foreign inventory            | Auth-derived tenant/user, RLS, tenant-safe FK, ownership check under lock.                                   |
+| Excess quantity              | Lock rows, compare normalized available totals, reject before mutation.                                      |
+| Stale session/source         | Completed U3 session, expected version, exact source hash and recipe/version revalidation.                   |
+| Partial writes               | One transaction; no externally visible operation until all inserts and updates commit.                       |
+| Contradictory retry          | Same key with different canonical hash returns conflict and performs no write.                               |
+| Recipe/plan mutation         | U4 never updates recipe, version, plan calendar, or `consumption_payload`.                                   |
 
 ## RLS, ownership, and permissions
 
@@ -322,4 +331,6 @@ This is an installed dependency/toolchain mismatch, not a U4 test result. `packa
 
 ## Verdict
 
-**SCHEMA DESIGN GO**, with implementation blocked until the decisions above are approved. No SQL migration, endpoint, database, production, or GitHub operation was performed.
+**Historical verdict:** SCHEMA DESIGN GO, with implementation blocked until the decisions above were approved. That proposal state is retained for lineage.
+
+**Current state:** Migration 019 is implemented and locally validated on disposable PostgreSQL together with migrations 001–018. The checks above confirm the local RLS, idempotency, concurrency, rollback, and checksum controls. No production migration, GitHub operation, or production database change was performed.
