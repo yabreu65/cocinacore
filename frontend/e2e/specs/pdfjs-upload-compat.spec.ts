@@ -75,15 +75,18 @@ test.describe('Owner global PDF upload PDF.js compatibility', () => {
       (response) => new URL(response.url()).pathname === '/pdf.worker.min.mjs'
     );
 
-    const titleInput = page.getByLabel('Título del libro global');
+    const titleInput = page.getByRole('textbox', { name: 'Título del libro global' });
     await expect(titleInput).toHaveCount(1);
     await expect(titleInput).toBeVisible();
     await titleInput.fill(`Compatibilidad ${marker}`);
-    await page.locator('input[type="file"]').setInputFiles({
-      name: 'compatibility.pdf',
-      mimeType: 'application/pdf',
-      buffer: createOnePagePdf(extractedText),
-    });
+    await page
+      .getByRole('main')
+      .locator('input[type="file"]')
+      .setInputFiles({
+        name: 'compatibility.pdf',
+        mimeType: 'application/pdf',
+        buffer: createOnePagePdf(extractedText),
+      });
     await page.getByRole('button', { name: 'Subir e indexar PDF global' }).click();
 
     const workerResponse = await workerResponsePromise;
