@@ -78,6 +78,9 @@ jobs:
       - name: Build and inspect Docker application routes
         run: sh ../scripts/tests/test-docker-image-route-contract.sh
 
+      - name: Prepare PostgreSQL integration image
+        run: docker pull pgvector/pgvector:pg16
+
       - name: Test bootstrap and migrator PostgreSQL boundary
         run: sh ../scripts/test-bootstrap-migrator-integration.sh
 

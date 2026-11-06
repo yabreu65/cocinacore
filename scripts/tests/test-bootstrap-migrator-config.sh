@@ -44,9 +44,30 @@ check_ci_lanes_gate() {
   ' "$workflow" || fail 'CI E2E shell must explicitly export separated DB lanes before db:provision in the same step'
 }
 
+check_ci_postgres_image_prep() {
+  workflow=$1
+  awk '
+    /^  frontend-quality:$/ { in_job = 1; next }
+    in_job && /^  [[:alnum:]_-]+:$/ { in_job = 0 }
+    in_job && /^      - name: Prepare PostgreSQL integration image$/ {
+      prep = NR
+      in_prep = 1
+      next
+    }
+    in_job && /^      - name:/ {
+      in_prep = 0
+      if ($0 == "      - name: Test bootstrap and migrator PostgreSQL boundary") bootstrap = NR
+      if ($0 == "      - name: Test canonical email PostgreSQL invariant") canonical = NR
+    }
+    in_job && in_prep && $0 == "        run: docker pull pgvector/pgvector:pg16" { pull = NR }
+    END { exit !(prep && pull && bootstrap && canonical && prep < bootstrap && pull < bootstrap && prep < canonical && pull < canonical) }
+  ' "$workflow" || fail 'frontend-quality must explicitly docker pull pgvector/pgvector:pg16 before both PostgreSQL integration tests'
+}
+
 if [ "${1:-}" = '--check-ci-workflow' ]; then
   [ "$#" -eq 2 ] || fail 'usage: test-bootstrap-migrator-config.sh --check-ci-workflow WORKFLOW'
   check_ci_lanes_gate "$2"
+  check_ci_postgres_image_prep "$2"
   exit 0
 fi
 
