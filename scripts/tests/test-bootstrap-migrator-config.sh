@@ -97,10 +97,22 @@ done
 CANONICAL_HELPER="$ROOT/scripts/test-canonical-email-integration.sh"
 ! grep -Eq 'select count\(\*\) from schema_migrations.*=[[:space:]]*11' "$CANONICAL_HELPER" \
   || fail 'canonical fresh ledger count is hardcoded to 11'
-grep -Fq 'EXPECTED_MIGRATION_COUNT=$(node -e "const m=require('\''$ROOT/db/migrations/manifest.json'\''); console.log(m.migrations.length)")' "$CANONICAL_HELPER" \
-  || fail 'canonical expected migration count is not manifest-derived'
+! grep -Fq 'EXPECTED_MIGRATION_COUNT=$(node -e "const m=require('\''$ROOT/db/migrations/manifest.json'\''); console.log(m.migrations.length)")' "$CANONICAL_HELPER" \
+  || fail 'canonical expected migration count incorrectly includes post-019 migrations'
+grep -Fq 'EXPECTED_MIGRATION_COUNT=$(node -e "const m=require('\''$ROOT/db/migrations/manifest.json'\''); console.log(m.migrations.filter(x => Number(x.id) <= 19).length)")' "$CANONICAL_HELPER" \
+  || fail 'canonical expected migration count is not derived from the manifest through 019'
 grep -Fq '[ "$(admin_sql "select count(*) from schema_migrations")" = "$EXPECTED_MIGRATION_COUNT" ]' "$CANONICAL_HELPER" \
   || fail 'canonical fresh ledger count does not use manifest-derived expectation'
+grep -Fq "where filename='019_real_consumption_reconciliation.sql'" "$CANONICAL_HELPER" \
+  || fail 'canonical fresh and legacy upgrade paths must assert migration 019 in the ledger'
+grep -Fq "where filename='020_tenant_rls_hardening.sql'" "$CANONICAL_HELPER" \
+  || fail 'canonical fresh and legacy upgrade paths must assert migration 020 is absent'
+awk '
+  /^migrate\(\) \{$/ { in_migrate = 1; body = ""; next }
+  in_migrate && /^\}$/ { found = 1; exit }
+  in_migrate { body = body $0 "\n" }
+  END { exit !(found && body ~ /node.*run-migrations[.]js.*--lane migration --stop-after 019/) }
+' "$CANONICAL_HELPER" || fail 'canonical migration helper must invoke the runner with --stop-after 019'
 grep -Fq "grep -q 'DONE 011_canonical_email_invariant.sql' \"\$LOG\"" "$CANONICAL_HELPER" \
   || fail 'canonical fresh migration completion assertion for 011 is missing'
 
