@@ -48,7 +48,16 @@ export type RecipeCacheKeyInput = {
 
 const RECIPE_CACHE_TTL_SECONDS = 21600; // 6 hours
 const RECIPE_CACHE_TTL_MS = RECIPE_CACHE_TTL_SECONDS * 1000;
-const REDIS_KEY_PREFIX = 'recipe:';
+const CACHE_NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/;
+
+function getRedisKeyPrefix(): string {
+  const namespace = process.env.COCINACORE_E2E_CACHE_NAMESPACE;
+  if (!namespace) return 'recipe:';
+  if (!CACHE_NAMESPACE_PATTERN.test(namespace)) {
+    throw new Error('COCINACORE_E2E_CACHE_NAMESPACE is invalid.');
+  }
+  return `recipe:e2e:${namespace}:`;
+}
 
 // ---------------------------------------------------------------------------
 // Redis client (lazy singleton, same pattern as rate-limit.ts)
@@ -148,7 +157,7 @@ export async function getCachedRecipe(key: string): Promise<CachedRecipe | null>
   const client = getRedisClient();
 
   if (client) {
-    const redisKey = REDIS_KEY_PREFIX + key;
+    const redisKey = getRedisKeyPrefix() + key;
     try {
       const raw = await client.get(redisKey);
       if (!raw) return null;
@@ -177,7 +186,7 @@ export async function setCachedRecipe(key: string, value: CachedRecipe): Promise
   const client = getRedisClient();
 
   if (client) {
-    const redisKey = REDIS_KEY_PREFIX + key;
+    const redisKey = getRedisKeyPrefix() + key;
     try {
       await client.set(redisKey, JSON.stringify(value), 'EX', RECIPE_CACHE_TTL_SECONDS);
       return;

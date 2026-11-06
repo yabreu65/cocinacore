@@ -3,9 +3,11 @@ import type { UserMealPlanRow } from '@/lib/db/types';
 import type { StructuredMealPlan } from '@/lib/meal-planner/structured-plan';
 
 const queryMock = vi.fn();
+const transactionMock = vi.fn();
 
 vi.mock('@/lib/db', () => ({
   query: queryMock,
+  transaction: transactionMock,
   mapSingleRow: (result: { rows: unknown[] }) => result.rows[0] ?? null,
 }));
 
@@ -15,16 +17,18 @@ const {
   findMealPlanByIdForUserAndTenant,
   replaceMealPlanForAdaptiveProposal,
   updateMealPlanScheduleForUserAndTenant,
+  attachRecipeToMealPlanSlot,
   MealPlanRepositoryError,
 } = await import('./mealPlanRepository');
 
 function structuredPlan(): StructuredMealPlan {
+  const labels = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
   return {
     period: 'week',
     dayCount: 7,
     days: Array.from({ length: 7 }, (_, index) => ({
       dayIndex: index + 1,
-      label: index === 0 ? 'Lunes' : index === 6 ? 'Domingo' : `Día ${index + 1}`,
+      label: labels[index],
       meals: [
         {
           mealType: 'breakfast' as const,
@@ -88,6 +92,7 @@ function mealPlanRow(overrides: Partial<UserMealPlanRow> = {}): UserMealPlanRow 
 describe('mealPlanRepository', () => {
   beforeEach(() => {
     queryMock.mockReset();
+    transactionMock.mockReset();
   });
 
   it('inserts only the canonical structured plan as parameterized JSONB payload', async () => {
@@ -235,5 +240,109 @@ describe('mealPlanRepository', () => {
       '2026-01-01T00:00:00.000Z',
       JSON.stringify(plan),
     ]);
+  });
+
+  it('attaches an exact recipe version only after confirmation and an unchanged snapshot', async () => {
+    const plan = structuredPlan();
+    const scheduledPlan = {
+      ...plan,
+      schedule: {
+        startDate: '2026-10-28',
+        timeZone: 'America/Caracas',
+        confirmedAt: '2026-10-27T12:00:00.000Z',
+        portionConfirmation: { peopleCount: 4, confirmedAt: '2026-10-27T12:00:00.000Z' },
+      },
+    };
+    const current = mealPlanRow({ calendar_payload: scheduledPlan });
+    const updated = mealPlanRow({
+      calendar_payload: {
+        ...scheduledPlan,
+        days: scheduledPlan.days.map((day) =>
+          day.dayIndex === 1
+            ? {
+                ...day,
+                meals: day.meals.map((meal) =>
+                  meal.mealType === 'lunch'
+                    ? { ...meal, recipeRef: { recipeId: 'recipe-1', versionId: 'version-1' } }
+                    : meal
+                ),
+              }
+            : day
+        ),
+      },
+    });
+    const client = { query: vi.fn() };
+    transactionMock.mockImplementation(async (callback: (value: typeof client) => unknown) =>
+      callback(client)
+    );
+    client.query
+      .mockResolvedValueOnce({ rows: [current] })
+      .mockResolvedValueOnce({ rows: [{ id: 'recipe-1' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'version-1' }] })
+      .mockResolvedValueOnce({ rows: [{ matches: true }] })
+      .mockResolvedValueOnce({ rows: [updated] });
+
+    await expect(
+      attachRecipeToMealPlanSlot({
+        mealPlanId: 'meal-plan-1',
+        userId: 'user-1',
+        tenantId: 'tenant-1',
+        dayIndex: 1,
+        mealType: 'lunch',
+        recipeId: 'recipe-1',
+        versionId: 'version-1',
+        expectedUpdatedAt: current.updated_at,
+        expectedCalendarPayload: current.calendar_payload,
+      })
+    ).resolves.toMatchObject({ status: 'applied', recipeId: 'recipe-1', versionId: 'version-1' });
+    expect(client.query).toHaveBeenCalledTimes(5);
+    expect(client.query.mock.calls[0][1]).toEqual(['meal-plan-1', 'tenant-1', 'user-1']);
+    expect(client.query.mock.calls[1][1]).toEqual(['recipe-1', 'tenant-1', 'user-1']);
+    expect(client.query.mock.calls[2][1]).toEqual(['version-1', 'recipe-1', 'tenant-1', 'user-1']);
+    expect(client.query.mock.calls[3][1]).toEqual([
+      'meal-plan-1',
+      'tenant-1',
+      'user-1',
+      current.updated_at,
+      JSON.stringify(current.calendar_payload),
+    ]);
+  });
+
+  it('returns a conflict and does not update when the plan snapshot is stale', async () => {
+    const current = mealPlanRow({
+      calendar_payload: {
+        ...structuredPlan(),
+        schedule: {
+          startDate: '2026-10-28',
+          timeZone: 'America/Caracas',
+          confirmedAt: '2026-10-27T12:00:00.000Z',
+          portionConfirmation: { peopleCount: 4, confirmedAt: '2026-10-27T12:00:00.000Z' },
+        },
+      },
+    });
+    const client = { query: vi.fn() };
+    transactionMock.mockImplementation(async (callback: (value: typeof client) => unknown) =>
+      callback(client)
+    );
+    client.query
+      .mockResolvedValueOnce({ rows: [current] })
+      .mockResolvedValueOnce({ rows: [{ id: 'recipe-1' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'version-1' }] })
+      .mockResolvedValueOnce({ rows: [{ matches: false }] });
+
+    await expect(
+      attachRecipeToMealPlanSlot({
+        mealPlanId: 'meal-plan-1',
+        userId: 'user-1',
+        tenantId: 'tenant-1',
+        dayIndex: 1,
+        mealType: 'lunch',
+        recipeId: 'recipe-1',
+        versionId: 'version-1',
+        expectedUpdatedAt: '2026-01-01T00:00:00.000Z',
+        expectedCalendarPayload: structuredPlan(),
+      })
+    ).resolves.toEqual({ status: 'conflict' });
+    expect(client.query).toHaveBeenCalledTimes(4);
   });
 });
