@@ -5,43 +5,63 @@ import { ResetPasswordSchema } from '@/lib/auth/schemas';
 import { consumePasswordResetToken } from '@/lib/db/repositories/passwordResetRepository';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { serverLogger } from '@/lib/serverLogger';
+import { getSafeErrorReason } from '@/lib/safe-error-reason';
+import {
+  getAuthenticationSecondaryRateLimitKey,
+  getRetryAfterSeconds,
+  getTargetRateLimitKey,
+} from '@/lib/rate-limit-identity';
 
 export const runtime = 'nodejs';
 
-function getIp(request: NextRequest): string {
-  return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
-}
-
 export async function POST(request: NextRequest) {
+  const requestId = crypto.randomUUID();
   const body: unknown = await request.json().catch(() => null);
   const parsed = ResetPasswordSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.issues[0]?.message ?? 'Datos inválidos.' }, { status: 400 });
+    return NextResponse.json(
+      { error: parsed.error.issues[0]?.message ?? 'Datos inválidos.' },
+      { status: 400 }
+    );
   }
 
-  const rateLimit = await checkRateLimit('auth/password-update', getIp(request));
+  const tokenKey = hashPasswordResetToken(parsed.data.token);
+  const targetRateLimitKey = getTargetRateLimitKey(request, tokenKey);
+  const targetRateLimit = await checkRateLimit(
+    'auth/password-update',
+    targetRateLimitKey.identity,
+    targetRateLimitKey.userId,
+    { requireSharedStore: true }
+  );
+  const secondaryKey = getAuthenticationSecondaryRateLimitKey(request, 'auth/password-update');
+  const secondaryRateLimit = targetRateLimit.success
+    ? await checkRateLimit(secondaryKey.route, secondaryKey.identity, undefined, {
+        requireSharedStore: true,
+      })
+    : targetRateLimit;
+  const rateLimit = targetRateLimit.success ? secondaryRateLimit : targetRateLimit;
   if (!rateLimit.success) {
-    const retryAfter = Math.max(1, rateLimit.resetAt - Math.floor(Date.now() / 1000));
+    const retryAfter = getRetryAfterSeconds(rateLimit.resetAt);
     return NextResponse.json(
       { error: 'Demasiados intentos. Esperá unos minutos y volvé a probar.' },
-      { status: 429, headers: { 'Retry-After': String(retryAfter) } }
+      {
+        status: rateLimit.storage === 'unavailable' ? 503 : 429,
+        headers: { 'Retry-After': String(retryAfter) },
+      }
     );
   }
 
   const passwordHash = await hashPassword(parsed.data.password);
 
   try {
-    const consumed = await consumePasswordResetToken(
-      hashPasswordResetToken(parsed.data.token),
-      async (client, token) => {
-        await client.query(
-          'update public.users set password_hash = $1, updated_at = now() where id = $2',
-          [passwordHash, token.user_id]
-        );
-        await client.query('delete from public.sessions where user_id = $1', [token.user_id]);
-        return true;
-      }
-    );
+    const consumed = await consumePasswordResetToken(tokenKey, async (client, token) => {
+      await client.query(
+        'update public.users set password_hash = $1, updated_at = now() where id = $2',
+        [passwordHash, token.user_id]
+      );
+      await client.query('delete from public.sessions where user_id = $1', [token.user_id]);
+      return true;
+    });
 
     if (!consumed) {
       return NextResponse.json(
@@ -53,11 +73,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true });
   } catch (error) {
     serverLogger.error('auth.password_reset.update_failed', {
-      error: error instanceof Error ? error.message : String(error),
+      requestId,
+      reason: getSafeErrorReason(error),
     });
-    return NextResponse.json(
-      { error: 'No pudimos actualizar la contraseña.' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'No pudimos actualizar la contraseña.' }, { status: 500 });
   }
 }

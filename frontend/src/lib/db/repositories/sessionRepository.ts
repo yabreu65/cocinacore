@@ -1,4 +1,5 @@
-import { query, mapSingleRow } from '@/lib/db';
+import type { PoolClient } from 'pg';
+import { authQuery, mapSingleRow, type DbOperationOptions } from '@/lib/db';
 import { SessionRow } from '@/lib/db/types';
 
 export async function hashSessionToken(token: string): Promise<string> {
@@ -20,9 +21,10 @@ export async function hashSessionToken(token: string): Promise<string> {
 export async function createSession(
   userId: string,
   tokenHash: string,
-  expiresAt: Date
+  expiresAt: Date,
+  client?: PoolClient
 ): Promise<SessionRow> {
-  const result = await query<SessionRow>(
+  const result = await (client ? client.query.bind(client) : authQuery)<SessionRow>(
     `insert into public.sessions (user_id, token_hash, expires_at)
      values ($1, $2, $3)
      returning *`,
@@ -37,30 +39,39 @@ export async function createSession(
   return session;
 }
 
-export async function findSessionByTokenHash(tokenHash: string): Promise<SessionRow | null> {
-  const result = await query<SessionRow>(
+export async function findSessionByTokenHash(
+  tokenHash: string,
+  options?: DbOperationOptions
+): Promise<SessionRow | null> {
+  const result = await authQuery<SessionRow>(
     `select * from public.sessions
      where token_hash = $1 and expires_at > now()
      limit 1`,
-    [tokenHash]
+    [tokenHash],
+    options
   );
   return mapSingleRow(result);
 }
 
-export async function touchSessionLastSeen(tokenHash: string): Promise<void> {
-  await query('update public.sessions set last_seen_at = now() where token_hash = $1', [
-    tokenHash,
-  ]);
+export async function touchSessionLastSeen(
+  tokenHash: string,
+  options?: DbOperationOptions
+): Promise<void> {
+  await authQuery(
+    'update public.sessions set last_seen_at = now() where token_hash = $1',
+    [tokenHash],
+    options
+  );
 }
 
 export async function deleteSessionByTokenHash(tokenHash: string): Promise<void> {
-  await query('delete from public.sessions where token_hash = $1', [tokenHash]);
+  await authQuery('delete from public.sessions where token_hash = $1', [tokenHash]);
 }
 
 export async function deleteSessionsByUserId(userId: string): Promise<void> {
-  await query('delete from public.sessions where user_id = $1', [userId]);
+  await authQuery('delete from public.sessions where user_id = $1', [userId]);
 }
 
 export async function deleteExpiredSessions(): Promise<void> {
-  await query('delete from public.sessions where expires_at <= now()');
+  await authQuery('delete from public.sessions where expires_at <= now()');
 }

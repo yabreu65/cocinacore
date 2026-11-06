@@ -36,11 +36,14 @@ jobs:
       - name: Install deps
         run: npm ci
 
-      - name: Pull PostgreSQL test image
-        run: docker pull pgvector/pgvector:pg16
-
       - name: Validate bootstrap and migrator configuration
         run: sh ../scripts/tests/test-bootstrap-migrator-config.sh
+
+      - name: Verify migration 020 release candidate artifacts
+        run: node ../scripts/check-020-release-candidate.mjs
+
+      - name: Test migration 020 release candidate gate
+        run: bash ../scripts/tests/test-020-release-candidate.sh
 
       - name: Validate persistent recipe migration contract
         run: sh ../scripts/tests/test-persistent-recipe-migration-contract.sh
@@ -74,6 +77,9 @@ jobs:
 
       - name: Build and inspect Docker application routes
         run: sh ../scripts/tests/test-docker-image-route-contract.sh
+
+      - name: Prepare PostgreSQL integration image
+        run: docker pull pgvector/pgvector:pg16
 
       - name: Test bootstrap and migrator PostgreSQL boundary
         run: sh ../scripts/test-bootstrap-migrator-integration.sh
@@ -123,24 +129,6 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-    env:
-      COCINACORE_SEPARATED_DB_LANES_ENABLED: "true"
-      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5435/cocinacore_local_db
-      BOOTSTRAP_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5435/cocinacore_local_db
-      MIGRATION_DATABASE_URL: postgresql://migration_admin:ci-migration-admin-password-2026@127.0.0.1:5435/cocinacore_local_db
-      MIGRATION_ADMIN_PASSWORD: ci-migration-admin-password-2026
-      REDIS_URL: redis://127.0.0.1:6381/15
-      E2E_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5435/cocinacore_local_db
-      E2E_REDIS_URL: redis://127.0.0.1:6381/15
-      AUTH_SECRET: ci-auth-secret-change-me
-      GEMINI_API_KEY: CHANGE_ME
-      STORAGE_DRIVER: local
-      LOCAL_UPLOAD_DIR: ./uploads
-      E2E_USER_EMAIL: test@cocinacore.local
-      E2E_USER_PASSWORD: TestPassword123!
-      E2E_OWNER_EMAIL: test@cocinacore.local
-      E2E_OWNER_PASSWORD: TestPassword123!
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -155,30 +143,147 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
-      - name: Provision database migration roles
-        run: npm run db:provision
-
-      - name: Run database migrations
-        run: npm run db:migrate
-
-      - name: Verify migration ledger completeness
-        run: npm run db:migrate:verify
-
-      - name: Seed E2E owner user
-        run: npm run db:bootstrap -- "$E2E_USER_EMAIL" "CI Owner" "$E2E_USER_PASSWORD"
-
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
-      - name: Run E2E tests
-        run: npm run test:e2e
-
-      - name: Run connected Today Playwright journey
-        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feat/m3-4-u5-hosted-e2e' && inputs.run_connected_today == true
+      - name: Provision 019, prepare and activate 020, then run isolated E2E
         env:
-          COCINACORE_ISOLATED_E2E: "1"
-          E2E_PROVIDER_PORT: "4319"
-        run: npm run test:e2e -- e2e/specs/today-recommendations-connected.spec.ts
+          RUN_CONNECTED_TODAY: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feat/m3-4-u5-hosted-e2e' && inputs.run_connected_today == true }}
+          COCINACORE_E2E_EXECUTION_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
+          E2E_APP_PORT: "4320"
+          AUTH_SECRET: ci-${{ github.run_id }}-${{ github.run_attempt }}-auth-secret
+          E2E_USER_EMAIL: test@cocinacore.local
+          E2E_USER_PASSWORD: TestPassword123!
+          E2E_OWNER_EMAIL: test@cocinacore.local
+          E2E_OWNER_PASSWORD: TestPassword123!
+          STORAGE_DRIVER: local
+          LOCAL_UPLOAD_DIR: ./uploads
+        run: |
+          set -euo pipefail
+          set +x
+
+          admin_url='postgresql://postgres:postgres@127.0.0.1:5435/cocinacore_local_db'
+          migration_admin_password="$(openssl rand -hex 32)"
+          runtime_password="$(openssl rand -hex 32)"
+          auth_password="$(openssl rand -hex 32)"
+          metrics_password="$(openssl rand -hex 32)"
+          global_writer_password="$(openssl rand -hex 32)"
+          dist_dir=''
+          verify_log=''
+          cleanup() {
+            if [ -n "$dist_dir" ]; then
+              python3 - "$dist_dir" <<'PY'
+          import pathlib, re, shutil, sys
+          target = pathlib.Path(sys.argv[1])
+          if not re.fullmatch(r'\.next-e2e-gha-[A-Za-z0-9_-]{1,96}', target.name) or target.resolve().parent != pathlib.Path.cwd().resolve():
+              raise SystemExit('Refusing to clean an unexpected E2E build directory.')
+          if target.exists():
+              shutil.rmtree(target)
+          PY
+            fi
+            if [ -n "$verify_log" ]; then
+              python3 -c 'import os,sys; p=sys.argv[1]; os.path.isfile(p) and os.unlink(p)' "$verify_log"
+            fi
+          }
+          trap cleanup EXIT
+          export COCINACORE_SEPARATED_DB_LANES_ENABLED=true
+          export BOOTSTRAP_DATABASE_URL="$admin_url"
+          export MIGRATION_ADMIN_PASSWORD="$migration_admin_password"
+          export MIGRATION_DATABASE_URL="postgresql://migration_admin:${migration_admin_password}@127.0.0.1:5435/cocinacore_local_db"
+
+          npm run db:provision
+          npm run db:migrate -- --stop-after 019
+          MIGRATION_EXPECTED_PENDING=020_tenant_rls_hardening.sql npm run db:migrate -- --verify-boundary 019
+
+          printf '\\set runtime_password %s\n\\i ../scripts/provision-runtime-role.sql\n' "$runtime_password" \
+            | psql "$admin_url" -X -v ON_ERROR_STOP=1
+          printf '\\set auth_password %s\n\\i ../scripts/provision-auth-role.sql\n' "$auth_password" \
+            | psql "$admin_url" -X -v ON_ERROR_STOP=1
+          printf '\\set metrics_password %s\n\\set global_writer_password %s\n\\i ../scripts/provision-020-inert-capabilities.sql\n' \
+            "$metrics_password" "$global_writer_password" | psql "$admin_url" -X -1 -v ON_ERROR_STOP=1
+
+          node <<'NODE'
+          const { Client } = require('pg');
+          const { attestPreparedCapabilities } = require('./scripts/prepared-capabilities-attestation');
+          (async () => {
+            const client = new Client({ connectionString: process.env.BOOTSTRAP_DATABASE_URL });
+            try {
+              await client.connect();
+              await attestPreparedCapabilities(client, { required: true });
+              console.log('Seven inert 020 capabilities verified.');
+            } finally {
+              await client.end();
+            }
+          })().catch(() => {
+            console.error('Prepared capability attestation failed.');
+            process.exitCode = 1;
+          });
+          NODE
+          psql "$admin_url" -X -v ON_ERROR_STOP=1 -f ../scripts/rls-candidates/020e-a1-inert-capability-guard.sql
+
+          MIGRATION_EXPECTED_PENDING=020_tenant_rls_hardening.sql npm run db:migrate
+          node <<'NODE'
+          const { Client } = require('pg');
+          const { attestActivatedCapabilities } = require('./scripts/activated-capabilities-attestation');
+          (async () => {
+            const client = new Client({ connectionString: process.env.MIGRATION_DATABASE_URL });
+            try {
+              await client.connect();
+              const state = await attestActivatedCapabilities(client);
+              if (state !== 'pending') throw new Error('Expected activation-pending state.');
+              console.log('020 activation-pending state verified.');
+            } finally {
+              await client.end();
+            }
+          })().catch(() => {
+            console.error('Activation-pending attestation failed.');
+            process.exitCode = 1;
+          });
+          NODE
+
+          verify_log="$(mktemp)"
+          if npm run db:migrate:verify > "$verify_log" 2>&1; then
+            echo 'verify-complete unexpectedly accepted activation-pending state.' >&2
+            exit 1
+          fi
+          grep -q 'ACTIVATION_PENDING' "$verify_log" || {
+            echo 'verify-complete failed for an unexpected reason before R4.' >&2
+            exit 1
+          }
+          python3 -c 'import os,sys; os.path.isfile(sys.argv[1]) and os.unlink(sys.argv[1])' "$verify_log"
+          verify_log=''
+
+          COCINACORE_ACTIVATION_DATABASE_URL="$admin_url" node scripts/activate-020-capabilities.js
+          npm run db:migrate:verify
+
+          unset BOOTSTRAP_DATABASE_URL MIGRATION_DATABASE_URL MIGRATION_ADMIN_PASSWORD
+          unset migration_admin_password
+          export AUTH_DATABASE_URL="postgresql://cocinacore_auth:${auth_password}@127.0.0.1:5435/cocinacore_local_db"
+          export OWNER_METRICS_DATABASE_URL="postgresql://cocinacore_owner_metrics:${metrics_password}@127.0.0.1:5435/cocinacore_local_db"
+          export OWNER_GLOBAL_WRITER_DATABASE_URL="postgresql://cocinacore_global_writer:${global_writer_password}@127.0.0.1:5435/cocinacore_local_db"
+          export E2E_DATABASE_URL="$admin_url"
+          export E2E_APP_DATABASE_URL="postgresql://cocinacore_runtime_rls:${runtime_password}@127.0.0.1:5435/cocinacore_local_db"
+          export E2E_REDIS_URL=redis://127.0.0.1:6381/15
+          export COCINACORE_E2E_DISPOSABLE=true
+          export COCINACORE_E2E_WORKERS=1
+          export COCINACORE_SEPARATE_AUTH_DB=true
+          export COCINACORE_SIGNUP_BOOTSTRAP_ENABLED=true
+          export COCINACORE_SIGNUP_MAINTENANCE=false
+          export COCINACORE_OWNER_METRICS_DB_ENABLED=true
+          export COCINACORE_OWNER_GLOBAL_WRITER_ENABLED=true
+          unset runtime_password auth_password metrics_password global_writer_password
+
+          dist_dir=".next-e2e-${COCINACORE_E2E_EXECUTION_ID}"
+          case "$dist_dir" in
+            .next-e2e-gha-[A-Za-z0-9_-]*) ;;
+            *) echo 'Unsafe E2E output directory.' >&2; exit 1 ;;
+          esac
+          npm run test:e2e
+
+          if [ "$RUN_CONNECTED_TODAY" = 'true' ]; then
+            COCINACORE_ISOLATED_E2E=1 E2E_PROVIDER_PORT=4319 \
+              npm run test:e2e -- e2e/specs/today-recommendations-connected.spec.ts
+          fi
 
       - name: Upload Playwright report
         if: always()

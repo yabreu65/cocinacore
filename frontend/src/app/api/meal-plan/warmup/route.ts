@@ -4,10 +4,21 @@ import { hydrateMealPlanWarmup, type WarmupMealPlanInput } from '@/lib/meal-plan
 import { isWarmupQueueEnabled, runMealPlanWarmupJob } from '@/lib/queue/meal-plan-warmup';
 import { validateRequest, MealPlanWarmupSchema, type MealPlanWarmupBody } from '@/lib/validation';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { getRetryAfterSeconds, getTrustedClientIdentity } from '@/lib/rate-limit-identity';
+import { requireUser } from '@/lib/auth/server';
+import type { AuthUser } from '@/lib/auth/types';
 
 export async function POST(request: NextRequest) {
   const startedAt = Date.now();
   const requestId = crypto.randomUUID();
+
+  let user: AuthUser;
+  try {
+    user = await requireUser(request);
+  } catch {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  if (!user.tenant) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   // 1. Zod validation
   const validation = await validateRequest(request, MealPlanWarmupSchema);
@@ -18,15 +29,26 @@ export async function POST(request: NextRequest) {
   const body: MealPlanWarmupBody = validation.data;
 
   // 2. Rate limit
-  const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
-  const rateLimit = await checkRateLimit('meal-plan/warmup', ip);
+  const rateLimit = await checkRateLimit(
+    'meal-plan/warmup',
+    user.id || getTrustedClientIdentity(request),
+    user.id,
+    { requireSharedStore: true }
+  );
   if (!rateLimit.success) {
+    const retryAfter = getRetryAfterSeconds(rateLimit.resetAt);
+    const storageUnavailable = rateLimit.storage === 'unavailable';
     return Response.json(
-      { error: 'Rate limit exceeded', retryAfter: rateLimit.resetAt },
       {
-        status: 429,
+        error: storageUnavailable
+          ? 'El warmup no está disponible temporalmente.'
+          : 'Rate limit exceeded',
+        retryAfter,
+      },
+      {
+        status: storageUnavailable ? 503 : 429,
         headers: {
-          'Retry-After': String(rateLimit.resetAt),
+          'Retry-After': String(retryAfter),
           'X-RateLimit-Limit': String(rateLimit.limit),
           'X-RateLimit-Remaining': String(rateLimit.remaining),
           'X-RateLimit-Reset': String(rateLimit.resetAt),
@@ -35,28 +57,29 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Calendar and targetDays are validated as non-empty arrays by Zod;
-  // cast to unknown[] then rely on WarmupMealPlanInput's runtime handling.
-  const calendar = (body.calendar ?? []) as unknown[];
-  const targetDays = (body.targetDays ?? []) as unknown[];
-  const raw = body as Record<string, unknown>;
-  const inventory = Array.isArray(raw.inventory) ? (raw.inventory as unknown[]) : [];
-
-  if (calendar.length === 0 || targetDays.length === 0) {
-    return NextResponse.json(
-      { error: 'Warmup inválido: faltan datos del calendario o días objetivo.' },
-      { status: 400 }
-    );
-  }
+  const targetDays = body.targetDays;
 
   try {
-    const normalizedInput = {
+    const requestUrl = new URL(request.url);
+    const configuredOrigin = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+    const origin = configuredOrigin
+      ? new URL(configuredOrigin).origin
+      : ['localhost', '127.0.0.1', '[::1]'].includes(requestUrl.hostname)
+        ? requestUrl.origin
+        : null;
+    if (!origin) {
+      return NextResponse.json(
+        { error: 'El warmup no está configurado para este origen.' },
+        { status: 503 }
+      );
+    }
+    const normalizedInput: WarmupMealPlanInput = {
       ...body,
-      origin: new URL(request.url).origin,
-      calendar,
-      targetDays,
-      inventory,
-    } as WarmupMealPlanInput;
+      origin,
+      actorUserId: user.id,
+      actorTenantId: user.tenant.tenantId,
+      warmupRequestId: crypto.randomUUID(),
+    };
 
     const result = isWarmupQueueEnabled()
       ? await runMealPlanWarmupJob(normalizedInput)
@@ -82,13 +105,8 @@ export async function POST(request: NextRequest) {
     serverLogger.error('meal_plan_warmup.failed', {
       requestId,
       durationMs: Date.now() - startedAt,
-      error: error instanceof Error ? error.message : 'Warmup error desconocido',
+      reason: error instanceof Error ? error.name : 'unknown',
     });
-    return NextResponse.json(
-      {
-        error: error instanceof Error ? error.message : 'No se pudo completar el warmup.',
-      },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'No se pudo completar el warmup.' }, { status: 500 });
   }
 }

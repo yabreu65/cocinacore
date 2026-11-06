@@ -161,10 +161,11 @@ async function existingIdempotentOperation(
   input: ReconcileRealConsumptionInput,
   requestHash: string
 ): Promise<RealConsumptionResult | null> {
+  // Immutable audit rows need no row lock (which would require UPDATE ACL).
+  // New writes are serialized by the session/plan locks and unique constraints.
   const result = await client.query<{ id: string; request_hash: string }>(
     `select id, request_hash from public.real_consumption_operations
-     where tenant_id = $1 and user_id = $2 and idempotency_key = $3
-     for update`,
+     where tenant_id = $1 and user_id = $2 and idempotency_key = $3`,
     [input.tenantId, input.userId, input.idempotencyKey]
   );
   const operation = result.rows[0];
@@ -295,13 +296,13 @@ async function getSlotClaim(
   input: ReconcileRealConsumptionInput,
   session: CookingSessionRow
 ): Promise<{ mode: 'planned_legacy' | 'real_reconciliation'; operation_id: string | null } | null> {
+  // Claims are append-only; the caller already holds the meal-plan lock.
   const existing = await client.query<{
     mode: 'planned_legacy' | 'real_reconciliation';
     operation_id: string | null;
   }>(
     `select mode, operation_id from public.meal_consumption_claims
-      where tenant_id = $1 and user_id = $2 and meal_plan_id = $3 and day_index = $4 and meal_type = $5
-      for update`,
+      where tenant_id = $1 and user_id = $2 and meal_plan_id = $3 and day_index = $4 and meal_type = $5`,
     [input.tenantId, input.userId, session.meal_plan_id, session.day_index, session.meal_type]
   );
   return existing.rows[0] ?? null;
@@ -575,10 +576,11 @@ export async function claimPlannedMealInTransaction(
   | { status: 'already_claimed'; mode: 'planned_legacy' | 'real_reconciliation' }
 > {
   await setRlsContext(client, input.tenantId, input.userId);
+  // The legacy consumption caller locks the plan first; immutable claims do
+  // not need UPDATE privileges merely to be checked. Uniqueness guards inserts.
   const existing = await client.query<{ mode: string }>(
     `select mode from public.meal_consumption_claims
-      where tenant_id = $1 and user_id = $2 and meal_plan_id = $3 and day_index = $4 and meal_type = $5
-      for update`,
+      where tenant_id = $1 and user_id = $2 and meal_plan_id = $3 and day_index = $4 and meal_type = $5`,
     [input.tenantId, input.userId, input.mealPlanId, input.dayIndex, input.mealType]
   );
   if (existing.rows[0])

@@ -199,7 +199,7 @@ async function checkGemini(): Promise<SingleCheck> {
 export async function GET(request: NextRequest) {
   try {
     const user = await requireUser(request, 'Unauthorized');
-    const owner = await isPlatformOwner(user.id);
+    const owner = await isPlatformOwner(user);
     if (!owner) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }

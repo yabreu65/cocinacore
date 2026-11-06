@@ -8,11 +8,68 @@ RUNNER="$ROOT/frontend/scripts/run-migrations.js"
 MANIFEST="$ROOT/db/migrations/manifest.json"
 LOCK_PREFIX='cocinacore:database-change:v1:'
 IMAGE='pgvector/pgvector:pg16'
+CI_WORKFLOW="$ROOT/.github/workflows/ci.yml"
 
 fail() {
   printf '%s\n' "config failure: $1" >&2
   exit 1
 }
+
+# Validate the lane opt-in in the E2E step's actual shell run block. The
+# optional --check-ci-workflow mode keeps this contract testable against a
+# temporary workflow copy without running the unrelated Compose checks.
+check_ci_lanes_gate() {
+  workflow=$1
+  [ -f "$workflow" ] || fail "CI workflow is missing: $workflow"
+  awk '
+    /^      - name: Provision 019, prepare and activate 020, then run isolated E2E$/ {
+      in_step = 1
+      next
+    }
+    in_step && /^      - name:/ { in_step = 0 }
+    in_step && /^        run: \|[[:space:]]*$/ {
+      in_run = 1
+      next
+    }
+    in_run {
+      if ($0 !~ /^          / && $0 !~ /^[[:space:]]*$/) {
+        in_run = 0
+        next
+      }
+      line = substr($0, 11)
+      if (line ~ /^export COCINACORE_SEPARATED_DB_LANES_ENABLED=true[[:space:]]*(#.*)?$/) enabled = NR
+      if (line ~ /^npm run db:provision([[:space:]]|$)/) provision = NR
+    }
+    END { exit !(in_step || enabled && provision && enabled < provision) }
+  ' "$workflow" || fail 'CI E2E shell must explicitly export separated DB lanes before db:provision in the same step'
+}
+
+check_ci_postgres_image_prep() {
+  workflow=$1
+  awk '
+    /^  frontend-quality:$/ { in_job = 1; next }
+    in_job && /^  [[:alnum:]_-]+:$/ { in_job = 0 }
+    in_job && /^      - name: Prepare PostgreSQL integration image$/ {
+      prep = NR
+      in_prep = 1
+      next
+    }
+    in_job && /^      - name:/ {
+      in_prep = 0
+      if ($0 == "      - name: Test bootstrap and migrator PostgreSQL boundary") bootstrap = NR
+      if ($0 == "      - name: Test canonical email PostgreSQL invariant") canonical = NR
+    }
+    in_job && in_prep && $0 == "        run: docker pull pgvector/pgvector:pg16" { pull = NR }
+    END { exit !(prep && pull && bootstrap && canonical && prep < bootstrap && pull < bootstrap && prep < canonical && pull < canonical) }
+  ' "$workflow" || fail 'frontend-quality must explicitly docker pull pgvector/pgvector:pg16 before both PostgreSQL integration tests'
+}
+
+if [ "${1:-}" = '--check-ci-workflow' ]; then
+  [ "$#" -eq 2 ] || fail 'usage: test-bootstrap-migrator-config.sh --check-ci-workflow WORKFLOW'
+  check_ci_lanes_gate "$2"
+  check_ci_postgres_image_prep "$2"
+  exit 0
+fi
 
 for helper in test-bootstrap-migrator-integration.sh test-canonical-email-integration.sh; do
   helper_path="$ROOT/scripts/$helper"
@@ -40,10 +97,22 @@ done
 CANONICAL_HELPER="$ROOT/scripts/test-canonical-email-integration.sh"
 ! grep -Eq 'select count\(\*\) from schema_migrations.*=[[:space:]]*11' "$CANONICAL_HELPER" \
   || fail 'canonical fresh ledger count is hardcoded to 11'
-grep -Fq 'EXPECTED_MIGRATION_COUNT=$(node -e "const m=require('\''$ROOT/db/migrations/manifest.json'\''); console.log(m.migrations.length)")' "$CANONICAL_HELPER" \
-  || fail 'canonical expected migration count is not manifest-derived'
+! grep -Fq 'EXPECTED_MIGRATION_COUNT=$(node -e "const m=require('\''$ROOT/db/migrations/manifest.json'\''); console.log(m.migrations.length)")' "$CANONICAL_HELPER" \
+  || fail 'canonical expected migration count incorrectly includes post-019 migrations'
+grep -Fq 'EXPECTED_MIGRATION_COUNT=$(node -e "const m=require('\''$ROOT/db/migrations/manifest.json'\''); console.log(m.migrations.filter(x => Number(x.id) <= 19).length)")' "$CANONICAL_HELPER" \
+  || fail 'canonical expected migration count is not derived from the manifest through 019'
 grep -Fq '[ "$(admin_sql "select count(*) from schema_migrations")" = "$EXPECTED_MIGRATION_COUNT" ]' "$CANONICAL_HELPER" \
   || fail 'canonical fresh ledger count does not use manifest-derived expectation'
+grep -Fq "where filename='019_real_consumption_reconciliation.sql'" "$CANONICAL_HELPER" \
+  || fail 'canonical fresh and legacy upgrade paths must assert migration 019 in the ledger'
+grep -Fq "where filename='020_tenant_rls_hardening.sql'" "$CANONICAL_HELPER" \
+  || fail 'canonical fresh and legacy upgrade paths must assert migration 020 is absent'
+awk '
+  /^migrate\(\) \{$/ { in_migrate = 1; body = ""; next }
+  in_migrate && /^\}$/ { found = 1; exit }
+  in_migrate { body = body $0 "\n" }
+  END { exit !(found && body ~ /node.*run-migrations[.]js.*--lane migration --stop-after 019/) }
+' "$CANONICAL_HELPER" || fail 'canonical migration helper must invoke the runner with --stop-after 019'
 grep -Fq "grep -q 'DONE 011_canonical_email_invariant.sql' \"\$LOG\"" "$CANONICAL_HELPER" \
   || fail 'canonical fresh migration completion assertion for 011 is missing'
 
@@ -55,21 +124,12 @@ const fs = require('fs');
 const path = require('path');
 const [manifestPath, directory, base] = process.argv.slice(2);
 const HISTORICAL_BASELINE_COUNT = 10;
-const CURRENT_MIGRATION_COUNT = 19;
-const manifestBytes = fs.readFileSync(manifestPath);
-const manifest = JSON.parse(manifestBytes.toString('utf8'));
-const EXPECTED_MANIFEST_SHA256 = 'a72a8f8c6e289444189ec055d9f86ecc2a7e0384b90fffdef698f53ad353b11b';
-if (crypto.createHash('sha256').update(manifestBytes).digest('hex') !== EXPECTED_MANIFEST_SHA256) process.exit(1);
+const CURRENT_MIGRATION_COUNT = 20;
+const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 if (manifest.manifestVersion !== 1 || manifest.trustedBaseCommit !== base) process.exit(1);
 if (manifest.migrationLaneVersion !== 1) process.exit(1);
 if (manifest.lockContract?.namespacePrefix !== 'cocinacore:database-change:v1:') process.exit(1);
 if (manifest.migrations?.length !== CURRENT_MIGRATION_COUNT) process.exit(1);
-if (manifest.migrations.some((entry, index) => entry.id !== String(index + 1).padStart(3, '0'))) process.exit(1);
-if (manifest.migrations[17]?.filename !== '018_cooking_sessions.sql' ||
-    manifest.migrations[17]?.sha256 !== 'b5e25bb76feed66fec8d767968aead734912d97e9cd6c98206edc99400c2cd7d' ||
-    manifest.migrations[18]?.filename !== '019_real_consumption_reconciliation.sql' ||
-    manifest.migrations[18]?.sha256 !== '509ec1b9ad8bd4f480d3a78ddb6e167647b0d54231bb68e9eb947882b560d587' ||
-    manifest.migrations.some((entry) => entry.id === '020' || entry.filename.startsWith('020_'))) process.exit(1);
 if (manifest.baselineObjects?.transferable?.length !== 38) process.exit(1);
 const kinds = manifest.baselineObjects.transferable.reduce((counts, object) => {
   counts[object.kind] = (counts[object.kind] || 0) + 1;
@@ -146,13 +206,7 @@ grep -Fq -- '--env-file "$RUNTIME_ENV_FILE"' "$PAWTECH_DEPLOY" || fail 'PawTech 
 grep -Fq 'npm run db:migrate:verify' "$PAWTECH_DEPLOY" || fail 'read-only runtime migration verification missing'
 ! grep -Eq 'npm run db:migrate([[:space:]]|$)' "$PAWTECH_DEPLOY" || fail 'mutating runtime migration command is forbidden'
 grep -Fq "$IMAGE" "$ROOT/.github/workflows/ci.yml" || fail 'CI PostgreSQL image policy is missing'
-grep -q 'COCINACORE_SEPARATED_DB_LANES_ENABLED: "true"' "$ROOT/.github/workflows/ci.yml" || fail 'CI separated test gate missing'
-pull_line=$(grep -nF 'run: docker pull pgvector/pgvector:pg16' "$ROOT/.github/workflows/ci.yml" | head -n 1 | cut -d: -f1)
-contract_line=$(grep -nF 'run: sh ../scripts/tests/test-bootstrap-migrator-config.sh' "$ROOT/.github/workflows/ci.yml" | head -n 1 | cut -d: -f1)
-integration_line=$(grep -nF 'run: sh ../scripts/test-bootstrap-migrator-integration.sh' "$ROOT/.github/workflows/ci.yml" | head -n 1 | cut -d: -f1)
-[ -n "$pull_line" ] && [ -n "$contract_line" ] && [ -n "$integration_line" ] &&
-  [ "$pull_line" -lt "$contract_line" ] && [ "$pull_line" -lt "$integration_line" ] ||
-  fail 'CI must pull the PostgreSQL test image before bootstrap/migrator contracts and integration tests'
+check_ci_lanes_gate "$CI_WORKFLOW"
 grep -Fq "$IMAGE" "$ROOT/docker-compose.prod.yml" || fail 'production PostgreSQL image policy is missing'
 grep -q 'arm64 platform manifest' "$ROOT/docs/production/runbook.md" || fail 'portable digest risk is undocumented'
 

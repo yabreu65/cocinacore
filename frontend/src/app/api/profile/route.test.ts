@@ -7,7 +7,7 @@ const findTermsMock = vi.fn();
 const listDimensionsMock = vi.fn();
 const listTermsMock = vi.fn();
 const saveProfileMock = vi.fn();
-const transactionMock = vi.fn();
+const scopedTransactionMock = vi.fn();
 const updateUserInTransactionMock = vi.fn();
 const saveProfileInTransactionMock = vi.fn();
 const lockProfileUpdateMock = vi.fn();
@@ -38,25 +38,80 @@ vi.mock('@/lib/db/repositories/culinaryProfileRepository', () => ({
 }));
 
 vi.mock('@/lib/db', () => ({
-  transaction: transactionMock,
+  scopedTransaction: scopedTransactionMock,
 }));
 
 const { GET, PUT } = await import('./route');
 
 const dimensions = [
-  { id: '11111111-1111-1111-1111-111111111111', key: 'cuisine', label: 'Cocina', sort_order: 1, created_at: '2026-01-01' },
-  { id: '22222222-2222-2222-2222-222222222222', key: 'dietary', label: 'Restricciones y dietas', sort_order: 2, created_at: '2026-01-01' },
-  { id: '33333333-3333-3333-3333-333333333333', key: 'technique', label: 'Técnica', sort_order: 3, created_at: '2026-01-01' },
-  { id: '44444444-4444-4444-4444-444444444444', key: 'ingredient_type', label: 'Tipo de ingrediente', sort_order: 4, created_at: '2026-01-01' },
-  { id: '55555555-5555-5555-5555-555555555555', key: 'goal', label: 'Objetivo', sort_order: 5, created_at: '2026-01-01' },
+  {
+    id: '11111111-1111-1111-1111-111111111111',
+    key: 'cuisine',
+    label: 'Cocina',
+    sort_order: 1,
+    created_at: '2026-01-01',
+  },
+  {
+    id: '22222222-2222-2222-2222-222222222222',
+    key: 'dietary',
+    label: 'Restricciones y dietas',
+    sort_order: 2,
+    created_at: '2026-01-01',
+  },
+  {
+    id: '33333333-3333-3333-3333-333333333333',
+    key: 'technique',
+    label: 'Técnica',
+    sort_order: 3,
+    created_at: '2026-01-01',
+  },
+  {
+    id: '44444444-4444-4444-4444-444444444444',
+    key: 'ingredient_type',
+    label: 'Tipo de ingrediente',
+    sort_order: 4,
+    created_at: '2026-01-01',
+  },
+  {
+    id: '55555555-5555-5555-5555-555555555555',
+    key: 'goal',
+    label: 'Objetivo',
+    sort_order: 5,
+    created_at: '2026-01-01',
+  },
 ];
 
 const terms = [
-  { id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', dimension_id: dimensions[0].id, label: 'Argentina', is_active: true },
-  { id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', dimension_id: dimensions[1].id, label: 'Sin TACC', is_active: true },
-  { id: 'cccccccc-cccc-cccc-cccc-cccccccccccc', dimension_id: dimensions[2].id, label: 'Ahumado', is_active: true },
-  { id: 'dddddddd-dddd-dddd-dddd-dddddddddddd', dimension_id: dimensions[3].id, label: 'Proteína', is_active: true },
-  { id: 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', dimension_id: dimensions[4].id, label: 'Bajar de peso', is_active: true },
+  {
+    id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    dimension_id: dimensions[0].id,
+    label: 'Argentina',
+    is_active: true,
+  },
+  {
+    id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+    dimension_id: dimensions[1].id,
+    label: 'Sin TACC',
+    is_active: true,
+  },
+  {
+    id: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+    dimension_id: dimensions[2].id,
+    label: 'Ahumado',
+    is_active: true,
+  },
+  {
+    id: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
+    dimension_id: dimensions[3].id,
+    label: 'Proteína',
+    is_active: true,
+  },
+  {
+    id: 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
+    dimension_id: dimensions[4].id,
+    label: 'Bajar de peso',
+    is_active: true,
+  },
 ];
 
 const user = {
@@ -99,7 +154,7 @@ describe('/api/profile culinary contract', () => {
     listDimensionsMock.mockReset();
     listTermsMock.mockReset();
     saveProfileMock.mockReset();
-    transactionMock.mockReset();
+    scopedTransactionMock.mockReset();
     updateUserInTransactionMock.mockReset();
     saveProfileInTransactionMock.mockReset();
     lockProfileUpdateMock.mockReset();
@@ -107,21 +162,52 @@ describe('/api/profile culinary contract', () => {
     findTermsInTransactionMock.mockReset();
     transactionClient.query.mockReset();
 
-    transactionMock.mockImplementation(async (callback: (client: typeof transactionClient) => Promise<unknown>) => callback(transactionClient));
+    scopedTransactionMock.mockImplementation(
+      async (_scope: unknown, callback: (client: typeof transactionClient) => Promise<unknown>) =>
+        callback(transactionClient)
+    );
     updateUserInTransactionMock.mockResolvedValue({ ...user, full_name: 'Yoryi' });
     saveProfileInTransactionMock.mockResolvedValue(profile);
     lockProfileUpdateMock.mockResolvedValue(undefined);
     findProfileInTransactionMock.mockResolvedValue(profile);
     findTermsInTransactionMock.mockResolvedValue([
-      { user_id: 'user-1', term_id: terms[0].id, preference_type: 'identity', weight: 1, created_at: '2026-01-01', term_label: 'Argentina' },
-      { user_id: 'user-1', term_id: terms[1].id, preference_type: 'avoid', weight: 1, created_at: '2026-01-01', term_label: 'Sin TACC' },
+      {
+        user_id: 'user-1',
+        term_id: terms[0].id,
+        preference_type: 'identity',
+        weight: 1,
+        created_at: '2026-01-01',
+        term_label: 'Argentina',
+      },
+      {
+        user_id: 'user-1',
+        term_id: terms[1].id,
+        preference_type: 'avoid',
+        weight: 1,
+        created_at: '2026-01-01',
+        term_label: 'Sin TACC',
+      },
     ]);
     requireUserMock.mockResolvedValue(user);
     updateUserMock.mockResolvedValue({ ...user, full_name: 'Yoryi' });
     findProfileMock.mockResolvedValue(profile);
     findTermsMock.mockResolvedValue([
-      { user_id: 'user-1', term_id: terms[0].id, preference_type: 'identity', weight: 1, created_at: '2026-01-01', term_label: 'Argentina' },
-      { user_id: 'user-1', term_id: terms[1].id, preference_type: 'avoid', weight: 1, created_at: '2026-01-01', term_label: 'Sin TACC' },
+      {
+        user_id: 'user-1',
+        term_id: terms[0].id,
+        preference_type: 'identity',
+        weight: 1,
+        created_at: '2026-01-01',
+        term_label: 'Argentina',
+      },
+      {
+        user_id: 'user-1',
+        term_id: terms[1].id,
+        preference_type: 'avoid',
+        weight: 1,
+        created_at: '2026-01-01',
+        term_label: 'Sin TACC',
+      },
     ]);
     listDimensionsMock.mockResolvedValue(dimensions);
     listTermsMock.mockResolvedValue(terms);
@@ -142,7 +228,7 @@ describe('/api/profile culinary contract', () => {
     expect(listTermsMock).not.toHaveBeenCalled();
     expect(updateUserMock).not.toHaveBeenCalled();
     expect(saveProfileMock).not.toHaveBeenCalled();
-    expect(transactionMock).not.toHaveBeenCalled();
+    expect(scopedTransactionMock).not.toHaveBeenCalled();
     expect(lockProfileUpdateMock).not.toHaveBeenCalled();
     expect(findProfileInTransactionMock).not.toHaveBeenCalled();
     expect(findTermsInTransactionMock).not.toHaveBeenCalled();
@@ -154,8 +240,8 @@ describe('/api/profile culinary contract', () => {
     const response = await GET();
 
     expect(response.status).toBe(200);
-    expect(findProfileMock).toHaveBeenCalledWith('user-1');
-    expect(findTermsMock).toHaveBeenCalledWith('user-1');
+    expect(findProfileMock).toHaveBeenCalledWith('user-1', 'tenant-1');
+    expect(findTermsMock).toHaveBeenCalledWith('user-1', 'tenant-1');
     expect(listDimensionsMock).toHaveBeenCalledTimes(1);
     expect(listTermsMock).toHaveBeenCalledWith(undefined, true);
 
@@ -210,8 +296,8 @@ describe('/api/profile culinary contract', () => {
     const response = await GET();
 
     expect(response.status).toBe(200);
-    expect(findProfileMock).toHaveBeenCalledWith('user-2');
-    expect(findTermsMock).toHaveBeenCalledWith('user-2');
+    expect(findProfileMock).toHaveBeenCalledWith('user-2', 'tenant-1');
+    expect(findTermsMock).toHaveBeenCalledWith('user-2', 'tenant-1');
     await expect(response.json()).resolves.toMatchObject({
       user: userB,
       profile: null,
@@ -265,37 +351,62 @@ describe('/api/profile culinary contract', () => {
   it.each([
     ['same tenant', 'tenant-1'],
     ['different tenant', 'tenant-2'],
-  ])('PUT uses session identity for user B in the %s despite forged body identities', async (_case, tenantId) => {
-    const userB = { ...user, id: 'user-2', tenant: { ...user.tenant, tenantId } };
-    requireUserMock.mockResolvedValueOnce(userB);
-    findProfileInTransactionMock.mockResolvedValueOnce(null);
-    findTermsInTransactionMock.mockResolvedValueOnce([]);
+  ])(
+    'PUT uses session identity for user B in the %s despite forged body identities',
+    async (_case, tenantId) => {
+      const userB = { ...user, id: 'user-2', tenant: { ...user.tenant, tenantId } };
+      requireUserMock.mockResolvedValueOnce(userB);
+      findProfileInTransactionMock.mockResolvedValueOnce(null);
+      findTermsInTransactionMock.mockResolvedValueOnce([]);
 
-    const response = await PUT(request({
-      fullName: 'User B',
-      level: 'Chef',
-      userId: 'user-1',
-      tenantId: 'tenant-forged',
-    }));
+      const response = await PUT(
+        request({
+          fullName: 'User B',
+          level: 'Chef',
+          userId: 'user-1',
+          tenantId: 'tenant-forged',
+        })
+      );
 
-    expect(response.status).toBe(200);
-    expect(lockProfileUpdateMock).toHaveBeenCalledWith(transactionClient, 'user-2');
-    expect(findProfileInTransactionMock).toHaveBeenCalledWith(transactionClient, 'user-2');
-    expect(findTermsInTransactionMock).toHaveBeenCalledWith(transactionClient, 'user-2');
-    expect(updateUserInTransactionMock).toHaveBeenCalledWith(transactionClient, 'user-2', { fullName: 'User B' });
-    expect(saveProfileInTransactionMock).toHaveBeenCalledWith(transactionClient, {
-      userId: 'user-2',
-      tenantId,
-      level: 'Chef',
-    });
-    expect(updateUserInTransactionMock).not.toHaveBeenCalledWith(transactionClient, 'user-1', expect.anything());
-    expect(saveProfileInTransactionMock).not.toHaveBeenCalledWith(transactionClient, expect.objectContaining({
-      userId: 'user-1',
-    }));
-    expect(saveProfileInTransactionMock).not.toHaveBeenCalledWith(transactionClient, expect.objectContaining({
-      tenantId: 'tenant-forged',
-    }));
-  });
+      expect(response.status).toBe(200);
+      expect(lockProfileUpdateMock).toHaveBeenCalledWith(transactionClient, 'user-2', tenantId);
+      expect(findProfileInTransactionMock).toHaveBeenCalledWith(
+        transactionClient,
+        'user-2',
+        tenantId
+      );
+      expect(findTermsInTransactionMock).toHaveBeenCalledWith(
+        transactionClient,
+        'user-2',
+        tenantId
+      );
+      expect(updateUserInTransactionMock).toHaveBeenCalledWith(transactionClient, 'user-2', {
+        fullName: 'User B',
+      });
+      expect(saveProfileInTransactionMock).toHaveBeenCalledWith(transactionClient, {
+        userId: 'user-2',
+        tenantId,
+        level: 'Chef',
+      });
+      expect(updateUserInTransactionMock).not.toHaveBeenCalledWith(
+        transactionClient,
+        'user-1',
+        expect.anything()
+      );
+      expect(saveProfileInTransactionMock).not.toHaveBeenCalledWith(
+        transactionClient,
+        expect.objectContaining({
+          userId: 'user-1',
+        })
+      );
+      expect(saveProfileInTransactionMock).not.toHaveBeenCalledWith(
+        transactionClient,
+        expect.objectContaining({
+          tenantId: 'tenant-forged',
+        })
+      );
+    }
+  );
 
   it('rejects a term submitted under the wrong semantic group before any mutation', async () => {
     const response = await PUT(
@@ -318,12 +429,15 @@ describe('/api/profile culinary contract', () => {
   });
 
   it('rejects unknown or inactive term ids before mutation', async () => {
-    listTermsMock.mockResolvedValue([...terms, {
-      id: 'ffffffff-ffff-ffff-ffff-ffffffffffff',
-      dimension_id: dimensions[0].id,
-      label: 'Inactiva',
-      is_active: false,
-    }]);
+    listTermsMock.mockResolvedValue([
+      ...terms,
+      {
+        id: 'ffffffff-ffff-ffff-ffff-ffffffffffff',
+        dimension_id: dimensions[0].id,
+        label: 'Inactiva',
+        is_active: false,
+      },
+    ]);
 
     const response = await PUT(
       request({
@@ -350,13 +464,16 @@ describe('/api/profile culinary contract', () => {
     const badLevel = await PUT(request({ level: 'Dios de la cocina' }));
     expect(badLevel.status).toBe(400);
 
-    const tooMany = await PUT(request({
-      selections: {
-        favoriteCuisineTermIds: Array.from({ length: 7 }, (_, index) =>
-          `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`
-        ),
-      },
-    }));
+    const tooMany = await PUT(
+      request({
+        selections: {
+          favoriteCuisineTermIds: Array.from(
+            { length: 7 },
+            (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`
+          ),
+        },
+      })
+    );
     expect(tooMany.status).toBe(400);
     expect(saveProfileMock).not.toHaveBeenCalled();
   });
@@ -372,56 +489,70 @@ describe('/api/profile culinary contract', () => {
   });
 
   it('persists bounded household, habitual-time, allergy, and normalized free-text profile fields', async () => {
-    const response = await PUT(request({
-      dislikedIngredients: ['  cilantro  ', 'CILANTRO', '  hongos   secos '],
-      allergies: ['  maní  '],
-      availableTimeMinutes: 45,
-      householdMembers: [
-        { name: 'Ana', ageGroup: 'adult' },
-        { name: 'Luz', ageGroup: 'child' },
-      ],
-    }));
+    const response = await PUT(
+      request({
+        dislikedIngredients: ['  cilantro  ', 'CILANTRO', '  hongos   secos '],
+        allergies: ['  maní  '],
+        availableTimeMinutes: 45,
+        householdMembers: [
+          { name: 'Ana', ageGroup: 'adult' },
+          { name: 'Luz', ageGroup: 'child' },
+        ],
+      })
+    );
 
     expect(response.status).toBe(200);
-    expect(saveProfileInTransactionMock).toHaveBeenCalledWith(transactionClient, expect.objectContaining({
-      dislikedIngredients: ['cilantro', 'hongos secos'],
-      allergies: ['maní'],
-      availableTimeMinutes: 45,
-      householdMembers: [
-        { name: 'Ana', ageGroup: 'adult' },
-        { name: 'Luz', ageGroup: 'child' },
-      ],
-    }));
+    expect(saveProfileInTransactionMock).toHaveBeenCalledWith(
+      transactionClient,
+      expect.objectContaining({
+        dislikedIngredients: ['cilantro', 'hongos secos'],
+        allergies: ['maní'],
+        availableTimeMinutes: 45,
+        householdMembers: [
+          { name: 'Ana', ageGroup: 'adult' },
+          { name: 'Luz', ageGroup: 'child' },
+        ],
+      })
+    );
   });
 
-  it.each([4, 241, 45.5])('rejects invalid habitual preparation time %s without mutation', async (minutes) => {
-    const response = await PUT(request({ availableTimeMinutes: minutes }));
+  it.each([4, 241, 45.5])(
+    'rejects invalid habitual preparation time %s without mutation',
+    async (minutes) => {
+      const response = await PUT(request({ availableTimeMinutes: minutes }));
 
-    expect(response.status).toBe(400);
-    expect(updateUserMock).not.toHaveBeenCalled();
-    expect(saveProfileMock).not.toHaveBeenCalled();
-  });
+      expect(response.status).toBe(400);
+      expect(updateUserMock).not.toHaveBeenCalled();
+      expect(saveProfileMock).not.toHaveBeenCalled();
+    }
+  );
 
   it('rejects unknown household age groups and object keys without mutation', async () => {
-    const unknownAgeGroup = await PUT(request({
-      householdMembers: [{ name: 'Persona', ageGroup: 'senior' }],
-    }));
+    const unknownAgeGroup = await PUT(
+      request({
+        householdMembers: [{ name: 'Persona', ageGroup: 'senior' }],
+      })
+    );
     expect(unknownAgeGroup.status).toBe(400);
 
-    const unknownKey = await PUT(request({
-      householdMembers: [{ name: 'Persona', ageGroup: 'adult', email: 'private@example.test' }],
-    }));
+    const unknownKey = await PUT(
+      request({
+        householdMembers: [{ name: 'Persona', ageGroup: 'adult', email: 'private@example.test' }],
+      })
+    );
     expect(unknownKey.status).toBe(400);
     expect(saveProfileMock).not.toHaveBeenCalled();
   });
 
   it('rejects oversized household lists and blank member names without mutation', async () => {
-    const tooMany = await PUT(request({
-      householdMembers: Array.from({ length: 13 }, (_, index) => ({
-        name: `Persona ${index}`,
-        ageGroup: 'adult',
-      })),
-    }));
+    const tooMany = await PUT(
+      request({
+        householdMembers: Array.from({ length: 13 }, (_, index) => ({
+          name: `Persona ${index}`,
+          ageGroup: 'adult',
+        })),
+      })
+    );
     expect(tooMany.status).toBe(400);
 
     const blankName = await PUT(request({ householdMembers: [{ name: '  ', ageGroup: 'adult' }] }));
@@ -438,8 +569,22 @@ describe('/api/profile culinary contract', () => {
     };
     findProfileMock.mockResolvedValueOnce({ ...profile, level: 'Chef', ...persistedFields });
     findTermsMock.mockResolvedValueOnce([
-      { user_id: 'user-1', term_id: terms[0].id, preference_type: 'identity', weight: 1, created_at: '2026-01-01', term_label: 'Argentina' },
-      { user_id: 'user-1', term_id: terms[1].id, preference_type: 'avoid', weight: 1, created_at: '2026-01-01', term_label: 'Sin TACC' },
+      {
+        user_id: 'user-1',
+        term_id: terms[0].id,
+        preference_type: 'identity',
+        weight: 1,
+        created_at: '2026-01-01',
+        term_label: 'Argentina',
+      },
+      {
+        user_id: 'user-1',
+        term_id: terms[1].id,
+        preference_type: 'avoid',
+        weight: 1,
+        created_at: '2026-01-01',
+        term_label: 'Sin TACC',
+      },
     ]);
 
     await PUT(request({ level: 'Chef' }));
@@ -453,8 +598,22 @@ describe('/api/profile culinary contract', () => {
   it('preserves omitted selection groups when one selection group is explicitly cleared', async () => {
     findProfileMock.mockResolvedValueOnce({ ...profile, level: 'Intermedio' });
     findTermsMock.mockResolvedValueOnce([
-      { user_id: 'user-1', term_id: terms[0].id, preference_type: 'identity', weight: 1, created_at: '2026-01-01', term_label: 'Argentina' },
-      { user_id: 'user-1', term_id: terms[1].id, preference_type: 'avoid', weight: 1, created_at: '2026-01-01', term_label: 'Sin TACC' },
+      {
+        user_id: 'user-1',
+        term_id: terms[0].id,
+        preference_type: 'identity',
+        weight: 1,
+        created_at: '2026-01-01',
+        term_label: 'Argentina',
+      },
+      {
+        user_id: 'user-1',
+        term_id: terms[1].id,
+        preference_type: 'avoid',
+        weight: 1,
+        created_at: '2026-01-01',
+        term_label: 'Sin TACC',
+      },
     ]);
 
     await PUT(request({ selections: { favoriteCuisineTermIds: [] } }));
@@ -489,15 +648,28 @@ describe('/api/profile culinary contract', () => {
   it('merges a partial selection group with the current persisted terms', async () => {
     findTermsMock.mockResolvedValueOnce([]);
     findTermsInTransactionMock.mockResolvedValueOnce([
-      { user_id: 'user-1', term_id: terms[1].id, preference_type: 'avoid', weight: 1, created_at: '2026-01-01', term_label: 'Sin TACC' },
+      {
+        user_id: 'user-1',
+        term_id: terms[1].id,
+        preference_type: 'avoid',
+        weight: 1,
+        created_at: '2026-01-01',
+        term_label: 'Sin TACC',
+      },
     ]);
 
-    const response = await PUT(request({
-      selections: { favoriteCuisineTermIds: [terms[0].id] },
-    }));
+    const response = await PUT(
+      request({
+        selections: { favoriteCuisineTermIds: [terms[0].id] },
+      })
+    );
 
     expect(response.status).toBe(200);
-    expect(findTermsInTransactionMock).toHaveBeenCalledWith(transactionClient, 'user-1');
+    expect(findTermsInTransactionMock).toHaveBeenCalledWith(
+      transactionClient,
+      'user-1',
+      'tenant-1'
+    );
     const saveInput = saveProfileInTransactionMock.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(saveInput.terms).toEqual([
       { termId: terms[0].id, preferenceType: 'identity' },
@@ -508,16 +680,22 @@ describe('/api/profile culinary contract', () => {
   it('rejects an existing profile from another tenant before terms reads or any mutation', async () => {
     findProfileInTransactionMock.mockResolvedValueOnce({ ...profile, tenant_id: 'tenant-2' });
 
-    const response = await PUT(request({
-      fullName: 'Changed name',
-      onboardingCompleted: true,
-      level: 'Chef',
-      selections: { favoriteCuisineTermIds: [] },
-    }));
+    const response = await PUT(
+      request({
+        fullName: 'Changed name',
+        onboardingCompleted: true,
+        level: 'Chef',
+        selections: { favoriteCuisineTermIds: [] },
+      })
+    );
 
     expect(response.status).toBe(409);
     await expect(response.json()).resolves.toEqual({ error: 'profile_tenant_mismatch' });
-    expect(findProfileInTransactionMock).toHaveBeenCalledWith(transactionClient, 'user-1');
+    expect(findProfileInTransactionMock).toHaveBeenCalledWith(
+      transactionClient,
+      'user-1',
+      'tenant-1'
+    );
     expect(findTermsInTransactionMock).not.toHaveBeenCalled();
     expect(updateUserInTransactionMock).not.toHaveBeenCalled();
     expect(saveProfileInTransactionMock).not.toHaveBeenCalled();
@@ -525,23 +703,29 @@ describe('/api/profile culinary contract', () => {
 
   it('locks and reads mutable profile state through the transaction client before writes', async () => {
     const calls: string[] = [];
-    lockProfileUpdateMock.mockImplementation(async (client: typeof transactionClient, userId: string) => {
-      expect(client).toBe(transactionClient);
-      expect(userId).toBe('user-1');
-      calls.push('lock');
-    });
-    findProfileInTransactionMock.mockImplementation(async (client: typeof transactionClient, userId: string) => {
-      expect(client).toBe(transactionClient);
-      expect(userId).toBe('user-1');
-      calls.push('profile-read');
-      return profile;
-    });
-    findTermsInTransactionMock.mockImplementation(async (client: typeof transactionClient, userId: string) => {
-      expect(client).toBe(transactionClient);
-      expect(userId).toBe('user-1');
-      calls.push('terms-read');
-      return [];
-    });
+    lockProfileUpdateMock.mockImplementation(
+      async (client: typeof transactionClient, userId: string) => {
+        expect(client).toBe(transactionClient);
+        expect(userId).toBe('user-1');
+        calls.push('lock');
+      }
+    );
+    findProfileInTransactionMock.mockImplementation(
+      async (client: typeof transactionClient, userId: string) => {
+        expect(client).toBe(transactionClient);
+        expect(userId).toBe('user-1');
+        calls.push('profile-read');
+        return profile;
+      }
+    );
+    findTermsInTransactionMock.mockImplementation(
+      async (client: typeof transactionClient, userId: string) => {
+        expect(client).toBe(transactionClient);
+        expect(userId).toBe('user-1');
+        calls.push('terms-read');
+        return [];
+      }
+    );
     updateUserInTransactionMock.mockImplementation(async () => {
       calls.push('user-write');
       return { ...user, full_name: 'Nuevo nombre' };
@@ -574,7 +758,9 @@ describe('/api/profile culinary contract', () => {
   });
 
   it('rejects free-text lists beyond count and per-value length bounds', async () => {
-    const tooManyDislikes = await PUT(request({ dislikedIngredients: Array.from({ length: 21 }, (_, index) => `food ${index}`) }));
+    const tooManyDislikes = await PUT(
+      request({ dislikedIngredients: Array.from({ length: 21 }, (_, index) => `food ${index}`) })
+    );
     expect(tooManyDislikes.status).toBe(400);
 
     const tooLongAllergy = await PUT(request({ allergies: ['a'.repeat(201)] }));
@@ -598,15 +784,22 @@ describe('/api/profile culinary contract', () => {
     const response = await PUT(request({ fullName: 'Nuevo nombre', onboardingCompleted: true }));
 
     expect(response.status).toBe(200);
-    expect(transactionMock).toHaveBeenCalledTimes(1);
+    expect(scopedTransactionMock).toHaveBeenCalledTimes(1);
+    expect(scopedTransactionMock).toHaveBeenCalledWith(
+      { tenantId: 'tenant-1', userId: 'user-1' },
+      expect.any(Function)
+    );
     expect(updateUserInTransactionMock).toHaveBeenCalledWith(transactionClient, 'user-1', {
       fullName: 'Nuevo nombre',
       onboardingCompleted: true,
     });
-    expect(saveProfileInTransactionMock).toHaveBeenCalledWith(transactionClient, expect.objectContaining({
-      userId: 'user-1',
-      tenantId: 'tenant-1',
-    }));
+    expect(saveProfileInTransactionMock).toHaveBeenCalledWith(
+      transactionClient,
+      expect.objectContaining({
+        userId: 'user-1',
+        tenantId: 'tenant-1',
+      })
+    );
     expect(updateUserMock).not.toHaveBeenCalled();
     expect(saveProfileMock).not.toHaveBeenCalled();
   });
@@ -614,20 +807,23 @@ describe('/api/profile culinary contract', () => {
   it.each([
     ['user update', updateUserInTransactionMock],
     ['culinary profile save', saveProfileInTransactionMock],
-  ])('returns 500 and rejects the transaction when %s fails', async (_operation, failingPersistence) => {
-    failingPersistence.mockRejectedValueOnce(new Error('persistence failed'));
+  ])(
+    'returns 500 and rejects the transaction when %s fails',
+    async (_operation, failingPersistence) => {
+      failingPersistence.mockRejectedValueOnce(new Error('persistence failed'));
 
-    const response = await PUT(request({ fullName: 'Nuevo nombre', onboardingCompleted: true }));
+      const response = await PUT(request({ fullName: 'Nuevo nombre', onboardingCompleted: true }));
 
-    expect(response.status).toBe(500);
-    expect(transactionMock).toHaveBeenCalledTimes(1);
-    await expect(response.json()).resolves.toMatchObject({ error: 'Unable to update profile' });
-  });
+      expect(response.status).toBe(500);
+      expect(scopedTransactionMock).toHaveBeenCalledTimes(1);
+      await expect(response.json()).resolves.toMatchObject({ error: 'Unable to update profile' });
+    }
+  );
 
   it('validates request data before starting a transaction', async () => {
     const response = await PUT(request({ fullName: 'x'.repeat(121) }));
 
     expect(response.status).toBe(400);
-    expect(transactionMock).not.toHaveBeenCalled();
+    expect(scopedTransactionMock).not.toHaveBeenCalled();
   });
 });

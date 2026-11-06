@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { requireUser } from '@/lib/auth/server';
 import type { AuthUser } from '@/lib/auth/types';
+import type { UserMealPlanRow } from '@/lib/db/types';
 import {
   findMealPlanByIdForUserAndTenant,
   updateMealPlanScheduleForUserAndTenant,
@@ -63,7 +64,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  let persistedPlan;
+  let persistedPlan: UserMealPlanRow | null;
   try {
     persistedPlan = await findMealPlanByIdForUserAndTenant(
       mealPlanId,

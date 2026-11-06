@@ -1,4 +1,4 @@
-import { query, transaction } from '@/lib/db';
+import { scopedTransaction } from '@/lib/db';
 import type { RecipeInventoryItemRow, UserMealPlanRow } from '@/lib/db/types';
 import type { DbTransactionClient } from '@/lib/db/transaction-client';
 import { normalizeInventoryName } from '@/lib/inventory/normalize-inventory';
@@ -282,7 +282,9 @@ export async function consumePlannedMealInTransaction(
 export async function consumePlannedMeal(
   input: ConsumePlannedMealInput
 ): Promise<ConsumePlannedMealResult> {
-  return transaction((client) => consumePlannedMealInTransaction(client, input));
+  return scopedTransaction({ tenantId: input.tenantId, userId: input.userId }, (client) =>
+    consumePlannedMealInTransaction(client, input)
+  );
 }
 
 export async function getMealPlanConsumptions(
@@ -290,11 +292,13 @@ export async function getMealPlanConsumptions(
   userId: string,
   tenantId: string
 ) {
-  const result = await query<Pick<UserMealPlanRow, 'consumption_payload'>>(
-    `select consumption_payload from public.user_meal_plans
+  const result = await scopedTransaction({ tenantId, userId }, (client) =>
+    client.query<Pick<UserMealPlanRow, 'consumption_payload'>>(
+      `select consumption_payload from public.user_meal_plans
       where id=$1 and tenant_id=$2 and user_id=$3
       limit 1`,
-    [mealPlanId, tenantId, userId]
+      [mealPlanId, tenantId, userId]
+    )
   );
   const row = result.rows[0];
   return row ? parseMealConsumptionPayload(row.consumption_payload) : null;

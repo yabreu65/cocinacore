@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireTenant, requireUser } from '@/lib/auth/server';
+import { requireUser } from '@/lib/auth/server';
 import {
   listRecipeHistoryByTenant,
   deleteRecipeHistory,
@@ -25,21 +25,29 @@ function toPublicRecipeHistoryItem(row: RecipeAiHistoryRow): PublicRecipeHistory
 }
 
 export async function GET(request: NextRequest) {
-  const [tenant, user] = await Promise.all([requireTenant(), requireUser()]);
+  const user = await requireUser();
+  const tenant = user.tenant;
+  if (!tenant) throw new Error('Tenant context required');
   const saved = request.nextUrl.searchParams.get('saved');
   if (saved !== null && saved !== 'true' && saved !== 'false') {
     return NextResponse.json({ error: 'Invalid saved filter' }, { status: 400 });
   }
 
-  const items = await listRecipeHistoryByTenant(tenant.tenantId, {
-    userId: user.id,
-    ...(saved === 'true' ? { onlySaved: true } : {}),
-  });
+  const items = await listRecipeHistoryByTenant(
+    tenant.tenantId,
+    {
+      userId: user.id,
+      ...(saved === 'true' ? { onlySaved: true } : {}),
+    },
+    { tenantId: tenant.tenantId, userId: user.id }
+  );
   return NextResponse.json({ items: items.map(toPublicRecipeHistoryItem) });
 }
 
 export async function DELETE(request: NextRequest) {
-  const [tenant, user] = await Promise.all([requireTenant(), requireUser()]);
+  const user = await requireUser();
+  const tenant = user.tenant;
+  if (!tenant) throw new Error('Tenant context required');
   const id = request.nextUrl.searchParams.get('id');
   if (!id) {
     return NextResponse.json({ error: 'ID is required' }, { status: 400 });
@@ -50,7 +58,9 @@ export async function DELETE(request: NextRequest) {
 }
 
 export async function PATCH(request: NextRequest) {
-  const [tenant, user] = await Promise.all([requireTenant(), requireUser()]);
+  const user = await requireUser();
+  const tenant = user.tenant;
+  if (!tenant) throw new Error('Tenant context required');
   const id = request.nextUrl.searchParams.get('id');
   const feedback = request.nextUrl.searchParams.get('feedback');
   const saved = request.nextUrl.searchParams.get('saved');

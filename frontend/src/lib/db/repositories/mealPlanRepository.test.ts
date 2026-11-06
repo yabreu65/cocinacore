@@ -4,10 +4,12 @@ import type { StructuredMealPlan } from '@/lib/meal-planner/structured-plan';
 
 const queryMock = vi.fn();
 const transactionMock = vi.fn();
+const scopedMock = vi.fn();
 
 vi.mock('@/lib/db', () => ({
   query: queryMock,
   transaction: transactionMock,
+  scopedTransaction: scopedMock,
   mapSingleRow: (result: { rows: unknown[] }) => result.rows[0] ?? null,
 }));
 
@@ -93,6 +95,12 @@ describe('mealPlanRepository', () => {
   beforeEach(() => {
     queryMock.mockReset();
     transactionMock.mockReset();
+    scopedMock
+      .mockReset()
+      .mockImplementation(
+        async (_scope: unknown, callback: (client: { query: typeof queryMock }) => unknown) =>
+          callback({ query: queryMock })
+      );
   });
 
   it('inserts only the canonical structured plan as parameterized JSONB payload', async () => {
@@ -114,6 +122,11 @@ describe('mealPlanRepository', () => {
     });
 
     expect(created).toEqual(mealPlanRow({ calendar_payload: plan }));
+    expect(scopedMock).toHaveBeenCalledWith(
+      { tenantId: 'tenant-1', userId: 'user-1' },
+      expect.any(Function)
+    );
+    expect(transactionMock).not.toHaveBeenCalled();
     expect(queryMock).toHaveBeenCalledTimes(1);
     const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain('insert into public.user_meal_plans');
@@ -145,6 +158,10 @@ describe('mealPlanRepository', () => {
       findMealPlanByIdForUserAndTenant('meal-plan-1', 'user-1', 'tenant-1')
     ).resolves.toEqual(row);
 
+    expect(scopedMock).toHaveBeenCalledWith(
+      { tenantId: 'tenant-1', userId: 'user-1' },
+      expect.any(Function)
+    );
     const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
     expect(sql).toMatch(/where id = \$1 and tenant_id = \$2 and user_id = \$3/);
     expect(params).toEqual(['meal-plan-1', 'tenant-1', 'user-1']);
@@ -272,8 +289,8 @@ describe('mealPlanRepository', () => {
       },
     });
     const client = { query: vi.fn() };
-    transactionMock.mockImplementation(async (callback: (value: typeof client) => unknown) =>
-      callback(client)
+    scopedMock.mockImplementation(
+      async (_scope: unknown, callback: (value: typeof client) => unknown) => callback(client)
     );
     client.query
       .mockResolvedValueOnce({ rows: [current] })
@@ -321,8 +338,8 @@ describe('mealPlanRepository', () => {
       },
     });
     const client = { query: vi.fn() };
-    transactionMock.mockImplementation(async (callback: (value: typeof client) => unknown) =>
-      callback(client)
+    scopedMock.mockImplementation(
+      async (_scope: unknown, callback: (value: typeof client) => unknown) => callback(client)
     );
     client.query
       .mockResolvedValueOnce({ rows: [current] })
@@ -345,4 +362,26 @@ describe('mealPlanRepository', () => {
     ).resolves.toEqual({ status: 'conflict' });
     expect(client.query).toHaveBeenCalledTimes(4);
   });
+});
+
+it('executes scoped plan read on the supplied transaction client', async () => {
+  const client = { query: vi.fn().mockResolvedValue({ rows: [{ id: 'plan' }] }) };
+  scopedMock.mockImplementation(
+    async (
+      _scope: unknown,
+      callback: (connection: typeof client) => Promise<unknown>
+    ): Promise<unknown> => callback(client)
+  );
+  const scope = { tenantId: 'tenant-1', userId: 'user-1' };
+  await expect(
+    findMealPlanByIdForUserAndTenant('plan', scope.userId, scope.tenantId, scope)
+  ).resolves.toEqual({ id: 'plan' });
+  expect(scopedMock).toHaveBeenCalledWith(scope, expect.any(Function));
+  expect(client.query).toHaveBeenCalledWith(
+    expect.stringContaining('tenant_id = $2 and user_id = $3'),
+    ['plan', 'tenant-1', 'user-1']
+  );
+  await expect(
+    findMealPlanByIdForUserAndTenant('plan', 'other', scope.tenantId, scope)
+  ).rejects.toThrow('scope mismatch');
 });

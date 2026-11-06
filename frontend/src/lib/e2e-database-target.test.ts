@@ -4,6 +4,8 @@ import { applyValidatedTargetsToRunner, validateE2ETargets } from '../../e2e/dat
 describe('validateE2ETargets', () => {
   const valid = {
     E2E_DATABASE_URL: 'postgresql://user:secret@127.0.0.1:5435/cocinacore_local_db',
+    E2E_APP_DATABASE_URL:
+      'postgresql://cocinacore_runtime_rls:runtime-secret@127.0.0.1:5435/cocinacore_local_db',
     E2E_REDIS_URL: 'redis://:secret@127.0.0.1:6381/15',
   };
 
@@ -16,13 +18,14 @@ describe('validateE2ETargets', () => {
 
     applyValidatedTargetsToRunner(environment);
 
-    expect(environment.DATABASE_URL).toBe(valid.E2E_DATABASE_URL);
+    expect(environment.DATABASE_URL).toBe(valid.E2E_APP_DATABASE_URL);
     expect(environment.REDIS_URL).toBe(valid.E2E_REDIS_URL);
   });
 
   it('accepts the isolated local database and Redis targets without exposing credentials', () => {
     expect(validateE2ETargets(valid)).toEqual({
       databaseUrl: valid.E2E_DATABASE_URL,
+      appDatabaseUrl: valid.E2E_APP_DATABASE_URL,
       redisUrl: valid.E2E_REDIS_URL,
       databaseTarget: {
         protocol: 'postgresql:',
@@ -48,6 +51,36 @@ describe('validateE2ETargets', () => {
     [{ ...valid, E2E_DATABASE_URL: 'postgresql://u:p@127.0.0.1:5436/cocinacore_local_db' }, '5435'],
     [{ ...valid, E2E_DATABASE_URL: 'postgres://u:p@127.0.0.1:5435/other' }, 'cocinacore_local_db'],
     [{ ...valid, E2E_DATABASE_URL: 'mysql://u:p@127.0.0.1:5435/cocinacore_local_db' }, 'postgres'],
+    [
+      {
+        ...valid,
+        E2E_APP_DATABASE_URL: 'postgresql://postgres:secret@127.0.0.1:5435/cocinacore_local_db',
+      },
+      'restricted cocinacore_runtime_rls role',
+    ],
+    [
+      {
+        ...valid,
+        E2E_APP_DATABASE_URL:
+          'postgresql://cocinacore_runtime_rls:secret@localhost:5435/cocinacore_local_db',
+      },
+      '127.0.0.1',
+    ],
+    [
+      {
+        ...valid,
+        E2E_APP_DATABASE_URL: 'postgresql://cocinacore_runtime_rls:secret@127.0.0.1:5435/other',
+      },
+      'cocinacore_local_db',
+    ],
+    [
+      {
+        ...valid,
+        E2E_APP_DATABASE_URL:
+          'postgresql://cocinacore_runtime_rls:secret@127.0.0.1:5436/cocinacore_local_db',
+      },
+      '5435',
+    ],
     [{ ...valid, E2E_REDIS_URL: undefined }, 'E2E_REDIS_URL is required'],
     [{ ...valid, E2E_REDIS_URL: 'redis://u:p@localhost:6381/15' }, '127.0.0.1'],
     [{ ...valid, E2E_REDIS_URL: 'redis://u:p@127.0.0.1:6379/15' }, '6381'],

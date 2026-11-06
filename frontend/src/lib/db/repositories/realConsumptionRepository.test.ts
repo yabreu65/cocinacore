@@ -158,6 +158,24 @@ describe('reconcileRealConsumptionInTransaction', () => {
     ).toHaveLength(1);
   });
 
+  it('reads immutable audit rows without locks requiring UPDATE privileges', async () => {
+    const { client, queries } = clientFor({ inventory: inventory() });
+    await reconcileRealConsumptionInTransaction(client, input());
+
+    const auditReads = queries.filter(({ sql }) =>
+      /select [\s\S]*from public\.(real_consumption_operations|meal_consumption_claims)/.test(sql)
+    );
+    expect(auditReads).toHaveLength(2);
+    for (const { sql } of auditReads) expect(sql).not.toMatch(/for (update|share)/i);
+    for (const table of ['cooking_sessions', 'user_meal_plans', 'recipe_inventory_items']) {
+      expect(
+        queries.some(
+          ({ sql }) => sql.includes(`from public.${table}`) && sql.includes('for update')
+        )
+      ).toBe(true);
+    }
+  });
+
   it('rejects an expired lot before creating an operation', async () => {
     const { client, queries } = clientFor({
       inventory: inventory('1', '2026-10-27T23:59:59.000Z'),
@@ -239,6 +257,10 @@ describe('reconcileRealConsumptionInTransaction', () => {
     });
 
     expect(result).toEqual({ status: 'already_claimed', mode: 'real_reconciliation' });
+    expect(
+      queries.find(({ sql }) => sql.includes('select mode from public.meal_consumption_claims'))
+        ?.sql
+    ).not.toMatch(/for (update|share)/i);
     expect(
       queries.some((entry) => entry.sql.includes('insert into public.meal_consumption_claims'))
     ).toBe(false);

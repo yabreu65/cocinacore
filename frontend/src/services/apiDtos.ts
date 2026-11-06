@@ -29,12 +29,18 @@ export type GeminiBatchEmbedContentsResponseDto = {
 export type GeminiGenerateContentResponseDto = {
   candidates: Array<{
     content: {
-      parts: Array<{
-        text: string;
-      }>;
+      parts: GeminiGenerateContentPartDto[];
     };
   }>;
 };
+
+export type GeminiGenerateContentPartDto = {
+  text?: string;
+  [key: string]: unknown;
+};
+
+const MAX_GEMINI_TEXT_PARTS = 128;
+const MAX_GEMINI_TEXT_CHARS = 100_000;
 
 export type MatchChunksRpcArgsDto = {
   query_embedding: number[];
@@ -95,19 +101,49 @@ export function isGeminiBatchEmbedContentsResponseDto(
 export function isGeminiGenerateContentResponseDto(
   value: unknown
 ): value is GeminiGenerateContentResponseDto {
-  if (!isRecord(value) || !Array.isArray(value.candidates)) {
+  if (!isRecord(value) || !Array.isArray(value.candidates) || value.candidates.length === 0) {
     return false;
   }
 
-  return value.candidates.every((candidate) => {
+  const candidates = value.candidates as unknown[];
+  const candidate: unknown = candidates[0];
+  return (() => {
     if (
       !isRecord(candidate) ||
       !isRecord(candidate.content) ||
-      !Array.isArray(candidate.content.parts)
+      !Array.isArray(candidate.content.parts) ||
+      candidate.content.parts.length === 0 ||
+      candidate.content.parts.length > MAX_GEMINI_TEXT_PARTS
     ) {
       return false;
     }
 
-    return candidate.content.parts.every((part) => isRecord(part) && typeof part.text === 'string');
-  });
+    return candidate.content.parts.every(
+      (part) => isRecord(part) && (!('text' in part) || typeof part.text === 'string')
+    );
+  })();
+}
+
+/**
+ * Extract the first Gemini candidate's valid text parts in provider order.
+ * Non-text parts (for example thought metadata) are ignored; a malformed text
+ * field rejects the complete response instead of coercing untrusted data.
+ */
+export function extractGeminiTextResponse(value: unknown): string | null {
+  if (!isGeminiGenerateContentResponseDto(value)) return null;
+
+  const parts = value.candidates[0]?.content.parts ?? [];
+  let totalCharacters = 0;
+  const textParts: string[] = [];
+  for (const part of parts) {
+    if (!('text' in part)) continue;
+    const text = part.text;
+    if (typeof text !== 'string') return null;
+    totalCharacters += text.length;
+    if (totalCharacters > MAX_GEMINI_TEXT_CHARS) return null;
+    if (text.length > 0) textParts.push(text);
+  }
+
+  const result = textParts.join('').trim();
+  return result.length > 0 ? result : null;
 }
