@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from 'next/server';
-import { requireTenant, requireUser } from '@/lib/auth/server';
+import { requireUser } from '@/lib/auth/server';
 import {
   deleteShoppingListItem,
   updateShoppingListItemStatus,
@@ -50,11 +50,11 @@ function unauthorizedResponse(error: unknown): NextResponse | null {
 
 export async function PATCH(request: NextRequest, context: RouteContext) {
   try {
-    const [tenant, user, { id }] = await Promise.all([
-      requireTenant(request, 'Unauthorized'),
+    const [user, { id }] = await Promise.all([
       requireUser(request, 'Unauthorized'),
       context.params,
     ]);
+    if (!user.tenant) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     if (!ShoppingListIdSchema.safeParse(id).success) {
       return NextResponse.json({ error: 'Invalid shopping list item id' }, { status: 400 });
@@ -67,7 +67,7 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
 
     const item = await updateShoppingListItemStatus(
       id,
-      tenant.tenantId,
+      user.tenant.tenantId,
       user.id,
       validation.data.status
     );
@@ -86,17 +86,17 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
 
 export async function DELETE(request: NextRequest, context: RouteContext) {
   try {
-    const [tenant, user, { id }] = await Promise.all([
-      requireTenant(request, 'Unauthorized'),
+    const [user, { id }] = await Promise.all([
       requireUser(request, 'Unauthorized'),
       context.params,
     ]);
+    if (!user.tenant) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     if (!ShoppingListIdSchema.safeParse(id).success) {
       return NextResponse.json({ error: 'Invalid shopping list item id' }, { status: 400 });
     }
 
-    const item = await deleteShoppingListItem(id, tenant.tenantId, user.id);
+    const item = await deleteShoppingListItem(id, user.tenant.tenantId, user.id);
     if (!item) {
       return NextResponse.json({ error: 'Shopping list item not found' }, { status: 404 });
     }

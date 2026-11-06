@@ -14,7 +14,7 @@ export default async function OwnerLayout({ children }: OwnerLayoutProps) {
     redirect('/login');
   }
 
-  if (!(await isPlatformOwner(user.id))) {
+  if (!(await isPlatformOwner(user))) {
     redirect('/app');
   }
 

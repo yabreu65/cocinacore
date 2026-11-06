@@ -7,21 +7,25 @@ import {
   hashPasswordResetToken,
 } from '@/lib/auth/password-reset';
 import { createPasswordResetToken } from '@/lib/db/repositories/passwordResetRepository';
-import { findUserByEmail } from '@/lib/db/repositories/userRepository';
+import { findUserByEmailForAuth } from '@/lib/db/repositories/userRepository';
 import { getAppPublicUrl, sendPasswordResetEmail } from '@/lib/email/resend';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { serverLogger } from '@/lib/serverLogger';
+import { getSafeErrorReason } from '@/lib/safe-error-reason';
+import {
+  getAuthenticationSecondaryRateLimitKey,
+  getRetryAfterSeconds,
+  getTargetRateLimitKey,
+  getTrustedClientIdentity,
+} from '@/lib/rate-limit-identity';
 
 export const runtime = 'nodejs';
 
 const GENERIC_RESPONSE = {
   ok: true,
-  message: 'Si el correo existe en CocinaCore, te enviaremos instrucciones para restablecer la contraseña.',
+  message:
+    'Si el correo existe en CocinaCore, te enviaremos instrucciones para restablecer la contraseña.',
 };
-
-function getIp(request: NextRequest): string {
-  return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
-}
 
 function buildResetUrl(token: string): string {
   const url = new URL('/reset-password', getAppPublicUrl());
@@ -32,29 +36,48 @@ function buildResetUrl(token: string): string {
 function emailConfigured(): boolean {
   return Boolean(
     process.env.RESEND_API_KEY?.trim() &&
-      process.env.RESEND_API_KEY !== 'CHANGE_ME' &&
-      process.env.EMAIL_FROM?.trim() &&
-      process.env.EMAIL_FROM !== 'CHANGE_ME' &&
-      process.env.APP_PUBLIC_URL?.trim() &&
-      process.env.APP_PUBLIC_URL !== 'CHANGE_ME'
+    process.env.RESEND_API_KEY !== 'CHANGE_ME' &&
+    process.env.EMAIL_FROM?.trim() &&
+    process.env.EMAIL_FROM !== 'CHANGE_ME' &&
+    process.env.APP_PUBLIC_URL?.trim() &&
+    process.env.APP_PUBLIC_URL !== 'CHANGE_ME'
   );
 }
 
 export async function POST(request: NextRequest) {
+  const requestId = crypto.randomUUID();
   const body: unknown = await request.json().catch(() => null);
   const parsed = AuthEmailSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: 'Ingresá un correo válido.' }, { status: 400 });
   }
 
-  const ip = getIp(request);
   const emailHash = hashPasswordResetIdentity(parsed.data.email);
-  const rateLimit = await checkRateLimit('auth/password-reset', ip, emailHash);
+  const clientIdentity = getTrustedClientIdentity(request);
+  const rateLimitKey = getTargetRateLimitKey(request, emailHash);
+  const targetRateLimit = await checkRateLimit(
+    'auth/password-reset',
+    rateLimitKey.identity,
+    rateLimitKey.userId,
+    {
+      requireSharedStore: true,
+    }
+  );
+  const secondaryKey = getAuthenticationSecondaryRateLimitKey(request, 'auth/password-reset');
+  const secondaryRateLimit = targetRateLimit.success
+    ? await checkRateLimit(secondaryKey.route, secondaryKey.identity, undefined, {
+        requireSharedStore: true,
+      })
+    : targetRateLimit;
+  const rateLimit = targetRateLimit.success ? secondaryRateLimit : targetRateLimit;
   if (!rateLimit.success) {
-    const retryAfter = Math.max(1, rateLimit.resetAt - Math.floor(Date.now() / 1000));
+    const retryAfter = getRetryAfterSeconds(rateLimit.resetAt);
     return NextResponse.json(
       { error: 'Demasiados intentos. Esperá unos minutos y volvé a probar.' },
-      { status: 429, headers: { 'Retry-After': String(retryAfter) } }
+      {
+        status: rateLimit.storage === 'unavailable' ? 503 : 429,
+        headers: { 'Retry-After': String(retryAfter) },
+      }
     );
   }
 
@@ -63,7 +86,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(GENERIC_RESPONSE);
   }
 
-  const user = await findUserByEmail(parsed.data.email);
+  const user = await findUserByEmailForAuth(parsed.data.email);
   if (!user) {
     return NextResponse.json(GENERIC_RESPONSE);
   }
@@ -73,7 +96,7 @@ export async function POST(request: NextRequest) {
     await createPasswordResetToken({
       userId: user.id,
       tokenHash: hashPasswordResetToken(token),
-      requestedIpHash: hashPasswordResetIdentity(ip),
+      requestedIpHash: hashPasswordResetIdentity(clientIdentity),
       expiresAt: getPasswordResetExpiry(),
     });
 
@@ -83,8 +106,8 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     serverLogger.error('auth.password_reset.request_failed', {
-      userId: user.id,
-      error: error instanceof Error ? error.message : String(error),
+      requestId,
+      reason: getSafeErrorReason(error),
     });
     return NextResponse.json(GENERIC_RESPONSE);
   }

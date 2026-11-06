@@ -122,6 +122,27 @@ describe('GET /api/meal-plan/coverage', () => {
     expect(mockListInventoryItemsByTenant).not.toHaveBeenCalled();
   });
 
+  it('rejects a user without a tenant before reading data', async () => {
+    mockRequireUser.mockResolvedValue({ ...user, tenant: null });
+    const response = await GET(request());
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: 'Unauthorized' });
+    expect(mockFindLatestMealPlanByUserAndTenant).not.toHaveBeenCalled();
+    expect(mockListInventoryItemsByTenant).not.toHaveBeenCalled();
+  });
+
+  it('uses tenant-shared inventory from another user for a 14-day forecast', async () => {
+    mockListInventoryItemsByTenant.mockResolvedValue([inventoryItem({ user_id: 'user-2' })]);
+    const response = await GET(request('14'));
+    expect(response.status).toBe(200);
+    expect(mockListInventoryItemsByTenant).toHaveBeenCalledWith(
+      'tenant-1', undefined, undefined, {}, { tenantId: 'tenant-1', userId: 'user-1' }
+    );
+    expect(await response.json()).toMatchObject({
+      forecast: { status: 'ready', horizonDays: 14, items: [{ availableQuantity: 750 }] },
+    });
+  });
+
   it('accepts only the 7- or 14-day horizon before querying tenant data', async () => {
     const response = await GET(request('8'));
 
@@ -191,7 +212,14 @@ describe('GET /api/meal-plan/coverage', () => {
 
     expect(response.status).toBe(200);
     expect(mockFindLatestMealPlanByUserAndTenant).toHaveBeenCalledWith('user-1', 'tenant-1');
-    expect(mockListInventoryItemsByTenant).toHaveBeenCalledWith('tenant-1');
+    expect(mockRequireUser).toHaveBeenCalledOnce();
+    expect(mockListInventoryItemsByTenant).toHaveBeenCalledWith(
+      'tenant-1',
+      undefined,
+      undefined,
+      {},
+      { tenantId: 'tenant-1', userId: 'user-1' }
+    );
     expect(await response.json()).toMatchObject({
       mealPlanId: 'plan-1',
       peopleCount: 2,

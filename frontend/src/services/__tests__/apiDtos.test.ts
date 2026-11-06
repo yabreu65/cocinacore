@@ -4,6 +4,7 @@ import {
   isGeminiBatchEmbedContentsResponseDto,
   isGeminiEmbedContentResponseDto,
   isGeminiGenerateContentResponseDto,
+  extractGeminiTextResponse,
   isNumberArray,
   isRecord,
 } from '../apiDtos';
@@ -35,6 +36,34 @@ describe('Gemini DTO guards', () => {
         candidates: [{ content: { parts: [{ text: 42 }] } }],
       })
     ).toBe(false);
+  });
+
+  it('extracts ordered text parts while ignoring provider metadata', () => {
+    expect(
+      extractGeminiTextResponse({
+        candidates: [
+          {
+            content: {
+              parts: [
+                { thought: true },
+                { text: 'first ' },
+                { inlineData: {} },
+                { text: 'second' },
+              ],
+            },
+          },
+        ],
+      })
+    ).toBe('first second');
+  });
+
+  it.each([
+    { candidates: [] },
+    { candidates: [{ content: { parts: [] } }] },
+    { candidates: [{ content: { parts: [{ thought: true }] } }] },
+    { candidates: [{ content: { parts: [{ thought: true }, { text: 42 }] } }] },
+  ])('rejects empty or malformed multipart responses', (payload) => {
+    expect(extractGeminiTextResponse(payload)).toBeNull();
   });
 });
 

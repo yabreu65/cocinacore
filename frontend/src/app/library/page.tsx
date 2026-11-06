@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { getCurrentUser } from '@/lib/auth/server';
-import { query } from '@/lib/db';
+import { scopedTransaction } from '@/lib/db';
 import type { PdfProcessingStatus } from '@/lib/db/types';
 
 export const dynamic = 'force-dynamic';
@@ -30,7 +30,10 @@ export default async function LibraryPage() {
         <section className="mx-auto w-full max-w-4xl rounded-3xl border border-[#E8DDD2] bg-white/80 p-5 premium-shadow">
           <h1 className="text-3xl font-semibold">Biblioteca</h1>
           <p className="mt-2 text-[#6B5A50]">Necesitás iniciar sesión para ver tu biblioteca.</p>
-          <Link href="/login" className="mt-4 inline-flex rounded-xl bg-[#C56A1A] px-4 py-2 font-semibold text-white">
+          <Link
+            href="/login"
+            className="mt-4 inline-flex rounded-xl bg-[#C56A1A] px-4 py-2 font-semibold text-white"
+          >
             Ir a login
           </Link>
         </section>
@@ -39,27 +42,35 @@ export default async function LibraryPage() {
   }
 
   const tenantId = user.tenant.tenantId;
-  const [pdfsResult, booksResult] = await Promise.all([
-    query<PdfRow>(
-      `select id, tenant_book_id, storage_path, created_at, processing_status, page_count, uploaded_by
-       from public.tenant_pdf_library
-       where tenant_id = $1
-       order by created_at desc
-       limit 50`,
-      [tenantId]
-    ),
-    query<BookRow>(
-      `select id, title, author
-       from public.tenant_books
-       where tenant_id = $1
-       order by created_at desc
-       limit 50`,
-      [tenantId]
-    ),
-  ]);
+  const { pdfsResult, booksResult } = await scopedTransaction(
+    { tenantId, userId: user.id },
+    async (client) => {
+      const [pdfs, books] = await Promise.all([
+        client.query<PdfRow>(
+          `select id, tenant_book_id, storage_path, created_at, processing_status, page_count, uploaded_by
+           from public.tenant_pdf_library
+           where tenant_id = $1
+           order by created_at desc
+           limit 50`,
+          [tenantId]
+        ),
+        client.query<BookRow>(
+          `select id, title, author
+           from public.tenant_books
+           where tenant_id = $1
+           order by created_at desc
+           limit 50`,
+          [tenantId]
+        ),
+      ]);
+      return { pdfsResult: pdfs, booksResult: books };
+    }
+  );
 
   const pdfs = pdfsResult.rows;
-  const books = booksResult.rows.filter((book) => pdfs.some((pdf) => pdf.tenant_book_id === book.id));
+  const books = booksResult.rows.filter((book) =>
+    pdfs.some((pdf) => pdf.tenant_book_id === book.id)
+  );
 
   return (
     <main className="texture-paper min-h-screen bg-[#FAF6F1] px-4 py-6 text-[#241A14] md:px-6">
@@ -83,8 +94,8 @@ export default async function LibraryPage() {
         </div>
 
         <div className="mb-4 rounded-2xl border border-[#E8DDD2] bg-white/70 p-4 text-sm text-[#6B5A50]">
-          Eliminación y edición quedan en reconstrucción. La página renderiza con datos reales
-          sobre PostgreSQL directo.
+          Eliminación y edición quedan en reconstrucción. La página renderiza con datos reales sobre
+          PostgreSQL directo.
         </div>
 
         <div className="grid gap-4 md:grid-cols-2">
@@ -96,17 +107,24 @@ export default async function LibraryPage() {
             </p>
             <ul className="mt-3 space-y-2">
               {pdfs.map((pdf) => (
-                <li key={pdf.id} className="rounded-xl border border-[#E8DDD2] bg-white/75 p-3 text-sm">
+                <li
+                  key={pdf.id}
+                  className="rounded-xl border border-[#E8DDD2] bg-white/75 p-3 text-sm"
+                >
                   <p className="font-medium text-[#241A14] line-clamp-1">
                     {pdf.storage_path.split('/').pop() ?? pdf.storage_path}
                   </p>
                   <p className="text-xs text-[#6B5A50]">
                     Estado: {pdf.processing_status} · Páginas: {pdf.page_count ?? '-'}
                   </p>
-                  <p className="mt-2 text-xs text-[#6B5A50]">{new Date(pdf.created_at).toLocaleString()}</p>
+                  <p className="mt-2 text-xs text-[#6B5A50]">
+                    {new Date(pdf.created_at).toLocaleString()}
+                  </p>
                 </li>
               ))}
-              {pdfs.length === 0 ? <li className="text-sm text-[#6B5A50]">No hay PDFs cargados.</li> : null}
+              {pdfs.length === 0 ? (
+                <li className="text-sm text-[#6B5A50]">No hay PDFs cargados.</li>
+              ) : null}
             </ul>
           </article>
 
@@ -114,12 +132,19 @@ export default async function LibraryPage() {
             <h2 className="text-lg font-semibold">Libros vinculados</h2>
             <ul className="mt-3 space-y-2">
               {books.map((book) => (
-                <li key={book.id} className="rounded-xl border border-[#E8DDD2] bg-white/75 p-3 text-sm">
+                <li
+                  key={book.id}
+                  className="rounded-xl border border-[#E8DDD2] bg-white/75 p-3 text-sm"
+                >
                   <p className="font-medium text-[#241A14]">{book.title}</p>
-                  <p className="text-xs text-[#6B5A50]">Autor: {book.author ?? 'No especificado'}</p>
+                  <p className="text-xs text-[#6B5A50]">
+                    Autor: {book.author ?? 'No especificado'}
+                  </p>
                 </li>
               ))}
-              {books.length === 0 ? <li className="text-sm text-[#6B5A50]">No hay libros vinculados.</li> : null}
+              {books.length === 0 ? (
+                <li className="text-sm text-[#6B5A50]">No hay libros vinculados.</li>
+              ) : null}
             </ul>
           </article>
         </div>

@@ -1,12 +1,15 @@
-import { query, queryWithStatementTimeout } from '@/lib/db';
+import { query, scopedTransaction, type DbOperationOptions } from '@/lib/db';
 import { BookChunkRow } from '@/lib/db/types';
 
 export interface SearchChunksInput {
   embedding: number[];
-  tenantId?: string | null;
+  tenantId: string;
+  userId: string;
   matchThreshold?: number;
   matchCount?: number;
   statementTimeoutMs: number;
+  signal?: AbortSignal;
+  deadlineAt?: number;
 }
 
 export interface MatchChunkResult {
@@ -24,9 +27,38 @@ export async function searchChunks(input: SearchChunksInput): Promise<MatchChunk
   const threshold = input.matchThreshold ?? 0.35;
   const count = input.matchCount ?? 5;
 
-  const sql = 'select * from public.match_chunks($1::vector(1536), $2, $3, $4)';
-  const params = [JSON.stringify(input.embedding), threshold, count, input.tenantId ?? null];
-  const result = await queryWithStatementTimeout<MatchChunkResult>(sql, params, input.statementTimeoutMs);
+  if (!input.tenantId || !input.userId) throw new Error('Authenticated RAG scope required.');
+  if (!Number.isSafeInteger(input.statementTimeoutMs) || input.statementTimeoutMs <= 0)
+    throw new Error('Statement timeout must be a positive safe integer.');
+  const sql = `select bc.id, bc.content, 1 - (bc.embedding <=> $1::vector(1536)) as similarity,
+       bc.metadata, bc.tenant_id, bc.global_book_id, bc.tenant_book_id, bc.source_type
+     from public.book_chunks bc
+     where (
+       (bc.source_type = 'global_pdf' and bc.tenant_id is null and bc.global_book_id is not null
+        and bc.tenant_book_id is null and exists (select 1 from public.global_books gb where gb.id = bc.global_book_id))
+       or (bc.source_type = 'tenant_pdf' and bc.tenant_id = $4::uuid and bc.global_book_id is null
+        and bc.tenant_book_id is not null and exists (select 1 from public.tenant_books tb where tb.id = bc.tenant_book_id and tb.tenant_id = $4::uuid))
+     ) and 1 - (bc.embedding <=> $1::vector(1536)) > $2
+     order by bc.embedding <=> $1::vector(1536)
+     limit $3`;
+  const params = [JSON.stringify(input.embedding), threshold, count, input.tenantId];
+  const options = {
+    signal: input.signal,
+    deadlineAt: input.deadlineAt,
+  } satisfies DbOperationOptions;
+  const result = await scopedTransaction(
+    { tenantId: input.tenantId, userId: input.userId },
+    async (client) => {
+      await client.query("select set_config('statement_timeout', $1, true)", [
+        `${input.statementTimeoutMs}ms`,
+      ]);
+      await client.query("select set_config('lock_timeout', $1, true)", [
+        `${input.statementTimeoutMs}ms`,
+      ]);
+      return client.query<MatchChunkResult>(sql, params);
+    },
+    options
+  );
 
   return result.rows;
 }

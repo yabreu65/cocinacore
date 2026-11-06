@@ -121,13 +121,13 @@ for expected in \
   'if (options.verifyComplete)' \
   'Migration ledger is complete.' \
   'begin read only' \
-  'if (separated) await assertAndAssumeMigrationIdentity(client, manifest, migrations, separated);' \
+  'await assertAndAssumeMigrationIdentity(client, manifest, migrations, separated);' \
   'Migration ledger is missing.'; do
   grep -Fq -- "$expected" "$RUNNER" || fail "missing migration runner contract: $expected"
 done
 
 verify_begin_line=$(grep -nF "await client.query('begin read only')" "$RUNNER" | head -n 1 | cut -d: -f1)
-verify_call_line=$(grep -nF 'if (separated) await assertAndAssumeMigrationIdentity(client, manifest, migrations, separated);' "$RUNNER" | tail -n 1 | cut -d: -f1)
+verify_call_line=$(grep -nF 'await assertAndAssumeMigrationIdentity(client, manifest, migrations, separated);' "$RUNNER" | tail -n 1 | cut -d: -f1)
 verify_identity_line=$(grep -nF 'const identity = await client.query(`' "$RUNNER" | cut -d: -f1)
 verify_authority_line=$(grep -nF 'const authority = await client.query(' "$RUNNER" | cut -d: -f1)
 verify_membership_line=$(grep -nF 'const memberships = await client.query(' "$RUNNER" | cut -d: -f1)
@@ -168,13 +168,16 @@ const ownerFunctions = [
   { schema: 'public', name: 'enforce_culinary_profile_term_group_limit', arguments: '' },
   { schema: 'public', name: 'prevent_culinary_profile_taxonomy_reclassification', arguments: '' },
   { schema: 'public', name: 'enforce_user_recipe_version_invariants', arguments: '' },
+  { schema: 'public', name: 'reject_real_consumption_mutation', arguments: '' },
+  { schema: 'public', name: 'validate_real_consumption_substitution', arguments: '' },
+  { schema: 'public', name: 'validate_real_consumption_movement_link', arguments: '' },
 ];
 const functionIdentity = ({ schema, name, arguments: args }) => schema + '.' + name + '(' + args + ')';
 const schemaOwner = 'cocinacore_schema_owner';
 const futureSql = Buffer.from('select 1;');
 if (process.env.FUTURE_018 === 'yes') {
   manifest.migrations.push({
-    id: '018', filename: '018_future.sql', lane: 'migration',
+    id: '021', filename: '021_future.sql', lane: 'migration',
     sha256: crypto.createHash('sha256').update(futureSql).digest('hex'),
     byteLength: futureSql.length, transactional: 'required', legacyChecksumBackfillAllowed: false,
   });
@@ -184,13 +187,13 @@ fs.readFileSync = (file, options) => {
     const contents = Buffer.from(JSON.stringify(manifest));
     return options && typeof options === 'object' && options.encoding ? contents.toString(options.encoding) : contents;
   }
-  if (String(file).endsWith('/018_future.sql')) return futureSql;
+  if (String(file).endsWith('/021_future.sql')) return futureSql;
   return originalReadFileSync(file, options);
 };
 fs.readdirSync = (directory, options) => {
   const files = originalReaddirSync(directory, options);
   return process.env.FUTURE_018 === 'yes' && String(directory) === path.dirname(process.env.MANIFEST_PATH)
-    ? [...files, '018_future.sql']
+    ? [...files, '021_future.sql']
     : files;
 };
 const queries = [];
@@ -243,6 +246,9 @@ class Pool {
         }
         if (text.includes('as database_settings')) return { rows: [{ database_settings: 0, tablespace_authority: 0, database_authority: 0 }] };
         if (text.includes('select count(*)::integer as count from authority')) return { rows: [{ count: 0 }] };
+        if (text.includes('as count') && text.includes('signup_new_account') && text.includes('runtime_identity_probe')) {
+          return { rows: [{ count: process.env.PREPARED_CAPABILITIES === 'yes' ? 7 : 0 }] };
+        }
         if (text.includes('from pg_catalog.pg_proc p') && /p\.prokind\s*=\s*'f'/.test(text)) {
           const fixture = process.env.OWNER_FUNCTIONS;
           if (!fixture || fixture === 'none' || process.env.LEDGER === '014-unapplied') return { rows: [] };
@@ -267,7 +273,10 @@ class Pool {
           }));
           const fixture = process.env.OWNER_FUNCTIONS;
           if (fixture && fixture !== 'none') {
-            let functions = ownerFunctions.map(functionIdentity);
+            const missingLast = ['pending', 'pending-018'].includes(process.env.LEDGER);
+            const applied = missingLast ? manifest.migrations.slice(0, -1) : manifest.migrations;
+            const declared = new Set(applied.flatMap((entry) => (entry.catalogAdditions || []).filter((addition) => addition.kind === 'function').map((addition) => addition.identity)));
+            let functions = ownerFunctions.filter((fn) => declared.has(fn.schema + '.' + fn.name)).map(functionIdentity);
             if (fixture === 'wrong-owner') functions = functions.slice(1);
             if (fixture === 'overload') functions.push('public.is_valid_culinary_profile_text_list(text[], integer, boolean)');
             if (fixture === 'undeclared') functions.push('public.untrusted_owner_function()');
@@ -387,9 +396,15 @@ class Pool {
 Module._load = function (request, parent, isMain) {
   if (request === 'pg') return { Pool };
   if (request === 'dotenv') return { config() {} };
+  if (request === './activated-capabilities-attestation') {
+    return {
+      attestActivatedCapabilities: async () => process.env.ACTIVATION_STATE || 'active',
+    };
+  }
   return originalLoad.call(this, request, parent, isMain);
 };
-process.argv = ['node', process.env.RUNNER_PATH, '--lane', 'migration', process.env.RUNNER_MODE];
+process.argv = ['node', process.env.RUNNER_PATH, '--lane', 'migration'];
+if (process.env.RUNNER_MODE && process.env.RUNNER_MODE !== '.') process.argv.push(process.env.RUNNER_MODE);
 if (process.env.RUNNER_MODE === '') process.exit = (code) => { process.exitCode = code; };
 process.env.DATABASE_URL = 'postgresql://offline.invalid/test';
 require(process.env.RUNNER_PATH);
@@ -503,6 +518,16 @@ for (const mode of ['--dry-run', '']) {
     process.exit(1);
   }
   const matching = run(mode, 'pending', false, false, 'none', 'valid', 'valid', { MIGRATION_EXPECTED_PENDING: expectedPending });
+  if (mode === '') {
+    const output = `${matching.stdout}${matching.stderr}`;
+    if (matching.status !== 1 ||
+        !output.includes('PREPARED_CAPABILITIES_RESTRICTED_LANE_REQUIRED') ||
+        output.match(/MIGRATION_SQL_QUERIES=(.*)/)?.[1] !== '[]') {
+      console.error(`offline legacy runner must reject migration 020 before SQL: status=${matching.status} stdout=${matching.stdout} stderr=${matching.stderr}`);
+      process.exit(1);
+    }
+    continue;
+  }
   if (matching.status !== 0 || `${matching.stdout}${matching.stderr}`.includes('MIGRATION_EXPECTED_PENDING_MISMATCH')) {
     console.error(`offline matching expected-pending set failed for ${mode || 'mutating'} mode: status=${matching.status} stdout=${matching.stdout} stderr=${matching.stderr}`);
     process.exit(1);
@@ -593,7 +618,7 @@ for (const [ledger, fixture, label] of [
   }
 }
 const futureResult = run('--verify-complete', 'pending-018', true);
-if (futureResult.status !== 1 || !`${futureResult.stdout}${futureResult.stderr}`.includes('Pending migration: 018_future.sql')) {
+if (futureResult.status !== 1 || !`${futureResult.stdout}${futureResult.stderr}`.includes('Pending migration: 021_future.sql')) {
   console.error(`offline future migration contract failed: ${futureResult.stderr}`);
   process.exit(1);
 }

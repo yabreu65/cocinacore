@@ -1,5 +1,12 @@
 import { PoolClient } from 'pg';
-import { query, mapSingleRow } from '@/lib/db';
+import {
+  query,
+  queryWithStatementTimeout,
+  mapSingleRow,
+  scopedTransaction,
+  type AuthenticatedDbScope,
+  type DbOperationOptions,
+} from '@/lib/db';
 import { RecipeInventoryItemRow } from '@/lib/db/types';
 
 export interface CreateInventoryItemInput {
@@ -30,53 +37,102 @@ export const MAX_WASTE_PREVENTION_INVENTORY_LIMIT = 100;
 
 export async function listWastePreventionInventoryByTenant(
   tenantId: string,
-  limit = MAX_WASTE_PREVENTION_INVENTORY_LIMIT
+  limit = MAX_WASTE_PREVENTION_INVENTORY_LIMIT,
+  scope?: AuthenticatedDbScope
 ): Promise<RecipeInventoryItemRow[]> {
   const boundedLimit = Number.isFinite(limit)
     ? Math.min(MAX_WASTE_PREVENTION_INVENTORY_LIMIT, Math.max(1, Math.floor(limit)))
     : MAX_WASTE_PREVENTION_INVENTORY_LIMIT;
-  const result = await query<RecipeInventoryItemRow>(
-    `select * from public.recipe_inventory_items
+  const sql = `select * from public.recipe_inventory_items
      where tenant_id = $1
      order by expiration_date asc nulls last, created_at asc, id asc
-     limit $2`,
-    [tenantId, Math.min(MAX_WASTE_PREVENTION_INVENTORY_LIMIT + 1, boundedLimit + 1)]
-  );
+     limit $2`;
+  const params = [tenantId, Math.min(MAX_WASTE_PREVENTION_INVENTORY_LIMIT + 1, boundedLimit + 1)];
+  if (scope && scope.tenantId !== tenantId) throw new Error('Inventory scope mismatch.');
+  const result = scope
+    ? await scopedTransaction(scope, (client) => client.query<RecipeInventoryItemRow>(sql, params))
+    : await query<RecipeInventoryItemRow>(sql, params);
   return result.rows;
 }
 
 export async function listTodayInventoryContextByTenant(
   tenantId: string,
   asOf: string,
-  limit: number
+  limit: number,
+  scope?: AuthenticatedDbScope
 ): Promise<TodayInventoryContextRow[]> {
   const boundedLimit = Number.isFinite(limit)
     ? Math.min(MAX_TODAY_INVENTORY_LIMIT, Math.max(1, Math.floor(limit)))
     : MAX_TODAY_INVENTORY_LIMIT;
-  const result = await query<TodayInventoryContextRow>(
-    `select tenant_id, ingredient_name, quantity, unit, expiration_date
+  const sql = `select tenant_id, ingredient_name, quantity, unit, expiration_date
      from public.recipe_inventory_items
      where tenant_id = $1 and (expiration_date is null or expiration_date >= $2)
      order by expiration_date asc nulls last
-     limit $3`,
-    [tenantId, asOf, boundedLimit]
-  );
+     limit $3`;
+  const params = [tenantId, asOf, boundedLimit];
+  if (scope && scope.tenantId !== tenantId) throw new Error('Inventory scope mismatch.');
+  const result = scope
+    ? await scopedTransaction(scope, (client) =>
+        client.query<TodayInventoryContextRow>(sql, params)
+      )
+    : await query<TodayInventoryContextRow>(sql, params);
   return result.rows;
 }
 
 export async function listInventoryItemsByTenant(
   tenantId: string,
-  limit?: number
+  limit?: number,
+  statementTimeoutMs?: number,
+  options: DbOperationOptions = {},
+  scope?: AuthenticatedDbScope
 ): Promise<RecipeInventoryItemRow[]> {
   const boundedLimit =
     typeof limit === 'number' && Number.isInteger(limit) && limit > 0 ? Math.min(limit, 501) : null;
-  const result = await query<RecipeInventoryItemRow>(
-    `select * from public.recipe_inventory_items
+  const sql = `select * from public.recipe_inventory_items
      where tenant_id = $1
-     order by created_at desc${boundedLimit === null ? '' : ' limit $2'}`,
-    boundedLimit === null ? [tenantId] : [tenantId, boundedLimit]
-  );
+     order by created_at desc${boundedLimit === null ? '' : ' limit $2'}`;
+  const params = boundedLimit === null ? [tenantId] : [tenantId, boundedLimit];
+  if (scope && scope.tenantId !== tenantId) throw new Error('Inventory scope mismatch.');
+  const result = scope
+    ? await scopedTransaction(
+        scope,
+        async (client) => {
+          if (statementTimeoutMs !== undefined) {
+            if (!Number.isSafeInteger(statementTimeoutMs) || statementTimeoutMs <= 0)
+              throw new Error('Statement timeout must be a positive safe integer.');
+            await client.query("select set_config('statement_timeout', $1, true)", [
+              `${statementTimeoutMs}ms`,
+            ]);
+            await client.query("select set_config('lock_timeout', $1, true)", [
+              `${statementTimeoutMs}ms`,
+            ]);
+          }
+          return client.query<RecipeInventoryItemRow>(sql, params);
+        },
+        options
+      )
+    : statementTimeoutMs === undefined
+      ? await query<RecipeInventoryItemRow>(sql, params, options)
+      : await queryWithStatementTimeout<RecipeInventoryItemRow>(
+          sql,
+          params,
+          statementTimeoutMs,
+          options
+        );
   return result.rows;
+}
+
+/** HTTP CRUD reads remain tenant-shared; the actor is used only for RLS context. */
+export async function listInventoryItemsScoped(
+  scope: AuthenticatedDbScope
+): Promise<RecipeInventoryItemRow[]> {
+  return scopedTransaction(scope, async (client) => {
+    const result = await client.query<RecipeInventoryItemRow>(
+      `select * from public.recipe_inventory_items where tenant_id = $1 order by created_at desc`,
+      [scope.tenantId]
+    );
+    return result.rows;
+  });
 }
 
 export async function findInventoryItemById(
@@ -93,37 +149,16 @@ export async function findInventoryItemById(
 export async function createInventoryItem(
   input: CreateInventoryItemInput
 ): Promise<RecipeInventoryItemRow> {
-  const result = await query<RecipeInventoryItemRow>(
-    `insert into public.recipe_inventory_items
-     (tenant_id, user_id, ingredient_name, quantity, unit, category, expiration_date,
-      estimated_unit_price, purchase_location, low_stock_threshold, normalized_name, notes)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-     returning *`,
-    [
-      input.tenantId,
-      input.userId,
-      input.ingredientName,
-      input.quantity ?? null,
-      input.unit ?? null,
-      input.category ?? null,
-      input.expirationDate ?? null,
-      input.estimatedUnitPrice ?? null,
-      input.purchaseLocation ?? null,
-      input.lowStockThreshold ?? null,
-      input.normalizedName ?? null,
-      input.notes ?? null,
-    ]
+  return scopedTransaction({ tenantId: input.tenantId, userId: input.userId }, (client) =>
+    createInventoryItemInTransaction(client, input)
   );
-
-  const item = mapSingleRow(result);
-  if (!item) throw new Error('Failed to create inventory item');
-  return item;
 }
 
 export async function updateInventoryItem(
   id: string,
   tenantId: string,
-  input: Partial<Omit<CreateInventoryItemInput, 'tenantId' | 'userId'>>
+  input: Partial<Omit<CreateInventoryItemInput, 'tenantId' | 'userId'>>,
+  scope?: AuthenticatedDbScope
 ): Promise<RecipeInventoryItemRow | null> {
   const fields: string[] = [];
   const values: unknown[] = [];
@@ -170,19 +205,44 @@ export async function updateInventoryItem(
     values.push(input.notes);
   }
 
-  if (fields.length === 0) return findInventoryItemById(id, tenantId);
+  if (fields.length === 0) {
+    if (!scope) return findInventoryItemById(id, tenantId);
+    if (scope.tenantId !== tenantId) throw new Error('Inventory scope mismatch.');
+    return scopedTransaction(scope, async (client) => {
+      const result = await client.query<RecipeInventoryItemRow>(
+        'select * from public.recipe_inventory_items where id = $1 and tenant_id = $2',
+        [id, tenantId]
+      );
+      return result.rows[0] ?? null;
+    });
+  }
 
   fields.push(`updated_at = now()`);
   values.push(id, tenantId);
 
-  const result = await query<RecipeInventoryItemRow>(
-    `update public.recipe_inventory_items set ${fields.join(', ')} where id = $${paramIndex} and tenant_id = $${paramIndex + 1} returning *`,
-    values
-  );
+  const sql = `update public.recipe_inventory_items set ${fields.join(', ')} where id = $${paramIndex} and tenant_id = $${paramIndex + 1} returning *`;
+  if (scope && scope.tenantId !== tenantId) throw new Error('Inventory scope mismatch.');
+  const result = scope
+    ? await scopedTransaction(scope, (client) => client.query<RecipeInventoryItemRow>(sql, values))
+    : await query<RecipeInventoryItemRow>(sql, values);
   return mapSingleRow(result);
 }
 
-export async function deleteInventoryItem(id: string, tenantId: string): Promise<void> {
+export async function deleteInventoryItem(
+  id: string,
+  tenantId: string,
+  scope?: AuthenticatedDbScope
+): Promise<void> {
+  if (scope && scope.tenantId !== tenantId) throw new Error('Inventory scope mismatch.');
+  if (scope) {
+    await scopedTransaction(scope, (client) =>
+      client.query('delete from public.recipe_inventory_items where id = $1 and tenant_id = $2', [
+        id,
+        tenantId,
+      ])
+    );
+    return;
+  }
   await query('delete from public.recipe_inventory_items where id = $1 and tenant_id = $2', [
     id,
     tenantId,

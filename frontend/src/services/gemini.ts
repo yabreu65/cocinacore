@@ -1,7 +1,7 @@
 import {
+  extractGeminiTextResponse,
   isGeminiBatchEmbedContentsResponseDto,
   isGeminiEmbedContentResponseDto,
-  isGeminiGenerateContentResponseDto,
 } from './apiDtos';
 import { getServerSecret } from './env';
 import { getGeminiBaseUrl } from '@/lib/ai/gemini-config';
@@ -48,8 +48,7 @@ export class GeminiEmbeddingService implements EmbeddingService {
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Gemini API Error (${response.status}): ${errorText}`);
+        throw new Error(`Gemini API Error (${response.status})`);
       }
 
       const data: unknown = await response.json();
@@ -59,7 +58,9 @@ export class GeminiEmbeddingService implements EmbeddingService {
 
       return data.embedding.values;
     } catch (error) {
-      serverLogger.error('gemini.embedding_failed', { error: String(error) });
+      serverLogger.error('gemini.embedding_failed', {
+        reason: error instanceof Error ? error.name : 'unknown',
+      });
       throw error;
     }
   }
@@ -67,7 +68,7 @@ export class GeminiEmbeddingService implements EmbeddingService {
   /**
    * Generates multiple vector embeddings in a batch using text-embedding-004
    */
-  public async generateEmbeddings(texts: string[]): Promise<number[][]> {
+  public async generateEmbeddings(texts: string[], signal?: AbortSignal): Promise<number[][]> {
     if (!texts || texts.length === 0) {
       return [];
     }
@@ -78,6 +79,7 @@ export class GeminiEmbeddingService implements EmbeddingService {
         headers: {
           'Content-Type': 'application/json',
         },
+        ...(signal ? { signal } : {}),
         body: JSON.stringify({
           requests: texts.map((text) => ({
             model: 'models/text-embedding-004',
@@ -89,8 +91,7 @@ export class GeminiEmbeddingService implements EmbeddingService {
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Gemini Batch API Error (${response.status}): ${errorText}`);
+        throw new Error(`Gemini Batch API Error (${response.status})`);
       }
 
       const data: unknown = await response.json();
@@ -100,7 +101,9 @@ export class GeminiEmbeddingService implements EmbeddingService {
 
       return data.embeddings.map((embedding) => embedding.values);
     } catch (error) {
-      serverLogger.error('gemini.batch_embedding_failed', { error: String(error) });
+      serverLogger.error('gemini.batch_embedding_failed', {
+        reason: error instanceof Error ? error.name : 'unknown',
+      });
       throw error;
     }
   }
@@ -199,24 +202,19 @@ Please craft the gourmet recipe based on these inputs:`;
         }),
       });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Gemini Recipe Generation Error (${response.status}): ${errorText}`);
-      }
+      if (!response.ok) throw new Error(`Gemini Recipe Generation Error (${response.status})`);
 
       const data: unknown = await response.json();
-      if (!isGeminiGenerateContentResponseDto(data)) {
-        throw new Error('Failed to retrieve text generation content from Gemini API response');
-      }
-
-      const textResponse = data.candidates[0]?.content.parts[0]?.text;
+      const textResponse = extractGeminiTextResponse(data);
       if (!textResponse) {
         throw new Error('Failed to retrieve text generation content from Gemini API response');
       }
 
       return textResponse;
     } catch (error) {
-      serverLogger.error('gemini.recipe_generation_failed', { error: String(error) });
+      serverLogger.error('gemini.recipe_generation_failed', {
+        reason: error instanceof Error ? error.name : 'unknown',
+      });
       throw error;
     }
   }

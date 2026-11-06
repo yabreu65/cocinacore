@@ -46,7 +46,7 @@ describe('/api/shopping-list', () => {
     createShoppingListItemMock.mockReset();
 
     requireTenantMock.mockResolvedValue({ tenantId: 'tenant-1' });
-    requireUserMock.mockResolvedValue({ id: 'user-1' });
+    requireUserMock.mockResolvedValue({ id: 'user-1', tenant: { tenantId: 'tenant-1' } });
     listShoppingListItemsMock.mockResolvedValue([item]);
     createShoppingListItemMock.mockResolvedValue(item);
   });
@@ -57,7 +57,10 @@ describe('/api/shopping-list', () => {
     );
 
     expect(response.status).toBe(200);
-    expect(listShoppingListItemsMock).toHaveBeenCalledWith('tenant-1', 'user-1', {});
+    expect(listShoppingListItemsMock).toHaveBeenCalledWith('tenant-1', 'user-1', {}, undefined, {
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    });
     expect(await response.json()).toEqual({
       items: [
         {
@@ -79,9 +82,15 @@ describe('/api/shopping-list', () => {
     const response = await GET(request('/api/shopping-list?status=purchased'));
 
     expect(response.status).toBe(200);
-    expect(listShoppingListItemsMock).toHaveBeenCalledWith('tenant-1', 'user-1', {
-      status: 'purchased',
-    });
+    expect(listShoppingListItemsMock).toHaveBeenCalledWith(
+      'tenant-1',
+      'user-1',
+      {
+        status: 'purchased',
+      },
+      undefined,
+      { tenantId: 'tenant-1', userId: 'user-1' }
+    );
   });
 
   it('rejects an invalid status filter before querying', async () => {
@@ -136,7 +145,7 @@ describe('/api/shopping-list', () => {
   });
 
   it('returns 401 without calling the repository when authentication fails', async () => {
-    requireTenantMock.mockRejectedValueOnce(new Error('Unauthorized'));
+    requireUserMock.mockRejectedValueOnce(new Error('Unauthorized'));
 
     const response = await GET(request('/api/shopping-list'));
 
@@ -153,4 +162,33 @@ describe('/api/shopping-list', () => {
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ error: 'Unable to retrieve shopping list' });
   });
+});
+
+it('rejects sessions without tenant without repository access', async () => {
+  requireUserMock.mockReset().mockResolvedValue({ id: 'user-1', tenant: null });
+  const response = await GET(request('/api/shopping-list'));
+  expect(response.status).toBe(401);
+  expect(requireUserMock).toHaveBeenCalledTimes(1);
+});
+
+it('uses a single authenticated session for POST and ignores identity fields', async () => {
+  requireUserMock.mockReset().mockResolvedValue({ id: 'user-1', tenant: { tenantId: 'tenant-1' } });
+  createShoppingListItemMock.mockResolvedValue(item);
+  const response = await POST(
+    request('/api/shopping-list', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ingredientName: 'Arroz',
+        source: 'manual',
+        tenantId: 'foreign',
+        userId: 'foreign',
+      }),
+    })
+  );
+  expect(response.status).toBe(201);
+  expect(requireUserMock).toHaveBeenCalledOnce();
+  expect(createShoppingListItemMock).toHaveBeenCalledWith(
+    expect.objectContaining({ tenantId: 'tenant-1', userId: 'user-1' })
+  );
 });

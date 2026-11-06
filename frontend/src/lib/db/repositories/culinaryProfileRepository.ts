@@ -1,4 +1,4 @@
-import { query, mapSingleRow, transaction } from '@/lib/db';
+import { query, mapSingleRow, scopedTransaction, type DbOperationOptions } from '@/lib/db';
 import type { PoolClient } from 'pg';
 import {
   CulinaryDimensionRow,
@@ -37,13 +37,68 @@ export async function listCulinaryTerms(
 }
 
 export async function findCulinaryProfileByUserId(
-  userId: string
+  userId: string,
+  tenantId: string
 ): Promise<UserCulinaryProfileRow | null> {
-  const result = await query<UserCulinaryProfileRow>(
-    'select * from public.user_culinary_profiles where user_id = $1',
-    [userId]
+  const result = await scopedTransaction({ tenantId, userId }, (client) =>
+    client.query<UserCulinaryProfileRow>(
+      'select * from public.user_culinary_profiles where user_id = $1 and tenant_id = $2',
+      [userId, tenantId]
+    )
   );
   return mapSingleRow(result);
+}
+
+/** Loads a profile only when both authenticated ownership dimensions match. */
+export async function findCulinaryProfileByUserAndTenant(
+  userId: string,
+  tenantId: string,
+  statementTimeoutMs?: number,
+  options: DbOperationOptions = {}
+): Promise<UserCulinaryProfileRow | null> {
+  const sql = 'select * from public.user_culinary_profiles where user_id = $1 and tenant_id = $2';
+  const params = [userId, tenantId];
+  const result = await scopedProfileQuery<UserCulinaryProfileRow>(
+    userId,
+    tenantId,
+    sql,
+    params,
+    statementTimeoutMs,
+    options
+  );
+  return mapSingleRow(result);
+}
+
+/** The caller must derive both identifiers from the same authenticated server identity. */
+async function scopedProfileQuery<T extends import('pg').QueryResultRow>(
+  userId: string,
+  tenantId: string,
+  sql: string,
+  params: unknown[],
+  statementTimeoutMs?: number,
+  options: DbOperationOptions = {}
+) {
+  if (
+    statementTimeoutMs !== undefined &&
+    (!Number.isSafeInteger(statementTimeoutMs) || statementTimeoutMs <= 0)
+  ) {
+    throw new Error('Statement timeout must be a positive safe integer.');
+  }
+  return scopedTransaction(
+    { tenantId, userId },
+    async (client) => {
+      if (statementTimeoutMs !== undefined) {
+        await client.query("select set_config('statement_timeout', $1, true)", [
+          `${statementTimeoutMs}ms`,
+        ]);
+        await client.query("select set_config('lock_timeout', $1, true)", [
+          `${statementTimeoutMs}ms`,
+        ]);
+      }
+      return client.query<T>(sql, params);
+    },
+    options
+  );
 }
 
 export interface UserCulinaryProfileTermWithLabel extends UserCulinaryProfileTermRow {
@@ -59,9 +114,7 @@ export interface CulinaryProfileQueryClient {
   execute(queryText: string, values?: unknown[]): Promise<void>;
 }
 
-function queryClient(
-  client: PoolClient | CulinaryProfileQueryClient
-): CulinaryProfileQueryClient {
+function queryClient(client: PoolClient | CulinaryProfileQueryClient): CulinaryProfileQueryClient {
   if ('queryProfile' in client) return client;
   return {
     queryProfile: (queryText, values) => client.query<UserCulinaryProfileRow>(queryText, values),
@@ -80,51 +133,82 @@ export class ProfileTenantMismatchError extends Error {
   }
 }
 
+function isProfileRowSecurityViolation(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null || !('code' in error) || !('message' in error)) {
+    return false;
+  }
+  return (
+    error.code === '42501' &&
+    typeof error.message === 'string' &&
+    error.message.includes('row-level security policy')
+  );
+}
+
 export async function lockCulinaryProfileUpdateInTransaction(
   client: PoolClient | CulinaryProfileQueryClient,
-  userId: string
+  userId: string,
+  tenantId: string
 ): Promise<void> {
   const typedClient = queryClient(client);
-  const lockKey = `culinary-profile:${userId}`;
+  const lockKey = `culinary-profile:${tenantId}:${userId}`;
   await typedClient.execute('select pg_advisory_xact_lock(hashtextextended($1, 0))', [lockKey]);
 }
 
 export async function findCulinaryProfileByUserIdInTransaction(
   client: PoolClient | CulinaryProfileQueryClient,
-  userId: string
+  userId: string,
+  tenantId: string
 ): Promise<UserCulinaryProfileRow | null> {
   const result = await queryClient(client).queryProfile(
-    'select * from public.user_culinary_profiles where user_id = $1',
-    [userId]
+    'select * from public.user_culinary_profiles where user_id = $1 and tenant_id = $2',
+    [userId, tenantId]
   );
   return result.rows[0] ?? null;
 }
 
 export async function findCulinaryProfileTermsByUserIdInTransaction(
   client: PoolClient | CulinaryProfileQueryClient,
-  userId: string
+  userId: string,
+  tenantId: string
 ): Promise<UserCulinaryProfileTermWithLabel[]> {
   const result = await queryClient(client).queryTerms(
     `select profile_terms.*, terms.label as term_label
      from public.user_culinary_profile_terms as profile_terms
+     join public.user_culinary_profiles as profiles
+       on profiles.user_id = profile_terms.user_id
+      and profiles.user_id = $1
+      and profiles.tenant_id = $2
      join public.culinary_terms as terms on terms.id = profile_terms.term_id
      where profile_terms.user_id = $1
      order by profile_terms.created_at desc, profile_terms.term_id`,
-    [userId]
+    [userId, tenantId]
   );
   return result.rows;
 }
 
 export async function findCulinaryProfileTermsByUserId(
-  userId: string
+  userId: string,
+  tenantId: string,
+  statementTimeoutMs?: number,
+  options: DbOperationOptions = {}
 ): Promise<UserCulinaryProfileTermWithLabel[]> {
-  const result = await query<UserCulinaryProfileTermWithLabel>(
-    `select profile_terms.*, terms.label as term_label
+  const sql = `select profile_terms.*, terms.label as term_label
      from public.user_culinary_profile_terms as profile_terms
+     join public.user_culinary_profiles as profiles
+       on profiles.user_id = profile_terms.user_id
+      and profiles.user_id = $1
+      and profiles.tenant_id = $2
      join public.culinary_terms as terms on terms.id = profile_terms.term_id
      where profile_terms.user_id = $1
-     order by profile_terms.created_at desc, profile_terms.term_id`,
-    [userId]
+     order by profile_terms.created_at desc, profile_terms.term_id`;
+  const params = [userId, tenantId];
+  const result = await scopedProfileQuery<UserCulinaryProfileTermWithLabel>(
+    userId,
+    tenantId,
+    sql,
+    params,
+    statementTimeoutMs,
+    options
   );
   return result.rows;
 }
@@ -133,19 +217,26 @@ export const MAX_WASTE_PREVENTION_PROFILE_TERMS = 100;
 
 export async function listWastePreventionCulinaryProfileTermsByUserId(
   userId: string,
+  tenantId: string,
   limit = MAX_WASTE_PREVENTION_PROFILE_TERMS
 ): Promise<UserCulinaryProfileTermWithLabel[]> {
   const boundedLimit = Number.isFinite(limit)
     ? Math.min(MAX_WASTE_PREVENTION_PROFILE_TERMS, Math.max(1, Math.floor(limit)))
     : MAX_WASTE_PREVENTION_PROFILE_TERMS;
-  const result = await query<UserCulinaryProfileTermWithLabel>(
-    `select profile_terms.*, terms.label as term_label
+  const result = await scopedTransaction({ tenantId, userId }, (client) =>
+    client.query<UserCulinaryProfileTermWithLabel>(
+      `select profile_terms.*, terms.label as term_label
      from public.user_culinary_profile_terms as profile_terms
+     join public.user_culinary_profiles as profiles
+       on profiles.user_id = profile_terms.user_id
+      and profiles.user_id = $1
+      and profiles.tenant_id = $2
      join public.culinary_terms as terms on terms.id = profile_terms.term_id
      where profile_terms.user_id = $1
      order by profile_terms.created_at desc, profile_terms.term_id
-     limit $2`,
-    [userId, Math.min(MAX_WASTE_PREVENTION_PROFILE_TERMS + 1, boundedLimit + 1)]
+     limit $3`,
+      [userId, tenantId, Math.min(MAX_WASTE_PREVENTION_PROFILE_TERMS + 1, boundedLimit + 1)]
+    )
   );
   return result.rows;
 }
@@ -159,15 +250,25 @@ export interface UpsertProfileInput {
 export async function upsertCulinaryProfile(
   input: UpsertProfileInput
 ): Promise<UserCulinaryProfileRow> {
-  const result = await query<UserCulinaryProfileRow>(
-    `insert into public.user_culinary_profiles (user_id, tenant_id, level)
+  const result = await scopedTransaction(
+    { tenantId: input.tenantId, userId: input.userId },
+    async (client) => {
+      try {
+        return await client.query<UserCulinaryProfileRow>(
+          `insert into public.user_culinary_profiles (user_id, tenant_id, level)
      values ($1, $2, $3)
      on conflict (user_id) do update set
        level = excluded.level,
        updated_at = now()
      where user_culinary_profiles.tenant_id = excluded.tenant_id
      returning *`,
-    [input.userId, input.tenantId, input.level ?? null]
+          [input.userId, input.tenantId, input.level ?? null]
+        );
+      } catch (error) {
+        if (isProfileRowSecurityViolation(error)) throw new ProfileTenantMismatchError();
+        throw error;
+      }
+    }
   );
 
   const profile = mapSingleRow(result);
@@ -177,15 +278,29 @@ export async function upsertCulinaryProfile(
 
 export async function setCulinaryProfileTerms(
   userId: string,
+  tenantId: string,
   terms: Array<{ termId: string; preferenceType: PreferenceType; weight?: number }>
 ): Promise<void> {
-  await transaction(async (client) => {
-    await client.query('delete from public.user_culinary_profile_terms where user_id = $1', [
-      userId,
-    ]);
+  await scopedTransaction({ tenantId, userId }, async (client) => {
+    const typedClient = queryClient(client);
+    const profile = await typedClient.queryProfile(
+      `select user_id, tenant_id
+       from public.user_culinary_profiles
+       where user_id = $1 and tenant_id = $2
+       for update`,
+      [userId, tenantId]
+    );
+    if (profile.rows.length !== 1) throw new ProfileTenantMismatchError();
+
+    await typedClient.execute(
+      `delete from public.user_culinary_profile_terms as profile_terms
+       using public.user_culinary_profiles as profiles
+       where profile_terms.user_id = $1 and profiles.user_id = $1 and profiles.tenant_id = $2`,
+      [userId, tenantId]
+    );
 
     for (const term of terms) {
-      await client.query(
+      await typedClient.execute(
         `insert into public.user_culinary_profile_terms
          (user_id, term_id, preference_type, weight)
          values ($1, $2, $3, $4)`,
@@ -194,7 +309,6 @@ export async function setCulinaryProfileTerms(
     }
   });
 }
-
 
 export interface SaveCulinaryProfileInput extends UpsertProfileInput {
   availableTimeMinutes?: number | null;
@@ -207,7 +321,9 @@ export interface SaveCulinaryProfileInput extends UpsertProfileInput {
 export async function saveCulinaryProfile(
   input: SaveCulinaryProfileInput
 ): Promise<UserCulinaryProfileRow> {
-  return transaction((client) => saveCulinaryProfileInTransaction(queryClient(client), input));
+  return scopedTransaction({ tenantId: input.tenantId, userId: input.userId }, (client) =>
+    saveCulinaryProfileInTransaction(queryClient(client), input)
+  );
 }
 
 export async function saveCulinaryProfileInTransaction(
@@ -215,12 +331,13 @@ export async function saveCulinaryProfileInTransaction(
   input: SaveCulinaryProfileInput
 ): Promise<UserCulinaryProfileRow> {
   const typedClient = queryClient(client);
-  const result = await typedClient.queryProfile(
-    `insert into public.user_culinary_profiles
+  let result: { rows: UserCulinaryProfileRow[] };
+  try {
+    result = await typedClient.queryProfile(
+      `insert into public.user_culinary_profiles
          (user_id, tenant_id, level, available_time_minutes, disliked_ingredients, allergies, household_members)
        values ($1, $2, $3, $4, $5, $6, $7::jsonb)
        on conflict (user_id) do update set
-         tenant_id = excluded.tenant_id,
          level = case when $8 then excluded.level else user_culinary_profiles.level end,
          available_time_minutes = case when $9 then excluded.available_time_minutes else user_culinary_profiles.available_time_minutes end,
          disliked_ingredients = case when $10 then excluded.disliked_ingredients else user_culinary_profiles.disliked_ingredients end,
@@ -229,29 +346,36 @@ export async function saveCulinaryProfileInTransaction(
          updated_at = now()
        where user_culinary_profiles.tenant_id = excluded.tenant_id
        returning *`,
-    [
-      input.userId,
-      input.tenantId,
-      input.level ?? null,
-      input.availableTimeMinutes ?? null,
-      input.dislikedIngredients ?? [],
-      input.allergies ?? [],
-      JSON.stringify(input.householdMembers ?? []),
-      input.level !== undefined,
-      input.availableTimeMinutes !== undefined,
-      input.dislikedIngredients !== undefined,
-      input.allergies !== undefined,
-      input.householdMembers !== undefined,
-    ]
-  );
+      [
+        input.userId,
+        input.tenantId,
+        input.level ?? null,
+        input.availableTimeMinutes ?? null,
+        input.dislikedIngredients ?? [],
+        input.allergies ?? [],
+        JSON.stringify(input.householdMembers ?? []),
+        input.level !== undefined,
+        input.availableTimeMinutes !== undefined,
+        input.dislikedIngredients !== undefined,
+        input.allergies !== undefined,
+        input.householdMembers !== undefined,
+      ]
+    );
+  } catch (error) {
+    if (isProfileRowSecurityViolation(error)) throw new ProfileTenantMismatchError();
+    throw error;
+  }
 
   const profile = result.rows[0];
   if (!profile) throw new ProfileTenantMismatchError();
 
   if (input.terms !== undefined) {
-    await typedClient.execute('delete from public.user_culinary_profile_terms where user_id = $1', [
-      input.userId,
-    ]);
+    await typedClient.execute(
+      `delete from public.user_culinary_profile_terms as profile_terms
+       using public.user_culinary_profiles as profiles
+       where profile_terms.user_id = $1 and profiles.user_id = $1 and profiles.tenant_id = $2`,
+      [input.userId, input.tenantId]
+    );
 
     for (const term of input.terms) {
       await typedClient.execute(

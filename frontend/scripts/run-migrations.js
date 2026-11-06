@@ -5,6 +5,9 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { Pool } = require('pg');
+const { assertPreparedCapabilitiesManifest } = require('./prepared-capabilities-contract');
+const { attestPreparedCapabilities } = require('./prepared-capabilities-attestation');
+const { attestActivatedCapabilities } = require('./activated-capabilities-attestation');
 
 if (process.env.COCINACORE_SKIP_DOTENV !== '1') {
   try {
@@ -34,15 +37,38 @@ function parseActivationGate(value = process.env.COCINACORE_SEPARATED_DB_LANES_E
 }
 
 function getOptions() {
-  const laneIndex = process.argv.indexOf('--lane');
-  const lane = laneIndex === -1 ? 'migration' : process.argv[laneIndex + 1];
+  const values = new Map();
+  const flags = new Set();
+  for (let i = 2; i < process.argv.length; i += 1) {
+    const arg = process.argv[i];
+    if (['--lane', '--stop-after', '--verify-boundary'].includes(arg)) {
+      if (values.has(arg) || !process.argv[i + 1] || process.argv[i + 1].startsWith('--'))
+        throw new Error(`Invalid or duplicate argument: ${arg}.`);
+      values.set(arg, process.argv[++i]);
+    } else if (['--dry-run', '--verify-complete'].includes(arg)) {
+      if (flags.has(arg)) throw new Error(`Duplicate argument: ${arg}.`);
+      flags.add(arg);
+    } else throw new Error(`Unknown argument: ${arg}.`);
+  }
+  const lane = values.has('--lane') ? values.get('--lane') : 'migration';
   if (!LANES.has(lane)) {
     throw new Error('--lane must be exactly migration or bootstrap.');
   }
+  const stopAfter = values.get('--stop-after');
+  const verifyBoundary = values.get('--verify-boundary');
+  if ((stopAfter && stopAfter !== '019') || (verifyBoundary && verifyBoundary !== '019'))
+    throw new Error('The only supported migration boundary is 019.');
+  if (
+    (stopAfter || verifyBoundary) &&
+    (lane !== 'migration' || flags.size || (stopAfter && verifyBoundary))
+  )
+    throw new Error('Boundary options cannot be combined with another mode or bootstrap lane.');
   return {
     lane,
-    dryRun: process.argv.includes('--dry-run'),
-    verifyComplete: process.argv.includes('--verify-complete'),
+    dryRun: flags.has('--dry-run'),
+    verifyComplete: flags.has('--verify-complete'),
+    stopAfter,
+    verifyBoundary,
   };
 }
 
@@ -257,6 +283,7 @@ function loadManifestAndMigrations() {
     throw new Error(`Trusted migration manifest is unreadable: ${error.message}`);
   }
   assertPlainObject(manifest, 'Migration manifest');
+  assertPreparedCapabilitiesManifest(manifest.preparedCapabilities);
   if (manifest.manifestVersion !== MANIFEST_VERSION) {
     throw new Error(`Unsupported migration manifest version: ${manifest.manifestVersion}`);
   }
@@ -265,12 +292,15 @@ function loadManifestAndMigrations() {
   }
   const legacyLineages = manifest.legacyLineages;
   if (
-    !Array.isArray(legacyLineages) || legacyLineages.length !== 1 ||
-    !legacyLineages[0] || Object.keys(legacyLineages[0]).sort().join(',') !== 'anchor,filenames,ledgerMode' ||
+    !Array.isArray(legacyLineages) ||
+    legacyLineages.length !== 1 ||
+    !legacyLineages[0] ||
+    Object.keys(legacyLineages[0]).sort().join(',') !== 'anchor,filenames,ledgerMode' ||
     legacyLineages[0].anchor !== '010_password_reset_tokens.sql' ||
     legacyLineages[0].ledgerMode !== 'legacy-two-column' ||
     !Array.isArray(legacyLineages[0].filenames) ||
-    legacyLineages[0].filenames.join(',') !== '011_mfa.sql,012_tenant_rls_stage.sql,013_platform_operator_stage.sql'
+    legacyLineages[0].filenames.join(',') !==
+      '011_mfa.sql,012_tenant_rls_stage.sql,013_platform_operator_stage.sql'
   ) {
     throw new Error('Trusted legacy migration lineage declaration is invalid.');
   }
@@ -763,11 +793,15 @@ async function assertSchemaOwnerDatabaseAuthority(client, manifest, applied) {
         if (addition.kind === 'table') {
           const [schema, name] = addition.identity.split('.');
           if (schema !== addition.schema) {
-            throw new Error(`ROLE_STATE_MISMATCH: invalid applied table declaration ${addition.identity}.`);
+            throw new Error(
+              `ROLE_STATE_MISMATCH: invalid applied table declaration ${addition.identity}.`
+            );
           }
           const identity = `table,${schema}.${name}`;
           if (allowed.has(identity)) {
-            throw new Error(`ROLE_STATE_MISMATCH: applied table ${addition.identity} duplicates a baseline owner target.`);
+            throw new Error(
+              `ROLE_STATE_MISMATCH: applied table ${addition.identity} duplicates a baseline owner target.`
+            );
           }
           allowed.add(identity);
           continue;
@@ -962,6 +996,18 @@ async function assertAndAssumeMigrationIdentity(client, manifest, migrations, se
   }
 
   await assertSchemaOwnerDatabaseAuthority(client, manifest, applied);
+  if (applied?.has('019_real_consumption_reconciliation.sql')) {
+    const post020Applied = migrations.some(
+      (migration) => migration.prefix >= 20 && applied.has(migration.filename)
+    );
+    if (post020Applied) {
+      const activationState = await attestActivatedCapabilities(client);
+      if (activationState === 'pending')
+        console.log('ACTIVATION PENDING: post-020 grants are incomplete.');
+    } else {
+      await attestPreparedCapabilities(client);
+    }
+  }
 }
 
 function parseBoundedTimeout(name) {
@@ -986,7 +1032,9 @@ function parseExpectedPending(migrations) {
   for (const filename of filenames) {
     const index = canonical.indexOf(filename);
     if (index === -1 || index <= previousIndex) {
-      throw new Error('MIGRATION_EXPECTED_PENDING must be an exact, ordered set of canonical migration filenames.');
+      throw new Error(
+        'MIGRATION_EXPECTED_PENDING must be an exact, ordered set of canonical migration filenames.'
+      );
     }
     previousIndex = index;
   }
@@ -1290,11 +1338,15 @@ async function getAppliedMigrations(client, migrations, separated, legacyLineage
   const seen = new Set();
   const positions = new Map();
   for (const [index, row] of result.rows.entries()) {
-    if (seen.has(row.filename)) throw new Error(`BASELINE_MISMATCH: duplicate applied migration ${row.filename}`);
+    if (seen.has(row.filename))
+      throw new Error(`BASELINE_MISMATCH: duplicate applied migration ${row.filename}`);
     seen.add(row.filename);
     positions.set(row.filename, index);
     if (legacyNames.has(row.filename)) {
-      if (separated) throw new Error('BASELINE_MISMATCH: legacy migration lineage is incompatible with separated ledger mode.');
+      if (separated)
+        throw new Error(
+          'BASELINE_MISMATCH: legacy migration lineage is incompatible with separated ledger mode.'
+        );
       continue;
     }
     const migration = expected.get(row.filename);
@@ -1305,42 +1357,69 @@ async function getAppliedMigrations(client, migrations, separated, legacyLineage
   }
   const legacyRows = result.rows.filter((row) => legacyNames.has(row.filename));
   if (legacyRows.length > 0) {
-    if (legacyRows.length !== legacyLineage.filenames.length ||
-        legacyRows.some((row, index) => row.filename !== legacyLineage.filenames[index])) {
-      throw new Error('BASELINE_MISMATCH: legacy migration lineage must be the complete ordered suffix.');
+    if (
+      legacyRows.length !== legacyLineage.filenames.length ||
+      legacyRows.some((row, index) => row.filename !== legacyLineage.filenames[index])
+    ) {
+      throw new Error(
+        'BASELINE_MISMATCH: legacy migration lineage must be the complete ordered suffix.'
+      );
     }
     const anchorPosition = positions.get(legacyLineage.anchor);
     const firstLegacyPosition = positions.get(legacyRows[0].filename);
-    if (anchorPosition === undefined || !migrations.slice(0, HISTORICAL_BASELINE_COUNT).every((migration) => {
-      const appliedPosition = positions.get(migration.filename);
-      return appliedPosition !== undefined && appliedPosition < firstLegacyPosition;
-    })) {
-      throw new Error('BASELINE_MISMATCH: canonical historical baseline must precede legacy migration lineage.');
+    if (
+      anchorPosition === undefined ||
+      !migrations.slice(0, HISTORICAL_BASELINE_COUNT).every((migration) => {
+        const appliedPosition = positions.get(migration.filename);
+        return appliedPosition !== undefined && appliedPosition < firstLegacyPosition;
+      })
+    ) {
+      throw new Error(
+        'BASELINE_MISMATCH: canonical historical baseline must precede legacy migration lineage.'
+      );
     }
-    if (anchorPosition >= firstLegacyPosition || legacyRows.some((row) => row.applied_at == null || row.timestamp_count > 1)) {
-      throw new Error('BASELINE_MISMATCH: legacy migration lineage does not follow its canonical anchor.');
+    if (
+      anchorPosition >= firstLegacyPosition ||
+      legacyRows.some((row) => row.applied_at == null || row.timestamp_count > 1)
+    ) {
+      throw new Error(
+        'BASELINE_MISMATCH: legacy migration lineage does not follow its canonical anchor.'
+      );
     }
     for (let index = 1; index < legacyRows.length; index += 1) {
-      if (positions.get(legacyRows[index - 1].filename) >= positions.get(legacyRows[index].filename) ||
-          legacyRows[index - 1].applied_at == null || legacyRows[index].applied_at == null ||
-          legacyRows[index].timestamp_count > 1) {
+      if (
+        positions.get(legacyRows[index - 1].filename) >=
+          positions.get(legacyRows[index].filename) ||
+        legacyRows[index - 1].applied_at == null ||
+        legacyRows[index].applied_at == null ||
+        legacyRows[index].timestamp_count > 1
+      ) {
         throw new Error('BASELINE_MISMATCH: legacy migration timestamps must strictly increase.');
       }
     }
-    const appliedCanonical = new Set(result.rows.filter((row) => expected.has(row.filename)).map((row) => row.filename));
+    const appliedCanonical = new Set(
+      result.rows.filter((row) => expected.has(row.filename)).map((row) => row.filename)
+    );
     const expectedSequence = [
       ...migrations.slice(0, HISTORICAL_BASELINE_COUNT).map((migration) => migration.filename),
       ...legacyLineage.filenames,
-      ...migrations.slice(HISTORICAL_BASELINE_COUNT)
+      ...migrations
+        .slice(HISTORICAL_BASELINE_COUNT)
         .filter((migration) => appliedCanonical.has(migration.filename))
         .map((migration) => migration.filename),
     ];
-    if (result.rows.length !== expectedSequence.length ||
-        result.rows.some((row, index) => row.filename !== expectedSequence[index])) {
-      throw new Error('BASELINE_MISMATCH: applied migration history does not match the canonical and legacy sequence.');
+    if (
+      result.rows.length !== expectedSequence.length ||
+      result.rows.some((row, index) => row.filename !== expectedSequence[index])
+    ) {
+      throw new Error(
+        'BASELINE_MISMATCH: applied migration history does not match the canonical and legacy sequence.'
+      );
     }
   }
-  return new Set(result.rows.filter((row) => !legacyNames.has(row.filename)).map((row) => row.filename));
+  return new Set(
+    result.rows.filter((row) => !legacyNames.has(row.filename)).map((row) => row.filename)
+  );
 }
 
 function assertGlobalOrder(migrations, applied) {
@@ -1355,10 +1434,20 @@ function assertGlobalOrder(migrations, applied) {
   }
 }
 
-async function runMigration(client, migration, separated) {
+async function runMigration(client, migration, separated, { post020Applied = false } = {}) {
   await client.query('begin');
   try {
+    if (migration.prefix >= 20) {
+      if (!separated) throw new Error('PREPARED_CAPABILITIES_RESTRICTED_LANE_REQUIRED');
+      if (post020Applied) await attestActivatedCapabilities(client);
+      else await attestPreparedCapabilities(client, { required: true });
+    }
     await client.query(migration.sql);
+    if (migration.prefix >= 20) {
+      const activationState = await attestActivatedCapabilities(client);
+      if (activationState === 'pending')
+        console.log('ACTIVATION PENDING: post-020 grants are incomplete.');
+    }
     if (separated) {
       await client.query(
         'insert into public.schema_migrations (filename, checksum) values ($1, $2)',
@@ -1380,10 +1469,44 @@ function firstPendingMigration(migrations, applied) {
   return migrations.find((migration) => !applied.has(migration.filename));
 }
 
+function assertNoMigrationAfterBoundary(migrations, applied) {
+  if (migrations.some((migration) => migration.prefix > 19 && applied.has(migration.filename)))
+    throw new Error('BOUNDARY_PASSED: a migration after 019 is already applied.');
+}
+
+async function assertBoundaryLedger(client, migrations, complete = true) {
+  const expected = migrations.filter((migration) => migration.prefix <= 19);
+  if (expected.length !== 19 || expected[18].id !== '019')
+    throw new Error('BOUNDARY_INVALID: canonical migrations 001–019 are required.');
+  const result = await client.query(
+    'select filename, checksum, count(*) over (partition by applied_at) as timestamp_count from public.schema_migrations order by applied_at, filename'
+  );
+  if (
+    result.rows.length > expected.length ||
+    (complete && result.rows.length !== expected.length) ||
+    result.rows.some(
+      (row, index) =>
+        row.filename !== expected[index]?.filename ||
+        row.checksum !== expected[index]?.sha256 ||
+        Number(row.timestamp_count) !== 1
+    )
+  )
+    throw new Error(
+      'BOUNDARY_INVALID: ledger order or checksum differs from the trusted manifest.'
+    );
+}
+
 async function main() {
   const options = getOptions();
   const { manifest, migrations, legacyLineage } = loadManifestAndMigrations();
   const separated = parseActivationGate();
+  if (
+    (options.stopAfter || options.verifyBoundary) &&
+    !migrations.some((entry) => entry.id === '019')
+  )
+    throw new Error('BOUNDARY_INVALID: migration 019 is missing from the trusted manifest.');
+  if (options.verifyBoundary && !separated)
+    throw new Error('BOUNDARY_UNVERIFIABLE: legacy migration ledger does not store checksums.');
   const expectedPending = parseExpectedPending(migrations);
   const pgLockTimeout = parseBoundedTimeout('MIGRATION_PG_LOCK_TIMEOUT_MS');
   const statementTimeout = parseBoundedTimeout('MIGRATION_PG_STATEMENT_TIMEOUT_MS');
@@ -1407,7 +1530,7 @@ async function main() {
   const client = await pool.connect();
   let lockKey;
   try {
-    if (separated && !options.verifyComplete) {
+    if (separated && !options.verifyComplete && !options.verifyBoundary) {
       if (options.lane === 'bootstrap') await assertBootstrapIdentity(client);
       else await assertAndAssumeMigrationIdentity(client, manifest, migrations, separated);
     }
@@ -1436,35 +1559,68 @@ async function main() {
     }
 
     let hadLedger;
-    if (options.verifyComplete) {
+    if (options.verifyComplete || options.verifyBoundary) {
       await client.query('begin read only');
       try {
-        if (separated) await assertAndAssumeMigrationIdentity(client, manifest, migrations, separated);
+        if (separated)
+          await assertAndAssumeMigrationIdentity(client, manifest, migrations, separated);
         hadLedger = await migrationLedgerExists(client);
         if (!hadLedger) throw new Error('Migration ledger is missing.');
         await assertLedgerShape(client, separated);
         const applied = await getAppliedMigrations(client, migrations, separated, legacyLineage);
         assertGlobalOrder(migrations, applied);
         assertExpectedPending(migrations, applied, expectedPending);
-        const pending = firstPendingMigration(migrations, applied);
-        if (pending) {
-          throw new Error(`Pending migration: ${pending.filename} (${pending.lane} lane).`);
+        if (options.verifyComplete) {
+          const post020Applied = migrations.some(
+            (entry) => entry.prefix >= 20 && applied.has(entry.filename)
+          );
+          if (post020Applied) {
+            const activationState = await attestActivatedCapabilities(client);
+            if (activationState !== 'active') {
+              throw new Error('ACTIVATION_PENDING: post-020 LOGIN grants are incomplete.');
+            }
+          }
+          const pending = firstPendingMigration(migrations, applied);
+          if (pending)
+            throw new Error(`Pending migration: ${pending.filename} (${pending.lane} lane).`);
+        } else {
+          assertNoMigrationAfterBoundary(migrations, applied);
+          await assertBoundaryLedger(client, migrations);
         }
         await client.query('commit');
-        console.log('Migration ledger is complete.');
+        if (options.verifyComplete) console.log('Migration ledger is complete.');
       } catch (error) {
         await client.query('rollback');
         throw error;
       }
       if (separated) await assertRunnerExtensionState(client, manifest, { pgcryptoRequired: true });
+      if (options.verifyBoundary)
+        console.log('BOUNDARY 019 verified; later migrations are not verified.');
       return;
     }
 
     hadLedger = await migrationLedgerExists(client);
+    if (options.stopAfter && hadLedger) {
+      await assertLedgerShape(client, separated);
+      const boundaryApplied = await getAppliedMigrations(
+        client,
+        migrations,
+        separated,
+        legacyLineage
+      );
+      assertGlobalOrder(migrations, boundaryApplied);
+      assertNoMigrationAfterBoundary(migrations, boundaryApplied);
+      if (separated) await assertBoundaryLedger(client, migrations, false);
+    }
     if (expectedPending !== undefined) {
       if (hadLedger) {
         await assertLedgerShape(client, separated);
-        const baselineApplied = await getAppliedMigrations(client, migrations, separated, legacyLineage);
+        const baselineApplied = await getAppliedMigrations(
+          client,
+          migrations,
+          separated,
+          legacyLineage
+        );
         assertGlobalOrder(migrations, baselineApplied);
         assertExpectedPending(migrations, baselineApplied, expectedPending);
       } else {
@@ -1490,6 +1646,14 @@ async function main() {
     for (const migration of migrations) {
       if (applied.has(migration.filename)) {
         console.log(`SKIP ${migration.filename}`);
+        if (options.stopAfter && migration.id === '019') {
+          if (separated) {
+            await assertBoundaryLedger(client, migrations);
+            await assertRunnerExtensionState(client, manifest, { pgcryptoRequired: true });
+          }
+          console.log('BOUNDARY 019 reached; later migrations remain unverified.');
+          return;
+        }
         continue;
       }
       if (migration.lane !== options.lane) {
@@ -1497,8 +1661,19 @@ async function main() {
         return;
       }
       console.log(`APPLY ${migration.filename}`);
-      await runMigration(client, migration, separated);
+      const post020Applied = migrations.some(
+        (entry) => entry.prefix >= 20 && applied.has(entry.filename)
+      );
+      await runMigration(client, migration, separated, { post020Applied });
       console.log(`DONE ${migration.filename}`);
+      if (options.stopAfter && migration.id === '019') {
+        if (separated) {
+          await assertBoundaryLedger(client, migrations);
+          await assertRunnerExtensionState(client, manifest, { pgcryptoRequired: true });
+        }
+        console.log('BOUNDARY 019 reached; later migrations remain unverified.');
+        return;
+      }
     }
     if (separated) await assertRunnerExtensionState(client, manifest, { pgcryptoRequired: true });
   } finally {

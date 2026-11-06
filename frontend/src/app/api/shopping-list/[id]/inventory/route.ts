@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from 'next/server';
-import { requireTenant, requireUser } from '@/lib/auth/server';
+import { requireUser } from '@/lib/auth/server';
 import {
   ShoppingListTransferError,
   transferPurchasedShoppingListItem,
@@ -62,17 +62,17 @@ function unauthorizedResponse(error: unknown): NextResponse | null {
 
 export async function POST(request: NextRequest, context: RouteContext) {
   try {
-    const [tenant, user, { id }] = await Promise.all([
-      requireTenant(request, 'Unauthorized'),
+    const [user, { id }] = await Promise.all([
       requireUser(request, 'Unauthorized'),
       context.params,
     ]);
+    if (!user.tenant) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     if (!ShoppingListIdSchema.safeParse(id).success) {
       return NextResponse.json({ error: 'Invalid shopping list item id' }, { status: 400 });
     }
 
-    const result = await transferPurchasedShoppingListItem(id, tenant.tenantId, user.id);
+    const result = await transferPurchasedShoppingListItem(id, user.tenant.tenantId, user.id);
     if (!result)
       return NextResponse.json({ error: 'Shopping list item not found' }, { status: 404 });
 

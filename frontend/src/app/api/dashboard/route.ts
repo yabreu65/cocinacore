@@ -12,10 +12,21 @@ export async function GET() {
   }
 
   const tenantId = user.tenant?.tenantId ?? null;
-  const tenant = tenantId ? await findTenantById(tenantId) : null;
+  const tenant = tenantId
+    ? await findTenantById(tenantId, undefined, undefined, { tenantId, userId: user.id })
+    : null;
 
   const inventory = tenantId
-    ? await listInventoryItemsByTenant(tenantId).then((items) =>
+    ? await listInventoryItemsByTenant(
+        tenantId,
+        undefined,
+        undefined,
+        {},
+        {
+          tenantId,
+          userId: user.id,
+        }
+      ).then((items) =>
         items.slice(0, 10).map((item) => ({
           id: item.id,
           name: item.ingredient_name,
@@ -25,7 +36,11 @@ export async function GET() {
     : [];
 
   const recentRecipes = tenantId
-    ? await listRecipeHistoryByTenant(tenantId, { userId: user.id }).then((items) =>
+    ? await listRecipeHistoryByTenant(
+        tenantId,
+        { userId: user.id },
+        { tenantId, userId: user.id }
+      ).then((items) =>
         items.slice(0, 5).map((item) => ({
           id: item.id,
           title: item.recipe_title ?? 'Receta generada',
@@ -35,7 +50,7 @@ export async function GET() {
       )
     : [];
 
-  const profile = await findCulinaryProfileByUserId(user.id);
+  const profile = tenantId ? await findCulinaryProfileByUserId(user.id, tenantId) : null;
 
   return NextResponse.json({
     userId: user.id,

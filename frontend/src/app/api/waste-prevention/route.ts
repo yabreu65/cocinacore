@@ -61,13 +61,13 @@ export async function GET(request: NextRequest) {
 
   try {
     const [inventory, recipes, profile, terms] = await Promise.all([
-      listWastePreventionInventoryByTenant(tenantId),
+      listWastePreventionInventoryByTenant(tenantId, undefined, { tenantId, userId: user.id }),
       listPersistentRecipes(
         { tenantId, userId: user.id },
         { archived: 'active', limit: 100, offset: 0, includeSentinel: true }
       ),
-      findCulinaryProfileByUserId(user.id),
-      listWastePreventionCulinaryProfileTermsByUserId(user.id),
+      findCulinaryProfileByUserId(user.id, tenantId),
+      listWastePreventionCulinaryProfileTermsByUserId(user.id, tenantId),
     ]);
     if (inventory.length > MAX_WASTE_PREVENTION_INVENTORY_LIMIT || recipes.length > 100) {
       serverLogger.warn('waste_prevention.projection_truncated', { requestId });

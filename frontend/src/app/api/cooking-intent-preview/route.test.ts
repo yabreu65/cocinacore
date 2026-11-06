@@ -134,7 +134,23 @@ describe('GET /api/cooking-intent-preview', () => {
       title: 'Test recipe',
       portions: { original: 2, requested: 4 },
     });
-    expect(mocks.listInventoryItemsByTenant).toHaveBeenCalledWith('tenant-1', 101);
+    expect(mocks.requireUser).toHaveBeenCalledOnce();
+    expect(mocks.listInventoryItemsByTenant).toHaveBeenCalledWith(
+      'tenant-1',
+      101,
+      undefined,
+      {},
+      { tenantId: 'tenant-1', userId: 'user-1' }
+    );
+  });
+
+  it('rejects a truncated inventory projection', async () => {
+    mocks.listInventoryItemsByTenant.mockResolvedValue(
+      Array.from({ length: 101 }, () => inventory)
+    );
+    const response = await GET(request(`source=recipe&recipeId=${recipeId}`));
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: 'Unable to load bounded preview data' });
   });
 
   it('does not reveal a recipe outside the user and tenant scope', async () => {
