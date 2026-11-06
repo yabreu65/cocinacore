@@ -8,11 +8,47 @@ RUNNER="$ROOT/frontend/scripts/run-migrations.js"
 MANIFEST="$ROOT/db/migrations/manifest.json"
 LOCK_PREFIX='cocinacore:database-change:v1:'
 IMAGE='pgvector/pgvector:pg16'
+CI_WORKFLOW="$ROOT/.github/workflows/ci.yml"
 
 fail() {
   printf '%s\n' "config failure: $1" >&2
   exit 1
 }
+
+# Validate the lane opt-in in the E2E step's actual shell run block. The
+# optional --check-ci-workflow mode keeps this contract testable against a
+# temporary workflow copy without running the unrelated Compose checks.
+check_ci_lanes_gate() {
+  workflow=$1
+  [ -f "$workflow" ] || fail "CI workflow is missing: $workflow"
+  awk '
+    /^      - name: Provision 019, prepare and activate 020, then run isolated E2E$/ {
+      in_step = 1
+      next
+    }
+    in_step && /^      - name:/ { in_step = 0 }
+    in_step && /^        run: \|[[:space:]]*$/ {
+      in_run = 1
+      next
+    }
+    in_run {
+      if ($0 !~ /^          / && $0 !~ /^[[:space:]]*$/) {
+        in_run = 0
+        next
+      }
+      line = substr($0, 11)
+      if (line ~ /^export COCINACORE_SEPARATED_DB_LANES_ENABLED=true[[:space:]]*(#.*)?$/) enabled = NR
+      if (line ~ /^npm run db:provision([[:space:]]|$)/) provision = NR
+    }
+    END { exit !(in_step || enabled && provision && enabled < provision) }
+  ' "$workflow" || fail 'CI E2E shell must explicitly export separated DB lanes before db:provision in the same step'
+}
+
+if [ "${1:-}" = '--check-ci-workflow' ]; then
+  [ "$#" -eq 2 ] || fail 'usage: test-bootstrap-migrator-config.sh --check-ci-workflow WORKFLOW'
+  check_ci_lanes_gate "$2"
+  exit 0
+fi
 
 for helper in test-bootstrap-migrator-integration.sh test-canonical-email-integration.sh; do
   helper_path="$ROOT/scripts/$helper"
@@ -137,7 +173,7 @@ grep -Fq -- '--env-file "$RUNTIME_ENV_FILE"' "$PAWTECH_DEPLOY" || fail 'PawTech 
 grep -Fq 'npm run db:migrate:verify' "$PAWTECH_DEPLOY" || fail 'read-only runtime migration verification missing'
 ! grep -Eq 'npm run db:migrate([[:space:]]|$)' "$PAWTECH_DEPLOY" || fail 'mutating runtime migration command is forbidden'
 grep -Fq "$IMAGE" "$ROOT/.github/workflows/ci.yml" || fail 'CI PostgreSQL image policy is missing'
-grep -q 'COCINACORE_SEPARATED_DB_LANES_ENABLED: "true"' "$ROOT/.github/workflows/ci.yml" || fail 'CI separated test gate missing'
+check_ci_lanes_gate "$CI_WORKFLOW"
 grep -Fq "$IMAGE" "$ROOT/docker-compose.prod.yml" || fail 'production PostgreSQL image policy is missing'
 grep -q 'arm64 platform manifest' "$ROOT/docs/production/runbook.md" || fail 'portable digest risk is undocumented'
 
