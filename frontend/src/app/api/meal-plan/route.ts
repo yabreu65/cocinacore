@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { serverLogger } from '@/lib/serverLogger';
-import { validateRequest, MealPlanSchema, type MealPlanBody } from '@/lib/validation';
+import { validateRequest, MealPlanRequestSchema, type MealPlanBody } from '@/lib/validation';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { getGeminiApiKey, getGeminiBaseUrl, getGeminiModel } from '@/lib/ai/gemini-config';
 import { requireUser } from '@/lib/auth/server';
@@ -28,6 +28,7 @@ import {
   renderStructuredMealPlan,
   structuredMealPlanResponseJsonSchema,
 } from '@/lib/meal-planner/structured-plan';
+import { validateOperationalMealPlanRequest } from '@/lib/operational-domain';
 
 const AI_REQUEST_TIMEOUT_MS = 60_000;
 const DEFAULT_PEOPLE_COUNT = 4;
@@ -125,12 +126,26 @@ export async function POST(request: NextRequest) {
   const baseUrl = getGeminiBaseUrl();
   const model = getGeminiModel();
 
-  const validation = await validateRequest(request, MealPlanSchema.passthrough());
+  const validation = await validateRequest(request, MealPlanRequestSchema);
   if (!validation.success) {
     return Response.json(validation.error.body, { status: validation.error.status });
   }
 
-  const body = validation.data as MealPlanBody & { cuisine?: string; country?: string };
+  const body = validation.data as MealPlanBody & {
+    cuisine?: string;
+    country?: string;
+  };
+
+  const operationalValidation = validateOperationalMealPlanRequest(user.tenant, {
+    period: body.period,
+    peopleCount: body.peopleCount,
+  });
+  if (!operationalValidation.success) {
+    return NextResponse.json(
+      { error: 'Invalid operational meal-plan request', code: operationalValidation.code },
+      { status: 400 }
+    );
+  }
 
   const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
   const rateLimit = await checkRateLimit('meal-plan', ip);

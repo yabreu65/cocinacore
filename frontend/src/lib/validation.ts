@@ -54,6 +54,23 @@ export const MealPlanSchema = z.object({
 
 export type MealPlanBody = z.infer<typeof MealPlanSchema>;
 
+/**
+ * Strict public request contract for POST /api/meal-plan.
+ *
+ * The legacy identity and available-time fields remain explicitly accepted so
+ * older clients receive the same safe behavior: those values are ignored and
+ * server-owned session/profile state wins. Unknown fields are rejected.
+ */
+export const MealPlanRequestSchema = MealPlanSchema.extend({
+  cuisine: z.string().trim().max(100).optional(),
+  country: z.string().trim().max(100).optional(),
+  availableTimeMinutes: z.number().int().min(5).max(240).optional(),
+  userId: z.string().max(200).optional(),
+  tenantId: z.string().max(200).optional(),
+}).strict();
+
+export type MealPlanRequestBody = z.infer<typeof MealPlanRequestSchema>;
+
 /** Schema for POST /api/embeddings */
 export const EmbeddingsSchema = z.object({
   texts: z.array(z.string().min(1).max(5000)).min(1).max(120),

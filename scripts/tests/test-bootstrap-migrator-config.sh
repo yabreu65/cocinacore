@@ -55,12 +55,21 @@ const fs = require('fs');
 const path = require('path');
 const [manifestPath, directory, base] = process.argv.slice(2);
 const HISTORICAL_BASELINE_COUNT = 10;
-const CURRENT_MIGRATION_COUNT = 17;
-const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+const CURRENT_MIGRATION_COUNT = 19;
+const manifestBytes = fs.readFileSync(manifestPath);
+const manifest = JSON.parse(manifestBytes.toString('utf8'));
+const EXPECTED_MANIFEST_SHA256 = 'a72a8f8c6e289444189ec055d9f86ecc2a7e0384b90fffdef698f53ad353b11b';
+if (crypto.createHash('sha256').update(manifestBytes).digest('hex') !== EXPECTED_MANIFEST_SHA256) process.exit(1);
 if (manifest.manifestVersion !== 1 || manifest.trustedBaseCommit !== base) process.exit(1);
 if (manifest.migrationLaneVersion !== 1) process.exit(1);
 if (manifest.lockContract?.namespacePrefix !== 'cocinacore:database-change:v1:') process.exit(1);
 if (manifest.migrations?.length !== CURRENT_MIGRATION_COUNT) process.exit(1);
+if (manifest.migrations.some((entry, index) => entry.id !== String(index + 1).padStart(3, '0'))) process.exit(1);
+if (manifest.migrations[17]?.filename !== '018_cooking_sessions.sql' ||
+    manifest.migrations[17]?.sha256 !== 'b5e25bb76feed66fec8d767968aead734912d97e9cd6c98206edc99400c2cd7d' ||
+    manifest.migrations[18]?.filename !== '019_real_consumption_reconciliation.sql' ||
+    manifest.migrations[18]?.sha256 !== '509ec1b9ad8bd4f480d3a78ddb6e167647b0d54231bb68e9eb947882b560d587' ||
+    manifest.migrations.some((entry) => entry.id === '020' || entry.filename.startsWith('020_'))) process.exit(1);
 if (manifest.baselineObjects?.transferable?.length !== 38) process.exit(1);
 const kinds = manifest.baselineObjects.transferable.reduce((counts, object) => {
   counts[object.kind] = (counts[object.kind] || 0) + 1;
@@ -138,6 +147,12 @@ grep -Fq 'npm run db:migrate:verify' "$PAWTECH_DEPLOY" || fail 'read-only runtim
 ! grep -Eq 'npm run db:migrate([[:space:]]|$)' "$PAWTECH_DEPLOY" || fail 'mutating runtime migration command is forbidden'
 grep -Fq "$IMAGE" "$ROOT/.github/workflows/ci.yml" || fail 'CI PostgreSQL image policy is missing'
 grep -q 'COCINACORE_SEPARATED_DB_LANES_ENABLED: "true"' "$ROOT/.github/workflows/ci.yml" || fail 'CI separated test gate missing'
+pull_line=$(grep -nF 'run: docker pull pgvector/pgvector:pg16' "$ROOT/.github/workflows/ci.yml" | head -n 1 | cut -d: -f1)
+contract_line=$(grep -nF 'run: sh ../scripts/tests/test-bootstrap-migrator-config.sh' "$ROOT/.github/workflows/ci.yml" | head -n 1 | cut -d: -f1)
+integration_line=$(grep -nF 'run: sh ../scripts/test-bootstrap-migrator-integration.sh' "$ROOT/.github/workflows/ci.yml" | head -n 1 | cut -d: -f1)
+[ -n "$pull_line" ] && [ -n "$contract_line" ] && [ -n "$integration_line" ] &&
+  [ "$pull_line" -lt "$contract_line" ] && [ "$pull_line" -lt "$integration_line" ] ||
+  fail 'CI must pull the PostgreSQL test image before bootstrap/migrator contracts and integration tests'
 grep -Fq "$IMAGE" "$ROOT/docker-compose.prod.yml" || fail 'production PostgreSQL image policy is missing'
 grep -q 'arm64 platform manifest' "$ROOT/docs/production/runbook.md" || fail 'portable digest risk is undocumented'
 

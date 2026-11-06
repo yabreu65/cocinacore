@@ -1,9 +1,5 @@
 import { z } from 'zod';
-import {
-  getMealPlanCanonicalDayLabel,
-  getMealPlanDayCount,
-  type MealPlanPeriod,
-} from './prompt';
+import { getMealPlanCanonicalDayLabel, getMealPlanDayCount, type MealPlanPeriod } from './prompt';
 
 const MEAL_TYPES = ['breakfast', 'lunch', 'dinner'] as const;
 
@@ -21,6 +17,10 @@ export interface StructuredMeal {
   prepMinutes?: number | null;
   description: string | null;
   ingredients: StructuredMealPlanIngredient[];
+  recipeRef?: {
+    recipeId: string;
+    versionId: string;
+  };
 }
 
 export interface StructuredMealPlanDay {
@@ -56,10 +56,7 @@ function normalizeWhitespace(value: string): string {
 }
 
 function boundedRequiredText(maxLength: number) {
-  return z
-    .string()
-    .transform(normalizeWhitespace)
-    .pipe(z.string().min(1).max(maxLength));
+  return z.string().transform(normalizeWhitespace).pipe(z.string().min(1).max(maxLength));
 }
 
 const nullableBoundedText = (maxLength: number) =>
@@ -89,6 +86,10 @@ const structuredMealCandidateSchema = z
     prepMinutes: z.number().int().min(1).max(240),
     description: nullableBoundedText(300),
     ingredients: z.array(structuredMealPlanIngredientCandidateSchema).min(1).max(30),
+    recipeRef: z
+      .object({ recipeId: z.string().uuid(), versionId: z.string().uuid() })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -265,22 +266,41 @@ function parseStructuredMealPlanCandidate(
   requestedPeriod: MealPlanPeriod,
   historical = false
 ): StructuredMealPlanParseResult {
-  const parsedCandidate = historical && isRecord(candidate) && isUnknownArray(candidate.days)
-    ? {
-        ...candidate,
-        days: candidate.days.map((day) =>
-          isRecord(day) && isUnknownArray(day.meals)
-            ? { ...day, meals: day.meals.map((meal) => isRecord(meal) ? { prepMinutes: null, ...meal } : meal) }
-            : day
-        ),
-      }
-    : candidate;
+  const parsedCandidate =
+    historical && isRecord(candidate) && isUnknownArray(candidate.days)
+      ? {
+          ...candidate,
+          days: candidate.days.map((day) =>
+            isRecord(day) && isUnknownArray(day.meals)
+              ? {
+                  ...day,
+                  meals: day.meals.map((meal) =>
+                    isRecord(meal) ? { prepMinutes: null, ...meal } : meal
+                  ),
+                }
+              : day
+          ),
+        }
+      : candidate;
   const historicalSchema = structuredMealPlanCandidateSchema.extend({
-    days: z.array(structuredMealPlanDayCandidateSchema.extend({
-      meals: z.array(structuredMealCandidateSchema.extend({ prepMinutes: z.number().int().min(1).max(240).nullable() })).length(3),
-    })).min(1).max(30),
+    days: z
+      .array(
+        structuredMealPlanDayCandidateSchema.extend({
+          meals: z
+            .array(
+              structuredMealCandidateSchema.extend({
+                prepMinutes: z.number().int().min(1).max(240).nullable(),
+              })
+            )
+            .length(3),
+        })
+      )
+      .min(1)
+      .max(30),
   });
-  const parsed = (historical ? historicalSchema : structuredMealPlanCandidateSchema).safeParse(parsedCandidate);
+  const parsed = (historical ? historicalSchema : structuredMealPlanCandidateSchema).safeParse(
+    parsedCandidate
+  );
   if (!parsed.success) {
     return { success: false, reason: 'schema_invalid' };
   }
@@ -302,14 +322,20 @@ function parseStructuredMealPlanCandidate(
     }
 
     const mealsByType = new Map(day.meals.map((meal) => [meal.mealType, meal]));
-    if (mealsByType.size !== MEAL_TYPES.length || MEAL_TYPES.some((type) => !mealsByType.has(type))) {
+    if (
+      mealsByType.size !== MEAL_TYPES.length ||
+      MEAL_TYPES.some((type) => !mealsByType.has(type))
+    ) {
       return { success: false, reason: 'meal_types_invalid' };
     }
 
     days.push({
       dayIndex: day.dayIndex,
       label: getMealPlanCanonicalDayLabel(requestedPeriod, day.dayIndex),
-      meals: MEAL_TYPES.map((mealType) => mealsByType.get(mealType)!),
+      meals: MEAL_TYPES.map((mealType) => {
+        const meal = mealsByType.get(mealType)!;
+        return meal.recipeRef ? { ...meal, recipeRef: meal.recipeRef } : meal;
+      }),
     });
   }
 
@@ -406,9 +432,10 @@ export function renderStructuredMealPlan(plan: StructuredMealPlan): string {
           })
           .join(', ');
         const description = meal.description ? ` — ${meal.description}` : '';
-        const prepTime = meal.prepMinutes === null || meal.prepMinutes === undefined
-          ? 'tiempo no estimado'
-          : `${meal.prepMinutes} min estimados`;
+        const prepTime =
+          meal.prepMinutes === null || meal.prepMinutes === undefined
+            ? 'tiempo no estimado'
+            : `${meal.prepMinutes} min estimados`;
         return `${meal.title} (${prepTime})${description}${ingredients ? ` (${ingredients})` : ''}`;
       });
       return `${day.label}\nDesayuno: ${meals[0]}\nAlmuerzo: ${meals[1]}\nCena: ${meals[2]}`;

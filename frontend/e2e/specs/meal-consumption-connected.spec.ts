@@ -3,6 +3,11 @@ import { expect, test, type Page } from '@playwright/test';
 import { Pool } from 'pg';
 import { validateE2ETargets } from '../database-target';
 import { installResponseCookies } from '../fixtures/auth';
+import {
+  assertE2EDisposableIsolation,
+  closeE2EDatabase,
+  hasAppendOnlyE2EReferences,
+} from '../fixtures/database';
 
 const database = new Pool({ connectionString: validateE2ETargets(process.env).databaseUrl });
 
@@ -56,8 +61,7 @@ async function createTestIdentity(
   };
   const userId = payload.user?.id;
   const tenantId = payload.user?.tenant?.tenantId;
-  if (!userId || !tenantId)
-    throw new Error('M1.6 signup identity is missing user or tenant.');
+  if (!userId || !tenantId) throw new Error('M1.6 signup identity is missing user or tenant.');
   return { userId, tenantId };
 }
 
@@ -104,6 +108,7 @@ async function cleanupTest(seed: Seed): Promise<void> {
       );
       plans.rows.forEach(({ id }) => planIds.add(id));
     });
+    if (await hasAppendOnlyE2EReferences(database, tenantId, userId, [...planIds])) return;
     const sources = [...planIds].map((id) => `meal-plan-consumption:${id}:1:breakfast`);
     const shoppingSources = [...planIds].map((id) => `meal-plan:${id}`);
     await attempt(() =>
@@ -195,7 +200,9 @@ async function cleanupTest(seed: Seed): Promise<void> {
         ]
       );
       if (Object.values(residuals.rows[0] ?? {}).some((count) => count !== '0')) {
-        failures.push(new Error(`M1.6 cleanup left scoped data: ${JSON.stringify(residuals.rows[0])}`));
+        failures.push(
+          new Error(`M1.6 cleanup left scoped data: ${JSON.stringify(residuals.rows[0])}`)
+        );
       }
     });
   } else if (tenantId) {
@@ -204,10 +211,12 @@ async function cleanupTest(seed: Seed): Promise<void> {
         `select count(*)::text as count from public.tenants where id=$1 and name=$2`,
         [tenantId, seed.tenantName]
       );
-      if (residual.rows[0]?.count !== '0') failures.push(new Error('M1.6 cleanup left its tenant behind.'));
+      if (residual.rows[0]?.count !== '0')
+        failures.push(new Error('M1.6 cleanup left its tenant behind.'));
     });
   }
-  if (failures.length) throw new AggregateError(failures, 'Failed to clean up M1.6 E2E identity/data.');
+  if (failures.length)
+    throw new AggregateError(failures, 'Failed to clean up M1.6 E2E identity/data.');
 }
 
 function canonicalPlan(trackedName: string, missingName: string, controlName: string) {
@@ -250,11 +259,13 @@ function canonicalPlan(trackedName: string, missingName: string, controlName: st
 test.describe('Connected cooked meal consumption', () => {
   test.afterAll(async () => {
     await database.end();
+    await closeE2EDatabase();
   });
 
   test('confirms one cooked meal, decrements inventory once, persists evidence, and replays idempotently', async ({
     page,
   }) => {
+    await assertE2EDisposableIsolation(database);
     const unique = `e2e-m1-6-3-${randomUUID()}`;
     const email = `${unique}@example.invalid`;
     const fullName = `E2E M1.6 ${randomUUID()}`;
@@ -451,7 +462,10 @@ test.describe('Connected cooked meal consumption', () => {
         await cleanupTest(seed);
       } catch (cleanupError) {
         if (operationError) {
-          throw new AggregateError([operationError, cleanupError], 'M1.6 test and cleanup both failed.');
+          throw new AggregateError(
+            [operationError, cleanupError],
+            'M1.6 test and cleanup both failed.'
+          );
         }
         throw cleanupError;
       }

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Page } from '@playwright/test';
 import type { Cookie } from '@playwright/test';
 
@@ -111,10 +112,18 @@ export async function installResponseCookies(
     const [key, ...parts] = attribute.trim().split('=');
     const attributeValue = parts.join('=').trim();
     switch (key?.toLowerCase()) {
-      case 'httponly': cookie.httpOnly = true; break;
-      case 'secure': cookie.secure = true; break;
-      case 'max-age': maxAge = Number(attributeValue); break;
-      case 'expires': expires = Date.parse(attributeValue) / 1000; break;
+      case 'httponly':
+        cookie.httpOnly = true;
+        break;
+      case 'secure':
+        cookie.secure = true;
+        break;
+      case 'max-age':
+        maxAge = Number(attributeValue);
+        break;
+      case 'expires':
+        expires = Date.parse(attributeValue) / 1000;
+        break;
       case 'samesite':
         if (attributeValue.toLowerCase() === 'strict') cookie.sameSite = 'Strict';
         else if (attributeValue.toLowerCase() === 'lax') cookie.sameSite = 'Lax';
@@ -129,6 +138,28 @@ export async function installResponseCookies(
     cookie.expires = Math.floor(expires);
   }
   await page.context().addCookies([cookie]);
+}
+
+export async function signupIsolatedE2EUser(
+  page: Page,
+  label: string
+): Promise<{ email: string; password: string }> {
+  const suffix = randomUUID();
+  const credentials = {
+    email: `${label}-${suffix}@example.invalid`,
+    password: `E2E-${suffix}!aA9`,
+  };
+  const response = await page.request.post('/api/auth/signup', {
+    data: {
+      ...credentials,
+      confirmPassword: credentials.password,
+      fullName: `E2E ${label}`,
+      termsAccepted: true,
+    },
+  });
+  if (!response.ok()) throw new Error(`Isolated E2E signup failed (${response.status()}).`);
+  await installResponseCookies(page, response);
+  return credentials;
 }
 
 /**

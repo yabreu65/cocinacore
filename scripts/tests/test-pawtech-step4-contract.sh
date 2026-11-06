@@ -168,13 +168,16 @@ const ownerFunctions = [
   { schema: 'public', name: 'enforce_culinary_profile_term_group_limit', arguments: '' },
   { schema: 'public', name: 'prevent_culinary_profile_taxonomy_reclassification', arguments: '' },
   { schema: 'public', name: 'enforce_user_recipe_version_invariants', arguments: '' },
+  { schema: 'public', name: 'reject_real_consumption_mutation', arguments: '' },
+  { schema: 'public', name: 'validate_real_consumption_substitution', arguments: '' },
+  { schema: 'public', name: 'validate_real_consumption_movement_link', arguments: '' },
 ];
 const functionIdentity = ({ schema, name, arguments: args }) => schema + '.' + name + '(' + args + ')';
 const schemaOwner = 'cocinacore_schema_owner';
 const futureSql = Buffer.from('select 1;');
-if (process.env.FUTURE_018 === 'yes') {
+if (process.env.FUTURE_020 === 'yes') {
   manifest.migrations.push({
-    id: '018', filename: '018_future.sql', lane: 'migration',
+    id: '020', filename: '020_future.sql', lane: 'migration',
     sha256: crypto.createHash('sha256').update(futureSql).digest('hex'),
     byteLength: futureSql.length, transactional: 'required', legacyChecksumBackfillAllowed: false,
   });
@@ -184,13 +187,13 @@ fs.readFileSync = (file, options) => {
     const contents = Buffer.from(JSON.stringify(manifest));
     return options && typeof options === 'object' && options.encoding ? contents.toString(options.encoding) : contents;
   }
-  if (String(file).endsWith('/018_future.sql')) return futureSql;
+  if (String(file).endsWith('/020_future.sql')) return futureSql;
   return originalReadFileSync(file, options);
 };
 fs.readdirSync = (directory, options) => {
   const files = originalReaddirSync(directory, options);
-  return process.env.FUTURE_018 === 'yes' && String(directory) === path.dirname(process.env.MANIFEST_PATH)
-    ? [...files, '018_future.sql']
+  return process.env.FUTURE_020 === 'yes' && String(directory) === path.dirname(process.env.MANIFEST_PATH)
+    ? [...files, '020_future.sql']
     : files;
 };
 const queries = [];
@@ -246,8 +249,14 @@ class Pool {
         if (text.includes('from pg_catalog.pg_proc p') && /p\.prokind\s*=\s*'f'/.test(text)) {
           const fixture = process.env.OWNER_FUNCTIONS;
           if (!fixture || fixture === 'none' || process.env.LEDGER === '014-unapplied') return { rows: [] };
+          const unapplied019Functions = new Set([
+            'reject_real_consumption_mutation',
+            'validate_real_consumption_substitution',
+            'validate_real_consumption_movement_link',
+          ]);
           const functions = ownerFunctions
             .filter((fn) => fn.schema === params[0] && fn.name === params[1])
+            .filter((fn) => process.env.LEDGER !== 'pending' || !unapplied019Functions.has(fn.name))
             .map((fn) => ({ ...fn, owner: schemaOwner }));
           if (fixture === 'wrong-owner' && params[1] === 'is_valid_culinary_profile_text_list') {
             functions[0].owner = 'cocinacore';
@@ -267,13 +276,20 @@ class Pool {
           }));
           const fixture = process.env.OWNER_FUNCTIONS;
           if (fixture && fixture !== 'none') {
-            let functions = ownerFunctions.map(functionIdentity);
+            const unapplied019Functions = new Set([
+              'public.reject_real_consumption_mutation()',
+              'public.validate_real_consumption_substitution()',
+              'public.validate_real_consumption_movement_link()',
+            ]);
+            let functions = ownerFunctions
+              .filter((fn) => process.env.LEDGER !== 'pending' || !unapplied019Functions.has(functionIdentity(fn)))
+              .map(functionIdentity);
             if (fixture === 'wrong-owner') functions = functions.slice(1);
             if (fixture === 'overload') functions.push('public.is_valid_culinary_profile_text_list(text[], integer, boolean)');
             if (fixture === 'undeclared') functions.push('public.untrusted_owner_function()');
             rows.push(...functions.map((identity) => ({ kind: 'function', identity })));
             const appliedFilenames = new Set(manifest.migrations.map((entry) => entry.filename));
-            if (['pending', 'pending-018'].includes(process.env.LEDGER)) {
+            if (['pending', 'pending-020'].includes(process.env.LEDGER)) {
               appliedFilenames.delete(manifest.migrations.at(-1).filename);
             }
             for (const migration of manifest.migrations) {
@@ -315,7 +331,7 @@ class Pool {
             applied_at: '2026-01-01T00:00:' + String(index).padStart(2, '0') + '.000Z',
           }));
           if (process.env.LEDGER === 'altered') entries[0].checksum = 'f'.repeat(64);
-          if (process.env.LEDGER === 'pending' || process.env.LEDGER === 'pending-018') entries = entries.slice(0, -1);
+          if (process.env.LEDGER === 'pending' || process.env.LEDGER === 'pending-020') entries = entries.slice(0, -1);
           if (process.env.DRIFT_AFTER_PROVISION === 'yes' && queries.some((sql) => sql.startsWith('create table if not exists public.schema_migrations'))) {
             entries = manifest.migrations.map((entry, index) => ({
               filename: entry.filename, checksum: entry.sha256,
@@ -419,10 +435,10 @@ setTimeout(() => {
   if (['--verify-complete', '--dry-run'].includes(process.env.RUNNER_MODE) && (!hasShapeCheck || !hasSecurityCheck)) process.exitCode = 5;
 }, 0);
 `;
-function run(mode, ledger, future018 = false, separated = false, ownerFunctions = 'none', identity = 'valid', membership = 'valid', extraEnv = {}) {
+function run(mode, ledger, futureMigration = false, separated = false, ownerFunctions = 'none', identity = 'valid', membership = 'valid', extraEnv = {}) {
   return spawnSync(process.execPath, ['-e', harness], {
     encoding: 'utf8',
-    env: { RUNNER_PATH: runner, MANIFEST_PATH: path.join(root, 'db/migrations/manifest.json'), RUNNER_MODE: mode, LEDGER: ledger, FUTURE_018: future018 ? 'yes' : 'no', SEPARATED: separated ? 'yes' : 'no', OWNER_FUNCTIONS: ownerFunctions, IDENTITY: identity, MEMBERSHIP: membership, COCINACORE_SEPARATED_DB_LANES_ENABLED: separated ? 'true' : 'false', DATABASE_URL: 'postgresql://offline.invalid/test', MIGRATION_DATABASE_URL: 'postgresql://offline.invalid/test', ...extraEnv },
+    env: { RUNNER_PATH: runner, MANIFEST_PATH: path.join(root, 'db/migrations/manifest.json'), RUNNER_MODE: mode, LEDGER: ledger, FUTURE_020: futureMigration ? 'yes' : 'no', SEPARATED: separated ? 'yes' : 'no', OWNER_FUNCTIONS: ownerFunctions, IDENTITY: identity, MEMBERSHIP: membership, COCINACORE_SEPARATED_DB_LANES_ENABLED: separated ? 'true' : 'false', DATABASE_URL: 'postgresql://offline.invalid/test', MIGRATION_DATABASE_URL: 'postgresql://offline.invalid/test', ...extraEnv },
   });
 }
 const timeoutResult = run('--verify-complete', 'complete', false, false, 'none', 'valid', 'valid', {
@@ -592,8 +608,8 @@ for (const [ledger, fixture, label] of [
     process.exit(1);
   }
 }
-const futureResult = run('--verify-complete', 'pending-018', true);
-if (futureResult.status !== 1 || !`${futureResult.stdout}${futureResult.stderr}`.includes('Pending migration: 018_future.sql')) {
+const futureResult = run('--verify-complete', 'pending-020', true);
+if (futureResult.status !== 1 || !`${futureResult.stdout}${futureResult.stderr}`.includes('Pending migration: 020_future.sql')) {
   console.error(`offline future migration contract failed: ${futureResult.stderr}`);
   process.exit(1);
 }

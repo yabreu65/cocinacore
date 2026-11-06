@@ -1,12 +1,18 @@
 import { type Page } from '@playwright/test';
 import Redis from 'ioredis';
-import { Pool } from 'pg';
+import { Pool, type PoolClient } from 'pg';
 import { validateE2ETargets } from '../database-target';
+import {
+  buildE2ECachePattern,
+  requireE2EIsolationConfiguration,
+  requireE2EExecutionId,
+} from './isolation';
 
 const { databaseUrl: DATABASE_URL, redisUrl: REDIS_URL } = validateE2ETargets(process.env);
 const VECTOR_1536 = `[${Array.from({ length: 1536 }, () => '1').join(',')}]`;
 
 let pool: Pool | null = null;
+let isolationLeaseClient: PoolClient | null = null;
 
 export interface AuthenticatedE2EIdentity {
   userId: string;
@@ -80,6 +86,64 @@ function getPool(): Pool {
   return pool;
 }
 
+export async function assertE2EDisposableIsolation(database: Pick<Pool, 'query'>): Promise<void> {
+  requireE2EIsolationConfiguration(process.env);
+  const targets = validateE2ETargets(process.env);
+  if (targets.databaseTarget.database !== 'cocinacore_local_db') {
+    throw new Error('Refusing E2E isolation outside the approved disposable database.');
+  }
+
+  const databaseIdentity = await database.query<{ databaseName: string }>(
+    'select current_database() as "databaseName"'
+  );
+  const identity = databaseIdentity.rows[0];
+  if (identity?.databaseName !== 'cocinacore_local_db') {
+    throw new Error('E2E database identity does not match the approved disposable target.');
+  }
+
+  if (!isolationLeaseClient) {
+    const leaseClient = await getPool().connect();
+    const lease = await leaseClient.query<{ acquired: boolean }>(
+      `select pg_try_advisory_lock(hashtextextended($1, 0)) as acquired`,
+      ['cocinacore:e2e:exclusive-disposable-lane']
+    );
+    if (!lease.rows[0]?.acquired) {
+      leaseClient.release();
+      throw new Error('Another E2E execution already owns the disposable database lane.');
+    }
+    isolationLeaseClient = leaseClient;
+    process.once('exit', () => {
+      isolationLeaseClient?.release();
+      isolationLeaseClient = null;
+    });
+  }
+
+  // Migration 019 is append-only by design. The lease plus workers=1 proves
+  // that this disposable database is owned by one execution; audit rows are
+  // retained until the disposable database itself is destroyed.
+  requireE2EExecutionId(process.env);
+}
+
+export async function hasAppendOnlyE2EReferences(
+  database: Pick<Pool, 'query'>,
+  tenantId: string,
+  userId: string,
+  planIds: readonly string[]
+): Promise<boolean> {
+  if (planIds.length === 0) return false;
+  const result = await database.query<{ referenced: boolean }>(
+    `select exists (
+       select 1 from public.meal_consumption_claims
+        where tenant_id = $1 and user_id = $2 and meal_plan_id = any($3::uuid[])
+     ) or exists (
+       select 1 from public.real_consumption_operations
+        where tenant_id = $1 and user_id = $2 and meal_plan_id = any($3::uuid[])
+     ) as referenced`,
+    [tenantId, userId, planIds]
+  );
+  return result.rows[0]?.referenced === true;
+}
+
 function sanitizeRunId(runId: string): string {
   return runId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80);
 }
@@ -111,11 +175,13 @@ export async function resolveAuthenticatedE2EIdentity(
 }
 
 export async function clearRecipeCache(): Promise<void> {
+  requireE2EIsolationConfiguration(process.env);
   const redis = new Redis(REDIS_URL, { maxRetriesPerRequest: 1 });
   try {
+    const pattern = buildE2ECachePattern(process.env);
     let cursor = '0';
     do {
-      const [nextCursor, keys] = await redis.scan(cursor, 'MATCH', 'recipe:*', 'COUNT', '100');
+      const [nextCursor, keys] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', '100');
       cursor = nextCursor;
       if (keys.length > 0) {
         await redis.del(...keys);
@@ -400,6 +466,8 @@ export async function recipeHistoryCount(identity: AuthenticatedE2EIdentity): Pr
 }
 
 export async function closeE2EDatabase(): Promise<void> {
+  isolationLeaseClient?.release();
+  isolationLeaseClient = null;
   if (pool) {
     await pool.end();
     pool = null;

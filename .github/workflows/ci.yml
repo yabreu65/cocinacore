@@ -36,6 +36,9 @@ jobs:
       - name: Install deps
         run: npm ci
 
+      - name: Pull PostgreSQL test image
+        run: docker pull pgvector/pgvector:pg16
+
       - name: Validate bootstrap and migrator configuration
         run: sh ../scripts/tests/test-bootstrap-migrator-config.sh
 
