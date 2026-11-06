@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NextRequest } from 'next/server';
 import type { UserMealPlanRow } from '@/lib/db/types';
 
@@ -133,6 +133,14 @@ function consumedBreakfastPayload() {
   };
 }
 
+beforeEach(() => {
+  vi.useFakeTimers({ now: new Date('2026-10-27T16:00:00.000Z'), toFake: ['Date'] });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe('GET /api/meal-plan/shopping-suggestions', () => {
   beforeEach(() => {
     requireUserMock.mockReset();
@@ -179,6 +187,28 @@ describe('GET /api/meal-plan/shopping-suggestions', () => {
       body.items.every((item) => !('tenant_id' in item) && !('user_id' in item) && !('id' in item))
     ).toBe(true);
     expect(JSON.stringify(body)).not.toContain('do-not-use-snapshot');
+  });
+
+  it('does not forecast meals when the confirmed plan no longer covers the current horizon', async () => {
+    vi.setSystemTime(new Date('2026-11-06T16:00:00.000Z'));
+
+    const response = await GET(request() as unknown as NextRequest);
+    const body = (await response.json()) as {
+      status: string;
+      reason?: string;
+      fromDate?: string;
+      throughDate?: string;
+      items: Array<Record<string, unknown>>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      status: 'unknown',
+      reason: 'plan_does_not_cover_horizon',
+      fromDate: '2026-11-06',
+      throughDate: '2026-11-12',
+      items: [],
+    });
   });
 
   it('marks matching shopping rows from every source without exposing ownership data', async () => {
