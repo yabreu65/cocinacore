@@ -57,6 +57,9 @@ jobs:
       - name: Validate PawTech Step 5 workflow contract
         run: sh ../scripts/tests/test-pawtech-step5-workflow-contract.sh
 
+      - name: Validate production-017 isolated hotfix admission
+        run: sh ../scripts/tests/test-prod-017-hotfix-contract.sh
+
       - name: Validate hosted Today E2E workflow contract
         run: sh ../scripts/tests/test-hosted-today-e2e-workflow-contract.sh
 

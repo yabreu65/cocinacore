@@ -129,7 +129,7 @@ grep -Fq 'FROM pg_roles' "$BACKUP_VERIFIER" || fail 'daily verifier must inspect
 ! grep -Eiq 'INSERT|UPDATE|DELETE|ALTER|CREATE|DROP|FROM public\.' "$BACKUP_VERIFIER" || fail 'daily verifier must not mutate or read application tables'
 grep -Fq 'BACKUP_VERIFICATION' "$DEPLOY_SCRIPT" || fail 'deployment state must retain backup verification evidence'
 grep -Fq 'DATABASE_CHANGED=NO' "$DEPLOY_SCRIPT" || fail 'database must remain unchanged'
-grep -Fq 'check_previous_app || fail' "$DEPLOY_SCRIPT" || fail 'preflight must prove a valid prior application rollback target'
+grep -Fq 'check_previous_app_for_release || fail' "$DEPLOY_SCRIPT" || fail 'preflight must prove a valid prior application rollback target'
 grep -Fq 'container_networks_exact "$APP_CONTAINER"' "$DEPLOY_SCRIPT" || fail 'preflight must enforce exact previous-app networks'
 grep -Fq '[ "$attached_networks" = "$expected_networks" ]' "$DEPLOY_SCRIPT" || fail 'rollback must reject networks beyond the exact required set'
 grep -Fq "x.status!=='ok'||x.dependencies?.database?.status!=='ok'||x.dependencies?.redis?.status!=='ok'" "$DEPLOY_SCRIPT" || fail 'public health must validate app/database/redis JSON health'
