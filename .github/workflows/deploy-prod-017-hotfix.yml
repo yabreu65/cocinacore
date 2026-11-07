@@ -1,0 +1,200 @@
+name: Deploy isolated production-017 security hotfix
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  validate-release:
+    name: Validate fixed production-017 candidate
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout trusted workflow ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Require workflow source from main
+        env:
+          TRUSTED_WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$TRUSTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          git merge-base --is-ancestor "$TRUSTED_WORKFLOW_SHA" origin/main
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.3
+
+      - name: Checkout fixed candidate commit
+        uses: actions/checkout@v4
+        with:
+          ref: d4a13a61cc0d24c4eda96a7baffaacfd0e47c191
+          path: release-candidate
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate pinned GitHub evidence and release contents
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: sh scripts/validate-prod-017-hotfix.sh "$GITHUB_WORKSPACE/release-candidate"
+
+      - name: Run fixed-candidate admission contract
+        run: sh scripts/tests/test-prod-017-hotfix-contract.sh
+
+  deploy-production:
+    name: Deploy exact production-017 candidate
+    runs-on: ubuntu-latest
+    needs: validate-release
+    if: github.ref == 'refs/heads/main'
+    environment: production
+
+    steps:
+      - name: Checkout trusted workflow ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Checkout fixed candidate commit
+        uses: actions/checkout@v4
+        with:
+          ref: d4a13a61cc0d24c4eda96a7baffaacfd0e47c191
+          path: release-candidate
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.3
+
+      - name: Revalidate all fixed admission evidence after approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: sh scripts/validate-prod-017-hotfix.sh "$GITHUB_WORKSPACE/release-candidate"
+
+      - name: Configure SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${VPS_SSH_KNOWN_HOSTS//[[:space:]]/}" ]]; then
+            echo "Required trusted SSH known_hosts secret is empty." >&2
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/cocinacore_deploy_key
+          chmod 600 ~/.ssh/cocinacore_deploy_key
+          printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          if ! ssh-keygen -F "$VPS_HOST" -f ~/.ssh/known_hosts >/dev/null 2>&1; then
+            echo "Trusted SSH known_hosts does not contain VPS_HOST." >&2
+            exit 1
+          fi
+
+      - name: Deploy on VPS using trusted main script and fixed candidate source
+        id: deploy
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          RELEASE_SHA: d4a13a61cc0d24c4eda96a7baffaacfd0e47c191
+          TRUSTED_WORKFLOW_SHA: ${{ github.sha }}
+          PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+          ATTEMPT_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          VPS_APP_DIR=/opt/pawtech/apps/cocinacore
+          printf -v remote_args '%q ' "$RELEASE_SHA" "$TRUSTED_WORKFLOW_SHA" "$PRODUCTION_URL" "$ATTEMPT_ID"
+          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+            -i ~/.ssh/cocinacore_deploy_key "$VPS_USER@$VPS_HOST" \
+            "bash -s -- $remote_args" <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          RELEASE_SHA=$1
+          TRUSTED_WORKFLOW_SHA=$2
+          PRODUCTION_URL=$3
+          ATTEMPT_ID=$4
+          VPS_APP_DIR=/opt/pawtech/apps/cocinacore
+          RUNTIME_ENV_FILE=/opt/pawtech/env/cocinacore.env
+
+          command -v realpath >/dev/null 2>&1 || { echo "Required path validation command is unavailable." >&2; exit 1; }
+          ACTUAL_APP_DIR=$(realpath -e "$VPS_APP_DIR")
+          [ "$ACTUAL_APP_DIR" = /opt/pawtech/apps/cocinacore ] || { echo "Pinned Pawtech app directory validation failed." >&2; exit 1; }
+          cd /opt/pawtech/apps/cocinacore
+          git fetch --all --prune
+          [[ "$RELEASE_SHA" == d4a13a61cc0d24c4eda96a7baffaacfd0e47c191 ]]
+          [[ "$TRUSTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git cat-file -e "${TRUSTED_WORKFLOW_SHA}^{commit}"
+          git merge-base --is-ancestor "$TRUSTED_WORKFLOW_SHA" origin/main
+          git cat-file -e "${RELEASE_SHA}^{commit}"
+          if ! git diff --quiet || ! git diff --cached --quiet; then
+            echo "Tracked deploy repository changes must be resolved before deployment." >&2
+            exit 1
+          fi
+
+          git show "$TRUSTED_WORKFLOW_SHA:scripts/deploy-pawtech-production.sh" | sh -s -- "$RELEASE_SHA" "$RUNTIME_ENV_FILE" "$PRODUCTION_URL" prod-017-hotfix-preflight "$ATTEMPT_ID"
+          git show "$TRUSTED_WORKFLOW_SHA:scripts/deploy-pawtech-production.sh" | sh -s -- "$RELEASE_SHA" "$RUNTIME_ENV_FILE" "$PRODUCTION_URL" prod-017-hotfix-deploy "$ATTEMPT_ID"
+          REMOTE_SCRIPT
+
+      - name: Production smoke check
+        id: public-smoke
+        env:
+          PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+        run: |
+          set -euo pipefail
+          curl -fsS "${PRODUCTION_URL%/}/api/health" | node -e "let b='';process.stdin.on('data',x=>b+=x);process.stdin.on('end',()=>{try{const x=JSON.parse(b);if(x.status!=='ok'||x.dependencies?.database?.status!=='ok'||x.dependencies?.redis?.status!=='ok')process.exit(1)}catch{process.exit(1)}})"
+
+      - name: Recover application after public smoke failure
+        if: ${{ failure() && steps.deploy.outcome == 'success' && steps.public-smoke.outcome == 'failure' }}
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          RELEASE_SHA: d4a13a61cc0d24c4eda96a7baffaacfd0e47c191
+          TRUSTED_WORKFLOW_SHA: ${{ github.sha }}
+          PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+          ATTEMPT_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          RUNTIME_ENV_FILE=/opt/pawtech/env/cocinacore.env
+          printf -v remote_args '%q ' "$RELEASE_SHA" "$TRUSTED_WORKFLOW_SHA" "$RUNTIME_ENV_FILE" "$PRODUCTION_URL" rollback "$ATTEMPT_ID"
+          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+            -i ~/.ssh/cocinacore_deploy_key "$VPS_USER@$VPS_HOST" \
+            "bash -s -- $remote_args" <<'REMOTE_ROLLBACK'
+          set -euo pipefail
+          RELEASE_SHA=$1
+          TRUSTED_WORKFLOW_SHA=$2
+          RUNTIME_ENV_FILE=$3
+          PRODUCTION_URL=$4
+          MODE=$5
+          ATTEMPT_ID=$6
+          VPS_APP_DIR=/opt/pawtech/apps/cocinacore
+
+          command -v realpath >/dev/null 2>&1 || { echo "Required path validation command is unavailable." >&2; exit 1; }
+          ACTUAL_APP_DIR=$(realpath -e "$VPS_APP_DIR")
+          [ "$ACTUAL_APP_DIR" = /opt/pawtech/apps/cocinacore ] || { echo "Pinned Pawtech app directory validation failed." >&2; exit 1; }
+          cd /opt/pawtech/apps/cocinacore
+          git fetch --all --prune
+          [[ "$TRUSTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git cat-file -e "${TRUSTED_WORKFLOW_SHA}^{commit}"
+          git merge-base --is-ancestor "$TRUSTED_WORKFLOW_SHA" origin/main
+          git show "$TRUSTED_WORKFLOW_SHA:scripts/deploy-pawtech-production.sh" | sh -s -- "$RELEASE_SHA" "$RUNTIME_ENV_FILE" "$PRODUCTION_URL" "$MODE" "$ATTEMPT_ID"
+          REMOTE_ROLLBACK

@@ -193,7 +193,7 @@ printf '%s\n' "$local_storage" | grep -Fq '[ -d "$UPLOAD_DIR" ]' || fail 'local 
 ! printf '%s\n' "$local_storage" | grep -Eq 'S3_|required_env' || fail 'local storage must not require S3 credentials'
 
 preflight_return_line=$(grep -nF 'PREFLIGHT_OK release=${RELEASE_SHA} storage=${STORAGE_DRIVER}' "$SCRIPT" | cut -d: -f1)
-preflight_previous_check_line=$(grep -nF '  check_previous_app || fail' "$SCRIPT" | cut -d: -f1)
+preflight_previous_check_line=$(grep -nF '  check_previous_app_for_release || fail' "$SCRIPT" | cut -d: -f1)
 preflight_exit_line=$(grep -nF '  exit 0' "$SCRIPT" | tail -n 1 | cut -d: -f1)
 cleanup_trap_line=$(grep -nF 'trap cleanup EXIT INT TERM' "$SCRIPT" | cut -d: -f1)
 [ -n "$preflight_return_line" ] && [ -n "$preflight_previous_check_line" ] && [ -n "$preflight_exit_line" ] && [ -n "$cleanup_trap_line" ] &&

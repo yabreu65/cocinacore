@@ -1,0 +1,169 @@
+#!/bin/sh
+# shellcheck disable=SC2016,SC2030,SC2031,SC2034,SC2329 # Literal snippets and dynamically evaluated gate tests are intentional.
+set -eu
+
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+WORKFLOW="$ROOT/.github/workflows/deploy-prod-017-hotfix.yml"
+NORMAL_WORKFLOW="$ROOT/.github/workflows/deploy.yml"
+DEPLOY_SCRIPT="$ROOT/scripts/deploy-pawtech-production.sh"
+ADMISSION_SCRIPT="$ROOT/scripts/prod-017-hotfix-admission.mjs"
+EVIDENCE_SCRIPT="$ROOT/scripts/validate-prod-017-hotfix.sh"
+NODE_TEST="$ROOT/scripts/tests/prod-017-hotfix-admission.test.mjs"
+RUNBOOK="$ROOT/docs/ops/prod-017-hotfix-admission.md"
+
+fail() {
+  printf '%s\n' "prod-017 hotfix contract failure: $1" >&2
+  exit 1
+}
+
+for file in "$WORKFLOW" "$NORMAL_WORKFLOW" "$DEPLOY_SCRIPT" "$ADMISSION_SCRIPT" "$EVIDENCE_SCRIPT" "$NODE_TEST" "$RUNBOOK"; do
+  [ -f "$file" ] || fail "required admission file is missing: ${file#"$ROOT"/}"
+done
+
+sh -n "$DEPLOY_SCRIPT" || fail 'production deploy script syntax is invalid'
+sh -n "$EVIDENCE_SCRIPT" || fail 'evidence validation script syntax is invalid'
+node --check "$ADMISSION_SCRIPT" || fail 'admission validator syntax is invalid'
+node --check "$NODE_TEST" || fail 'admission tests syntax is invalid'
+node --test "$NODE_TEST"
+
+workflow_dispatch_block=$(sed -n '/^on:/,/^[^[:space:]]/p' "$WORKFLOW")
+printf '%s\n' "$workflow_dispatch_block" | grep -Eq '^  workflow_dispatch:$' || fail 'hotfix workflow must be manual only'
+printf '%s\n' "$workflow_dispatch_block" | grep -Eq '^[[:space:]]+inputs:' && fail 'hotfix workflow must not expose caller-controlled release inputs'
+grep -Fq "if: github.ref == 'refs/heads/main'" "$WORKFLOW" || fail 'hotfix jobs must execute only from main'
+grep -Fq 'node-version: 22.22.3' "$WORKFLOW" || fail 'admission workflow must pin Node 22.22.3'
+grep -Fq 'environment: production' "$WORKFLOW" || fail 'hotfix deploy must use the production approval Environment'
+grep -Fq 'needs: validate-release' "$WORKFLOW" || fail 'production deployment must depend on completed validation'
+grep -Fq 'group: deploy-production' "$WORKFLOW" || fail 'hotfix workflow must share official deploy concurrency'
+grep -Fq 'cancel-in-progress: false' "$WORKFLOW" || fail 'hotfix deploy must not be cancelled by a newer deployment'
+for permission in 'contents: read' 'actions: read' 'issues: read' 'pull-requests: read'; do
+  grep -Fq "$permission" "$WORKFLOW" || fail "missing least-privilege GitHub permission: $permission"
+done
+! grep -Eiq 'contents:[[:space:]]*write|actions:[[:space:]]*write|issues:[[:space:]]*write|pull-requests:[[:space:]]*write' "$WORKFLOW" ||
+  fail 'admission workflow may not grant GitHub write permissions'
+
+grep -Fq 'd4a13a61cc0d24c4eda96a7baffaacfd0e47c191' "$WORKFLOW" || fail 'workflow is missing fixed candidate SHA'
+grep -Fq 'ad99d502ff19d7bb154c04c24697d2a43c1b17e8' "$DEPLOY_SCRIPT" || fail 'server deploy script must pin the production baseline'
+grep -Fq 'actions/runs/42310527377' "$EVIDENCE_SCRIPT" || fail 'workflow evidence script must pin the successful CI run'
+grep -Fq 'issues/92' "$EVIDENCE_SCRIPT" || fail 'workflow evidence script must pin the risk issue'
+grep -Fq 'pulls/93' "$EVIDENCE_SCRIPT" || fail 'workflow evidence script must pin the candidate PR'
+grep -Fq 'environments/production"' "$EVIDENCE_SCRIPT" || fail 'evidence script must read production Environment protection metadata'
+grep -Fq 'environments/production/deployment-branch-policies' "$EVIDENCE_SCRIPT" || fail 'evidence script must read production deployment branch policies'
+grep -Fq 'validateEnvironmentConfiguration' "$ADMISSION_SCRIPT" || fail 'admission must validate Environment approvals and branch restrictions'
+grep -Fq 'production Environment protection metadata is unavailable' "$EVIDENCE_SCRIPT" || fail 'inaccessible Environment metadata must fail closed'
+grep -Fq 'production Environment branch policy metadata is unavailable' "$EVIDENCE_SCRIPT" || fail 'inaccessible branch policy metadata must fail closed'
+
+grep -Fq 'issues/92' "$EVIDENCE_SCRIPT" || fail 'evidence script must read only the accepted advisory issue'
+grep -Fq 'pulls/93' "$EVIDENCE_SCRIPT" || fail 'evidence script must read only the isolated candidate PR'
+grep -Fq 'RELEASE_SHA: d4a13a61cc0d24c4eda96a7baffaacfd0e47c191' "$WORKFLOW" || fail 'workflow release constant differs from the reviewed SHA'
+grep -Fq 'sha: "d4a13a61cc0d24c4eda96a7baffaacfd0e47c191"' "$ADMISSION_SCRIPT" || fail 'validator release constant differs from the reviewed SHA'
+grep -Fq 'PROD_017_HOTFIX_SHA=d4a13a61cc0d24c4eda96a7baffaacfd0e47c191' "$DEPLOY_SCRIPT" || fail 'server-side release constant differs from the reviewed SHA'
+grep -Fq 'PROD_017_HOTFIX_PARENT=ad99d502ff19d7bb154c04c24697d2a43c1b17e8' "$DEPLOY_SCRIPT" || fail 'server-side baseline constant differs from production SHA'
+grep -Fq 'PROD_017_PARENT_IMAGE_ID=sha256:b72d20d7c9e6634584b562837e563355c87d02439c0c64bd44d870f0056a7204' "$DEPLOY_SCRIPT" || fail 'server baseline image digest differs from the verified production image'
+grep -Fq 'validate_prod017_hotfix_candidate' "$DEPLOY_SCRIPT" || fail 'server deploy script must independently validate the fixed candidate'
+grep -Fq 'frontend/e2e/specs/pdfjs-upload-compat.spec.ts' "$DEPLOY_SCRIPT" || fail 'server allowlist is missing the reviewed E2E path'
+grep -Fq 'frontend/src/app/api/meal-plan/shopping-suggestions/route.test.ts' "$DEPLOY_SCRIPT" || fail 'server allowlist is missing the reviewed API test path'
+grep -Fq "17|017|017_persistent_recipe_archive.sql" "$DEPLOY_SCRIPT" || fail 'server must enforce the exact schema-017 manifest'
+
+server_gate=$(sed -n '/^validate_prod017_hotfix_candidate()/,/^}/p' "$DEPLOY_SCRIPT")
+[ -n "$server_gate" ] || fail 'server-side candidate validator function is missing'
+(
+  set -eu
+  fail() { printf '%s\n' "$*" >&2; exit 1; }
+  PROD_017_HOTFIX_SHA=d4a13a61cc0d24c4eda96a7baffaacfd0e47c191
+  PROD_017_HOTFIX_PARENT=ad99d502ff19d7bb154c04c24697d2a43c1b17e8
+  RELEASE_SHA=d4a13a61cc0d24c4eda96a7baffaacfd0e47c191
+  eval "$server_gate"
+  validate_prod017_hotfix_candidate
+) || fail 'server-side validator rejected its exact fixed candidate'
+if (
+  set -eu
+  fail() { exit 1; }
+  PROD_017_HOTFIX_SHA=d4a13a61cc0d24c4eda96a7baffaacfd0e47c191
+  PROD_017_HOTFIX_PARENT=ad99d502ff19d7bb154c04c24697d2a43c1b17e8
+  RELEASE_SHA=refs/heads/another-release
+  eval "$server_gate"
+  validate_prod017_hotfix_candidate
+) >/dev/null 2>&1; then
+  fail 'server-side validator accepted a mutable ref instead of the fixed SHA'
+fi
+
+previous_app_gate=$(sed -n '/^check_previous_app_for_release()/,/^}/p' "$DEPLOY_SCRIPT")
+[ -n "$previous_app_gate" ] || fail 'server-side exact previous-image validator is missing'
+(
+  set -eu
+  PROD_017_HOTFIX_PARENT=ad99d502ff19d7bb154c04c24697d2a43c1b17e8
+  MODE=prod-017-hotfix-preflight
+  PREVIOUS_IMAGE=
+  APP_CONTAINER=cocinacore-web
+  PROD_017_PARENT_IMAGE_ID=sha256:b72d20d7c9e6634584b562837e563355c87d02439c0c64bd44d870f0056a7204
+  check_previous_app() { PREVIOUS_IMAGE=$TEST_PREVIOUS_IMAGE; }
+  docker() { printf '%s\n' "$TEST_PREVIOUS_DOCKER_IMAGE_ID"; }
+  TEST_PREVIOUS_IMAGE="cocinacore:deploy-$PROD_017_HOTFIX_PARENT"
+  TEST_PREVIOUS_DOCKER_IMAGE_ID=$PROD_017_PARENT_IMAGE_ID
+  eval "$previous_app_gate"
+  check_previous_app_for_release
+) || fail 'server-side validator rejected the exact deployed production baseline image and digest'
+if (
+  set -eu
+  PROD_017_HOTFIX_PARENT=ad99d502ff19d7bb154c04c24697d2a43c1b17e8
+  MODE=prod-017-hotfix-deploy
+  PREVIOUS_IMAGE=
+  APP_CONTAINER=cocinacore-web
+  PROD_017_PARENT_IMAGE_ID=sha256:b72d20d7c9e6634584b562837e563355c87d02439c0c64bd44d870f0056a7204
+  check_previous_app() { PREVIOUS_IMAGE=$TEST_PREVIOUS_IMAGE; }
+  docker() { printf '%s\n' "$TEST_PREVIOUS_DOCKER_IMAGE_ID"; }
+  TEST_PREVIOUS_IMAGE='cocinacore:deploy-ffffffffffffffffffffffffffffffffffffffff'
+  TEST_PREVIOUS_DOCKER_IMAGE_ID=$PROD_017_PARENT_IMAGE_ID
+  eval "$previous_app_gate"
+  check_previous_app_for_release
+) >/dev/null 2>&1; then
+  fail 'server-side validator accepted a production image different from the fixed parent'
+fi
+if (
+  set -eu
+  PROD_017_HOTFIX_PARENT=ad99d502ff19d7bb154c04c24697d2a43c1b17e8
+  MODE=prod-017-hotfix-deploy
+  PREVIOUS_IMAGE=
+  APP_CONTAINER=cocinacore-web
+  PROD_017_PARENT_IMAGE_ID=sha256:b72d20d7c9e6634584b562837e563355c87d02439c0c64bd44d870f0056a7204
+  check_previous_app() { PREVIOUS_IMAGE=$TEST_PREVIOUS_IMAGE; }
+  docker() { printf '%s\n' "$TEST_PREVIOUS_DOCKER_IMAGE_ID"; }
+  TEST_PREVIOUS_IMAGE="cocinacore:deploy-$PROD_017_HOTFIX_PARENT"
+  TEST_PREVIOUS_DOCKER_IMAGE_ID=sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+  eval "$previous_app_gate"
+  check_previous_app_for_release
+) >/dev/null 2>&1; then
+  fail 'server-side validator accepted a moved baseline image tag'
+fi
+
+for mode in prod-017-hotfix-preflight prod-017-hotfix-deploy; do
+  grep -Fq "$mode" "$DEPLOY_SCRIPT" || fail "server script lacks fixed mode $mode"
+done
+grep -Fq 'git merge-base --is-ancestor "$RELEASE_SHA" origin/main' "$DEPLOY_SCRIPT" || fail 'ordinary deploy ancestry gate was removed'
+grep -Fq 'git merge-base --is-ancestor "$TRUSTED_WORKFLOW_SHA" origin/main' "$WORKFLOW" || fail 'VPS must require trusted workflow source on main'
+grep -Fq 'git show "$TRUSTED_WORKFLOW_SHA:scripts/deploy-pawtech-production.sh"' "$WORKFLOW" || fail 'VPS must execute the versioned trusted deploy script'
+! grep -Fq 'git show "$RELEASE_SHA:scripts/deploy-pawtech-production.sh"' "$WORKFLOW" || fail 'hotfix must not execute deploy code from candidate source'
+! grep -Fq 'git checkout --detach "$RELEASE_SHA"' "$WORKFLOW" || fail 'hotfix must not move the persistent VPS checkout to the candidate'
+grep -Fq 'steps.deploy.outcome == '\''success'\'' && steps.public-smoke.outcome == '\''failure'\''' "$WORKFLOW" || fail 'public health failure must invoke recovery'
+grep -Fq 'rollback "$ATTEMPT_ID"' "$WORKFLOW" || fail 'recovery must use the exact deployment attempt'
+if ! grep -Fq 'PREVIOUS_ID' "$DEPLOY_SCRIPT" || ! grep -Fq 'PREVIOUS_IMAGE' "$DEPLOY_SCRIPT"; then
+  fail 'exact container/image rollback identity was weakened'
+fi
+grep -Fq 'npm run db:migrate:verify' "$DEPLOY_SCRIPT" || fail 'read-only schema verification was removed'
+! grep -Eq 'npm run db:migrate([[:space:]]|$)' "$DEPLOY_SCRIPT" || fail 'mutating migration command is forbidden'
+grep -Fq 'verify-pawtech-cocinacore-daily-backup.sh' "$DEPLOY_SCRIPT" || fail 'official backup verification is missing'
+
+# This route does not modify the ordinary workflow. Verify its independent
+# main-only condition and ancestor gate rather than comparing against the
+# production-017 candidate snapshot (main intentionally contains M5).
+grep -Fq "if: github.ref == 'refs/heads/main'" "$NORMAL_WORKFLOW" || fail 'ordinary deployment workflow must remain main-only'
+grep -Fq 'git merge-base --is-ancestor "$DEPLOY_SHA" origin/main' "$NORMAL_WORKFLOW" || fail 'normal workflow no longer requires main ancestry'
+! grep -Fq 'PROD_017_HOTFIX' "$NORMAL_WORKFLOW" || fail 'fixed hotfix exception leaked into the ordinary workflow'
+
+grep -Fq 'workflow must be present on the default branch' "$RUNBOOK" || fail 'runbook must require default-branch integration before dispatch'
+grep -Fq 'protection_rules=[]' "$RUNBOOK" || fail 'runbook must record the verified missing production approval rules'
+grep -Fq '**NO-GO**' "$RUNBOOK" || fail 'runbook must block use until Environment protection is configured and verified'
+grep -Fq 'fails closed' "$RUNBOOK" || fail 'runbook must require rejection when Environment APIs are unavailable'
+grep -Fq 'exactly one custom branch policy' "$RUNBOOK" || fail 'runbook must document exact main-only branch policy'
+
+printf '%s\n' 'PROD_017_HOTFIX_CONTRACT_OK'

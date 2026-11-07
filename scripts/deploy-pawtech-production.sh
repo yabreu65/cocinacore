@@ -28,10 +28,14 @@ NEW_APP_RUN_ATTEMPTED=0
 DEPLOY_SUCCEEDED=0
 DATABASE_CHANGED=NO
 PREVIOUS_ID=
+PREVIOUS_IMAGE_ID=
 DEPLOYMENT_ATTEMPT=
 BACKUP_VERIFICATION=
 NEW_IMAGE=
 PREVIOUS_IMAGE=
+PROD_017_HOTFIX_SHA=d4a13a61cc0d24c4eda96a7baffaacfd0e47c191
+PROD_017_HOTFIX_PARENT=ad99d502ff19d7bb154c04c24697d2a43c1b17e8
+PROD_017_PARENT_IMAGE_ID=sha256:b72d20d7c9e6634584b562837e563355c87d02439c0c64bd44d870f0056a7204
 
 log() {
   printf '%s\n' "$*"
@@ -44,6 +48,32 @@ fail() {
     printf '%s\n' "PAWTECH_DEPLOY_ERROR: $*" >&2
   fi
   exit 1
+}
+
+validate_prod017_hotfix_candidate() {
+  [ "$RELEASE_SHA" = "$PROD_017_HOTFIX_SHA" ] || fail 'prod-017 exception accepts only the fixed reviewed candidate SHA'
+
+  parents=$(git rev-list --parents -n 1 "$RELEASE_SHA" 2>/dev/null) || fail 'prod-017 candidate commit is unavailable'
+  [ "$parents" = "$PROD_017_HOTFIX_SHA $PROD_017_HOTFIX_PARENT" ] || fail 'prod-017 candidate parent is not the fixed production baseline'
+
+  expected_changes=$(printf 'M\t%s\n' \
+    'frontend/e2e/specs/pdfjs-upload-compat.spec.ts' \
+    'frontend/package-lock.json' \
+    'frontend/package.json' \
+    'frontend/src/app/api/meal-plan/shopping-suggestions/route.test.ts' | LC_ALL=C sort)
+  actual_changes=$(git diff-tree --no-commit-id --name-status -r "$PROD_017_HOTFIX_PARENT" "$PROD_017_HOTFIX_SHA" 2>/dev/null | LC_ALL=C sort) ||
+    fail 'prod-017 candidate change list could not be verified'
+  [ "$actual_changes" = "$expected_changes" ] || fail 'prod-017 candidate diff is not the exact four-file allowlist'
+
+  release_manifest=$(git rev-parse "$PROD_017_HOTFIX_SHA:db/migrations/manifest.json" 2>/dev/null) ||
+    fail 'prod-017 candidate migration manifest is unavailable'
+  parent_manifest=$(git rev-parse "$PROD_017_HOTFIX_PARENT:db/migrations/manifest.json" 2>/dev/null) ||
+    fail 'production baseline migration manifest is unavailable'
+  [ "$release_manifest" = "$parent_manifest" ] || fail 'prod-017 candidate changed the migration manifest'
+  migration_summary=$(git show "$PROD_017_HOTFIX_SHA:db/migrations/manifest.json" | node -e 'let body="";process.stdin.on("data",chunk=>body+=chunk);process.stdin.on("end",()=>{try{const migrations=JSON.parse(body).migrations;const latest=migrations.at(-1);if(!Array.isArray(migrations))process.exit(1);process.stdout.write([migrations.length,latest?.id,latest?.filename].join("|"))}catch{process.exit(1)}})' 2>/dev/null) ||
+    fail 'prod-017 candidate manifest could not be parsed'
+  [ "$migration_summary" = '17|017|017_persistent_recipe_archive.sql' ] || fail 'prod-017 candidate does not describe exactly schema migrations 001-017'
+  git diff --check "$PROD_017_HOTFIX_PARENT" "$PROD_017_HOTFIX_SHA" >/dev/null 2>&1 || fail 'prod-017 candidate diff-check failed'
 }
 
 container_absent() {
@@ -91,6 +121,17 @@ check_previous_app() {
   container_networks_exact "$APP_CONTAINER" || return 1
   previous_internal_health_ok || return 1
   public_health_ok
+}
+
+check_previous_app_for_release() {
+  check_previous_app || return 1
+  case "$MODE" in
+    prod-017-hotfix-preflight|prod-017-hotfix-deploy)
+      [ "$PREVIOUS_IMAGE" = "cocinacore:deploy-${PROD_017_HOTFIX_PARENT}" ] || return 1
+      PREVIOUS_IMAGE_ID=$(docker inspect --format '{{.Image}}' "$APP_CONTAINER" 2>/dev/null) || return 1
+      [ "$PREVIOUS_IMAGE_ID" = "$PROD_017_PARENT_IMAGE_ID" ] || return 1
+      ;;
+  esac
 }
 
 rollback_mode() {
@@ -368,8 +409,8 @@ printf '%s' "$RELEASE_SHA" | grep -Eq '^[0-9a-f]{40}$' ||
   fail 'deployment attempt ID is invalid'
 
 case "$MODE" in
-  deploy|preflight|rollback) ;;
-  *) fail 'mode must be deploy or preflight' ;;
+  deploy|preflight|rollback|prod-017-hotfix-preflight|prod-017-hotfix-deploy) ;;
+  *) fail 'unsupported deployment mode' ;;
 esac
 
 if [ "$MODE" = 'rollback' ]; then
@@ -444,14 +485,21 @@ for container in "$POSTGRES_CONTAINER" "$REDIS_CONTAINER"; do
 done
 
 git cat-file -e "${RELEASE_SHA}^{commit}" || fail 'release commit is not available in deploy repository'
-git merge-base --is-ancestor "$RELEASE_SHA" origin/main || fail 'release commit is not integrated into origin/main'
+case "$MODE" in
+  prod-017-hotfix-preflight|prod-017-hotfix-deploy)
+    validate_prod017_hotfix_candidate
+    ;;
+  *)
+    git merge-base --is-ancestor "$RELEASE_SHA" origin/main || fail 'release commit is not integrated into origin/main'
+    ;;
+esac
 
-if [ "$MODE" = 'preflight' ]; then
+if [ "$MODE" = 'preflight' ] || [ "$MODE" = 'prod-017-hotfix-preflight' ]; then
   [ -d "$MANUAL_BACKUP_ROOT" ] && [ -w "$MANUAL_BACKUP_ROOT" ] || fail 'deployment state root must already exist and be writable'
   verifier_mode=$(git ls-tree "$RELEASE_SHA" -- scripts/verify-pawtech-cocinacore-daily-backup.sh | awk '{print $1}')
   [ "$verifier_mode" = 100755 ] || fail 'release daily backup verifier must have Git mode 100755'
   git cat-file -e "$RELEASE_SHA:scripts/verify-pawtech-cocinacore-daily-backup.sh" || fail 'read-only daily backup verifier is missing from release'
-  check_previous_app || fail 'preflight requires a running, healthy previous application on exactly the Pawtech networks'
+  check_previous_app_for_release || fail 'preflight requires the exact healthy production-017 baseline application on exactly the Pawtech networks'
   log "PREFLIGHT_OK release=${RELEASE_SHA} storage=${STORAGE_DRIVER}" "attempt=${ATTEMPT_ID}"
   exit 0
 fi
@@ -531,7 +579,7 @@ TRAEFIK_HOST=$(printf '%s' "$PRODUCTION_URL" | sed -E 's#^https?://##; s#/.*$##'
 TRAEFIK_RULE=$(printf 'Host(`%s`)' "$TRAEFIK_HOST")
 
 [ -n "$PREVIOUS" ] || fail 'previous application rollback container name is unavailable'
-check_previous_app || fail 'previous application rollback target is no longer running and healthy on exact Pawtech networks'
+check_previous_app_for_release || fail 'previous application rollback target is not the exact healthy production-017 baseline on exact Pawtech networks'
 [ -n "$PREVIOUS_ID" ] && [ -n "$PREVIOUS_IMAGE" ] || fail 'previous application rollback identity is incomplete'
 DEPLOY_STATE_FILE="$backup_dir/deploy-state-${ATTEMPT_ID}.state"
 [ ! -e "$DEPLOY_STATE_FILE" ] || fail 'deployment attempt state record already exists'
