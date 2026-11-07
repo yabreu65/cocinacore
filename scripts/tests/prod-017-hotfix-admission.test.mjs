@@ -18,6 +18,12 @@ import {
   validateCommitMetadata,
   validateEnvironmentConfiguration,
   validateEvidence,
+  validateManualAttemptId,
+  validateAttemptIdForMode,
+  validateManualAuthorization,
+  validateManualEvidence,
+  validateRepositoryOwner,
+  fetchManualEvidence,
   validateGitCandidate,
 } from "../prod-017-hotfix-admission.mjs";
 
@@ -107,6 +113,51 @@ function validEvidence() {
       total_count: 1,
       branch_policies: [{ id: 17, name: "main" }],
     },
+  };
+}
+
+const MANUAL_NOW = new Date("2026-11-07T02:00:00Z");
+const MANUAL_ATTEMPT = "manual-20261107T020000Z-a1b2c3d4e5f60718";
+const MANUAL_COMMENT_ID = 987654321;
+const OWNER_ID = 1234567;
+
+function validRepositoryMetadata(overrides = {}) {
+  return {
+    id: 7654321,
+    name: "cocinacore",
+    full_name: PROD_017_RELEASE.repository,
+    owner: { id: OWNER_ID, login: "yabreu65", type: "User" },
+    ...overrides,
+  };
+}
+
+function validManualComment(overrides = {}) {
+  const record = {
+    schema_version: 1,
+    candidate_sha: PROD_017_RELEASE.sha,
+    attempt_id: MANUAL_ATTEMPT,
+    valid_from: "2026-11-07T01:59:00Z",
+    expires_at: "2026-11-07T03:00:00Z",
+    authorized_by: "yabreu65",
+    issue_number: 92,
+    accepted_risks: [
+      "GHSA-3g3m-2fjr-6pw4",
+      "GHSA-g3hv-75wg-m249",
+      "5 moderate production records; 0 high and 0 critical",
+    ],
+    baseline_sha: PROD_017_RELEASE.parent,
+    rollback_conditions:
+      "Application-only rollback using the same attempt ID; no PostgreSQL restore; no migrations.",
+  };
+  return {
+    id: MANUAL_COMMENT_ID,
+    issue_url: "https://api.github.com/repos/yabreu65/cocinacore/issues/92",
+    author_association: "OWNER",
+    user: { id: OWNER_ID, login: "yabreu65", type: "User" },
+    created_at: "2026-11-07T01:59:30Z",
+    updated_at: "2026-11-07T01:59:30Z",
+    body: `COCINACORE-PROD-017-MANUAL-AUTHORIZATION-V1\n${JSON.stringify(record)}`,
+    ...overrides,
   };
 }
 
@@ -379,6 +430,419 @@ test("rejects mutable PR target or changed candidate/base", () => {
         pullRequest: { ...evidence.pullRequest, draft: false },
       }),
     /PR #93/,
+  );
+});
+
+test("accepts a fixed owner authorization bound to one manual attempt", async () => {
+  const result = validateManualAuthorization({
+    repository: validRepositoryMetadata(),
+    comment: validManualComment(),
+    commentId: MANUAL_COMMENT_ID,
+    attemptId: MANUAL_ATTEMPT,
+    now: MANUAL_NOW,
+  });
+  assert.equal(result.commentId, MANUAL_COMMENT_ID);
+  assert.equal(result.attemptId, MANUAL_ATTEMPT);
+  assert.equal(result.candidateSha, PROD_017_RELEASE.sha);
+  assert.equal(result.authorizer, "yabreu65");
+  assert.match(result.fingerprint, /^[0-9a-f]{64}$/);
+
+  assert.equal(
+    validateManualEvidence({
+      repository: validRepositoryMetadata(),
+      ...validEvidence(),
+      comment: validManualComment(),
+      commentId: MANUAL_COMMENT_ID,
+      attemptId: MANUAL_ATTEMPT,
+      now: MANUAL_NOW,
+    }).attemptId,
+    MANUAL_ATTEMPT,
+  );
+  assert.equal(
+    validateAttemptIdForMode("prod-017-manual-deploy", MANUAL_ATTEMPT),
+    true,
+  );
+  assert.equal(
+    validateAttemptIdForMode("prod-017-hotfix-deploy", "gha-42310527377-1"),
+    true,
+  );
+  assert.throws(
+    () =>
+      validateAttemptIdForMode("prod-017-manual-deploy", "gha-42310527377-1"),
+    /manual attempt ID/,
+  );
+  assert.throws(
+    () => validateAttemptIdForMode("prod-017-hotfix-deploy", MANUAL_ATTEMPT),
+    /GitHub Actions attempt ID/,
+  );
+});
+
+test("rejects malformed, reused, forged, or altered manual authorization", () => {
+  assert.throws(
+    () => validateManualAttemptId("manual-../../gha-1-1"),
+    /manual attempt ID/,
+  );
+  assert.throws(
+    () => validateManualAttemptId("manual-20261107T020000Z-A1B2C3D4E5F60718"),
+    /manual attempt ID/,
+  );
+
+  const wrongAttempt = validManualComment();
+  const wrongAttemptRecord = JSON.parse(wrongAttempt.body.split("\n")[1]);
+  wrongAttemptRecord.attempt_id = "manual-20261107T020000Z-1111111111111111";
+  wrongAttempt.body = `COCINACORE-PROD-017-MANUAL-AUTHORIZATION-V1\n${JSON.stringify(wrongAttemptRecord)}`;
+  assert.throws(
+    () =>
+      validateManualAuthorization({
+        repository: validRepositoryMetadata(),
+        comment: wrongAttempt,
+        commentId: MANUAL_COMMENT_ID,
+        attemptId: MANUAL_ATTEMPT,
+        now: MANUAL_NOW,
+      }),
+    /fixed candidate, baseline, risks, and rollback/,
+  );
+
+  const forgedAuthor = validManualComment({
+    user: { id: OWNER_ID + 1, login: "intruder", type: "User" },
+  });
+  assert.throws(
+    () =>
+      validateManualAuthorization({
+        repository: validRepositoryMetadata(),
+        comment: forgedAuthor,
+        commentId: MANUAL_COMMENT_ID,
+        attemptId: MANUAL_ATTEMPT,
+        now: MANUAL_NOW,
+      }),
+    /comment identity/,
+  );
+  const wrongAssociation = validManualComment({
+    author_association: "COLLABORATOR",
+  });
+  assert.throws(
+    () =>
+      validateManualAuthorization({
+        repository: validRepositoryMetadata(),
+        comment: wrongAssociation,
+        commentId: MANUAL_COMMENT_ID,
+        attemptId: MANUAL_ATTEMPT,
+        now: MANUAL_NOW,
+      }),
+    /comment identity/,
+  );
+  const wrongCommentId = validManualComment({ id: MANUAL_COMMENT_ID + 1 });
+  assert.throws(
+    () =>
+      validateManualAuthorization({
+        repository: validRepositoryMetadata(),
+        comment: wrongCommentId,
+        commentId: MANUAL_COMMENT_ID,
+        attemptId: MANUAL_ATTEMPT,
+        now: MANUAL_NOW,
+      }),
+    /comment identity/,
+  );
+  const edited = validManualComment({ updated_at: "2026-11-07T02:00:00Z" });
+  assert.throws(
+    () =>
+      validateManualAuthorization({
+        repository: validRepositoryMetadata(),
+        comment: edited,
+        commentId: MANUAL_COMMENT_ID,
+        attemptId: MANUAL_ATTEMPT,
+        now: MANUAL_NOW,
+      }),
+    /comment identity/,
+  );
+  const malformedCommentTimestamp = validManualComment({
+    created_at: "not-a-timestamp",
+    updated_at: "not-a-timestamp",
+  });
+  assert.throws(
+    () =>
+      validateManualAuthorization({
+        repository: validRepositoryMetadata(),
+        comment: malformedCommentTimestamp,
+        commentId: MANUAL_COMMENT_ID,
+        attemptId: MANUAL_ATTEMPT,
+        now: MANUAL_NOW,
+      }),
+    /comment created_at must be canonical UTC/,
+  );
+
+  for (const change of [
+    { candidate_sha: "a".repeat(40) },
+    { baseline_sha: "b".repeat(40) },
+    { issue_number: 93 },
+    { authorized_by: "someone-else" },
+    { rollback_conditions: "restore database" },
+    { accepted_risks: ["GHSA-3g3m-2fjr-6pw4"] },
+  ]) {
+    const comment = validManualComment();
+    const record = JSON.parse(comment.body.split("\n")[1]);
+    Object.assign(record, change);
+    comment.body = `COCINACORE-PROD-017-MANUAL-AUTHORIZATION-V1\n${JSON.stringify(record)}`;
+    assert.throws(
+      () =>
+        validateManualAuthorization({
+          repository: validRepositoryMetadata(),
+          comment,
+          commentId: MANUAL_COMMENT_ID,
+          attemptId: MANUAL_ATTEMPT,
+          now: MANUAL_NOW,
+        }),
+      /fixed candidate, baseline, risks, and rollback/,
+    );
+  }
+
+  const extraField = validManualComment();
+  const extraRecord = JSON.parse(extraField.body.split("\n")[1]);
+  extraRecord.skip_checks = true;
+  extraField.body = `COCINACORE-PROD-017-MANUAL-AUTHORIZATION-V1\n${JSON.stringify(extraRecord)}`;
+  assert.throws(
+    () =>
+      validateManualAuthorization({
+        repository: validRepositoryMetadata(),
+        comment: extraField,
+        commentId: MANUAL_COMMENT_ID,
+        attemptId: MANUAL_ATTEMPT,
+        now: MANUAL_NOW,
+      }),
+    /fields do not match/,
+  );
+});
+
+test("rejects expired, future, or overlong owner authorization windows", () => {
+  for (const [valid_from, expires_at] of [
+    ["2026-11-07T00:00:00Z", "2026-11-07T01:59:59Z"],
+    ["2026-11-07T02:01:00Z", "2026-11-07T03:00:00Z"],
+    ["2026-11-07T01:00:00Z", "2026-11-07T04:00:00Z"],
+  ]) {
+    const comment = validManualComment();
+    const record = JSON.parse(comment.body.split("\n")[1]);
+    record.valid_from = valid_from;
+    record.expires_at = expires_at;
+    comment.body = `COCINACORE-PROD-017-MANUAL-AUTHORIZATION-V1\n${JSON.stringify(record)}`;
+    assert.throws(
+      () =>
+        validateManualAuthorization({
+          repository: validRepositoryMetadata(),
+          comment,
+          commentId: MANUAL_COMMENT_ID,
+          attemptId: MANUAL_ATTEMPT,
+          now: MANUAL_NOW,
+        }),
+      /valid execution window/,
+    );
+  }
+});
+
+test("manual validation fails closed for missing CI evidence and migration changes", () => {
+  const evidence = {
+    repository: validRepositoryMetadata(),
+    ...validEvidence(),
+    comment: validManualComment(),
+    commentId: MANUAL_COMMENT_ID,
+    attemptId: MANUAL_ATTEMPT,
+    now: MANUAL_NOW,
+  };
+  assert.throws(
+    () => validateManualEvidence({ ...evidence, ciRun: undefined }),
+    /pinned CI run/,
+  );
+
+  const withSql = [
+    ...commitMetadata().changes,
+    { status: "A", path: "db/migrations/020_rls.sql" },
+  ];
+  assert.throws(
+    () => validateCommitMetadata(commitMetadata({ changes: withSql })),
+    /four-file reviewed allowlist/,
+  );
+});
+
+test("fetches only pinned read-only GitHub evidence and never returns the token", async () => {
+  const evidence = validEvidence();
+  const values = new Map([
+    [
+      `https://api.github.com/repos/${PROD_017_RELEASE.repository}`,
+      validRepositoryMetadata(),
+    ],
+    [
+      `https://api.github.com/repos/yabreu65/cocinacore/actions/runs/${PROD_017_RELEASE.ciRunId}`,
+      evidence.ciRun,
+    ],
+    [
+      `https://api.github.com/repos/yabreu65/cocinacore/issues/92`,
+      evidence.issue,
+    ],
+    [
+      `https://api.github.com/repos/yabreu65/cocinacore/pulls/93`,
+      evidence.pullRequest,
+    ],
+    [
+      `https://api.github.com/repos/yabreu65/cocinacore/issues/comments/${MANUAL_COMMENT_ID}`,
+      validManualComment(),
+    ],
+  ]);
+  const urls = [];
+  const result = await fetchManualEvidence({
+    token: "fixture-token-never-logged",
+    commentId: MANUAL_COMMENT_ID,
+    attemptId: MANUAL_ATTEMPT,
+    now: MANUAL_NOW,
+    fetchImpl: async (url, options) => {
+      urls.push(url);
+      assert.equal(
+        options.headers.Authorization,
+        "Bearer fixture-token-never-logged",
+      );
+      assert.equal(options.method, undefined);
+      assert.equal(options.redirect, "error");
+      return { ok: true, json: async () => values.get(url) };
+    },
+  });
+  assert.deepEqual(urls.sort(), [...values.keys()].sort());
+  assert.equal(JSON.stringify(result).includes("fixture-token"), false);
+  await assert.rejects(
+    fetchManualEvidence({
+      token: "",
+      commentId: MANUAL_COMMENT_ID,
+      attemptId: MANUAL_ATTEMPT,
+      fetchImpl: async () => {
+        throw new Error("should not fetch");
+      },
+    }),
+    /incomplete/,
+  );
+});
+
+test("requires the real repository owner identity to match the commenter ID", () => {
+  assert.deepEqual(validateRepositoryOwner(validRepositoryMetadata()), {
+    login: "yabreu65",
+    id: OWNER_ID,
+  });
+
+  for (const repository of [
+    validRepositoryMetadata({ full_name: "attacker/cocinacore" }),
+    validRepositoryMetadata({
+      owner: { id: OWNER_ID, login: "intruder", type: "User" },
+    }),
+    validRepositoryMetadata({
+      owner: { id: OWNER_ID, login: "yabreu65", type: "Organization" },
+    }),
+    validRepositoryMetadata({
+      owner: { id: "1234567", login: "yabreu65", type: "User" },
+    }),
+  ]) {
+    assert.throws(() => validateRepositoryOwner(repository), /owner identity/);
+  }
+
+  const wrongAccount = validManualComment({
+    user: { id: OWNER_ID + 1, login: "yabreu65", type: "User" },
+  });
+  assert.throws(
+    () =>
+      validateManualAuthorization({
+        repository: validRepositoryMetadata(),
+        comment: wrongAccount,
+        commentId: MANUAL_COMMENT_ID,
+        attemptId: MANUAL_ATTEMPT,
+        now: MANUAL_NOW,
+      }),
+    /comment identity/,
+  );
+});
+
+test("rejects deleted comments, network failures, and incomplete GitHub responses", async () => {
+  const validValues = [
+    validRepositoryMetadata(),
+    validEvidence().ciRun,
+    validEvidence().issue,
+    validEvidence().pullRequest,
+    validManualComment(),
+  ];
+  let call = 0;
+  const deletedComment = async () => {
+    const current = call++;
+    return current === 4
+      ? { ok: false, status: 404, json: async () => ({}) }
+      : { ok: true, json: async () => validValues[current] };
+  };
+  await assert.rejects(
+    fetchManualEvidence({
+      token: "fixture-token",
+      commentId: MANUAL_COMMENT_ID,
+      attemptId: MANUAL_ATTEMPT,
+      fetchImpl: deletedComment,
+    }),
+    /evidence is unavailable/,
+  );
+
+  await assert.rejects(
+    fetchManualEvidence({
+      token: "fixture-token",
+      commentId: MANUAL_COMMENT_ID,
+      attemptId: MANUAL_ATTEMPT,
+      fetchImpl: async () => {
+        throw new Error("simulated network outage");
+      },
+    }),
+    /evidence request failed/,
+  );
+
+  const completeEvidence = new Map([
+    [
+      `https://api.github.com/repos/${PROD_017_RELEASE.repository}`,
+      validRepositoryMetadata(),
+    ],
+    [
+      `https://api.github.com/repos/${PROD_017_RELEASE.repository}/actions/runs/${PROD_017_RELEASE.ciRunId}`,
+      validEvidence().ciRun,
+    ],
+    [
+      `https://api.github.com/repos/${PROD_017_RELEASE.repository}/issues/${PROD_017_RELEASE.issueNumber}`,
+      validEvidence().issue,
+    ],
+    [
+      `https://api.github.com/repos/${PROD_017_RELEASE.repository}/pulls/${PROD_017_RELEASE.pullRequestNumber}`,
+      validEvidence().pullRequest,
+    ],
+    [
+      `https://api.github.com/repos/${PROD_017_RELEASE.repository}/issues/comments/${MANUAL_COMMENT_ID}`,
+      validManualComment(),
+    ],
+  ]);
+  await assert.rejects(
+    fetchManualEvidence({
+      token: "fixture-token",
+      commentId: MANUAL_COMMENT_ID,
+      attemptId: MANUAL_ATTEMPT,
+      fetchImpl: async (url) => ({
+        ok: true,
+        json: async () =>
+          url === `https://api.github.com/repos/${PROD_017_RELEASE.repository}`
+            ? undefined
+            : completeEvidence.get(url),
+      }),
+    }),
+    /owner identity/,
+  );
+
+  await assert.rejects(
+    fetchManualEvidence({
+      token: "fixture-token",
+      commentId: MANUAL_COMMENT_ID,
+      attemptId: MANUAL_ATTEMPT,
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => {
+          throw new Error("malformed response");
+        },
+      }),
+    }),
+    /response is malformed/,
   );
 });
 

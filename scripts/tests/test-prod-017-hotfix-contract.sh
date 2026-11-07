@@ -28,7 +28,13 @@ node --test "$NODE_TEST"
 
 workflow_dispatch_block=$(sed -n '/^on:/,/^[^[:space:]]/p' "$WORKFLOW")
 printf '%s\n' "$workflow_dispatch_block" | grep -Eq '^  workflow_dispatch:$' || fail 'hotfix workflow must be manual only'
-printf '%s\n' "$workflow_dispatch_block" | grep -Eq '^[[:space:]]+inputs:' && fail 'hotfix workflow must not expose caller-controlled release inputs'
+printf '%s\n' "$workflow_dispatch_block" | grep -Fq '      admission_mode:' || fail 'hotfix workflow must require an explicit admission mode'
+printf '%s\n' "$workflow_dispatch_block" | grep -Fq '          - gha' || fail 'hotfix workflow must preserve GHA admission mode'
+printf '%s\n' "$workflow_dispatch_block" | grep -Fq '          - manual' || fail 'hotfix workflow must expose only the fixed manual authorization mode'
+printf '%s\n' "$workflow_dispatch_block" | grep -Fq '      manual_attempt_id:' || fail 'manual path must receive its bound attempt ID'
+printf '%s\n' "$workflow_dispatch_block" | grep -Fq '      authorization_comment_id:' || fail 'manual path must receive the exact authorization comment ID'
+! printf '%s\n' "$workflow_dispatch_block" | grep -Eiq 'release_sha:|branch:|tag:|ci_run:|pull_request:|issue_number:' ||
+  fail 'hotfix workflow must not expose caller-controlled release or evidence selectors'
 grep -Fq "if: github.ref == 'refs/heads/main'" "$WORKFLOW" || fail 'hotfix jobs must execute only from main'
 grep -Fq 'node-version: 22.22.3' "$WORKFLOW" || fail 'admission workflow must pin Node 22.22.3'
 grep -Fq 'environment: production' "$WORKFLOW" || fail 'hotfix deploy must use the production approval Environment'
@@ -165,5 +171,135 @@ grep -Fq 'protection_rules=[]' "$RUNBOOK" || fail 'runbook must record the verif
 grep -Fq '**NO-GO**' "$RUNBOOK" || fail 'runbook must block use until Environment protection is configured and verified'
 grep -Fq 'fails closed' "$RUNBOOK" || fail 'runbook must require rejection when Environment APIs are unavailable'
 grep -Fq 'exactly one custom branch policy' "$RUNBOOK" || fail 'runbook must document exact main-only branch policy'
+
+for manual_expected in \
+  'COCINACORE-PROD-017-MANUAL-AUTHORIZATION-V1' \
+  'author_association !== "OWNER"' \
+  'yabreu65' \
+  'manual-api' \
+  'issues/comments/${commentId}' \
+  'manual-auth-${ATTEMPT_ID}' \
+  'manual authorization attempt was already reserved' \
+  'manual authorization attempt was already consumed' \
+  'manual rollback authorization identity mismatch' \
+  'MANUAL_AUTH_STATUS=CONSUMED'; do
+  if ! grep -Fq "$manual_expected" "$ADMISSION_SCRIPT" "$DEPLOY_SCRIPT"; then
+    grep -Fq "$manual_expected" "$WORKFLOW" || fail "manual authorization contract is missing: $manual_expected"
+  fi
+done
+grep -Fq 'prod-017-manual-preflight' "$DEPLOY_SCRIPT" || fail 'manual preflight mode is missing'
+grep -Fq 'prod-017-manual-deploy' "$DEPLOY_SCRIPT" || fail 'manual deploy mode is missing'
+grep -Fq 'unset GH_TOKEN' "$WORKFLOW" || fail 'manual token must be unset immediately after server-side validation'
+grep -Fq 'source /dev/stdin' "$WORKFLOW" || fail 'SSH bootstrap must keep the token out of exported environment and command arguments'
+remote_payload=$(sed -n "/cat <<'REMOTE_SCRIPT'/,/^[[:space:]]*REMOTE_SCRIPT/p" "$WORKFLOW")
+if printf '%s\n' "$remote_payload" | grep -Eq '^[[:space:]]*IFS= read -r (GH_TOKEN|RELEASE_SHA|TRUSTED_WORKFLOW_SHA|PRODUCTION_URL|ATTEMPT_ID|ADMISSION_MODE|AUTHORIZATION_COMMENT_ID|REMOTE_PHASE)'; then
+  fail 'remote payload must not consume SSH protocol headers after the bootstrap has already read them'
+fi
+grep -Fq 'GH_TOKEN="$GH_TOKEN" sh -s --' "$WORKFLOW" || fail 'manual token must be delivered only to the verifier invocation over SSH stdin'
+! grep -Fq 'export GH_TOKEN' "$WORKFLOW" || fail 'manual GitHub token must not be exported to the deploy shell environment'
+if ! grep -Fq 'run_remote manual-preflight' "$WORKFLOW" ||
+  ! grep -Fq 'run_remote manual-deploy' "$WORKFLOW"; then
+  fail 'manual preflight and deployment must use separate one-use SSH token streams'
+fi
+ssh_invocation=$(grep -F ' -i ~/.ssh/cocinacore_deploy_key "$VPS_USER@$VPS_HOST"' "$WORKFLOW" | head -n 1)
+! printf '%s\n' "$ssh_invocation" | grep -Fq '$GH_TOKEN' || fail 'manual GitHub token must not appear in SSH argv'
+grep -Fq 'The owner authorization is not an independent human review' "$RUNBOOK" ||
+  grep -Fq 'not an independent human review' "$RUNBOOK" || fail 'runbook must not claim independent review for the owner path'
+
+# Exercise the actual workflow deployment shell and remote bootstrap with fake SSH.
+# The fake validates the header, rejects a token in SSH argv, then replays the
+# actual bootstrap with a harmless payload instead of contacting a server.
+ssh_test_root=$(mktemp -d "${TMPDIR:-/tmp}/prod-017-fake-ssh.XXXXXXXX") || fail 'fake SSH test temp directory unavailable'
+trap 'rm -rf "$ssh_test_root"' EXIT HUP INT TERM
+mkdir "$ssh_test_root/bin"
+cat > "$ssh_test_root/bin/ssh" <<'EOF'
+#!/bin/sh
+remote_command=
+for arg in "$@"; do
+  remote_command=$arg
+  case "$arg" in
+    *"${EXPECTED_GH_TOKEN:-}"*)
+      [ -n "${EXPECTED_GH_TOKEN:-}" ] || continue
+      printf '%s\n' 'token value leaked into fake SSH argv' >&2
+      exit 91
+      ;;
+  esac
+done
+IFS= read -r received_token || exit 92
+[ "$received_token" = "${EXPECTED_GH_TOKEN:-}" ] || exit 93
+IFS= read -r received_release_sha || exit 92
+IFS= read -r received_workflow_sha || exit 92
+IFS= read -r received_production_url || exit 92
+IFS= read -r received_attempt_id || exit 92
+IFS= read -r received_mode || exit 92
+IFS= read -r received_comment_id || exit 92
+IFS= read -r received_phase || exit 92
+cat >/dev/null
+printf 'ssh-call\n' >> "$SSH_CALLS"
+{
+  printf '%s\n' "$received_token" "$received_release_sha" "$received_workflow_sha" "$received_production_url" "$received_attempt_id" "$received_mode" "$received_comment_id" "$received_phase"
+  cat <<'REMOTE_TEST_PAYLOAD'
+set -euo pipefail
+check_value() {
+  [ "$2" = "$3" ] || { printf 'remote bootstrap fixture mismatch: %s expected=<%s> actual=<%s>\n' "$1" "$2" "$3" >&2; exit 1; }
+}
+check_value release-sha d4a13a61cc0d24c4eda96a7baffaacfd0e47c191 "$RELEASE_SHA"
+check_value workflow-sha aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "$TRUSTED_WORKFLOW_SHA"
+check_value mode "${EXPECTED_ADMISSION_MODE:?}" "$ADMISSION_MODE"
+if [ "${EXPECTED_REMOTE_PHASE:?}" = manual ]; then
+  case "$REMOTE_PHASE" in
+    manual-preflight|manual-deploy) ;;
+    *) printf 'remote bootstrap fixture mismatch: phase <%s>\n' "$REMOTE_PHASE" >&2; exit 1 ;;
+  esac
+else
+  check_value phase "$EXPECTED_REMOTE_PHASE" "$REMOTE_PHASE"
+fi
+check_value attempt "${EXPECTED_ATTEMPT_ID:?}" "$ATTEMPT_ID"
+check_value comment-id "${EXPECTED_COMMENT_ID-}" "$AUTHORIZATION_COMMENT_ID"
+if [ "$ADMISSION_MODE" = manual ]; then
+  [ "$GH_TOKEN" = fixture_read_token ]
+else
+  [ -z "$GH_TOKEN" ]
+fi
+printf '%s\n' "$REMOTE_PHASE" >> "$REMOTE_BOOTSTRAP_TRACE"
+REMOTE_TEST_PAYLOAD
+} | bash -x -c "$remote_command" 2>"${SSH_DEBUG:?}" || {
+  cat "$SSH_DEBUG" >&2
+  exit 94
+}
+EOF
+chmod 700 "$ssh_test_root/bin/ssh"
+ruby -ryaml -e 'd=YAML.load_file(ARGV[0]); s=d.fetch("jobs").fetch("deploy-production").fetch("steps").find{|x| x["id"]=="deploy"}; print s.fetch("run")' "$WORKFLOW" > "$ssh_test_root/deploy-step.sh" || fail 'could not extract workflow deployment shell'
+PATH="$ssh_test_root/bin:$PATH" EXPECTED_GH_TOKEN='fixture_read_token' EXPECTED_ADMISSION_MODE=manual EXPECTED_REMOTE_PHASE=manual \
+  EXPECTED_ATTEMPT_ID=manual-20261107T020000Z-a1b2c3d4e5f60718 EXPECTED_COMMENT_ID=987654321 REMOTE_BOOTSTRAP_TRACE="$ssh_test_root/manual.bootstrap" \
+  SSH_DEBUG="$ssh_test_root/remote-bootstrap.debug" SSH_CALLS="$ssh_test_root/manual.calls" \
+  GH_TOKEN=fixture_read_token RELEASE_SHA=d4a13a61cc0d24c4eda96a7baffaacfd0e47c191 TRUSTED_WORKFLOW_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  PRODUCTION_URL=https://example.invalid VPS_HOST=example.invalid VPS_USER=deploy HOME="$ssh_test_root" \
+  ADMISSION_MODE=manual MANUAL_ATTEMPT_ID=manual-20261107T020000Z-a1b2c3d4e5f60718 AUTHORIZATION_COMMENT_ID=987654321 \
+  GITHUB_RUN_ID=123 GITHUB_RUN_ATTEMPT=1 bash "$ssh_test_root/deploy-step.sh" || fail 'manual workflow did not complete both fake SSH stages'
+[ "$(wc -l < "$ssh_test_root/manual.calls" | tr -d ' ')" = 2 ] || fail 'manual workflow must open separate fake SSH sessions for preflight and deploy'
+PATH="$ssh_test_root/bin:$PATH" EXPECTED_GH_TOKEN='' EXPECTED_ADMISSION_MODE=gha EXPECTED_REMOTE_PHASE=gha \
+  EXPECTED_ATTEMPT_ID=gha-123-1 EXPECTED_COMMENT_ID='' REMOTE_BOOTSTRAP_TRACE="$ssh_test_root/gha.bootstrap" \
+  SSH_DEBUG="$ssh_test_root/remote-bootstrap.debug" SSH_CALLS="$ssh_test_root/gha.calls" \
+  GH_TOKEN=fixture_read_token RELEASE_SHA=d4a13a61cc0d24c4eda96a7baffaacfd0e47c191 TRUSTED_WORKFLOW_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  PRODUCTION_URL=https://example.invalid VPS_HOST=example.invalid VPS_USER=deploy HOME="$ssh_test_root" \
+  ADMISSION_MODE=gha MANUAL_ATTEMPT_ID='' AUTHORIZATION_COMMENT_ID='' GITHUB_RUN_ID=123 GITHUB_RUN_ATTEMPT=1 \
+  bash "$ssh_test_root/deploy-step.sh" || fail 'GHA workflow did not complete its fake SSH session'
+[ "$(wc -l < "$ssh_test_root/gha.calls" | tr -d ' ')" = 1 ] || fail 'GHA mode must preserve its single SSH deployment session'
+[ "$(wc -l < "$ssh_test_root/manual.bootstrap" | tr -d ' ')" = 2 ] || {
+  printf 'manual bootstrap trace: <%s>\n' "$(cat "$ssh_test_root/manual.bootstrap" 2>/dev/null || true)" >&2
+  fail 'manual remote bootstrap did not execute both safe payloads'
+}
+[ "$(cat "$ssh_test_root/manual.bootstrap")" = "manual-preflight
+manual-deploy" ] || fail 'manual remote bootstrap received incorrect phase values'
+[ "$(cat "$ssh_test_root/gha.bootstrap")" = gha ] || fail 'GHA remote bootstrap received incorrect phase value'
+if PATH="$ssh_test_root/bin:$PATH" EXPECTED_GH_TOKEN='fixture_read_token' SSH_CALLS="$ssh_test_root/newline.calls" \
+  GH_TOKEN=fixture_read_token RELEASE_SHA=d4a13a61cc0d24c4eda96a7baffaacfd0e47c191 TRUSTED_WORKFLOW_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  PRODUCTION_URL="$(printf 'https://example.invalid\nbroken')" VPS_HOST=example.invalid VPS_USER=deploy HOME="$ssh_test_root" \
+  ADMISSION_MODE=manual MANUAL_ATTEMPT_ID=manual-20261107T020000Z-a1b2c3d4e5f60718 AUTHORIZATION_COMMENT_ID=987654321 \
+  GITHUB_RUN_ID=123 GITHUB_RUN_ATTEMPT=1 bash "$ssh_test_root/deploy-step.sh" >/dev/null 2>&1; then
+  fail 'line-broken production URL reached fake SSH'
+fi
+[ ! -e "$ssh_test_root/newline.calls" ] || fail 'newline in production URL entered the SSH line protocol'
 
 printf '%s\n' 'PROD_017_HOTFIX_CONTRACT_OK'

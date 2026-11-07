@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 SCRIPT="$ROOT/scripts/deploy-pawtech-production.sh"
 BACKUP_VERIFIER="$ROOT/scripts/verify-pawtech-cocinacore-daily-backup.sh"
 WORKFLOW="$ROOT/.github/workflows/deploy.yml"
@@ -55,7 +55,20 @@ grep -Fq 'npm run db:migrate:verify' "$SCRIPT" || fail 'read-only migration veri
 grep -Fq "log 'MIGRATION_EXPECTATION=NO_OP'" "$SCRIPT" || fail 'no-op migration expectation is not emitted after verification'
 grep -Fq 'DATABASE_CHANGED=NO' "$SCRIPT" || fail 'database must remain unchanged'
 grep -Fq "log 'DATABASE_CHANGED=NO'" "$SCRIPT" || fail 'successful read-only verify must explicitly report unchanged database'
-grep -Fq "grep -Eq '^gha-[0-9]{1,20}-[0-9]{1,6}$'" "$SCRIPT" || fail 'deployment attempt ID must be bounded and validated'
+grep -Fq "grep -Eq '^gha-[0-9]{1,20}-[0-9]{1,6}$'" "$SCRIPT" || fail 'GitHub Actions attempt ID must remain bounded and validated'
+grep -Fq "grep -Eq '^manual-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}$'" "$SCRIPT" || fail 'manual attempt ID must use its separate strict format'
+grep -Fq "grep -Eq '^(gha-[0-9]{1,20}-[0-9]{1,6}|manual-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16})$'" "$SCRIPT" || fail 'rollback must accept only a valid GHA or manual attempt ID'
+manual_auth_call_line=$(grep -nF '    fetch_manual_authorization' "$SCRIPT" | cut -d: -f1)
+runtime_env_read_line=$(grep -nF '[ -s "$RUNTIME_ENV_FILE" ]' "$SCRIPT" | cut -d: -f1)
+docker_network_read_line=$(grep -nF 'docker network inspect "$network"' "$SCRIPT" | tail -n 1 | cut -d: -f1)
+[ -n "$manual_auth_call_line" ] && [ -n "$runtime_env_read_line" ] && [ -n "$docker_network_read_line" ] &&
+  [ "$manual_auth_call_line" -lt "$runtime_env_read_line" ] && [ "$manual_auth_call_line" -lt "$docker_network_read_line" ] ||
+  fail 'manual GitHub authorization must be verified before production config/Docker reads'
+manual_fingerprint_compare_line=$(grep -nF '[ "$MANUAL_AUTH_FINGERPRINT" != "$verified_fingerprint" ]' "$SCRIPT" | cut -d: -f1)
+manual_consumed_write_line=$(grep -nF "printf 'STATUS=CONSUMED\\n'" "$SCRIPT" | cut -d: -f1)
+[ -n "$manual_fingerprint_compare_line" ] && [ -n "$manual_consumed_write_line" ] &&
+  [ "$manual_fingerprint_compare_line" -lt "$manual_consumed_write_line" ] ||
+  fail 'manual deploy must compare live owner authorization fingerprint to its reservation before consuming'
 grep -Fq 'chmod 600 "$DEPLOY_STATE_FILE"' "$SCRIPT" || fail 'pre-cutover state record must be private'
 grep -Fq 'if [ "$MODE" = '\''rollback'\'' ]; then' "$SCRIPT" || fail 'rollback-only mode branch is missing'
 rollback_dispatch_line=$(grep -nF 'if [ "$MODE" = '\''rollback'\'' ]; then' "$SCRIPT" | head -n 1 | cut -d: -f1)
@@ -205,7 +218,7 @@ preflight_section=$(sed -n "${preflight_start_line},${preflight_exit_line}p" "$S
 ! printf '%s\n' "$preflight_section" | grep -Eq 'trap[[:space:]]+cleanup|mkdir|chmod|chown|docker (rm|run|build|stop|start|rename|network connect)|mktemp|flock|git archive|tar -xf|git checkout|git reset|git clean|touch|install' ||
   fail 'preflight must not install cleanup or perform deploy/worktree mutations'
 command_check_line=$(grep -nF 'for tool in $required_tools' "$SCRIPT" | cut -d: -f1)
-sha_check_line=$(grep -nF "grep -Eq '^[0-9a-f]{40}$'" "$SCRIPT" | head -n 1 | cut -d: -f1)
+sha_check_line=$(grep -nF "printf '%s' \"\$RELEASE_SHA\" | grep -Eq '^[0-9a-f]{40}$'" "$SCRIPT" | head -n 1 | cut -d: -f1)
 [ -n "$command_check_line" ] && [ -n "$sha_check_line" ] && [ "$command_check_line" -lt "$sha_check_line" ] ||
   fail 'required commands must be checked before preflight uses them'
 grep -Fq 's3)' "$SCRIPT" || fail 'S3 storage mode is missing'
@@ -229,18 +242,18 @@ permissions_block=$(awk '
 grep -Fq 'VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}' "$WORKFLOW" ||
   fail 'SSH known_hosts must come from the production Environment secret'
 grep -Fq 'VPS_SSH_KNOWN_HOSTS' "$WORKFLOW" || fail 'required trusted SSH known_hosts secret is missing'
-grep -Fq '[[ -z "${VPS_SSH_KNOWN_HOSTS//[[:space:]]/}" ]]' "$WORKFLOW" ||
+grep -Fq "[[ -z \"\${VPS_SSH_KNOWN_HOSTS//[[:space:]]/}\" ]]" "$WORKFLOW" ||
   fail 'empty or whitespace-only known_hosts secret must fail closed'
 grep -Fq 'VPS_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts' "$WORKFLOW" ||
   fail 'trusted known_hosts secret must be written to the known_hosts file'
 grep -Fq 'chmod 600 ~/.ssh/known_hosts' "$WORKFLOW" || fail 'known_hosts file must be private'
-grep -Fq 'ssh-keygen -F "$VPS_HOST" -f ~/.ssh/known_hosts' "$WORKFLOW" ||
+grep -Fq "ssh-keygen -F \"\$VPS_HOST\" -f ~/.ssh/known_hosts" "$WORKFLOW" ||
   fail 'configured known_hosts must be checked for VPS_HOST'
 ! grep -Fq 'ssh-keyscan' "$WORKFLOW" || fail 'ssh-keyscan must not establish host trust'
 grep -Fq 'StrictHostKeyChecking=yes' "$WORKFLOW" || fail 'SSH host key checking must be strict'
 ssh_command_count=$(grep -Fc 'ssh -o StrictHostKeyChecking=yes' "$WORKFLOW")
 [ "$ssh_command_count" -eq 2 ] || fail 'deploy and rollback must both use strict SSH host verification'
-ssh_trust_options_count=$(grep -Fc 'ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null' "$WORKFLOW")
+ssh_trust_options_count=$(grep -Fc "ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=\"\$HOME/.ssh/known_hosts\" -o GlobalKnownHostsFile=/dev/null" "$WORKFLOW")
 [ "$ssh_trust_options_count" -eq 2 ] || fail 'deploy and rollback must use only the configured known_hosts trust source'
 grep -Fq 'deploy-pawtech-production.sh' "$WORKFLOW" || fail 'workflow does not call PawTech deploy script'
 grep -Fq '/opt/pawtech/env/cocinacore.env' "$WORKFLOW" || fail 'workflow runtime env path mismatch'
@@ -256,5 +269,164 @@ for inspected in "$SCRIPT" "$WORKFLOW"; do
   ! grep -Eq '(^|[;&|])[[:space:]]*(env|printenv)[[:space:]]|\.Config\.Env|cat[^[:cntrl:]]*RUNTIME_ENV_FILE|source[^[:cntrl:]]*RUNTIME_ENV_FILE|^[[:space:]]*\.[[:space:]].*RUNTIME_ENV_FILE|(echo|printf)[[:space:]].*(DATABASE_URL|REDIS_URL|AUTH_SECRET|GEMINI_API_KEY|S3_SECRET_ACCESS_KEY)' "$inspected" ||
     fail 'deploy implementation may expose runtime environment values'
 done
+grep -Fq "MANUAL_GITHUB_TOKEN=\$manual_auth_input_token" "$SCRIPT" || fail 'manual token must be captured in the isolated shell variable'
+! grep -Fq 'export MANUAL_GITHUB_TOKEN' "$SCRIPT" || fail 'manual token must never be exported to child commands'
+manual_token_capture_line=$(grep -n "^    manual_auth_input_token=\${GH_TOKEN:-}" "$SCRIPT" | cut -d: -f1)
+candidate_validation_line=$(grep -n '^    validate_prod017_hotfix_candidate$' "$SCRIPT" | tail -n 1 | cut -d: -f1)
+[ -n "$manual_token_capture_line" ] && [ -n "$candidate_validation_line" ] &&
+  [ "$manual_token_capture_line" -lt "$candidate_validation_line" ] ||
+  fail 'manual token must be removed from the environment before any candidate child process'
+
+# Exercise one-use authorization state and rollback identity using only temporary local files.
+# The extracted functions do not invoke SSH, Docker, PostgreSQL, or GitHub.
+manual_test_root=$(mktemp -d "${TMPDIR:-/tmp}/prod-017-manual-state-test.XXXXXXXX") || fail 'manual test temp directory unavailable'
+manual_test_root=$(cd "$manual_test_root" && pwd -P) || fail 'manual test temp directory path unavailable'
+trap 'rm -rf "$manual_test_root"' EXIT HUP INT TERM
+chmod 700 "$manual_test_root"
+manual_lock="$manual_test_root/deploy.lock"
+manual_functions=$(sed -n '/^assert_manual_state_root()/,/^}/p; /^reserve_manual_authorization()/,/^}/p; /^consume_manual_authorization()/,/^}/p; /^revalidate_manual_authorization_before_cutover()/,/^}/p; /^rollback_fail()/,/^}/p; /^rollback_mode()/,/^}/p' "$SCRIPT" | sed "s|/tmp/cocinacore-production-deploy.lock|$manual_lock|g")
+[ -n "$manual_functions" ] || fail 'manual authorization functions could not be extracted for isolated tests'
+printf '%s\n' "$manual_functions" > "$manual_test_root/functions.sh"
+cat > "$manual_test_root/driver.sh" <<'EOF'
+#!/bin/sh
+set -eu
+fail() { printf 'TEST_FAIL:%s\n' "$*" >&2; exit 1; }
+log() { :; }
+docker() { printf 'docker-called\n' >> "$DOCKER_TRACE"; return 1; }
+MANUAL_AUTH_COMMENT_ID_FROM_API=${MANUAL_AUTH_COMMENT_ID:-}
+MANUAL_GITHUB_TOKEN=fixture-manual-token
+flock() { [ "${FLOCK_FAIL:-0}" = 0 ]; }
+realpath() { node -e 'process.stdout.write(require("node:fs").realpathSync(process.argv[1]))' "${2:-$1}"; }
+stat() {
+  case "${2:-}" in
+    %a) node -e 'process.stdout.write((require("node:fs").statSync(process.argv[1]).mode & 0o777).toString(8))' "$3" ;;
+    %u) node -e 'process.stdout.write(String(require("node:fs").statSync(process.argv[1]).uid))' "$3" ;;
+    *) command stat "$@" ;;
+  esac
+}
+date() {
+  if [ "${1:-}" = -u ] && [ "${2:-}" = -d ]; then
+    node -e 'const d = new Date(process.argv[1]); if (!Number.isFinite(d.getTime())) process.exit(1); process.stdout.write(String(Math.floor(d.getTime()/1000)))' "$3"
+  elif [ "${1:-}" = -u ] && [ "${2:-}" = +%s ]; then
+    node -e 'process.stdout.write(String(Math.floor(Date.now()/1000)))'
+  else
+    command date "$@"
+  fi
+}
+. "$FUNCTIONS_FILE"
+case "$TEST_MODE" in
+  reserve) reserve_manual_authorization ;;
+  consume) consume_manual_authorization ;;
+  final-check)
+    fetch_manual_authorization() {
+      MANUAL_AUTH_COMMENT_ID_FROM_API=${FINAL_COMMENT_ID:-$MANUAL_AUTH_COMMENT_ID_FROM_API}
+      MANUAL_AUTHORIZER=${FINAL_AUTHORIZER:-$MANUAL_AUTHORIZER}
+      MANUAL_AUTH_EXPIRES_AT=${FINAL_EXPIRY:-$MANUAL_AUTH_EXPIRES_AT}
+      MANUAL_AUTH_FINGERPRINT=${FINAL_FINGERPRINT:-$MANUAL_AUTH_FINGERPRINT}
+    }
+    revalidate_manual_authorization_before_cutover
+    [ -z "${MANUAL_GITHUB_TOKEN:-}" ] || fail 'manual API token was not cleared after final revalidation'
+    [ -z "${GH_TOKEN:-}" ] || fail 'manual GH_TOKEN was not cleared after final revalidation'
+    if export -p | grep -q 'MANUAL_GITHUB_TOKEN'; then
+      fail 'manual API token was exported to child processes'
+    fi
+    ;;
+  rollback) rollback_mode ;;
+  *) fail 'unknown test mode' ;;
+esac
+EOF
+chmod 700 "$manual_test_root/driver.sh"
+manual_attempt="manual-$(date -u +%Y%m%dT%H%M%SZ)-a1b2c3d4e5f60718"
+manual_expiry=$(node -e 'process.stdout.write(new Date(Math.floor((Date.now()+3600000)/1000)*1000).toISOString().replace(".000Z","Z"))') || fail 'local UTC clock fixture unavailable'
+run_manual_driver() {
+  run_mode=$1
+  run_attempt=${2:-$manual_attempt}
+  run_fingerprint=${3:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}
+  run_expiry=${4:-$manual_expiry}
+  run_comment_id=${5:-987654321}
+  run_backup_root=${6:-$manual_test_root}
+  run_flock_fail=${7:-0}
+  env \
+    "FUNCTIONS_FILE=$manual_test_root/functions.sh" \
+    "MANUAL_BACKUP_ROOT=$run_backup_root" \
+    "RELEASE_SHA=d4a13a61cc0d24c4eda96a7baffaacfd0e47c191" \
+    "ATTEMPT_ID=$run_attempt" \
+    "MANUAL_AUTH_COMMENT_ID=$run_comment_id" \
+    "MANUAL_AUTHORIZER=yabreu65" \
+    "MANUAL_AUTH_EXPIRES_AT=$run_expiry" \
+    "MANUAL_AUTH_FINGERPRINT=$run_fingerprint" \
+    "DOCKER_TRACE=$manual_test_root/docker.trace" \
+    "FLOCK_FAIL=$run_flock_fail" \
+    "TEST_MODE=$run_mode" \
+    sh "$manual_test_root/driver.sh"
+}
+run_manual_driver reserve || fail 'valid manual authorization reservation failed'
+reserved_mode=$(node -e 'process.stdout.write((require("node:fs").statSync(process.argv[1]).mode & 0o777).toString(8))' "$manual_test_root/manual-auth-$manual_attempt.state")
+[ "$reserved_mode" = 600 ] || fail 'reserved authorization must be mode 0600'
+if run_manual_driver reserve >/dev/null 2>&1; then
+  fail 'manual attempt replay was reserved twice'
+fi
+if run_manual_driver consume "$manual_attempt" cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc >/dev/null 2>&1; then
+  fail 'manual deploy accepted a changed live comment fingerprint'
+fi
+changed_expiry=$(node -e 'process.stdout.write(new Date(Math.floor((Date.now()+7200000)/1000)*1000).toISOString().replace(".000Z","Z"))')
+if run_manual_driver consume "$manual_attempt" aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "$changed_expiry" >/dev/null 2>&1; then
+  fail 'manual deploy accepted a changed live authorization expiry'
+fi
+run_manual_driver consume || fail 'matching manual authorization could not be consumed'
+consumed_mode=$(node -e 'process.stdout.write((require("node:fs").statSync(process.argv[1]).mode & 0o777).toString(8))' "$manual_test_root/manual-auth-$manual_attempt.consumed")
+[ "$consumed_mode" = 600 ] || fail 'consumed authorization must be mode 0600'
+if run_manual_driver consume "$manual_attempt" aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "$manual_expiry" 123 >/dev/null 2>&1; then
+  fail 'manual authorization accepted a different comment identity'
+fi
+if run_manual_driver consume >/dev/null 2>&1; then
+  fail 'manual authorization consumption was replayable'
+fi
+
+absent_root="$manual_test_root/absent"
+mkdir "$absent_root"
+chmod 700 "$absent_root"
+if run_manual_driver consume "$manual_attempt" aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "$manual_expiry" 987654321 "$absent_root" >/dev/null 2>&1; then
+  fail 'manual deploy accepted a missing authorization reservation'
+fi
+
+tampered_attempt="manual-$(date -u +%Y%m%dT%H%M%SZ)-bbbbbbbbbbbbbbbb"
+run_manual_driver reserve "$tampered_attempt" bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb || fail 'second valid manual authorization reservation failed'
+sed -i.bak 's/COMMENT_ID=987654321/COMMENT_ID=987654322/' "$manual_test_root/manual-auth-$tampered_attempt.state"
+rm -f "$manual_test_root/manual-auth-$tampered_attempt.state.bak"
+if run_manual_driver consume "$tampered_attempt" bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb >/dev/null 2>&1; then
+  fail 'manual deploy accepted an altered authorization reservation'
+fi
+if run_manual_driver reserve "$manual_attempt" aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "$manual_expiry" 987654321 "$manual_test_root" 1 >/dev/null 2>&1; then
+  fail 'manual preflight ignored a held deployment lock'
+fi
+run_manual_driver final-check || fail 'matching final authorization revalidation failed'
+if FINAL_FINGERPRINT=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc \
+  run_manual_driver final-check >/dev/null 2>&1; then
+  fail 'cutover accepted a changed owner authorization fingerprint'
+fi
+
+final_revalidation_line=$(grep -n '^  revalidate_manual_authorization_before_cutover$' "$SCRIPT" | tail -n 1 | cut -d: -f1)
+state_write_line=$(grep -n '^DEPLOY_STATE_FILE=' "$SCRIPT" | tail -n 1 | cut -d: -f1)
+[ -n "$final_revalidation_line" ] && [ -n "$state_write_line" ] &&
+  [ "$final_revalidation_line" -lt "$state_write_line" ] ||
+  fail 'manual owner authorization is not revalidated immediately before cutover state'
+
+rollback_attempt=$manual_attempt
+cat > "$manual_test_root/deploy-state-$rollback_attempt.state" <<EOF
+RELEASE_SHA=d4a13a61cc0d24c4eda96a7baffaacfd0e47c191
+IMAGE=cocinacore:deploy-d4a13a61cc0d24c4eda96a7baffaacfd0e47c191
+PREVIOUS_CONTAINER=cocinacore-web-pre-ad99d502-20261107T020000Z
+PREVIOUS_ID=$(printf '%064d' 1)
+PREVIOUS_IMAGE=cocinacore:deploy-ad99d502ff19d7bb154c04c24697d2a43c1b17e8
+BACKUP_VERIFICATION=DAILY_BACKUP_VERIFIED
+DATABASE_CHANGED=NO
+DEPLOY_STATE_ATTEMPT=manual-20261107T020000Z-1111111111111111
+EOF
+chmod 600 "$manual_test_root/deploy-state-$rollback_attempt.state"
+if env FUNCTIONS_FILE="$manual_test_root/functions.sh" MANUAL_BACKUP_ROOT="$manual_test_root" RELEASE_SHA=d4a13a61cc0d24c4eda96a7baffaacfd0e47c191 ATTEMPT_ID="$rollback_attempt" DOCKER_TRACE="$manual_test_root/docker.trace" TEST_MODE=rollback sh "$manual_test_root/driver.sh" >/dev/null 2>&1; then
+  fail 'rollback accepted a state record bound to a different attempt ID'
+fi
+[ ! -e "$manual_test_root/docker.trace" ] || fail 'wrong-identity rollback reached Docker'
 
 printf '%s\n' 'pawtech production deploy contract passed'

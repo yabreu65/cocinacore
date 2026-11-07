@@ -2,6 +2,23 @@ name: Deploy isolated production-017 security hotfix
 
 on:
   workflow_dispatch:
+    inputs:
+      admission_mode:
+        description: Use the existing protected GitHub gate or owner-authorized manual record
+        type: choice
+        options:
+          - gha
+          - manual
+        default: gha
+        required: true
+      manual_attempt_id:
+        description: Required only for manual mode; must exactly match the owner authorization comment
+        type: string
+        required: false
+      authorization_comment_id:
+        description: Required only for manual mode; Issue 92 comment authored by the repository owner
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -50,10 +67,31 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Validate pinned GitHub evidence and release contents
+      - name: Validate fixed release and selected authorization mode
         env:
           GH_TOKEN: ${{ github.token }}
-        run: sh scripts/validate-prod-017-hotfix.sh "$GITHUB_WORKSPACE/release-candidate"
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          ADMISSION_MODE: ${{ inputs.admission_mode }}
+          MANUAL_ATTEMPT_ID: ${{ inputs.manual_attempt_id }}
+          AUTHORIZATION_COMMENT_ID: ${{ inputs.authorization_comment_id }}
+        run: |
+          set -euo pipefail
+          case "$ADMISSION_MODE" in
+            gha)
+              test -z "$MANUAL_ATTEMPT_ID"
+              test -z "$AUTHORIZATION_COMMENT_ID"
+              sh scripts/validate-prod-017-hotfix.sh "$GITHUB_WORKSPACE/release-candidate"
+              ;;
+            manual)
+              test -n "$MANUAL_ATTEMPT_ID"
+              test -n "$AUTHORIZATION_COMMENT_ID"
+              sh scripts/validate-prod-017-hotfix.sh "$GITHUB_WORKSPACE/release-candidate" manual "$AUTHORIZATION_COMMENT_ID" "$MANUAL_ATTEMPT_ID"
+              ;;
+            *)
+              echo "Unsupported admission mode." >&2
+              exit 1
+              ;;
+          esac
 
       - name: Run fixed-candidate admission contract
         run: sh scripts/tests/test-prod-017-hotfix-contract.sh
@@ -86,10 +124,31 @@ jobs:
         with:
           node-version: 22.22.3
 
-      - name: Revalidate all fixed admission evidence after approval
+      - name: Revalidate fixed release authorization before SSH
         env:
           GH_TOKEN: ${{ github.token }}
-        run: sh scripts/validate-prod-017-hotfix.sh "$GITHUB_WORKSPACE/release-candidate"
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          ADMISSION_MODE: ${{ inputs.admission_mode }}
+          MANUAL_ATTEMPT_ID: ${{ inputs.manual_attempt_id }}
+          AUTHORIZATION_COMMENT_ID: ${{ inputs.authorization_comment_id }}
+        run: |
+          set -euo pipefail
+          case "$ADMISSION_MODE" in
+            gha)
+              test -z "$MANUAL_ATTEMPT_ID"
+              test -z "$AUTHORIZATION_COMMENT_ID"
+              sh scripts/validate-prod-017-hotfix.sh "$GITHUB_WORKSPACE/release-candidate"
+              ;;
+            manual)
+              test -n "$MANUAL_ATTEMPT_ID"
+              test -n "$AUTHORIZATION_COMMENT_ID"
+              sh scripts/validate-prod-017-hotfix.sh "$GITHUB_WORKSPACE/release-candidate" manual "$AUTHORIZATION_COMMENT_ID" "$MANUAL_ATTEMPT_ID"
+              ;;
+            *)
+              echo "Unsupported admission mode." >&2
+              exit 1
+              ;;
+          esac
 
       - name: Configure SSH
         env:
@@ -112,27 +171,58 @@ jobs:
             exit 1
           fi
 
-      - name: Deploy on VPS using trusted main script and fixed candidate source
+      - name: Deploy on VPS with fixed candidate and selected one-use admission
         id: deploy
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: d4a13a61cc0d24c4eda96a7baffaacfd0e47c191
           TRUSTED_WORKFLOW_SHA: ${{ github.sha }}
           PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
-          ATTEMPT_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
+          ADMISSION_MODE: ${{ inputs.admission_mode }}
+          MANUAL_ATTEMPT_ID: ${{ inputs.manual_attempt_id }}
+          AUTHORIZATION_COMMENT_ID: ${{ inputs.authorization_comment_id }}
         run: |
           set -euo pipefail
-          VPS_APP_DIR=/opt/pawtech/apps/cocinacore
-          printf -v remote_args '%q ' "$RELEASE_SHA" "$TRUSTED_WORKFLOW_SHA" "$PRODUCTION_URL" "$ATTEMPT_ID"
-          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
-            -i ~/.ssh/cocinacore_deploy_key "$VPS_USER@$VPS_HOST" \
-            "bash -s -- $remote_args" <<'REMOTE_SCRIPT'
+          run_remote() {
+            REMOTE_PHASE=$1
+            case "$ADMISSION_MODE" in
+              manual)
+                ATTEMPT_ID=$MANUAL_ATTEMPT_ID
+                REMOTE_GH_TOKEN=$GH_TOKEN
+                REMOTE_ADMISSION_MODE=manual
+                REMOTE_COMMENT_ID=$AUTHORIZATION_COMMENT_ID
+                ;;
+              gha)
+                ATTEMPT_ID=gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}
+                REMOTE_GH_TOKEN=
+                REMOTE_ADMISSION_MODE=gha
+                REMOTE_COMMENT_ID=
+                ;;
+              *) echo "Unsupported admission mode." >&2; return 1 ;;
+            esac
+            [[ "$RELEASE_SHA" == d4a13a61cc0d24c4eda96a7baffaacfd0e47c191 ]]
+            [[ "$TRUSTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]
+            if [[ "$PRODUCTION_URL" == *$'\n'* || "$PRODUCTION_URL" == *$'\r'* ]]; then
+              echo "Production URL contains a forbidden line break." >&2
+              return 1
+            fi
+            if [[ "$REMOTE_ADMISSION_MODE" == manual ]]; then
+              [[ "$ATTEMPT_ID" =~ ^manual-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}$ ]]
+              [[ "$REMOTE_COMMENT_ID" =~ ^[0-9]{1,20}$ ]]
+              [[ -n "$REMOTE_GH_TOKEN" && "$REMOTE_GH_TOKEN" != *$'\n'* && "$REMOTE_GH_TOKEN" != *$'\r'* ]]
+            else
+              [[ "$REMOTE_PHASE" == gha ]]
+              [[ "$ATTEMPT_ID" =~ ^gha-[0-9]{1,20}-[0-9]{1,6}$ ]]
+              [[ -z "$REMOTE_COMMENT_ID" && -z "$REMOTE_GH_TOKEN" ]]
+            fi
+            {
+              printf '%s\n' "$REMOTE_GH_TOKEN" "$RELEASE_SHA" "$TRUSTED_WORKFLOW_SHA" "$PRODUCTION_URL" "$ATTEMPT_ID" "$REMOTE_ADMISSION_MODE" "$REMOTE_COMMENT_ID" "$REMOTE_PHASE"
+              cat <<'REMOTE_SCRIPT'
           set -euo pipefail
-          RELEASE_SHA=$1
-          TRUSTED_WORKFLOW_SHA=$2
-          PRODUCTION_URL=$3
-          ATTEMPT_ID=$4
+          export RELEASE_SHA TRUSTED_WORKFLOW_SHA PRODUCTION_URL ATTEMPT_ID ADMISSION_MODE AUTHORIZATION_COMMENT_ID
+          case "$ADMISSION_MODE" in manual|gha) ;; *) echo "Unsupported admission mode." >&2; exit 1 ;; esac
           VPS_APP_DIR=/opt/pawtech/apps/cocinacore
           RUNTIME_ENV_FILE=/opt/pawtech/env/cocinacore.env
 
@@ -151,9 +241,38 @@ jobs:
             exit 1
           fi
 
-          git show "$TRUSTED_WORKFLOW_SHA:scripts/deploy-pawtech-production.sh" | sh -s -- "$RELEASE_SHA" "$RUNTIME_ENV_FILE" "$PRODUCTION_URL" prod-017-hotfix-preflight "$ATTEMPT_ID"
-          git show "$TRUSTED_WORKFLOW_SHA:scripts/deploy-pawtech-production.sh" | sh -s -- "$RELEASE_SHA" "$RUNTIME_ENV_FILE" "$PRODUCTION_URL" prod-017-hotfix-deploy "$ATTEMPT_ID"
+          if [[ "$ADMISSION_MODE" == manual ]]; then
+            [[ "$ATTEMPT_ID" =~ ^manual-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}$ ]]
+            [[ "$AUTHORIZATION_COMMENT_ID" =~ ^[0-9]{1,20}$ ]]
+            [[ -n "$GH_TOKEN" ]]
+            case "$REMOTE_PHASE" in
+              manual-preflight|manual-deploy) ;;
+              *) echo "Unsupported manual deployment phase." >&2; exit 1 ;;
+            esac
+            manual_mode=prod-017-$REMOTE_PHASE
+            git show "$TRUSTED_WORKFLOW_SHA:scripts/deploy-pawtech-production.sh" | GH_TOKEN="$GH_TOKEN" sh -s -- "$RELEASE_SHA" "$RUNTIME_ENV_FILE" "$PRODUCTION_URL" "$manual_mode" "$ATTEMPT_ID" "$AUTHORIZATION_COMMENT_ID" "$TRUSTED_WORKFLOW_SHA"
+            unset GH_TOKEN
+          else
+            [[ "$REMOTE_PHASE" == gha ]]
+            [[ -z "$GH_TOKEN" ]]
+            [[ "$ATTEMPT_ID" =~ ^gha-[0-9]{1,20}-[0-9]{1,6}$ ]]
+            [[ -z "$AUTHORIZATION_COMMENT_ID" ]]
+            git show "$TRUSTED_WORKFLOW_SHA:scripts/deploy-pawtech-production.sh" | sh -s -- "$RELEASE_SHA" "$RUNTIME_ENV_FILE" "$PRODUCTION_URL" prod-017-hotfix-preflight "$ATTEMPT_ID"
+            git show "$TRUSTED_WORKFLOW_SHA:scripts/deploy-pawtech-production.sh" | sh -s -- "$RELEASE_SHA" "$RUNTIME_ENV_FILE" "$PRODUCTION_URL" prod-017-hotfix-deploy "$ATTEMPT_ID"
+          fi
           REMOTE_SCRIPT
+            } | ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+              -i ~/.ssh/cocinacore_deploy_key "$VPS_USER@$VPS_HOST" \
+              "bash -c 'IFS= read -r GH_TOKEN || exit 1; IFS= read -r RELEASE_SHA || exit 1; IFS= read -r TRUSTED_WORKFLOW_SHA || exit 1; IFS= read -r PRODUCTION_URL || exit 1; IFS= read -r ATTEMPT_ID || exit 1; IFS= read -r ADMISSION_MODE || exit 1; IFS= read -r AUTHORIZATION_COMMENT_ID || exit 1; IFS= read -r REMOTE_PHASE || exit 1; export RELEASE_SHA TRUSTED_WORKFLOW_SHA PRODUCTION_URL ATTEMPT_ID ADMISSION_MODE AUTHORIZATION_COMMENT_ID REMOTE_PHASE; source /dev/stdin'"
+          }
+          case "$ADMISSION_MODE" in
+            manual)
+              run_remote manual-preflight
+              run_remote manual-deploy
+              ;;
+            gha) run_remote gha ;;
+            *) echo "Unsupported admission mode." >&2; exit 1 ;;
+          esac
 
       - name: Production smoke check
         id: public-smoke
@@ -171,21 +290,27 @@ jobs:
           RELEASE_SHA: d4a13a61cc0d24c4eda96a7baffaacfd0e47c191
           TRUSTED_WORKFLOW_SHA: ${{ github.sha }}
           PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
-          ATTEMPT_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
+          ADMISSION_MODE: ${{ inputs.admission_mode }}
+          MANUAL_ATTEMPT_ID: ${{ inputs.manual_attempt_id }}
         run: |
           set -euo pipefail
           RUNTIME_ENV_FILE=/opt/pawtech/env/cocinacore.env
-          printf -v remote_args '%q ' "$RELEASE_SHA" "$TRUSTED_WORKFLOW_SHA" "$RUNTIME_ENV_FILE" "$PRODUCTION_URL" rollback "$ATTEMPT_ID"
+          if [[ "$ADMISSION_MODE" == manual ]]; then
+            ATTEMPT_ID=$MANUAL_ATTEMPT_ID
+          else
+            ATTEMPT_ID=gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}
+          fi
+          printf -v remote_args '%q ' "$RELEASE_SHA" "$RUNTIME_ENV_FILE" "$PRODUCTION_URL" rollback "$ATTEMPT_ID" "$TRUSTED_WORKFLOW_SHA"
           ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
             -i ~/.ssh/cocinacore_deploy_key "$VPS_USER@$VPS_HOST" \
             "bash -s -- $remote_args" <<'REMOTE_ROLLBACK'
           set -euo pipefail
           RELEASE_SHA=$1
-          TRUSTED_WORKFLOW_SHA=$2
-          RUNTIME_ENV_FILE=$3
-          PRODUCTION_URL=$4
-          MODE=$5
-          ATTEMPT_ID=$6
+          RUNTIME_ENV_FILE=$2
+          PRODUCTION_URL=$3
+          MODE=$4
+          ATTEMPT_ID=$5
+          TRUSTED_WORKFLOW_SHA=$6
           VPS_APP_DIR=/opt/pawtech/apps/cocinacore
 
           command -v realpath >/dev/null 2>&1 || { echo "Required path validation command is unavailable." >&2; exit 1; }

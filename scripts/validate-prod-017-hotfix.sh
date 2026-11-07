@@ -4,18 +4,28 @@ set -eu
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 ADMISSION="$ROOT/scripts/prod-017-hotfix-admission.mjs"
 RELEASE_REPOSITORY=${1:-}
+ADMISSION_MODE=${2:-gha}
 
 fail() {
   printf '%s\n' "prod-017 hotfix admission failed: $1" >&2
   exit 1
 }
 
-[ "$#" -eq 1 ] || fail 'candidate checkout path is required'
+[ "$#" -eq 1 ] || [ "$#" -eq 4 ] || fail 'candidate checkout path and optional manual authorization are required'
 [ -e "$RELEASE_REPOSITORY/.git" ] || fail 'candidate checkout must be a Git repository'
-command -v gh >/dev/null 2>&1 || fail 'GitHub CLI is required for evidence validation'
 command -v node >/dev/null 2>&1 || fail 'Node.js is required for admission validation'
 [ -n "${GH_TOKEN:-}" ] || fail 'GitHub read token is unavailable'
 [ -n "${GITHUB_REPOSITORY:-}" ] || fail 'repository identity is unavailable'
+[ "$GITHUB_REPOSITORY" = 'yabreu65/cocinacore' ] || fail 'repository identity does not match the fixed release'
+
+if [ "$ADMISSION_MODE" = manual ]; then
+  [ "$#" -eq 4 ] || fail 'manual admission requires a comment ID and manual attempt ID'
+  node "$ADMISSION" git "$RELEASE_REPOSITORY"
+  GH_TOKEN="$GH_TOKEN" node "$ADMISSION" manual-api "$3" "$4"
+  exit 0
+fi
+[ "$ADMISSION_MODE" = gha ] && [ "$#" -eq 1 ] || fail 'GitHub Actions admission arguments are invalid'
+command -v gh >/dev/null 2>&1 || fail 'GitHub CLI is required for evidence validation'
 
 tmp_root=${RUNNER_TEMP:-${TMPDIR:-/tmp}}
 tmp_dir=$(mktemp -d "$tmp_root/prod-017-hotfix-evidence.XXXXXXXX") || fail 'temporary evidence directory could not be created'

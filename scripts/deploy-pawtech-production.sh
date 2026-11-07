@@ -7,6 +7,8 @@ RUNTIME_ENV_FILE=${2:-$EXPECTED_RUNTIME_ENV_FILE}
 PRODUCTION_URL=${3:-}
 MODE=${4:-deploy}
 ATTEMPT_ID=${5:-}
+MANUAL_AUTH_COMMENT_ID=${6:-}
+TRUSTED_TOOLING_SHA=${7:-}
 MANUAL_BACKUP_ROOT=/opt/pawtech/backups/postgres/cocinacore_db/manual
 
 APP_CONTAINER=cocinacore-web
@@ -23,7 +25,6 @@ RELEASE_DIR=
 RELEASE_TAR=
 PREVIOUS_RENAME_ATTEMPTED=0
 PREVIOUS_RENAMED=0
-NEW_APP_STARTED=0
 NEW_APP_RUN_ATTEMPTED=0
 DEPLOY_SUCCEEDED=0
 DATABASE_CHANGED=NO
@@ -36,6 +37,21 @@ PREVIOUS_IMAGE=
 PROD_017_HOTFIX_SHA=d4a13a61cc0d24c4eda96a7baffaacfd0e47c191
 PROD_017_HOTFIX_PARENT=ad99d502ff19d7bb154c04c24697d2a43c1b17e8
 PROD_017_PARENT_IMAGE_ID=sha256:b72d20d7c9e6634584b562837e563355c87d02439c0c64bd44d870f0056a7204
+MANUAL_AUTH_STATE_FILE=
+MANUAL_AUTH_CONSUMED_FILE=
+MANUAL_AUTHORIZER=
+MANUAL_AUTH_EXPIRES_AT=
+MANUAL_AUTH_FINGERPRINT=
+case "$MODE" in
+  prod-017-manual-preflight|prod-017-manual-deploy)
+    unset MANUAL_GITHUB_TOKEN manual_auth_input_token
+    manual_auth_input_token=${GH_TOKEN:-}
+    unset GH_TOKEN
+    MANUAL_GITHUB_TOKEN=$manual_auth_input_token
+    unset manual_auth_input_token
+    ;;
+  *) unset MANUAL_GITHUB_TOKEN ;;
+esac
 
 log() {
   printf '%s\n' "$*"
@@ -126,12 +142,192 @@ check_previous_app() {
 check_previous_app_for_release() {
   check_previous_app || return 1
   case "$MODE" in
-    prod-017-hotfix-preflight|prod-017-hotfix-deploy)
+    prod-017-hotfix-preflight|prod-017-hotfix-deploy|prod-017-manual-preflight|prod-017-manual-deploy)
       [ "$PREVIOUS_IMAGE" = "cocinacore:deploy-${PROD_017_HOTFIX_PARENT}" ] || return 1
       PREVIOUS_IMAGE_ID=$(docker inspect --format '{{.Image}}' "$APP_CONTAINER" 2>/dev/null) || return 1
       [ "$PREVIOUS_IMAGE_ID" = "$PROD_017_PARENT_IMAGE_ID" ] || return 1
       ;;
   esac
+}
+
+assert_manual_state_root() {
+  [ -d "$MANUAL_BACKUP_ROOT" ] && [ ! -L "$MANUAL_BACKUP_ROOT" ] && [ -w "$MANUAL_BACKUP_ROOT" ] ||
+    fail 'manual authorization state root is unavailable'
+  manual_realpath=$(realpath -e "$MANUAL_BACKUP_ROOT" 2>/dev/null) || fail 'manual authorization state root could not be verified'
+  [ "$manual_realpath" = "$MANUAL_BACKUP_ROOT" ] || fail 'manual authorization state root path mismatch'
+  manual_state_root_mode=$(stat -c '%a' "$MANUAL_BACKUP_ROOT" 2>/dev/null) || fail 'manual authorization state root mode unavailable'
+  manual_state_root_owner=$(stat -c '%u' "$MANUAL_BACKUP_ROOT" 2>/dev/null) || fail 'manual authorization state root owner unavailable'
+  manual_deploy_uid=$(id -u) || fail 'manual deployment user identity unavailable'
+  [ "$manual_state_root_mode" = 700 ] && [ "$manual_state_root_owner" = "$manual_deploy_uid" ] ||
+    fail 'manual authorization state root permissions or owner mismatch'
+}
+
+fetch_manual_authorization() {
+  if [ -z "$MANUAL_AUTH_COMMENT_ID" ] || ! printf '%s' "$MANUAL_AUTH_COMMENT_ID" | grep -Eq '^[0-9]{1,20}$'; then
+    fail 'manual authorization comment ID is invalid'
+  fi
+  if [ -z "$TRUSTED_TOOLING_SHA" ] || ! printf '%s' "$TRUSTED_TOOLING_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+    fail 'trusted manual admission source SHA is invalid'
+  fi
+  unset manual_token
+  manual_token=${GH_TOKEN:-${MANUAL_GITHUB_TOKEN:-}}
+  [ -n "$manual_token" ] || fail 'manual GitHub authorization token is unavailable'
+  git cat-file -e "${TRUSTED_TOOLING_SHA}^{commit}" || fail 'trusted manual admission source is unavailable'
+  git merge-base --is-ancestor "$TRUSTED_TOOLING_SHA" origin/main || fail 'manual admission source is not integrated into origin/main'
+  validator_file=$(mktemp "${TMPDIR:-/tmp}/cocinacore-manual-admission.XXXXXXXX.mjs") || fail 'manual admission verifier temp file could not be created'
+  if ! (umask 077; git show "$TRUSTED_TOOLING_SHA:scripts/prod-017-hotfix-admission.mjs" >"$validator_file"); then
+    rm -f "$validator_file"
+    fail 'trusted manual admission verifier is unavailable'
+  fi
+  chmod 600 "$validator_file" || { rm -f "$validator_file"; fail 'manual admission verifier temp permissions could not be secured'; }
+  manual_proof=$(GH_TOKEN="$manual_token" node "$validator_file" manual-api "$MANUAL_AUTH_COMMENT_ID" "$ATTEMPT_ID") || {
+    unset GH_TOKEN MANUAL_GITHUB_TOKEN manual_token
+    rm -f "$validator_file"
+    fail 'owner authorization or pinned GitHub release evidence was rejected'
+  }
+  unset GH_TOKEN
+  MANUAL_GITHUB_TOKEN=$manual_token
+  unset manual_token
+  rm -f "$validator_file" || fail 'manual admission verifier temp cleanup failed'
+  IFS='|' read -r proof_marker MANUAL_AUTH_COMMENT_ID_FROM_API proof_attempt MANUAL_AUTHORIZER MANUAL_AUTH_EXPIRES_AT MANUAL_AUTH_FINGERPRINT <<EOF
+$manual_proof
+EOF
+  if [ "$proof_marker" != PROD_017_MANUAL_AUTH_OK ] ||
+    [ "$MANUAL_AUTH_COMMENT_ID_FROM_API" != "$MANUAL_AUTH_COMMENT_ID" ] ||
+    [ "$proof_attempt" != "$ATTEMPT_ID" ] ||
+    [ "$MANUAL_AUTHORIZER" != yabreu65 ] ||
+    ! printf '%s' "$MANUAL_AUTH_EXPIRES_AT" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' ||
+    ! printf '%s' "$MANUAL_AUTH_FINGERPRINT" | grep -Eq '^[0-9a-f]{64}$'; then
+    fail 'manual authorization evidence output is malformed'
+  fi
+}
+
+revalidate_manual_authorization_before_cutover() {
+  expected_comment_id=$MANUAL_AUTH_COMMENT_ID_FROM_API
+  expected_authorizer=$MANUAL_AUTHORIZER
+  expected_expiry=$MANUAL_AUTH_EXPIRES_AT
+  expected_fingerprint=$MANUAL_AUTH_FINGERPRINT
+  fetch_manual_authorization
+  if [ "$MANUAL_AUTH_COMMENT_ID_FROM_API" != "$expected_comment_id" ] ||
+    [ "$MANUAL_AUTHORIZER" != "$expected_authorizer" ] ||
+    [ "$MANUAL_AUTH_EXPIRES_AT" != "$expected_expiry" ] ||
+    [ "$MANUAL_AUTH_FINGERPRINT" != "$expected_fingerprint" ]; then
+    unset GH_TOKEN MANUAL_GITHUB_TOKEN
+    fail 'manual authorization changed after deployment preflight'
+  fi
+  unset GH_TOKEN MANUAL_GITHUB_TOKEN
+  log "MANUAL_AUTH_REVALIDATED_BEFORE_CUTOVER attempt=${ATTEMPT_ID} comment=${MANUAL_AUTH_COMMENT_ID_FROM_API}"
+}
+
+reserve_manual_authorization() {
+  assert_manual_state_root
+  exec 9>/tmp/cocinacore-production-deploy.lock
+  flock -n 9 || fail 'another CocinaCore production deployment is already running'
+  MANUAL_AUTH_STATE_FILE="$MANUAL_BACKUP_ROOT/manual-auth-${ATTEMPT_ID}.state"
+  [ ! -e "$MANUAL_AUTH_STATE_FILE" ] || fail 'manual authorization attempt was already reserved'
+  if ! (
+    umask 077
+    set -C
+    {
+      printf 'STATUS=RESERVED\n'
+      printf 'RELEASE_SHA=%s\n' "$RELEASE_SHA"
+      printf 'ATTEMPT_ID=%s\n' "$ATTEMPT_ID"
+      printf 'COMMENT_ID=%s\n' "$MANUAL_AUTH_COMMENT_ID"
+      printf 'AUTHORIZER=%s\n' "$MANUAL_AUTHORIZER"
+      printf 'EXPIRES_AT=%s\n' "$MANUAL_AUTH_EXPIRES_AT"
+      printf 'FINGERPRINT=%s\n' "$MANUAL_AUTH_FINGERPRINT"
+    } >"$MANUAL_AUTH_STATE_FILE"
+  ); then
+    fail 'manual authorization could not be atomically reserved'
+  fi
+  chmod 600 "$MANUAL_AUTH_STATE_FILE" || fail 'manual authorization reservation permissions could not be secured'
+  manual_state_mode=$(stat -c '%a' "$MANUAL_AUTH_STATE_FILE" 2>/dev/null) || fail 'manual authorization reservation mode unavailable'
+  manual_state_owner=$(stat -c '%u' "$MANUAL_AUTH_STATE_FILE" 2>/dev/null) || fail 'manual authorization reservation owner unavailable'
+  [ "$manual_state_mode" = 600 ] && [ "$manual_state_owner" = "$manual_deploy_uid" ] ||
+    fail 'manual authorization reservation permissions or owner mismatch'
+  log "MANUAL_AUTH_RESERVED attempt=${ATTEMPT_ID} comment=${MANUAL_AUTH_COMMENT_ID} authorizer=${MANUAL_AUTHORIZER}"
+}
+
+consume_manual_authorization() {
+  assert_manual_state_root
+  exec 9>/tmp/cocinacore-production-deploy.lock
+  flock -n 9 || fail 'another CocinaCore production deployment is already running'
+  MANUAL_AUTH_STATE_FILE="$MANUAL_BACKUP_ROOT/manual-auth-${ATTEMPT_ID}.state"
+  MANUAL_AUTH_CONSUMED_FILE="$MANUAL_BACKUP_ROOT/manual-auth-${ATTEMPT_ID}.consumed"
+  verified_comment_id=${MANUAL_AUTH_COMMENT_ID_FROM_API:-}
+  verified_authorizer=${MANUAL_AUTHORIZER:-}
+  verified_expiry=${MANUAL_AUTH_EXPIRES_AT:-}
+  verified_fingerprint=${MANUAL_AUTH_FINGERPRINT:-}
+  [ -f "$MANUAL_AUTH_STATE_FILE" ] && [ ! -L "$MANUAL_AUTH_STATE_FILE" ] || fail 'manual authorization reservation is missing'
+  manual_state_mode=$(stat -c '%a' "$MANUAL_AUTH_STATE_FILE" 2>/dev/null) || fail 'manual authorization reservation mode unavailable'
+  manual_state_owner=$(stat -c '%u' "$MANUAL_AUTH_STATE_FILE" 2>/dev/null) || fail 'manual authorization reservation owner unavailable'
+  [ "$manual_state_mode" = 600 ] && [ "$manual_state_owner" = "$manual_deploy_uid" ] ||
+    fail 'manual authorization reservation permissions or owner mismatch'
+  state_status=
+  state_release_sha=
+  state_attempt_id=
+  state_comment_id=
+  MANUAL_AUTHORIZER=
+  MANUAL_AUTH_EXPIRES_AT=
+  MANUAL_AUTH_FINGERPRINT=
+  seen_state_status=0
+  seen_state_release=0
+  seen_state_attempt=0
+  seen_state_comment=0
+  seen_state_authorizer=0
+  seen_state_expiry=0
+  seen_state_fingerprint=0
+  while IFS='=' read -r state_key state_value || [ -n "$state_key$state_value" ]; do
+    case "$state_key" in
+      STATUS) [ "$seen_state_status" -eq 0 ] || fail 'duplicate manual authorization state field'; state_status=$state_value; seen_state_status=1 ;;
+      RELEASE_SHA) [ "$seen_state_release" -eq 0 ] || fail 'duplicate manual authorization state field'; state_release_sha=$state_value; seen_state_release=1 ;;
+      ATTEMPT_ID) [ "$seen_state_attempt" -eq 0 ] || fail 'duplicate manual authorization state field'; state_attempt_id=$state_value; seen_state_attempt=1 ;;
+      COMMENT_ID) [ "$seen_state_comment" -eq 0 ] || fail 'duplicate manual authorization state field'; state_comment_id=$state_value; seen_state_comment=1 ;;
+      AUTHORIZER) [ "$seen_state_authorizer" -eq 0 ] || fail 'duplicate manual authorization state field'; MANUAL_AUTHORIZER=$state_value; seen_state_authorizer=1 ;;
+      EXPIRES_AT) [ "$seen_state_expiry" -eq 0 ] || fail 'duplicate manual authorization state field'; MANUAL_AUTH_EXPIRES_AT=$state_value; seen_state_expiry=1 ;;
+      FINGERPRINT) [ "$seen_state_fingerprint" -eq 0 ] || fail 'duplicate manual authorization state field'; MANUAL_AUTH_FINGERPRINT=$state_value; seen_state_fingerprint=1 ;;
+      *) fail 'unknown manual authorization state field' ;;
+    esac
+  done < "$MANUAL_AUTH_STATE_FILE"
+  if [ "$seen_state_status$seen_state_release$seen_state_attempt$seen_state_comment$seen_state_authorizer$seen_state_expiry$seen_state_fingerprint" != 1111111 ] ||
+    [ "$state_status" != RESERVED ] ||
+    [ "$state_release_sha" != "$RELEASE_SHA" ] ||
+    [ "$state_attempt_id" != "$ATTEMPT_ID" ] ||
+    [ "$state_comment_id" != "$MANUAL_AUTH_COMMENT_ID" ] ||
+    [ "$state_comment_id" != "$verified_comment_id" ] ||
+    [ "$MANUAL_AUTHORIZER" != yabreu65 ] ||
+    [ "$MANUAL_AUTHORIZER" != "$verified_authorizer" ] ||
+    [ "$MANUAL_AUTH_EXPIRES_AT" != "$verified_expiry" ] ||
+    [ "$MANUAL_AUTH_FINGERPRINT" != "$verified_fingerprint" ] ||
+    ! printf '%s' "$MANUAL_AUTH_EXPIRES_AT" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' ||
+    ! printf '%s' "$MANUAL_AUTH_FINGERPRINT" | grep -Eq '^[0-9a-f]{64}$'; then
+    fail 'manual authorization reservation does not match the fixed release and attempt'
+  fi
+  manual_now=$(date -u +%s) || fail 'manual authorization clock is unavailable'
+  manual_expiry=$(date -u -d "$MANUAL_AUTH_EXPIRES_AT" +%s 2>/dev/null) || fail 'manual authorization expiry is invalid'
+  [ "$manual_now" -le "$manual_expiry" ] || fail 'manual authorization has expired'
+  [ ! -e "$MANUAL_AUTH_CONSUMED_FILE" ] || fail 'manual authorization attempt was already consumed'
+  if ! (
+    umask 077
+    set -C
+    {
+      printf 'STATUS=CONSUMED\n'
+      printf 'RELEASE_SHA=%s\n' "$RELEASE_SHA"
+      printf 'ATTEMPT_ID=%s\n' "$ATTEMPT_ID"
+      printf 'COMMENT_ID=%s\n' "$MANUAL_AUTH_COMMENT_ID"
+      printf 'AUTHORIZER=%s\n' "$MANUAL_AUTHORIZER"
+      printf 'EXPIRES_AT=%s\n' "$MANUAL_AUTH_EXPIRES_AT"
+      printf 'FINGERPRINT=%s\n' "$MANUAL_AUTH_FINGERPRINT"
+    } >"$MANUAL_AUTH_CONSUMED_FILE"
+  ); then
+    fail 'manual authorization could not be atomically consumed'
+  fi
+  chmod 600 "$MANUAL_AUTH_CONSUMED_FILE" || fail 'manual authorization consumption permissions could not be secured'
+  consumed_mode=$(stat -c '%a' "$MANUAL_AUTH_CONSUMED_FILE" 2>/dev/null) || fail 'manual authorization consumption mode unavailable'
+  consumed_owner=$(stat -c '%u' "$MANUAL_AUTH_CONSUMED_FILE" 2>/dev/null) || fail 'manual authorization consumption owner unavailable'
+  [ "$consumed_mode" = 600 ] && [ "$consumed_owner" = "$manual_deploy_uid" ] ||
+    fail 'manual authorization consumption permissions or owner mismatch'
+  log "MANUAL_AUTH_CONSUMED attempt=${ATTEMPT_ID} comment=${MANUAL_AUTH_COMMENT_ID} authorizer=${MANUAL_AUTHORIZER}"
 }
 
 rollback_mode() {
@@ -173,6 +369,11 @@ rollback_mode() {
   STATE_BACKUP_VERIFICATION=
   STATE_DATABASE_CHANGED=
   STATE_ATTEMPT=
+  STATE_MANUAL_AUTH_COMMENT_ID=
+  STATE_MANUAL_AUTHORIZER=
+  STATE_MANUAL_AUTHORIZATION_EXPIRES_AT=
+  STATE_MANUAL_AUTHORIZATION_FINGERPRINT=
+  STATE_MANUAL_AUTH_STATUS=
   seen_release=0
   seen_image=0
   seen_previous_container=0
@@ -181,6 +382,11 @@ rollback_mode() {
   seen_backup=0
   seen_database=0
   seen_attempt=0
+  seen_manual_comment=0
+  seen_manual_authorizer=0
+  seen_manual_expiry=0
+  seen_manual_fingerprint=0
+  seen_manual_status=0
   key=
   value=
   while IFS='=' read -r key value || [ -n "$key$value" ]; do
@@ -193,6 +399,11 @@ rollback_mode() {
       BACKUP_VERIFICATION) [ "$seen_backup" -eq 0 ] || rollback_fail 'duplicate state field'; STATE_BACKUP_VERIFICATION=$value; seen_backup=1 ;;
       DATABASE_CHANGED) [ "$seen_database" -eq 0 ] || rollback_fail 'duplicate state field'; STATE_DATABASE_CHANGED=$value; seen_database=1 ;;
       DEPLOY_STATE_ATTEMPT) [ "$seen_attempt" -eq 0 ] || rollback_fail 'duplicate state field'; STATE_ATTEMPT=$value; seen_attempt=1 ;;
+      MANUAL_AUTH_COMMENT_ID) [ "$seen_manual_comment" -eq 0 ] || rollback_fail 'duplicate manual authorization field'; STATE_MANUAL_AUTH_COMMENT_ID=$value; seen_manual_comment=1 ;;
+      MANUAL_AUTHORIZER) [ "$seen_manual_authorizer" -eq 0 ] || rollback_fail 'duplicate manual authorization field'; STATE_MANUAL_AUTHORIZER=$value; seen_manual_authorizer=1 ;;
+      MANUAL_AUTHORIZATION_EXPIRES_AT) [ "$seen_manual_expiry" -eq 0 ] || rollback_fail 'duplicate manual authorization field'; STATE_MANUAL_AUTHORIZATION_EXPIRES_AT=$value; seen_manual_expiry=1 ;;
+      MANUAL_AUTHORIZATION_FINGERPRINT) [ "$seen_manual_fingerprint" -eq 0 ] || rollback_fail 'duplicate manual authorization field'; STATE_MANUAL_AUTHORIZATION_FINGERPRINT=$value; seen_manual_fingerprint=1 ;;
+      MANUAL_AUTH_STATUS) [ "$seen_manual_status" -eq 0 ] || rollback_fail 'duplicate manual authorization field'; STATE_MANUAL_AUTH_STATUS=$value; seen_manual_status=1 ;;
       *) rollback_fail 'unknown or malformed state field' ;;
     esac
   done < "$DEPLOY_STATE_FILE"
@@ -202,6 +413,47 @@ rollback_mode() {
     [ "$STATE_IMAGE" = "cocinacore:deploy-${RELEASE_SHA}" ] && [ "$STATE_BACKUP_VERIFICATION" = DAILY_BACKUP_VERIFIED ] &&
     [ "$STATE_DATABASE_CHANGED" = NO ] ||
     rollback_fail 'state release/attempt/image/database identity mismatch'
+  if printf '%s' "$ATTEMPT_ID" | grep -Eq '^manual-'; then
+    [ "$seen_manual_comment$seen_manual_authorizer$seen_manual_expiry$seen_manual_fingerprint$seen_manual_status" = 11111 ] ||
+      rollback_fail 'manual rollback authorization state is incomplete'
+    if [ "$STATE_MANUAL_AUTH_STATUS" != CONSUMED ] ||
+      [ "$STATE_MANUAL_AUTHORIZER" != yabreu65 ] ||
+      ! printf '%s' "$STATE_MANUAL_AUTH_COMMENT_ID" | grep -Eq '^[0-9]{1,20}$' ||
+      ! printf '%s' "$STATE_MANUAL_AUTHORIZATION_EXPIRES_AT" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' ||
+      ! printf '%s' "$STATE_MANUAL_AUTHORIZATION_FINGERPRINT" | grep -Eq '^[0-9a-f]{64}$'; then
+      rollback_fail 'manual rollback authorization identity is invalid'
+    fi
+    MANUAL_AUTH_STATE_FILE="$MANUAL_BACKUP_ROOT/manual-auth-${ATTEMPT_ID}.state"
+    MANUAL_AUTH_CONSUMED_FILE="$MANUAL_BACKUP_ROOT/manual-auth-${ATTEMPT_ID}.consumed"
+    [ -f "$MANUAL_AUTH_STATE_FILE" ] && [ ! -L "$MANUAL_AUTH_STATE_FILE" ] &&
+      [ -f "$MANUAL_AUTH_CONSUMED_FILE" ] && [ ! -L "$MANUAL_AUTH_CONSUMED_FILE" ] ||
+      rollback_fail 'manual authorization reservation or consumption evidence is missing'
+    manual_auth_state_mode=$(stat -c '%a' "$MANUAL_AUTH_STATE_FILE" 2>/dev/null) || rollback_fail 'manual authorization reservation metadata unavailable'
+    manual_auth_state_owner=$(stat -c '%u' "$MANUAL_AUTH_STATE_FILE" 2>/dev/null) || rollback_fail 'manual authorization reservation owner unavailable'
+    manual_auth_consumed_mode=$(stat -c '%a' "$MANUAL_AUTH_CONSUMED_FILE" 2>/dev/null) || rollback_fail 'manual authorization consumption metadata unavailable'
+    manual_auth_consumed_owner=$(stat -c '%u' "$MANUAL_AUTH_CONSUMED_FILE" 2>/dev/null) || rollback_fail 'manual authorization consumption owner unavailable'
+    [ "$manual_auth_state_mode" = 600 ] && [ "$manual_auth_state_owner" = "$deploy_uid" ] &&
+      [ "$manual_auth_consumed_mode" = 600 ] && [ "$manual_auth_consumed_owner" = "$deploy_uid" ] ||
+      rollback_fail 'manual authorization evidence permissions/owner mismatch'
+    if ! grep -Fxq "RELEASE_SHA=$RELEASE_SHA" "$MANUAL_AUTH_STATE_FILE" ||
+      ! grep -Fxq "ATTEMPT_ID=$ATTEMPT_ID" "$MANUAL_AUTH_STATE_FILE" ||
+      ! grep -Fxq "COMMENT_ID=$STATE_MANUAL_AUTH_COMMENT_ID" "$MANUAL_AUTH_STATE_FILE" ||
+      ! grep -Fxq "AUTHORIZER=$STATE_MANUAL_AUTHORIZER" "$MANUAL_AUTH_STATE_FILE" ||
+      ! grep -Fxq "EXPIRES_AT=$STATE_MANUAL_AUTHORIZATION_EXPIRES_AT" "$MANUAL_AUTH_STATE_FILE" ||
+      ! grep -Fxq "FINGERPRINT=$STATE_MANUAL_AUTHORIZATION_FINGERPRINT" "$MANUAL_AUTH_STATE_FILE" ||
+      ! grep -Fxq "RELEASE_SHA=$RELEASE_SHA" "$MANUAL_AUTH_CONSUMED_FILE" ||
+      ! grep -Fxq "ATTEMPT_ID=$ATTEMPT_ID" "$MANUAL_AUTH_CONSUMED_FILE" ||
+      ! grep -Fxq "COMMENT_ID=$STATE_MANUAL_AUTH_COMMENT_ID" "$MANUAL_AUTH_CONSUMED_FILE" ||
+      ! grep -Fxq "AUTHORIZER=$STATE_MANUAL_AUTHORIZER" "$MANUAL_AUTH_CONSUMED_FILE" ||
+      ! grep -Fxq "EXPIRES_AT=$STATE_MANUAL_AUTHORIZATION_EXPIRES_AT" "$MANUAL_AUTH_CONSUMED_FILE" ||
+      ! grep -Fxq "FINGERPRINT=$STATE_MANUAL_AUTHORIZATION_FINGERPRINT" "$MANUAL_AUTH_CONSUMED_FILE" ||
+      ! grep -Fxq 'STATUS=CONSUMED' "$MANUAL_AUTH_CONSUMED_FILE"; then
+      rollback_fail 'manual rollback authorization identity mismatch'
+    fi
+  else
+    [ "$seen_manual_comment$seen_manual_authorizer$seen_manual_expiry$seen_manual_fingerprint$seen_manual_status" = 00000 ] ||
+      rollback_fail 'GitHub Actions rollback state unexpectedly contains manual authorization'
+  fi
   printf '%s' "$STATE_PREVIOUS_CONTAINER" | grep -Eq '^cocinacore-web-pre-[0-9a-f]{8}-[0-9]{8}T[0-9]{6}Z$' || rollback_fail 'previous container name is invalid'
   printf '%s' "$STATE_PREVIOUS_ID" | grep -Eq '^[0-9a-f]{64}$' || rollback_fail 'previous container ID is invalid'
   printf '%s' "$STATE_PREVIOUS_IMAGE" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._/:@-]*$' || rollback_fail 'previous image reference is invalid'
@@ -405,18 +657,53 @@ done
 
 printf '%s' "$RELEASE_SHA" | grep -Eq '^[0-9a-f]{40}$' ||
   fail 'release SHA must be exactly 40 lowercase hexadecimal characters'
-[ "${#ATTEMPT_ID}" -le 40 ] && printf '%s' "$ATTEMPT_ID" | grep -Eq '^gha-[0-9]{1,20}-[0-9]{1,6}$' ||
-  fail 'deployment attempt ID is invalid'
 
 case "$MODE" in
-  deploy|preflight|rollback|prod-017-hotfix-preflight|prod-017-hotfix-deploy) ;;
+  deploy|preflight|rollback|prod-017-hotfix-preflight|prod-017-hotfix-deploy|prod-017-manual-preflight|prod-017-manual-deploy) ;;
   *) fail 'unsupported deployment mode' ;;
+esac
+
+case "$MODE" in
+  prod-017-manual-preflight|prod-017-manual-deploy)
+    if [ -z "$MANUAL_AUTH_COMMENT_ID" ] || [ -z "$TRUSTED_TOOLING_SHA" ]; then
+      fail 'manual authorization inputs are incomplete'
+    fi
+    if [ "${#ATTEMPT_ID}" -gt 40 ] || ! printf '%s' "$ATTEMPT_ID" | grep -Eq '^manual-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}$'; then
+      fail 'manual deployment attempt ID is invalid'
+    fi
+    [ -n "${MANUAL_GITHUB_TOKEN:-}" ] || fail 'manual GitHub authorization token is unavailable'
+    ;;
+  rollback)
+    if [ "${#ATTEMPT_ID}" -gt 40 ] || ! printf '%s' "$ATTEMPT_ID" | grep -Eq '^(gha-[0-9]{1,20}-[0-9]{1,6}|manual-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16})$'; then
+      fail 'rollback attempt ID is invalid'
+    fi
+    ;;
+  *)
+    if [ "${#ATTEMPT_ID}" -gt 40 ] || ! printf '%s' "$ATTEMPT_ID" | grep -Eq '^gha-[0-9]{1,20}-[0-9]{1,6}$'; then
+      fail 'GitHub Actions deployment attempt ID is invalid'
+    fi
+    [ -z "$MANUAL_AUTH_COMMENT_ID" ] && [ -z "$TRUSTED_TOOLING_SHA" ] ||
+      fail 'GitHub Actions mode must not carry manual authorization inputs'
+    ;;
 esac
 
 if [ "$MODE" = 'rollback' ]; then
   rollback_mode
   exit 0
 fi
+
+case "$MODE" in
+  prod-017-manual-preflight|prod-017-manual-deploy)
+    validate_prod017_hotfix_candidate
+    fetch_manual_authorization
+    if [ "$MODE" = 'prod-017-manual-preflight' ]; then
+      reserve_manual_authorization
+      unset MANUAL_GITHUB_TOKEN
+    else
+      consume_manual_authorization
+    fi
+    ;;
+esac
 
 if ! production_url_valid; then
   fail 'production URL must be an absolute HTTP(S) URL with a host'
@@ -486,7 +773,7 @@ done
 
 git cat-file -e "${RELEASE_SHA}^{commit}" || fail 'release commit is not available in deploy repository'
 case "$MODE" in
-  prod-017-hotfix-preflight|prod-017-hotfix-deploy)
+  prod-017-hotfix-preflight|prod-017-hotfix-deploy|prod-017-manual-preflight|prod-017-manual-deploy)
     validate_prod017_hotfix_candidate
     ;;
   *)
@@ -494,7 +781,7 @@ case "$MODE" in
     ;;
 esac
 
-if [ "$MODE" = 'preflight' ] || [ "$MODE" = 'prod-017-hotfix-preflight' ]; then
+if [ "$MODE" = 'preflight' ] || [ "$MODE" = 'prod-017-hotfix-preflight' ] || [ "$MODE" = 'prod-017-manual-preflight' ]; then
   [ -d "$MANUAL_BACKUP_ROOT" ] && [ -w "$MANUAL_BACKUP_ROOT" ] || fail 'deployment state root must already exist and be writable'
   verifier_mode=$(git ls-tree "$RELEASE_SHA" -- scripts/verify-pawtech-cocinacore-daily-backup.sh | awk '{print $1}')
   [ "$verifier_mode" = 100755 ] || fail 'release daily backup verifier must have Git mode 100755'
@@ -506,8 +793,10 @@ fi
 
 trap cleanup EXIT INT TERM
 
-exec 9>/tmp/cocinacore-production-deploy.lock
-flock -n 9 || fail 'another CocinaCore production deployment is already running'
+if [ "$MODE" != 'prod-017-manual-preflight' ] && [ "$MODE" != 'prod-017-manual-deploy' ]; then
+  exec 9>/tmp/cocinacore-production-deploy.lock
+  flock -n 9 || fail 'another CocinaCore production deployment is already running'
+fi
 
 short_sha=$(printf '%s' "$RELEASE_SHA" | cut -c1-8)
 IMAGE="cocinacore:deploy-${RELEASE_SHA}"
@@ -581,6 +870,9 @@ TRAEFIK_RULE=$(printf 'Host(`%s`)' "$TRAEFIK_HOST")
 [ -n "$PREVIOUS" ] || fail 'previous application rollback container name is unavailable'
 check_previous_app_for_release || fail 'previous application rollback target is not the exact healthy production-017 baseline on exact Pawtech networks'
 [ -n "$PREVIOUS_ID" ] && [ -n "$PREVIOUS_IMAGE" ] || fail 'previous application rollback identity is incomplete'
+if [ "$MODE" = 'prod-017-manual-deploy' ]; then
+  revalidate_manual_authorization_before_cutover
+fi
 DEPLOY_STATE_FILE="$backup_dir/deploy-state-${ATTEMPT_ID}.state"
 [ ! -e "$DEPLOY_STATE_FILE" ] || fail 'deployment attempt state record already exists'
 DEPLOY_STATE_ATTEMPT=$ATTEMPT_ID
@@ -596,6 +888,13 @@ if ! (
     printf 'BACKUP_VERIFICATION=%s\n' "$BACKUP_VERIFICATION"
     printf 'DATABASE_CHANGED=%s\n' "$DATABASE_CHANGED"
     printf 'DEPLOY_STATE_ATTEMPT=%s\n' "$DEPLOY_STATE_ATTEMPT"
+    if [ "$MODE" = 'prod-017-manual-deploy' ]; then
+      printf 'MANUAL_AUTH_COMMENT_ID=%s\n' "$MANUAL_AUTH_COMMENT_ID"
+      printf 'MANUAL_AUTHORIZER=%s\n' "$MANUAL_AUTHORIZER"
+      printf 'MANUAL_AUTHORIZATION_EXPIRES_AT=%s\n' "$MANUAL_AUTH_EXPIRES_AT"
+      printf 'MANUAL_AUTHORIZATION_FINGERPRINT=%s\n' "$MANUAL_AUTH_FINGERPRINT"
+      printf 'MANUAL_AUTH_STATUS=CONSUMED\n'
+    fi
   } >"$DEPLOY_STATE_FILE"
 ); then
   fail 'unable to create private deployment state record'
@@ -634,8 +933,6 @@ docker run -d \
   --label traefik.http.routers.cocinacore.tls.certresolver=letsencrypt \
   --label traefik.http.services.cocinacore.loadbalancer.server.port=3000 \
   "$IMAGE" >/dev/null
-NEW_APP_STARTED=1
-
 docker network connect "$PUBLIC_NETWORK" "$APP_CONTAINER"
 
 app_ok=0
