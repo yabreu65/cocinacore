@@ -25,6 +25,7 @@ RELEASE_DIR=
 RELEASE_TAR=
 PREVIOUS_RENAME_ATTEMPTED=0
 PREVIOUS_RENAMED=0
+NEW_APP_STARTED=0
 NEW_APP_RUN_ATTEMPTED=0
 DEPLOY_SUCCEEDED=0
 DATABASE_CHANGED=NO
@@ -520,6 +521,9 @@ rollback_mode() {
 cleanup() {
   status=$?
   rollback_ok=1
+  if [ "$NEW_APP_STARTED" -eq 1 ] && [ "$NEW_APP_RUN_ATTEMPTED" -ne 1 ]; then
+    rollback_ok=0
+  fi
   if [ "$CANDIDATE_STARTED" -eq 1 ] && [ -n "$CANDIDATE" ]; then
     if docker inspect "$CANDIDATE" >/dev/null 2>&1; then
       candidate_identity=$(docker inspect --format '{{.Config.Image}}|{{index .Config.Labels "com.cocinacore.deploy-attempt"}}' "$CANDIDATE" 2>/dev/null || true)
@@ -933,6 +937,7 @@ docker run -d \
   --label traefik.http.routers.cocinacore.tls.certresolver=letsencrypt \
   --label traefik.http.services.cocinacore.loadbalancer.server.port=3000 \
   "$IMAGE" >/dev/null
+NEW_APP_STARTED=1
 docker network connect "$PUBLIC_NETWORK" "$APP_CONTAINER"
 
 app_ok=0
