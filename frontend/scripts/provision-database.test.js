@@ -11,7 +11,9 @@ const {
   assertReservedRoleOwnership,
   attestLedger,
   attestBaselineCatalog,
+  backfillTrustedLegacyChecksums,
   expectedCatalog,
+  resolveLegacy017OwnerProfile,
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- Load the provisioner's CommonJS exports directly.
 } = require('./provision-database');
 const {
@@ -41,11 +43,20 @@ const emptyCatalog = () => ({
 });
 
 function fixture({
+  schemas = [],
+  tables = [],
   functions = [],
+  constraints = [],
   migrations = [{ filename: appliedFilename, catalogAdditions: [addition] }],
   transferable = [],
 } = {}) {
-  const catalog = { ...emptyCatalog(), functions: { rows: functions } };
+  const catalog = {
+    ...emptyCatalog(),
+    schemas: { rows: schemas },
+    tables: { rows: tables },
+    functions: { rows: functions },
+    constraints: { rows: constraints },
+  };
   let queryIndex = 0;
   const client = {
     async query() {
@@ -90,9 +101,30 @@ function historicalFunction(owner = 'cocinacore') {
   };
 }
 
-async function attest(options = {}, ownerState = 'legacy', applied = [appliedFilename]) {
-  const { client, manifest } = fixture(options);
-  return attestBaselineCatalog(client, manifest, ownerState, new Set(applied));
+async function attest(
+  options = {},
+  ownerState = 'legacy',
+  applied = [appliedFilename],
+  legacyOwnerProfile
+) {
+  const targetOptions =
+    ownerState === 'target' && options.constraints === undefined
+      ? {
+          ...options,
+          constraints: [
+            { identity: 'public.schema_migrations.schema_migrations_checksum_source_check' },
+          ],
+        }
+      : options;
+  const { client, manifest } = fixture(targetOptions);
+  return attestBaselineCatalog(
+    client,
+    manifest,
+    ownerState,
+    new Set(applied),
+    legacyOwnerProfile,
+    ownerState === 'target' ? 'provenance' : undefined
+  );
 }
 
 function isControlledBaselineMismatch(error) {
@@ -128,6 +160,130 @@ test('admits an applied 014-declared function for both legacy and target ownersh
       )
     );
   }
+});
+
+test('admits the fixed production-017 owner profile only when explicitly selected', async () => {
+  const productionProfile = {
+    objectOwner: 'cocinacore_user',
+    publicSchemaOwner: 'cocinacore_user',
+  };
+  await assert.doesNotReject(
+    attest(
+      {
+        schemas: [{ identity: 'public', owner: 'cocinacore_user' }],
+        tables: [{ identity: 'public.historical_table', owner: 'cocinacore_user' }],
+        transferable: [
+          {
+            kind: 'schema',
+            schema: 'public',
+            expectedLegacyOwner: 'pg_database_owner',
+            targetOwner: 'cocinacore_schema_owner',
+          },
+          {
+            kind: 'table',
+            schema: 'public',
+            name: 'historical_table',
+            expectedLegacyOwner: 'cocinacore',
+            targetOwner: 'cocinacore_schema_owner',
+          },
+        ],
+        functions: [
+          { identity: additionIdentity, owner: 'cocinacore_user', security_definer: false },
+        ],
+      },
+      'legacy',
+      [appliedFilename],
+      productionProfile
+    )
+  );
+  await assert.rejects(
+    attest({
+      functions: [
+        { identity: additionIdentity, owner: 'cocinacore_user', security_definer: false },
+      ],
+    }),
+    /BASELINE_MISMATCH: applied function owner differs/
+  );
+});
+
+test('selects only fixed legacy-017 owner profiles from the sentinel function', async () => {
+  const client = (functionOwner) => ({
+    query: async () => ({ rows: [{ function_owner: functionOwner }] }),
+  });
+
+  assert.deepEqual(await resolveLegacy017OwnerProfile(client('cocinacore_user')), {
+    objectOwner: 'cocinacore_user',
+    publicSchemaOwner: 'cocinacore_user',
+  });
+  assert.equal(await resolveLegacy017OwnerProfile(client('cocinacore')), undefined);
+  await assert.rejects(() => resolveLegacy017OwnerProfile(client('unexpected_owner')));
+  await assert.rejects(() => resolveLegacy017OwnerProfile({ query: async () => ({ rows: [] }) }));
+});
+
+test('classifies the exact ordered 001-017 ledger before any provisioner DDL', async () => {
+  const statements = [];
+  const columns = [
+    { attname: 'filename', data_type: 'text', attnotnull: true },
+    {
+      attname: 'applied_at',
+      data_type: 'timestamp with time zone',
+      attnotnull: true,
+      default_expression: 'now()',
+    },
+  ];
+  const client = {
+    async query(statement) {
+      statements.push(statement);
+      if (statements.length === 1) return { rows: columns };
+      if (statements.length === 2) {
+        return { rows: [{ relrowsecurity: true, primary_keys: 1, public_grants: 0 }] };
+      }
+      return {
+        rows: migrationManifest.migrations.slice(0, 17).map((entry, index) => ({
+          filename: entry.filename,
+          applied_at: new Date(Date.UTC(2026, 0, index + 1)),
+        })),
+      };
+    },
+  };
+
+  const result = await attestLedger(client, migrationManifest, false);
+  assert.equal(result.legacyState, 'production-017-unverifiable');
+  assert.equal(result.appliedMigrations.size, 17);
+  assert.match(statements[2], /order by applied_at, filename/);
+  assert.ok(
+    statements.every(
+      (statement) => !/^\s*(alter|update|insert|delete|create|drop)\b/i.test(statement)
+    )
+  );
+});
+
+test('preserves unknown historical checksums as NULL with explicit legacy provenance', async () => {
+  const statements = [];
+  const client = {
+    async query(statement, values = []) {
+      statements.push({ statement, values });
+      return { rowCount: 1 };
+    },
+  };
+
+  await backfillTrustedLegacyChecksums(client, migrationManifest, 'production-017-unverifiable');
+
+  const updates = statements.filter(({ statement }) => /^update /i.test(statement));
+  assert.equal(updates.length, 17);
+  assert.equal(updates.filter(({ values }) => values[1] === 'manifest_backfill').length, 10);
+  const unverifiable = updates.filter(({ values }) => values[0] === 'legacy_unverifiable');
+  assert.equal(unverifiable.length, 7);
+  assert.ok(unverifiable.every(({ statement }) => /set checksum_source=\$1/.test(statement)));
+  assert.ok(unverifiable.every(({ statement }) => !/set checksum=/.test(statement)));
+  assert.ok(
+    statements.some(({ statement }) => /alter column checksum_source set not null/.test(statement))
+  );
+  assert.ok(
+    statements.some(({ statement }) =>
+      /add constraint schema_migrations_checksum_source_check/.test(statement)
+    )
+  );
 });
 
 test('attests established checksummed and provenance ledger modes without conflating them', async () => {

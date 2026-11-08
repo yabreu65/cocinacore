@@ -6,9 +6,13 @@ const fs = require('fs');
 const path = require('path');
 const { Client } = require('pg');
 const {
+  classifyLegacyLedger,
+  LEGACY_UNVERIFIABLE,
+  MANIFEST_BACKFILL,
   validateChecksummedLedger,
   validateEstablishedLedger,
 } = require('./migration-ledger-contract');
+const { attestLegacy017Structure } = require('./legacy-017-database-attestation');
 
 try {
   require('dotenv').config({ path: path.resolve(__dirname, '../.env.local'), quiet: true });
@@ -18,6 +22,10 @@ try {
 
 const MIGRATION_ROLE = 'migration_admin';
 const SCHEMA_OWNER = 'cocinacore_schema_owner';
+const PRODUCTION_017_OWNER_PROFILE = Object.freeze({
+  objectOwner: 'cocinacore_user',
+  publicSchemaOwner: 'cocinacore_user',
+});
 const LOCK_NAMESPACE_PREFIX = 'cocinacore:database-change:v1:';
 const MANIFEST_VERSION = 1;
 const TRUSTED_BASE = '2069fc1f5a1ffc8407bd99cd91f9fadfbd04c6c4';
@@ -345,6 +353,25 @@ async function assertBootstrapIdentity(client) {
       'MIGRATION_IDENTITY_MISMATCH: BOOTSTRAP_DATABASE_URL must authenticate directly as a PostgreSQL superuser.'
     );
   }
+}
+
+async function resolveLegacy017OwnerProfile(client) {
+  const owners = await client.query(
+    `select pg_catalog.pg_get_userbyid(p.proowner) as function_owner
+       from pg_catalog.pg_proc p
+       join pg_catalog.pg_namespace n on n.oid=p.pronamespace
+      where n.nspname='public'
+        and p.proname='is_valid_culinary_profile_text_list'`
+  );
+  if (owners.rows.length !== 1) {
+    throw new Error('BASELINE_MISMATCH: production-017 owner profile is ambiguous.');
+  }
+  const functionOwner = owners.rows[0].function_owner;
+  if (functionOwner === PRODUCTION_017_OWNER_PROFILE.objectOwner) {
+    return PRODUCTION_017_OWNER_PROFILE;
+  }
+  if (functionOwner === 'cocinacore') return undefined;
+  throw new Error('BASELINE_MISMATCH: production-017 owner profile is unexpected.');
 }
 
 function lockTimeout() {
@@ -1015,28 +1042,35 @@ async function attestLedger(client, manifest, established) {
     checksummed: 'filename, applied_at, checksum',
     provenance: 'filename, applied_at, checksum, checksum_source',
   }[ledgerMode];
+  const orderBy = ledgerMode === 'checksummed' ? 'filename' : 'applied_at, filename';
   const rows = await client.query(
-    `select ${selectedColumns} from public.schema_migrations order by ${ledgerMode === 'provenance' ? 'applied_at, filename' : 'filename'}`
+    `select ${selectedColumns} from public.schema_migrations order by ${orderBy}`
   );
-  let appliedMigrations;
   if (established) {
-    appliedMigrations =
-      ledgerMode === 'provenance'
-        ? validateEstablishedLedger(rows.rows, manifest.migrations)
-        : validateChecksummedLedger(rows.rows, manifest.migrations);
-  } else {
-    const expected = manifest.migrations.filter((entry) => entry.legacyChecksumBackfillAllowed);
-    compareExact(
-      rows.rows.map((row) => row.filename),
-      expected.map((entry) => entry.filename),
-      'Legacy ledger migration set'
-    );
-    appliedMigrations = new Set(rows.rows.map((row) => row.filename));
+    return {
+      appliedMigrations:
+        ledgerMode === 'provenance'
+          ? validateEstablishedLedger(rows.rows, manifest.migrations)
+          : validateChecksummedLedger(rows.rows, manifest.migrations),
+      legacyState: 'established',
+      ledgerMode,
+    };
   }
-  return { appliedMigrations, ledgerMode };
+  return {
+    appliedMigrations: new Set(rows.rows.map((row) => row.filename)),
+    legacyState: classifyLegacyLedger(rows.rows, manifest.migrations),
+    ledgerMode,
+  };
 }
 
-async function attestBaselineCatalog(client, manifest, ownerState, appliedMigrations, ledgerMode) {
+async function attestBaselineCatalog(
+  client,
+  manifest,
+  ownerState,
+  appliedMigrations,
+  legacyOwnerProfile,
+  ledgerMode
+) {
   const catalog = await getCatalog(client);
   const expected = expectedCatalog(
     manifest,
@@ -1099,7 +1133,8 @@ async function attestBaselineCatalog(client, manifest, ownerState, appliedMigrat
     .filter((migration) => appliedMigrations.has(migration.filename))
     .flatMap((migration) => migration.catalogAdditions || [])
     .filter((addition) => addition.kind === 'function' || addition.kind === 'table');
-  const expectedAdditionOwner = ownerState === 'legacy' ? 'cocinacore' : SCHEMA_OWNER;
+  const expectedAdditionOwner =
+    ownerState === 'legacy' ? legacyOwnerProfile?.objectOwner || 'cocinacore' : SCHEMA_OWNER;
   const appliedOwnerEntries = new Map();
   for (const addition of appliedOwnerAdditions) {
     const rows = addition.kind === 'function' ? catalog.functions.rows : catalog.tables.rows;
@@ -1121,7 +1156,7 @@ async function attestBaselineCatalog(client, manifest, ownerState, appliedMigrat
       );
     }
     appliedOwnerEntries.set(key, {
-      expectedLegacyOwner: 'cocinacore',
+      expectedLegacyOwner: expectedAdditionOwner,
       targetOwner: SCHEMA_OWNER,
     });
   }
@@ -1155,7 +1190,11 @@ async function attestBaselineCatalog(client, manifest, ownerState, appliedMigrat
         throw new Error(`BASELINE_MISMATCH: missing owner policy for ${kind} ${row.identity}.`);
       }
       const expectedOwner =
-        ownerState === 'legacy' ? object.expectedLegacyOwner : object.targetOwner;
+        ownerState === 'legacy'
+          ? object.kind === 'schema' && object.schema === 'public' && legacyOwnerProfile
+            ? legacyOwnerProfile.publicSchemaOwner
+            : legacyOwnerProfile?.objectOwner || object.expectedLegacyOwner
+          : object.targetOwner;
       if (row.owner !== expectedOwner) {
         throw new Error(`BASELINE_MISMATCH: unexpected owner for ${kind} ${row.identity}.`);
       }
@@ -1483,23 +1522,84 @@ async function transferObject(client, object) {
   }
 }
 
+async function transferAppliedMigrationObjects(client, manifest, appliedMigrations) {
+  const additions = manifest.migrations
+    .filter((migration) => appliedMigrations.has(migration.filename))
+    .flatMap((migration) => migration.catalogAdditions || [])
+    .filter((addition) => addition.kind === 'table' || addition.kind === 'function');
+  for (const addition of additions.filter((entry) => entry.kind === 'table')) {
+    const [schema, name] = addition.identity.split('.');
+    if (schema !== addition.schema || !name) {
+      throw new Error(`BASELINE_MISMATCH: invalid applied table identity ${addition.identity}.`);
+    }
+    await transferObject(client, { kind: 'table', schema, name });
+  }
+  for (const addition of additions.filter((entry) => entry.kind === 'function')) {
+    const name = addition.identity.split('.').at(-1);
+    const matches = await client.query(
+      `select pg_catalog.pg_get_function_identity_arguments(p.oid) as arguments
+         from pg_catalog.pg_proc p
+         join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+        where n.nspname = $1 and p.proname = $2
+          and not exists (
+            select 1 from pg_catalog.pg_depend d
+             where d.classid = 'pg_catalog.pg_proc'::pg_catalog.regclass
+               and d.objid = p.oid and d.deptype = 'e'
+          )`,
+      [addition.schema, name]
+    );
+    if (matches.rowCount !== 1) {
+      throw new Error(
+        `BASELINE_MISMATCH: applied function ${addition.identity} is ambiguous or missing.`
+      );
+    }
+    await transferObject(client, {
+      kind: 'function',
+      schema: addition.schema,
+      name,
+      arguments: matches.rows[0].arguments,
+    });
+  }
+}
+
 function quoteIdentifier(identifier) {
   return `"${String(identifier).replaceAll('"', '""')}"`;
 }
 
-async function backfillTrustedLegacyChecksums(client, manifest) {
+async function backfillTrustedLegacyChecksums(client, manifest, legacyState) {
   await client.query('alter table public.schema_migrations add column checksum text');
+  await client.query('alter table public.schema_migrations add column checksum_source text');
   for (const entry of manifest.migrations.filter(
     (migration) => migration.legacyChecksumBackfillAllowed
   )) {
     const result = await client.query(
-      'update public.schema_migrations set checksum=$1 where filename=$2 and checksum is null',
-      [entry.sha256, entry.filename]
+      'update public.schema_migrations set checksum=$1, checksum_source=$2 where filename=$3 and checksum is null and checksum_source is null',
+      [entry.sha256, MANIFEST_BACKFILL, entry.filename]
     );
     if (result.rowCount !== 1)
       throw new Error(`Trusted checksum backfill failed for ${entry.filename}.`);
   }
-  await client.query('alter table public.schema_migrations alter column checksum set not null');
+  if (legacyState === 'production-017-unverifiable') {
+    for (const entry of manifest.migrations.slice(10, 17)) {
+      const result = await client.query(
+        'update public.schema_migrations set checksum_source=$1 where filename=$2 and checksum is null and checksum_source is null',
+        [LEGACY_UNVERIFIABLE, entry.filename]
+      );
+      if (result.rowCount !== 1) {
+        throw new Error(`Legacy checksum provenance marking failed for ${entry.filename}.`);
+      }
+    }
+  }
+  await client.query(
+    'alter table public.schema_migrations alter column checksum_source set not null'
+  );
+  await client.query(`
+    alter table public.schema_migrations
+      add constraint schema_migrations_checksum_source_check check (
+        (checksum_source = 'legacy_unverifiable' and checksum is null)
+        or (checksum_source in ('manifest_backfill', 'migration_file') and checksum is not null)
+      )
+  `);
 }
 
 async function main() {
@@ -1528,19 +1628,29 @@ async function main() {
     const roleState = await inspectReservedRoles(client);
     const hasLedger = await ledgerExists(client);
     let appliedMigrations = new Set();
+    let legacyState;
     let ledgerMode;
     await preflightExtensions(client, manifest, { established: hasLedger });
     if (hasLedger) {
       const ledger = await attestLedger(client, manifest, roleState === 'established');
       appliedMigrations = ledger.appliedMigrations;
+      legacyState = ledger.legacyState;
       ledgerMode = ledger.ledgerMode;
+      const legacyOwnerProfile =
+        legacyState === 'production-017-unverifiable'
+          ? await resolveLegacy017OwnerProfile(client)
+          : undefined;
       await attestBaselineCatalog(
         client,
         manifest,
         roleState === 'absent' ? 'legacy' : 'target',
         appliedMigrations,
+        legacyOwnerProfile,
         ledgerMode
       );
+      if (legacyState === 'production-017-unverifiable') {
+        await attestLegacy017Structure(client);
+      }
     } else {
       await attestFreshCatalog(client, manifest, roleState === 'absent' ? 'legacy' : 'target');
     }
@@ -1559,8 +1669,9 @@ async function main() {
         if (hasLedger) {
           for (const object of manifest.baselineObjects.transferable)
             await transferObject(client, object);
-          await backfillTrustedLegacyChecksums(client, manifest);
-          ledgerMode = 'checksummed';
+          await transferAppliedMigrationObjects(client, manifest, appliedMigrations);
+          await backfillTrustedLegacyChecksums(client, manifest, legacyState);
+          ledgerMode = 'provenance';
         } else {
           const publicSchema = manifest.baselineObjects.transferable.find(
             (object) => object.kind === 'schema' && object.schema === 'public'
@@ -1579,7 +1690,17 @@ async function main() {
         const ledger = await attestLedger(client, manifest, true);
         appliedMigrations = ledger.appliedMigrations;
         ledgerMode = ledger.ledgerMode;
-        await attestBaselineCatalog(client, manifest, 'target', appliedMigrations, ledgerMode);
+        await attestBaselineCatalog(
+          client,
+          manifest,
+          'target',
+          appliedMigrations,
+          undefined,
+          ledgerMode
+        );
+        if (legacyState === 'production-017-unverifiable') {
+          await attestLegacy017Structure(client);
+        }
       } else {
         await attestFreshCatalog(client, manifest, 'target');
       }
@@ -1615,5 +1736,7 @@ module.exports = {
   assertReservedRoleOwnership,
   attestLedger,
   attestBaselineCatalog,
+  backfillTrustedLegacyChecksums,
   expectedCatalog,
+  resolveLegacy017OwnerProfile,
 };
