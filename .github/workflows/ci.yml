@@ -72,6 +72,17 @@ jobs:
       - name: Validate Docker application route context
         run: sh ../scripts/tests/test-dockerignore-route-contract.sh
 
+      - name: Test production acceptance isolation gate
+        run: node ../scripts/tests/production-acceptance-isolation.test.mjs
+
+      - name: Test production acceptance manifest recovery
+        run: node ../scripts/tests/production-acceptance-fixture-manifest.test.mjs
+      - name: Test production acceptance safety gates
+        run: node ../scripts/tests/production-acceptance-safety.test.mjs
+
+      - name: Validate protected M4 fixture workflow
+        run: bash ../scripts/tests/test-m4-acceptance-fixture-workflow.sh
+
       - name: Validate GitHub Actions expressions with pinned actionlint
         run: bash ../scripts/ci/run-actionlint.sh
 
