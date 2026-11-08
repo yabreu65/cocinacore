@@ -5,6 +5,13 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { Client } = require('pg');
+const {
+  assertSignature: assertLegacy017Signature,
+  CONSTRAINT_NAMES: LEGACY_017_CONSTRAINT_NAMES,
+  FUNCTION_NAMES: LEGACY_017_FUNCTION_NAMES,
+  INDEX_NAMES: LEGACY_017_INDEX_NAMES,
+  TRIGGER_NAMES: LEGACY_017_TRIGGER_NAMES,
+} = require('./legacy-017-attestation');
 
 try {
   require('dotenv').config({ path: path.resolve(__dirname, '../.env.local'), quiet: true });
@@ -143,7 +150,8 @@ function loadTrustedManifest() {
           throw new Error(`Trusted catalog addition is unsupported: ${entry.filename}.`);
         }
         const key = `${addition.kind}|${addition.schema}|${addition.identity}`;
-        if (catalogAdditions.has(key)) throw new Error(`Duplicate trusted catalog addition: ${key}`);
+        if (catalogAdditions.has(key))
+          throw new Error(`Duplicate trusted catalog addition: ${key}`);
         catalogAdditions.add(key);
       }
     }
@@ -879,22 +887,38 @@ function expectedCatalog(manifest, appliedMigrations, catalogFunctions) {
         expected.types.push(`${schema}.${tableName}`);
         expected.types.push(`${schema}._${tableName}`);
       } else if (addition.kind === 'index') {
-        expected.indexes.push(`${addition.schema}.${addition.identity}`);
+        expected.indexes.push(qualifyRelationObjectIdentity(addition));
       } else if (addition.kind === 'constraint') {
-        expected.constraints.push(`${addition.schema}.${addition.identity}`);
+        expected.constraints.push(qualifyRelationObjectIdentity(addition));
       } else if (addition.kind === 'function') {
         const functionName = `${addition.schema}.${addition.identity.split('.')[1]}`;
-        const matches = catalogFunctions.filter((identity) => identity.startsWith(`${functionName}(`));
+        const matches = catalogFunctions.filter((identity) =>
+          identity.startsWith(`${functionName}(`)
+        );
         if (matches.length !== 1) {
-          throw new Error(`BASELINE_MISMATCH: applied function ${functionName} must exist exactly once.`);
+          throw new Error(
+            `BASELINE_MISMATCH: applied function ${functionName} must exist exactly once.`
+          );
         }
         expected.functions.push(matches[0]);
       } else if (addition.kind === 'trigger') {
-        expected.triggers.push(`${addition.schema}.${addition.identity}`);
+        expected.triggers.push(qualifyRelationObjectIdentity(addition));
       }
     }
   }
   return expected;
+}
+
+function qualifyRelationObjectIdentity(addition) {
+  const identityParts = addition.identity.split('.');
+  if (
+    !['internal', 'public'].includes(addition.schema) ||
+    identityParts.length !== 2 ||
+    identityParts.some((part) => !/^[a-z_][a-z0-9_]*$/.test(part))
+  ) {
+    throw new Error(`BASELINE_MISMATCH: invalid ${addition.kind} identity.`);
+  }
+  return `${addition.schema}.${addition.identity}`;
 }
 
 async function ledgerExists(client) {
@@ -1043,18 +1067,22 @@ async function attestBaselineCatalog(client, manifest, ownerState, appliedMigrat
   const appliedOwnerEntries = new Map();
   for (const addition of appliedOwnerAdditions) {
     const rows = addition.kind === 'function' ? catalog.functions.rows : catalog.tables.rows;
-    const identity = addition.kind === 'function'
-      ? `${addition.schema}.${addition.identity.split('.')[1]}`
-      : addition.identity;
-    const matches = addition.kind === 'function'
-      ? rows.filter((row) => row.identity.startsWith(`${identity}(`))
-      : rows.filter((row) => row.identity === identity);
+    const identity =
+      addition.kind === 'function'
+        ? `${addition.schema}.${addition.identity.split('.')[1]}`
+        : addition.identity;
+    const matches =
+      addition.kind === 'function'
+        ? rows.filter((row) => row.identity.startsWith(`${identity}(`))
+        : rows.filter((row) => row.identity === identity);
     if (matches.length !== 1 || matches[0].owner !== expectedAdditionOwner) {
       throw new Error(`BASELINE_MISMATCH: applied ${addition.kind} owner differs for ${identity}.`);
     }
     const key = `${addition.kind}|${matches[0].identity}`;
     if (appliedOwnerEntries.has(key)) {
-      throw new Error(`BASELINE_MISMATCH: duplicate applied ${addition.kind} owner policy for ${matches[0].identity}.`);
+      throw new Error(
+        `BASELINE_MISMATCH: duplicate applied ${addition.kind} owner policy for ${matches[0].identity}.`
+      );
     }
     appliedOwnerEntries.set(key, {
       expectedLegacyOwner: 'cocinacore',
@@ -1074,7 +1102,9 @@ async function attestBaselineCatalog(client, manifest, ownerState, appliedMigrat
   );
   for (const [key, ownerPolicy] of appliedOwnerEntries) {
     if (byKey.has(key)) {
-      throw new Error(`BASELINE_MISMATCH: conflicting owner policy for ${key.slice('function|'.length)}.`);
+      throw new Error(
+        `BASELINE_MISMATCH: conflicting owner policy for ${key.slice('function|'.length)}.`
+      );
     }
     byKey.set(key, ownerPolicy);
   }
@@ -1095,6 +1125,158 @@ async function attestBaselineCatalog(client, manifest, ownerState, appliedMigrat
       }
     }
   }
+}
+
+async function attestLegacy017Structure(client) {
+  const columns = await client.query(
+    `select c.relname || '.' || a.attname as identity,
+            pg_catalog.format_type(a.atttypid, a.atttypmod) as data_type,
+            a.attnotnull,
+            coalesce(pg_catalog.pg_get_expr(d.adbin, d.adrelid), '') as default_expression
+       from pg_catalog.pg_attribute a
+       join pg_catalog.pg_class c on c.oid = a.attrelid
+       join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+       left join pg_catalog.pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
+      where n.nspname = 'public'
+        and c.relkind in ('r','p')
+        and c.relname || '.' || a.attname = any($1::text[])
+        and a.attnum > 0 and not a.attisdropped
+      order by identity`,
+    [
+      [
+        'shopping_list_items.transfer_inventory_item_id',
+        'shopping_list_items.transferred_at',
+        'user_culinary_profiles.allergies',
+        'user_culinary_profiles.available_time_minutes',
+        'user_culinary_profiles.disliked_ingredients',
+        'user_culinary_profiles.household_members',
+        'user_meal_plans.consumption_payload',
+        'user_recipes.archived_at',
+      ],
+    ]
+  );
+  const constraints = await client.query(
+    `select c.relname || '.' || x.conname as identity,
+            x.contype::text as type,
+            x.convalidated as validated,
+            pg_catalog.pg_get_constraintdef(x.oid) as definition
+       from pg_catalog.pg_constraint x
+       join pg_catalog.pg_class c on c.oid = x.conrelid
+       join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+      where n.nspname = 'public' and x.conname = any($1::text[])
+      order by identity`,
+    [LEGACY_017_CONSTRAINT_NAMES]
+  );
+  const indexes = await client.query(
+    `select i.relname as identity,
+            x.indisvalid as valid,
+            x.indisready as ready,
+            pg_catalog.pg_get_indexdef(x.indexrelid) as definition
+       from pg_catalog.pg_index x
+       join pg_catalog.pg_class i on i.oid = x.indexrelid
+       join pg_catalog.pg_class t on t.oid = x.indrelid
+       join pg_catalog.pg_namespace n on n.oid = t.relnamespace
+      where n.nspname = 'public' and i.relname = any($1::text[])
+      order by identity`,
+    [LEGACY_017_INDEX_NAMES]
+  );
+  const policies = await client.query(`
+    select c.relname || '.' || p.polname as identity,
+           p.polcmd::text as command,
+           p.polpermissive as permissive,
+           p.polroles::text as roles,
+           coalesce(pg_catalog.pg_get_expr(p.polqual, p.polrelid), '') as using_expression,
+           coalesce(pg_catalog.pg_get_expr(p.polwithcheck, p.polrelid), '') as check_expression,
+           c.relrowsecurity as rls_enabled,
+           c.relforcerowsecurity as rls_forced
+      from pg_catalog.pg_policy p
+      join pg_catalog.pg_class c on c.oid = p.polrelid
+      join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public' and c.relname in ('user_recipes','user_recipe_versions')
+     order by identity
+  `);
+  const functions = await client.query(
+    `select n.nspname || '.' || p.proname || '(' ||
+             pg_catalog.pg_get_function_identity_arguments(p.oid) || ')' as identity,
+            pg_catalog.pg_get_functiondef(p.oid) as definition,
+            p.prosecdef as security_definer
+       from pg_catalog.pg_proc p
+       join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public' and p.proname = any($1::text[])
+      order by identity`,
+    [LEGACY_017_FUNCTION_NAMES]
+  );
+  const triggers = await client.query(
+    `select t.tgname as identity,
+            pg_catalog.pg_get_triggerdef(t.oid) as definition,
+            t.tgenabled as enabled
+       from pg_catalog.pg_trigger t
+       join pg_catalog.pg_class c on c.oid = t.tgrelid
+       join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+      where n.nspname = 'public' and not t.tgisinternal and t.tgname = any($1::text[])
+      order by identity`,
+    [LEGACY_017_TRIGGER_NAMES]
+  );
+  const data = await client.query(`
+    select not exists (
+             select 1 from public.users
+              where email <> pg_catalog.lower(pg_catalog.btrim(email)) or email = ''
+           ) as canonical_emails,
+           not exists (
+             select 1 from public.users
+              group by email having count(*) > 1
+           ) as unique_emails,
+           not exists (
+             select 1
+               from public.user_culinary_profile_terms as profile_terms
+               join public.culinary_terms as terms on terms.id = profile_terms.term_id
+               join public.culinary_dimensions as dimensions on dimensions.id = terms.dimension_id
+              where dimensions.key in ('cuisine','dietary','technique','ingredient_type','goal')
+              group by profile_terms.user_id, dimensions.key
+             having count(*) > case dimensions.key
+                      when 'cuisine' then 6 when 'dietary' then 12
+                      when 'technique' then 8 when 'ingredient_type' then 8 when 'goal' then 6
+                    end
+           ) as culinary_term_groups_within_limits
+  `);
+
+  const actual = {
+    columns: columns.rows.map((row) => [
+      row.identity,
+      row.data_type,
+      row.attnotnull,
+      row.default_expression,
+    ]),
+    constraints: constraints.rows.map((row) => [
+      row.identity,
+      row.type,
+      row.validated,
+      row.definition,
+    ]),
+    indexes: indexes.rows.map((row) => [row.identity, row.valid, row.ready, row.definition]),
+    policies: policies.rows.map((row) => [
+      row.identity,
+      row.command,
+      row.permissive,
+      row.roles,
+      row.using_expression,
+      row.check_expression,
+      row.rls_enabled,
+      row.rls_forced,
+    ]),
+    functions: functions.rows.map((row) => [
+      row.identity,
+      crypto.createHash('sha256').update(row.definition).digest('hex'),
+      row.security_definer,
+    ]),
+    triggers: triggers.rows.map((row) => [row.identity, row.definition, row.enabled]),
+    dataConditions: {
+      canonicalEmails: data.rows[0]?.canonical_emails,
+      uniqueEmails: data.rows[0]?.unique_emails,
+      culinaryTermGroupsWithinLimits: data.rows[0]?.culinary_term_groups_within_limits,
+    },
+  };
+  assertLegacy017Signature(actual);
 }
 
 async function attestFreshCatalog(client, manifest, ownerState) {
@@ -1175,13 +1357,13 @@ async function assertReservedRoleOwnership(client, manifest, appliedMigrations) 
        select pg_catalog.pg_get_userbyid(n.nspowner), 'schema', n.nspname
          from pg_catalog.pg_namespace n
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select pg_catalog.pg_get_userbyid(c.relowner), 'relation', n.nspname || '.' || c.relname
          from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid=c.relnamespace
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
           and not exists (
             select 1 from pg_catalog.pg_depend d
@@ -1192,7 +1374,7 @@ async function assertReservedRoleOwnership(client, manifest, appliedMigrations) 
        select pg_catalog.pg_get_userbyid(p.proowner), 'function', n.nspname || '.' || p.proname || '(' || pg_catalog.pg_get_function_identity_arguments(p.oid) || ')'
          from pg_catalog.pg_proc p join pg_catalog.pg_namespace n on n.oid=p.pronamespace
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
           and not exists (
             select 1 from pg_catalog.pg_depend d
@@ -1203,7 +1385,7 @@ async function assertReservedRoleOwnership(client, manifest, appliedMigrations) 
        select pg_catalog.pg_get_userbyid(t.typowner), 'type', n.nspname || '.' || t.typname
          from pg_catalog.pg_type t join pg_catalog.pg_namespace n on n.oid=t.typnamespace
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
           and not exists (
             select 1 from pg_catalog.pg_depend d
@@ -1214,37 +1396,37 @@ async function assertReservedRoleOwnership(client, manifest, appliedMigrations) 
        select pg_catalog.pg_get_userbyid(c.conowner), 'conversion', n.nspname || '.' || c.conname
          from pg_catalog.pg_conversion c join pg_catalog.pg_namespace n on n.oid=c.connamespace
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select pg_catalog.pg_get_userbyid(o.oprowner), 'operator', n.nspname || '.' || o.oprname
          from pg_catalog.pg_operator o join pg_catalog.pg_namespace n on n.oid=o.oprnamespace
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select pg_catalog.pg_get_userbyid(o.opcowner), 'operator class', n.nspname || '.' || o.opcname
          from pg_catalog.pg_opclass o join pg_catalog.pg_namespace n on n.oid=o.opcnamespace
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select pg_catalog.pg_get_userbyid(o.opfowner), 'operator family', n.nspname || '.' || o.opfname
          from pg_catalog.pg_opfamily o join pg_catalog.pg_namespace n on n.oid=o.opfnamespace
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select pg_catalog.pg_get_userbyid(t.dictowner), 'text search dictionary', n.nspname || '.' || t.dictname
          from pg_catalog.pg_ts_dict t join pg_catalog.pg_namespace n on n.oid=t.dictnamespace
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select pg_catalog.pg_get_userbyid(t.cfgowner), 'text search configuration', n.nspname || '.' || t.cfgname
          from pg_catalog.pg_ts_config t join pg_catalog.pg_namespace n on n.oid=t.cfgnamespace
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select pg_catalog.pg_get_userbyid(f.fdwowner), 'foreign data wrapper', f.fdwname
@@ -1278,14 +1460,16 @@ async function assertReservedRoleOwnership(client, manifest, appliedMigrations) 
   for (const addition of appliedAdditions.filter((entry) => entry.kind === 'table')) {
     const [schema] = addition.identity.split('.');
     if (schema !== addition.schema || allowed.has(`table|${addition.identity}`)) {
-      throw new Error(`ROLE_STATE_MISMATCH: invalid or duplicate applied table ${addition.identity}.`);
+      throw new Error(
+        `ROLE_STATE_MISMATCH: invalid or duplicate applied table ${addition.identity}.`
+      );
     }
     allowed.add(`table|${addition.identity}`);
   }
   for (const row of ordinary.rows.filter((entry) => entry.owner === SCHEMA_OWNER)) {
-    const isAppliedFunction = row.kind === 'function' && [...appliedFunctionNames].some(
-      (name) => row.identity.startsWith(`${name}(`)
-    );
+    const isAppliedFunction =
+      row.kind === 'function' &&
+      [...appliedFunctionNames].some((name) => row.identity.startsWith(`${name}(`));
     if (!allowed.has(`${row.kind}|${row.identity}`) && !isAppliedFunction) {
       throw new Error(
         `ROLE_STATE_MISMATCH: schema owner owns unexpected object ${row.kind} ${row.identity}.`
@@ -1299,7 +1483,7 @@ async function assertReservedRoleOwnership(client, manifest, appliedMigrations) 
          from pg_catalog.pg_namespace n
          cross join lateral pg_catalog.aclexplode(n.nspacl) a
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select a.grantee
@@ -1307,7 +1491,7 @@ async function assertReservedRoleOwnership(client, manifest, appliedMigrations) 
          join pg_catalog.pg_namespace n on n.oid=c.relnamespace
          cross join lateral pg_catalog.aclexplode(c.relacl) a
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select a.grantee
@@ -1315,7 +1499,7 @@ async function assertReservedRoleOwnership(client, manifest, appliedMigrations) 
          join pg_catalog.pg_namespace n on n.oid=p.pronamespace
          cross join lateral pg_catalog.aclexplode(p.proacl) a
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select a.grantee
@@ -1323,7 +1507,7 @@ async function assertReservedRoleOwnership(client, manifest, appliedMigrations) 
          join pg_catalog.pg_namespace n on n.oid=t.typnamespace
          cross join lateral pg_catalog.aclexplode(t.typacl) a
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select a.grantee
@@ -1535,4 +1719,9 @@ if (require.main === module) {
   });
 }
 
-module.exports = { attestBaselineCatalog };
+module.exports = {
+  assertReservedRoleOwnership,
+  attestBaselineCatalog,
+  attestLegacy017Structure,
+  expectedCatalog,
+};
