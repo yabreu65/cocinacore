@@ -22,9 +22,59 @@ try {
 
 const MIGRATION_ROLE = 'migration_admin';
 const SCHEMA_OWNER = 'cocinacore_schema_owner';
+const RUNTIME_ROLE = 'cocinacore_user';
 const PRODUCTION_017_OWNER_PROFILE = Object.freeze({
   objectOwner: 'cocinacore_user',
   publicSchemaOwner: 'cocinacore_user',
+});
+// Exact runtime table permissions for the application SQL paths in the
+// production-017 codebase. Empty entries are deliberately unprivileged.
+// Migrations 018/019 own their own ACL contracts.
+const RUNTIME_TABLE_PRIVILEGES = Object.freeze({
+  book_chunks: Object.freeze(['SELECT', 'INSERT']),
+  culinary_dimensions: Object.freeze(['SELECT']),
+  culinary_terms: Object.freeze(['SELECT']),
+  global_books: Object.freeze(['SELECT', 'INSERT']),
+  global_pdf_library: Object.freeze(['SELECT', 'INSERT']),
+  inventory_movements: Object.freeze(['INSERT']),
+  password_reset_tokens: Object.freeze(['SELECT', 'INSERT', 'UPDATE']),
+  platform_owners: Object.freeze(['SELECT']),
+  premium_recipe_reviews: Object.freeze([]),
+  premium_recipes: Object.freeze([]),
+  premium_review_reports: Object.freeze(['SELECT']),
+  recipe_ai_history: Object.freeze(['SELECT', 'INSERT', 'UPDATE', 'DELETE']),
+  recipe_ai_ratings: Object.freeze([]),
+  recipe_inventory_items: Object.freeze(['SELECT', 'INSERT', 'UPDATE', 'DELETE']),
+  schema_migrations: Object.freeze(['SELECT']),
+  sessions: Object.freeze(['SELECT', 'INSERT', 'UPDATE', 'DELETE']),
+  shopping_list_items: Object.freeze(['SELECT', 'INSERT', 'UPDATE', 'DELETE']),
+  saved_premium_recipes: Object.freeze([]),
+  tenant_books: Object.freeze(['SELECT', 'DELETE']),
+  tenant_invitations: Object.freeze(['SELECT', 'UPDATE']),
+  tenant_memberships: Object.freeze(['SELECT', 'INSERT', 'UPDATE', 'DELETE']),
+  tenant_pdf_library: Object.freeze(['SELECT', 'DELETE']),
+  tenants: Object.freeze(['SELECT', 'INSERT', 'UPDATE']),
+  user_culinary_profile_terms: Object.freeze(['SELECT', 'INSERT', 'DELETE']),
+  user_culinary_profiles: Object.freeze(['SELECT', 'INSERT', 'UPDATE']),
+  user_meal_plans: Object.freeze(['SELECT', 'INSERT', 'UPDATE']),
+  user_meal_plan_inventory_suggestions: Object.freeze([]),
+  user_meal_plan_optimization_snapshots: Object.freeze([]),
+  user_recipe_versions: Object.freeze(['SELECT', 'INSERT']),
+  user_recipes: Object.freeze(['SELECT', 'INSERT', 'UPDATE']),
+  users: Object.freeze(['SELECT', 'INSERT', 'UPDATE']),
+});
+const RUNTIME_TABLE_PRIVILEGE_NAMES = Object.freeze([
+  'SELECT',
+  'INSERT',
+  'UPDATE',
+  'DELETE',
+  'TRUNCATE',
+  'REFERENCES',
+  'TRIGGER',
+]);
+const RUNTIME_LEDGER_POLICY = Object.freeze({
+  name: 'schema_migrations_runtime_select',
+  using: 'true',
 });
 const LOCK_NAMESPACE_PREFIX = 'cocinacore:database-change:v1:';
 const MANIFEST_VERSION = 1;
@@ -614,6 +664,254 @@ async function assertPublicSchemaAcl(client) {
   `);
   if (!publicAcl.rows[0].public_usage || publicAcl.rows[0].public_create) {
     throw new Error('ROLE_STATE_MISMATCH: public schema ACL does not match the trusted contract.');
+  }
+}
+
+function normalizePrivileges(values) {
+  return [...new Set(values || [])].sort();
+}
+
+function assertRuntimeAclRows(rows, { allowMissing = false } = {}) {
+  const expectedTables = new Set(Object.keys(RUNTIME_TABLE_PRIVILEGES));
+  for (const row of rows) {
+    if (!expectedTables.has(row.table_name)) {
+      throw new Error(`RUNTIME_ACL_MISMATCH: unexpected table ${row.table_name}.`);
+    }
+    if (!row.exists) continue;
+    if (row.owner !== SCHEMA_OWNER) {
+      throw new Error(`RUNTIME_ACL_MISMATCH: ${row.table_name} has an unexpected owner.`);
+    }
+
+    const expected = normalizePrivileges(RUNTIME_TABLE_PRIVILEGES[row.table_name]);
+    const direct = normalizePrivileges(row.direct_privileges);
+    const effective = normalizePrivileges(row.effective_privileges);
+    const grantable = normalizePrivileges(row.grantable_privileges);
+    if (
+      row.public_grants ||
+      grantable.length !== 0 ||
+      direct.some((privilege) => !expected.includes(privilege)) ||
+      effective.some((privilege) => !expected.includes(privilege)) ||
+      (!allowMissing &&
+        (direct.join(',') !== expected.join(',') || effective.join(',') !== expected.join(',')))
+    ) {
+      throw new Error(`RUNTIME_ACL_MISMATCH: privileges on public.${row.table_name} are invalid.`);
+    }
+  }
+}
+
+async function getRuntimeAclRows(client) {
+  const tableNames = Object.keys(RUNTIME_TABLE_PRIVILEGES);
+  const result = await client.query(
+    `with targets as (
+       select table_name, pg_catalog.to_regclass(pg_catalog.format('public.%I', table_name)) as relation
+         from pg_catalog.unnest($1::text[]) as target(table_name)
+     ), runtime as (
+       select oid from pg_catalog.pg_roles where rolname = $2
+     )
+     select target.table_name,
+            relation.oid is not null as exists,
+            pg_catalog.pg_get_userbyid(relation.relowner) as owner,
+            coalesce((
+              select pg_catalog.array_agg(distinct acl.privilege_type order by acl.privilege_type)
+                from pg_catalog.aclexplode(coalesce(
+                       relation.relacl,
+                       pg_catalog.acldefault('r', relation.relowner)
+                     )) as acl
+               where acl.grantee = runtime.oid
+            ), array[]::text[]) as direct_privileges,
+            coalesce((
+              select pg_catalog.array_agg(distinct acl.privilege_type order by acl.privilege_type)
+                from pg_catalog.aclexplode(coalesce(
+                       relation.relacl,
+                       pg_catalog.acldefault('r', relation.relowner)
+                     )) as acl
+               where acl.grantee = runtime.oid and acl.is_grantable
+            ), array[]::text[]) as grantable_privileges,
+            coalesce((
+              select pg_catalog.array_agg(privilege order by privilege)
+                from pg_catalog.unnest($3::text[]) as requested(privilege)
+               where relation.oid is not null
+                 and pg_catalog.has_table_privilege($2, relation.oid, privilege)
+            ), array[]::text[]) as effective_privileges,
+            relation.oid is not null and exists (
+              select 1
+                from pg_catalog.aclexplode(coalesce(
+                       relation.relacl,
+                       pg_catalog.acldefault('r', relation.relowner)
+                     )) as acl
+               where acl.grantee = 0
+            ) as public_grants
+       from targets target
+       left join pg_catalog.pg_class relation on relation.oid = target.relation
+       left join runtime on true
+      order by target.table_name`,
+    [tableNames, RUNTIME_ROLE, RUNTIME_TABLE_PRIVILEGE_NAMES]
+  );
+  return result.rows;
+}
+
+async function assertRuntimeAclState(client, { allowMissing = false } = {}) {
+  const role = await client.query(
+    `select r.rolcanlogin, r.rolsuper, r.rolcreatedb, r.rolcreaterole,
+            r.rolreplication, r.rolbypassrls,
+            exists(select 1 from pg_catalog.pg_auth_members m where m.member = r.oid) as has_memberships,
+            pg_catalog.has_database_privilege(r.oid, current_database(), 'CREATE') as database_create,
+            pg_catalog.has_schema_privilege(r.oid, 'public', 'USAGE') as public_usage,
+            pg_catalog.has_schema_privilege(r.oid, 'public', 'CREATE') as public_create
+       from pg_catalog.pg_roles r where r.rolname = $1`,
+    [RUNTIME_ROLE]
+  );
+  const state = role.rows[0];
+  // LOGIN is deployment-specific; CI can keep the runtime role NOLOGIN while testing migrations.
+  if (
+    !state ||
+    state.rolsuper ||
+    state.rolcreatedb ||
+    state.rolcreaterole ||
+    state.rolreplication ||
+    state.rolbypassrls ||
+    state.has_memberships ||
+    state.database_create ||
+    !state.public_usage ||
+    state.public_create
+  ) {
+    throw new Error(
+      'RUNTIME_ACL_MISMATCH: runtime role attributes or schema privileges are unsafe.'
+    );
+  }
+
+  const rows = await getRuntimeAclRows(client);
+  assertRuntimeAclRows(rows, { allowMissing });
+  const columnAcl = await client.query(
+    `select c.relname, a.attname, acl.grantee
+       from pg_catalog.pg_class c
+       join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+       join pg_catalog.pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
+       cross join lateral pg_catalog.aclexplode(a.attacl) as acl
+      where n.nspname = 'public'
+        and c.relname = any($1::text[])
+        and acl.grantee in (
+          0,
+          (select oid from pg_catalog.pg_roles where rolname = $2)
+        )`,
+    [Object.keys(RUNTIME_TABLE_PRIVILEGES), RUNTIME_ROLE]
+  );
+  if (columnAcl.rowCount !== 0) {
+    throw new Error('RUNTIME_ACL_MISMATCH: unexpected column-level runtime or PUBLIC grant.');
+  }
+  return rows;
+}
+
+async function readRuntimeLedgerPolicy(client) {
+  const ledger = await client.query(
+    `select c.relrowsecurity, c.relforcerowsecurity
+       from pg_catalog.pg_class c
+      where c.oid = pg_catalog.to_regclass('public.schema_migrations')`
+  );
+  if (
+    ledger.rowCount !== 1 ||
+    !ledger.rows[0].relrowsecurity ||
+    ledger.rows[0].relforcerowsecurity
+  ) {
+    throw new Error('RUNTIME_LEDGER_MISMATCH: schema_migrations RLS contract is invalid.');
+  }
+  const policies = await client.query(
+    `select p.polname, p.polcmd, p.polpermissive,
+            (p.polroles = array[(select oid from pg_catalog.pg_roles where rolname = $1)]::oid[]) as runtime_only,
+            pg_catalog.pg_get_expr(p.polqual, p.polrelid) as using_expression,
+            pg_catalog.pg_get_expr(p.polwithcheck, p.polrelid) as check_expression
+       from pg_catalog.pg_policy p
+      where p.polrelid = pg_catalog.to_regclass('public.schema_migrations')
+      order by p.polname`,
+    [RUNTIME_ROLE]
+  );
+  return policies.rows;
+}
+
+function assertRuntimeLedgerPolicy(policies, { allowAbsent = false } = {}) {
+  if (policies.length === 0 && allowAbsent) return;
+  const policy = policies[0];
+  if (
+    policies.length !== 1 ||
+    policy?.polname !== RUNTIME_LEDGER_POLICY.name ||
+    policy.polcmd !== 'r' ||
+    !policy.polpermissive ||
+    !policy.runtime_only ||
+    policy.using_expression !== RUNTIME_LEDGER_POLICY.using ||
+    policy.check_expression !== null
+  ) {
+    throw new Error('RUNTIME_LEDGER_MISMATCH: schema_migrations runtime policy is unexpected.');
+  }
+}
+
+async function assertRuntimeLedgerState(client, { allowAbsent = false } = {}) {
+  const policies = await readRuntimeLedgerPolicy(client);
+  assertRuntimeLedgerPolicy(policies, { allowAbsent });
+}
+
+async function assertLegacyRuntimeLedgerState(client) {
+  const policies = await readRuntimeLedgerPolicy(client);
+  if (policies.length !== 0) {
+    throw new Error('RUNTIME_LEDGER_MISMATCH: legacy schema_migrations must have no policies.');
+  }
+}
+
+async function applyRuntimeAccess(client, { resetTableAcl }) {
+  await client.query('set local role "cocinacore_schema_owner"');
+  try {
+    const existingTables = await getRuntimeAclRows(client);
+    for (const row of existingTables.filter((entry) => entry.exists)) {
+      const table = `public.${quoteIdentifier(row.table_name)}`;
+      if (resetTableAcl) {
+        await client.query(
+          `revoke all privileges on table ${table} from ${quoteIdentifier(RUNTIME_ROLE)}`
+        );
+        const columns = await client.query(
+          `select a.attname
+             from pg_catalog.pg_attribute a
+            where a.attrelid = pg_catalog.to_regclass($1)
+              and a.attnum > 0 and not a.attisdropped and a.attacl is not null
+              and exists (
+                select 1 from pg_catalog.aclexplode(a.attacl) acl
+                 where acl.grantee = (select oid from pg_catalog.pg_roles where rolname = $2)
+              )`,
+          [table, RUNTIME_ROLE]
+        );
+        for (const column of columns.rows) {
+          await client.query(
+            `revoke all privileges (${quoteIdentifier(column.attname)}) on table ${table} from ${quoteIdentifier(RUNTIME_ROLE)}`
+          );
+        }
+      } else {
+        const expected = RUNTIME_TABLE_PRIVILEGES[row.table_name];
+        const missing = expected.filter((privilege) => !row.direct_privileges.includes(privilege));
+        if (missing.length > 0) {
+          await client.query(
+            `grant ${missing.join(', ')} on table ${table} to ${quoteIdentifier(RUNTIME_ROLE)}`
+          );
+        }
+      }
+      if (resetTableAcl) {
+        const expected = RUNTIME_TABLE_PRIVILEGES[row.table_name];
+        if (expected.length > 0) {
+          await client.query(
+            `grant ${expected.join(', ')} on table ${table} to ${quoteIdentifier(RUNTIME_ROLE)}`
+          );
+        }
+      }
+    }
+    await client.query(`revoke create on schema public from ${quoteIdentifier(RUNTIME_ROLE)}`);
+    const policies = await readRuntimeLedgerPolicy(client);
+    assertRuntimeLedgerPolicy(policies, { allowAbsent: true });
+    if (policies.length === 0) {
+      await client.query(
+        `create policy ${quoteIdentifier(RUNTIME_LEDGER_POLICY.name)}
+           on public.schema_migrations for select to ${quoteIdentifier(RUNTIME_ROLE)}
+           using (true)`
+      );
+    }
+  } finally {
+    await client.query('reset role');
   }
 }
 
@@ -1651,6 +1949,12 @@ async function main() {
       if (legacyState === 'production-017-unverifiable') {
         await attestLegacy017Structure(client);
       }
+      if (roleState === 'absent') {
+        await assertLegacyRuntimeLedgerState(client);
+      } else {
+        await assertRuntimeAclState(client, { allowMissing: true });
+        await assertRuntimeLedgerState(client, { allowAbsent: true });
+      }
     } else {
       await attestFreshCatalog(client, manifest, roleState === 'absent' ? 'legacy' : 'target');
     }
@@ -1672,6 +1976,7 @@ async function main() {
           await transferAppliedMigrationObjects(client, manifest, appliedMigrations);
           await backfillTrustedLegacyChecksums(client, manifest, legacyState);
           ledgerMode = 'provenance';
+          await applyRuntimeAccess(client, { resetTableAcl: true });
         } else {
           const publicSchema = manifest.baselineObjects.transferable.find(
             (object) => object.kind === 'schema' && object.schema === 'public'
@@ -1681,6 +1986,10 @@ async function main() {
         await client.query('revoke create on schema public from public');
         await client.query('grant usage on schema public to public');
         await client.query(`revoke all on schema public from ${MIGRATION_ROLE}`);
+      }
+
+      if (hasLedger && roleState === 'established') {
+        await applyRuntimeAccess(client, { resetTableAcl: false });
       }
 
       await inspectReservedRoles(client);
@@ -1701,6 +2010,8 @@ async function main() {
         if (legacyState === 'production-017-unverifiable') {
           await attestLegacy017Structure(client);
         }
+        await assertRuntimeAclState(client);
+        await assertRuntimeLedgerState(client);
       } else {
         await attestFreshCatalog(client, manifest, 'target');
       }
@@ -1734,9 +2045,14 @@ if (require.main === module) {
 module.exports = {
   assertPublicSchemaAcl,
   assertReservedRoleOwnership,
+  assertRuntimeAclRows,
+  assertRuntimeLedgerPolicy,
   attestLedger,
   attestBaselineCatalog,
   backfillTrustedLegacyChecksums,
   expectedCatalog,
   resolveLegacy017OwnerProfile,
+  RUNTIME_ROLE,
+  RUNTIME_TABLE_PRIVILEGES,
+  RUNTIME_LEDGER_POLICY,
 };

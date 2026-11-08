@@ -362,6 +362,7 @@ TMP_ROOT=$(mktemp -d)
 LOG="$TMP_ROOT/operation.log"
 MIGRATION_PASSWORD=$(openssl rand -hex 18)
 ADMIN_PASSWORD=$(openssl rand -hex 18)
+RUNTIME_PASSWORD=$(openssl rand -hex 18)
 
 fail() {
   exit 1
@@ -378,10 +379,11 @@ start_container() {
   until docker exec "$CONTAINER" pg_isready -h 127.0.0.1 -U cocinacore -d "$DB" >/dev/null 2>&1; do
     attempt=$((attempt + 1)); [ "$attempt" -lt 60 ] || fail 'PostgreSQL did not become ready'; sleep 1
   done
-  admin_sql "$DB" 'create role cocinacore_user nologin nosuperuser nobypassrls'
+  admin_sql "$DB" "create role cocinacore_user login password '$RUNTIME_PASSWORD' nosuperuser nocreatedb nocreaterole noreplication nobypassrls"
   PORT=$(docker port "$CONTAINER" 5432/tcp | sed 's/.*://')
   ADMIN_URL="postgresql://cocinacore:$ADMIN_PASSWORD@127.0.0.1:$PORT/$DB"
   MIGRATION_URL="postgresql://migration_admin:$MIGRATION_PASSWORD@127.0.0.1:$PORT/$DB"
+  RUNTIME_URL="postgresql://cocinacore_user:$RUNTIME_PASSWORD@127.0.0.1:$PORT/$DB"
 }
 
 stop_container() {
@@ -392,6 +394,12 @@ stop_container() {
 admin_sql() {
   database=$1; shift
   docker exec -i "$CONTAINER" psql -X -v ON_ERROR_STOP=1 -U cocinacore -d "$database" -Atqc "$*"
+}
+
+runtime_sql() {
+  database=$1; shift
+  docker exec -e PGPASSWORD="$RUNTIME_PASSWORD" -i "$CONTAINER" \
+    psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -U cocinacore_user -d "$database" -Atqc "$*"
 }
 
 migrator_sql() {
@@ -609,7 +617,7 @@ admin_sql "$DB" "insert into pg_depend(classid,objid,objsubid,refclassid,refobji
 provision >"$LOG" 2>&1
 
 # Exact extension identity detects same-count substitution, not only cardinality drift.
-admin_sql "$DB" 'create function public.cp21_fake_vector_member() returns integer language sql as $$select 1$$'
+admin_sql "$DB" "create function public.cp21_fake_vector_member() returns integer language sql as \$\$select 1\$\$"
 admin_sql "$DB" "delete from pg_depend where refclassid='pg_extension'::regclass and refobjid=(select oid from pg_extension where extname='vector') and deptype='e' and classid='pg_operator'::regclass and objid=$VECTOR_OPERATOR;
 insert into pg_depend(classid,objid,objsubid,refclassid,refobjid,refobjsubid,deptype)
 values ('pg_proc'::regclass,'public.cp21_fake_vector_member()'::regprocedure,0,'pg_extension'::regclass,(select oid from pg_extension where extname='vector'),0,'e')"
@@ -623,7 +631,7 @@ admin_sql "$DB" 'drop function public.cp21_fake_vector_member()'
 admin_sql "$DB" 'create schema cp21_rogue authorization migration_admin'
 expect_provision_failure ROLE_STATE_MISMATCH
 admin_sql "$DB" 'alter schema cp21_rogue owner to cocinacore; drop schema cp21_rogue'
-admin_sql "$DB" 'create schema cp21_rogue; create type cp21_rogue.forbidden_enum as enum ($$forbidden$$); alter type cp21_rogue.forbidden_enum owner to migration_admin'
+admin_sql "$DB" "create schema cp21_rogue; create type cp21_rogue.forbidden_enum as enum (\$\$forbidden\$\$); alter type cp21_rogue.forbidden_enum owner to migration_admin"
 expect_provision_failure ROLE_STATE_MISMATCH
 admin_sql "$DB" 'alter type cp21_rogue.forbidden_enum owner to cocinacore; drop schema cp21_rogue cascade'
 
@@ -1064,6 +1072,20 @@ set_check legacy017_owner_transfer
 [ "$(admin_sql "$DB" "select pg_catalog.pg_get_userbyid(p.proowner) from pg_catalog.pg_proc p join pg_catalog.pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='is_valid_culinary_profile_text_list'")" = cocinacore_schema_owner ] || fail 'legacy 017 application function ownership was not transferred'
 set_check legacy017_data_preservation
 [ "$(admin_sql "$DB" "select count(*) from tenants where id='$LEGACY017_TENANT' and name='legacy017-before'")" = 1 ] || fail 'legacy 017 fixture data was lost'
+set_check legacy017_runtime_ledger_select
+[ "$(runtime_sql "$DB" 'select count(*) from public.schema_migrations')" = 17 ] || fail 'runtime role cannot read all 17 legacy ledger rows after provision'
+set_check legacy017_runtime_ledger_policy
+[ "$(admin_sql "$DB" "select c.relrowsecurity||','||c.relforcerowsecurity||','||(select count(*) from pg_catalog.pg_policy p where p.polrelid=c.oid and p.polname='schema_migrations_runtime_select' and p.polcmd='r' and p.polpermissive and p.polroles=array[(select oid from pg_catalog.pg_roles where rolname='cocinacore_user')]::oid[] and pg_catalog.pg_get_expr(p.polqual,p.polrelid)='true' and p.polwithcheck is null and (select count(*) from pg_catalog.pg_policy other where other.polrelid=c.oid)=1) from pg_catalog.pg_class c where c.oid='public.schema_migrations'::pg_catalog.regclass")" = 'true,false,1' ] || fail 'migration ledger SELECT policy does not match the exact runtime-only contract'
+set_check legacy017_runtime_ledger_read_only
+if runtime_sql "$DB" "update public.schema_migrations set applied_at=applied_at where filename='001_extensions_and_core.sql'" >"$LOG" 2>&1; then
+  fail 'runtime role unexpectedly updated the migration ledger'
+fi
+grep -qi 'permission denied' "$LOG" || fail 'runtime ledger write rejection was not a permission denial'
+set_check legacy017_runtime_unlisted_table_denial
+if runtime_sql "$DB" 'select count(*) from public.premium_recipes' >"$LOG" 2>&1; then
+  fail 'runtime role unexpectedly read the unlisted premium_recipes table'
+fi
+grep -qi 'permission denied' "$LOG" || fail 'unlisted table rejection was not a permission denial'
 set_check legacy017_exact_pending_m5
 migrate_m5_pending >"$LOG" 2>&1
 grep -q 'DONE 018_cooking_sessions.sql' "$LOG" || fail 'legacy 017 continuation did not apply 018'
@@ -1074,6 +1096,49 @@ grep -q 'Migration ledger is complete' "$LOG" || fail 'legacy 017 continuation d
 [ "$(admin_sql "$DB" "select count(*) from schema_migrations")" = "$EXPECTED_MIGRATION_COUNT" ] || fail 'legacy 017 ledger is not complete through 019'
 [ "$(admin_sql "$DB" "select count(*) from schema_migrations where filename in ('018_cooking_sessions.sql','019_real_consumption_reconciliation.sql') and checksum_source='migration_file' and checksum is not null")" = 2 ] || fail '018/019 migration-file provenance is missing'
 [ "$(admin_sql "$DB" "select count(*) from schema_migrations where checksum_source='legacy_unverifiable' and checksum is null")" = 7 ] || fail '018/019 continuation changed unknown historic checksums'
+[ "$(runtime_sql "$DB" 'select count(*) from public.schema_migrations')" = "$EXPECTED_MIGRATION_COUNT" ] || fail 'runtime role cannot read the full 019 migration ledger'
+set_check runtime_ledger_no_update
+if runtime_sql "$DB" "update public.schema_migrations set applied_at=applied_at where filename='001_extensions_and_core.sql'" >"$LOG" 2>&1; then
+  fail 'runtime role unexpectedly updated the completed migration ledger'
+fi
+grep -qi 'permission denied' "$LOG" || fail 'completed runtime ledger write rejection was not a permission denial'
+set_check runtime_app_repository_operations
+(
+  cd "$ROOT/frontend"
+  COCINACORE_PROVISIONED_RUNTIME_INTEGRATION=true \
+  DATABASE_URL="$RUNTIME_URL" \
+  RUNTIME_TEST_ADMIN_DATABASE_URL="$ADMIN_URL" \
+  npm test -- src/lib/db/runtime-provisioning.integration.test.ts
+) >"$LOG" 2>&1 || {
+  cat "$LOG" >&2
+  fail 'application repository operations failed under the provisioned runtime role'
+}
+grep -Eq '1 passed|Tests  1 passed' "$LOG" || fail 'runtime application integration test did not report one passing test'
+set_check runtime_baseline_acl_matrix
+RUNTIME_ACL_SQL=$(node - "$ROOT/frontend/scripts/provision-database.js" <<'NODE'
+const { RUNTIME_TABLE_PRIVILEGES } = require(process.argv[2]);
+const tables = Object.keys(RUNTIME_TABLE_PRIVILEGES).sort();
+const privileges = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'];
+const rows = tables.map((table) => `select '${table}' as table_name, ${privileges
+  .map((privilege) => `pg_catalog.has_table_privilege('cocinacore_user', 'public.${table}', '${privilege}')::int`)
+  .join(', ')}`);
+console.log(rows.join(' union all ') + ' order by table_name');
+NODE
+)
+RUNTIME_ACL_ACTUAL=$(admin_sql "$DB" "$RUNTIME_ACL_SQL" | LC_ALL=C sort)
+RUNTIME_ACL_EXPECTED=$(node - "$ROOT/frontend/scripts/provision-database.js" <<'NODE' | LC_ALL=C sort
+const { RUNTIME_TABLE_PRIVILEGES } = require(process.argv[2]);
+const tables = Object.keys(RUNTIME_TABLE_PRIVILEGES).sort();
+const privileges = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'];
+console.log(tables.map((table) => `${table}|${privileges
+  .map((privilege) => RUNTIME_TABLE_PRIVILEGES[table]?.includes(privilege) ? 1 : 0)
+  .join('|')}`).join('\n'));
+NODE
+)
+if [ "$RUNTIME_ACL_ACTUAL" != "$RUNTIME_ACL_EXPECTED" ]; then
+  printf '%s\n' 'runtime ACL matrix actual:' "$RUNTIME_ACL_ACTUAL" 'runtime ACL matrix expected:' "$RUNTIME_ACL_EXPECTED" >&2
+  fail 'runtime privileges on the baseline 31-table set are not the exact fixed contract'
+fi
 set_check assert_m5_runtime_grants
 M5_RUNTIME_PRIVILEGES=$(admin_sql "$DB" "select
   has_table_privilege('cocinacore_user','public.cooking_sessions','select') || ',' ||
