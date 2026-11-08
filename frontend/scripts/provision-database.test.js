@@ -9,11 +9,16 @@ const migrationManifest = require('../../db/migrations/manifest.json');
 const {
   assertPublicSchemaAcl,
   assertReservedRoleOwnership,
+  assertRuntimeAclRows,
+  assertRuntimeLedgerPolicy,
   attestLedger,
   attestBaselineCatalog,
   backfillTrustedLegacyChecksums,
   expectedCatalog,
   resolveLegacy017OwnerProfile,
+  RUNTIME_LEDGER_POLICY,
+  RUNTIME_ROLE,
+  RUNTIME_TABLE_PRIVILEGES,
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- Load the provisioner's CommonJS exports directly.
 } = require('./provision-database');
 const {
@@ -30,6 +35,16 @@ const addition = {
   identity: 'public.is_valid_culinary_profile_text_list',
 };
 const additionIdentity = 'public.is_valid_culinary_profile_text_list()';
+const runtimeAclFixture = () =>
+  Object.entries(RUNTIME_TABLE_PRIVILEGES).map(([table_name, privileges]) => ({
+    table_name,
+    exists: true,
+    owner: 'cocinacore_schema_owner',
+    direct_privileges: [...privileges],
+    effective_privileges: [...privileges],
+    grantable_privileges: [],
+    public_grants: false,
+  }));
 const emptyCatalog = () => ({
   schemas: { rows: [] },
   tables: { rows: [] },
@@ -149,6 +164,78 @@ function checksummedLedgerRows(count) {
     checksum: migration.sha256,
   }));
 }
+
+test('runtime ACL contract grants only the operations required by production SQL paths', () => {
+  assert.equal(RUNTIME_ROLE, 'cocinacore_user');
+  assert.equal(Object.keys(RUNTIME_TABLE_PRIVILEGES).length, 31);
+  assert.deepEqual(RUNTIME_TABLE_PRIVILEGES.schema_migrations, ['SELECT']);
+  assert.deepEqual(RUNTIME_TABLE_PRIVILEGES.users, ['SELECT', 'INSERT', 'UPDATE']);
+  assert.deepEqual(RUNTIME_TABLE_PRIVILEGES.sessions, ['SELECT', 'INSERT', 'UPDATE', 'DELETE']);
+  for (const deliberatelyUnprivileged of [
+    'premium_recipes',
+    'premium_recipe_reviews',
+    'recipe_ai_ratings',
+    'saved_premium_recipes',
+    'user_meal_plan_inventory_suggestions',
+    'user_meal_plan_optimization_snapshots',
+  ]) {
+    assert.deepEqual(RUNTIME_TABLE_PRIVILEGES[deliberatelyUnprivileged], []);
+  }
+});
+
+test('runtime ACL attestation accepts the fixed contract and controlled incomplete subset', () => {
+  assert.doesNotThrow(() => assertRuntimeAclRows(runtimeAclFixture()));
+  const incomplete = runtimeAclFixture();
+  incomplete.find((row) => row.table_name === 'sessions').direct_privileges = ['SELECT'];
+  incomplete.find((row) => row.table_name === 'sessions').effective_privileges = ['SELECT'];
+  assert.throws(() => assertRuntimeAclRows(incomplete), /RUNTIME_ACL_MISMATCH/);
+  assert.doesNotThrow(() => assertRuntimeAclRows(incomplete, { allowMissing: true }));
+});
+
+test('runtime ACL attestation rejects excess, PUBLIC, and grant-option privileges', () => {
+  const excess = runtimeAclFixture();
+  excess.find((row) => row.table_name === 'users').direct_privileges.push('DELETE');
+  assert.throws(() => assertRuntimeAclRows(excess, { allowMissing: true }), /RUNTIME_ACL_MISMATCH/);
+
+  const publicGrant = runtimeAclFixture();
+  publicGrant.find((row) => row.table_name === 'tenants').public_grants = true;
+  assert.throws(() => assertRuntimeAclRows(publicGrant), /RUNTIME_ACL_MISMATCH/);
+
+  const grantOption = runtimeAclFixture();
+  grantOption.find((row) => row.table_name === 'book_chunks').grantable_privileges = ['INSERT'];
+  assert.throws(() => assertRuntimeAclRows(grantOption), /RUNTIME_ACL_MISMATCH/);
+});
+
+test('ledger runtime policy is SELECT-only, single-role, and fail-closed on drift', () => {
+  assert.doesNotThrow(() => assertRuntimeLedgerPolicy([], { allowAbsent: true }));
+  assert.throws(() => assertRuntimeLedgerPolicy([]), /RUNTIME_LEDGER_MISMATCH/);
+  assert.doesNotThrow(() =>
+    assertRuntimeLedgerPolicy([
+      {
+        polname: RUNTIME_LEDGER_POLICY.name,
+        polcmd: 'r',
+        polpermissive: true,
+        runtime_only: true,
+        using_expression: 'true',
+        check_expression: null,
+      },
+    ])
+  );
+  assert.throws(
+    () =>
+      assertRuntimeLedgerPolicy([
+        {
+          polname: RUNTIME_LEDGER_POLICY.name,
+          polcmd: '*',
+          polpermissive: true,
+          runtime_only: true,
+          using_expression: 'true',
+          check_expression: null,
+        },
+      ]),
+    /RUNTIME_LEDGER_MISMATCH/
+  );
+});
 
 test('admits an applied 014-declared function for both legacy and target ownership', async () => {
   for (const ownerState of ['legacy', 'target']) {
