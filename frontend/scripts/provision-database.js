@@ -5,6 +5,14 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { Client } = require('pg');
+const {
+  classifyLegacyLedger,
+  LEGACY_UNVERIFIABLE,
+  MANIFEST_BACKFILL,
+  validateChecksummedLedger,
+  validateEstablishedLedger,
+} = require('./migration-ledger-contract');
+const { attestLegacy017Structure } = require('./legacy-017-database-attestation');
 
 try {
   require('dotenv').config({ path: path.resolve(__dirname, '../.env.local'), quiet: true });
@@ -14,6 +22,10 @@ try {
 
 const MIGRATION_ROLE = 'migration_admin';
 const SCHEMA_OWNER = 'cocinacore_schema_owner';
+const PRODUCTION_017_OWNER_PROFILE = Object.freeze({
+  objectOwner: 'cocinacore_user',
+  publicSchemaOwner: 'cocinacore_user',
+});
 const LOCK_NAMESPACE_PREFIX = 'cocinacore:database-change:v1:';
 const MANIFEST_VERSION = 1;
 const TRUSTED_BASE = '2069fc1f5a1ffc8407bd99cd91f9fadfbd04c6c4';
@@ -143,7 +155,8 @@ function loadTrustedManifest() {
           throw new Error(`Trusted catalog addition is unsupported: ${entry.filename}.`);
         }
         const key = `${addition.kind}|${addition.schema}|${addition.identity}`;
-        if (catalogAdditions.has(key)) throw new Error(`Duplicate trusted catalog addition: ${key}`);
+        if (catalogAdditions.has(key))
+          throw new Error(`Duplicate trusted catalog addition: ${key}`);
         catalogAdditions.add(key);
       }
     }
@@ -340,6 +353,25 @@ async function assertBootstrapIdentity(client) {
       'MIGRATION_IDENTITY_MISMATCH: BOOTSTRAP_DATABASE_URL must authenticate directly as a PostgreSQL superuser.'
     );
   }
+}
+
+async function resolveLegacy017OwnerProfile(client) {
+  const owners = await client.query(
+    `select pg_catalog.pg_get_userbyid(p.proowner) as function_owner
+       from pg_catalog.pg_proc p
+       join pg_catalog.pg_namespace n on n.oid=p.pronamespace
+      where n.nspname='public'
+        and p.proname='is_valid_culinary_profile_text_list'`
+  );
+  if (owners.rows.length !== 1) {
+    throw new Error('BASELINE_MISMATCH: production-017 owner profile is ambiguous.');
+  }
+  const functionOwner = owners.rows[0].function_owner;
+  if (functionOwner === PRODUCTION_017_OWNER_PROFILE.objectOwner) {
+    return PRODUCTION_017_OWNER_PROFILE;
+  }
+  if (functionOwner === 'cocinacore') return undefined;
+  throw new Error('BASELINE_MISMATCH: production-017 owner profile is unexpected.');
 }
 
 function lockTimeout() {
@@ -567,9 +599,18 @@ async function assertReservedRoleAclState(client) {
     throw new Error('ROLE_STATE_MISMATCH: reserved roles have unexpected tablespace authority.');
   }
 
+  await assertPublicSchemaAcl(client);
+}
+
+async function assertPublicSchemaAcl(client) {
   const publicAcl = await client.query(`
-    select pg_catalog.has_schema_privilege('public', 'public', 'USAGE') as public_usage,
-           pg_catalog.has_schema_privilege('public', 'public', 'CREATE') as public_create
+    select coalesce(bool_or(a.grantee = 0 and a.privilege_type = 'USAGE'), false) as public_usage,
+           coalesce(bool_or(a.grantee = 0 and a.privilege_type = 'CREATE'), false) as public_create
+      from pg_catalog.pg_namespace n
+      left join lateral pg_catalog.aclexplode(
+        coalesce(n.nspacl, pg_catalog.acldefault('n', n.nspowner))
+      ) a on true
+     where n.nspname = 'public'
   `);
   if (!publicAcl.rows[0].public_usage || publicAcl.rows[0].public_create) {
     throw new Error('ROLE_STATE_MISMATCH: public schema ACL does not match the trusted contract.');
@@ -879,22 +920,38 @@ function expectedCatalog(manifest, appliedMigrations, catalogFunctions) {
         expected.types.push(`${schema}.${tableName}`);
         expected.types.push(`${schema}._${tableName}`);
       } else if (addition.kind === 'index') {
-        expected.indexes.push(`${addition.schema}.${addition.identity}`);
+        expected.indexes.push(qualifyRelationObjectIdentity(addition));
       } else if (addition.kind === 'constraint') {
-        expected.constraints.push(`${addition.schema}.${addition.identity}`);
+        expected.constraints.push(qualifyRelationObjectIdentity(addition));
       } else if (addition.kind === 'function') {
         const functionName = `${addition.schema}.${addition.identity.split('.')[1]}`;
-        const matches = catalogFunctions.filter((identity) => identity.startsWith(`${functionName}(`));
+        const matches = catalogFunctions.filter((identity) =>
+          identity.startsWith(`${functionName}(`)
+        );
         if (matches.length !== 1) {
-          throw new Error(`BASELINE_MISMATCH: applied function ${functionName} must exist exactly once.`);
+          throw new Error(
+            `BASELINE_MISMATCH: applied function ${functionName} must exist exactly once.`
+          );
         }
         expected.functions.push(matches[0]);
       } else if (addition.kind === 'trigger') {
-        expected.triggers.push(`${addition.schema}.${addition.identity}`);
+        expected.triggers.push(qualifyRelationObjectIdentity(addition));
       }
     }
   }
   return expected;
+}
+
+function qualifyRelationObjectIdentity(addition) {
+  const identityParts = addition.identity.split('.');
+  if (
+    !['internal', 'public'].includes(addition.schema) ||
+    identityParts.length !== 2 ||
+    identityParts.some((part) => !/^[a-z_][a-z0-9_]*$/.test(part))
+  ) {
+    throw new Error(`BASELINE_MISMATCH: invalid ${addition.kind} identity.`);
+  }
+  return `${addition.schema}.${addition.identity}`;
 }
 
 async function ledgerExists(client) {
@@ -918,21 +975,33 @@ async function ledgerColumns(client) {
 async function attestLedger(client, manifest, established) {
   const columns = await ledgerColumns(client);
   const names = columns.rows.map((row) => row.attname).sort();
-  compareExact(
-    names,
-    established ? ['applied_at', 'checksum', 'filename'] : ['applied_at', 'filename'],
-    'Legacy ledger columns'
-  );
+  const ledgerMode = !established
+    ? 'legacy-two-column'
+    : names.includes('checksum_source')
+      ? 'provenance'
+      : 'checksummed';
+  const expectedColumns = {
+    'legacy-two-column': ['applied_at', 'filename'],
+    checksummed: ['applied_at', 'checksum', 'filename'],
+    provenance: ['applied_at', 'checksum', 'checksum_source', 'filename'],
+  }[ledgerMode];
+  compareExact(names, expectedColumns, 'Legacy ledger columns');
   const filename = columns.rows.find((column) => column.attname === 'filename');
   const appliedAt = columns.rows.find((column) => column.attname === 'applied_at');
   const checksum = columns.rows.find((column) => column.attname === 'checksum');
+  const checksumSource = columns.rows.find((column) => column.attname === 'checksum_source');
   if (
     filename?.data_type !== 'text' ||
     !filename.attnotnull ||
     appliedAt?.data_type !== 'timestamp with time zone' ||
     !appliedAt.attnotnull ||
     appliedAt.default_expression !== 'now()' ||
-    (established && (checksum?.data_type !== 'text' || !checksum.attnotnull))
+    (ledgerMode === 'checksummed' && (checksum?.data_type !== 'text' || !checksum.attnotnull)) ||
+    (ledgerMode === 'provenance' &&
+      (checksum?.data_type !== 'text' ||
+        checksum.attnotnull ||
+        checksumSource?.data_type !== 'text' ||
+        !checksumSource.attnotnull))
   ) {
     throw new Error('BASELINE_MISMATCH: migration ledger column contract is invalid.');
   }
@@ -942,50 +1011,75 @@ async function attestLedger(client, manifest, established) {
              where x.conrelid=c.oid and x.contype='p'
                and pg_catalog.pg_get_constraintdef(x.oid)='PRIMARY KEY (filename)') as primary_keys,
            (select count(*)::integer from pg_catalog.aclexplode(c.relacl) a
-             where a.grantee=0) as public_grants
+             where a.grantee=0) as public_grants,
+           (select count(*)::integer from pg_catalog.pg_constraint x
+             where x.conrelid=c.oid
+               and x.conname='schema_migrations_checksum_source_check'
+               and x.contype='c' and x.convalidated) as checksum_source_constraints,
+           (select pg_catalog.pg_get_constraintdef(x.oid) from pg_catalog.pg_constraint x
+             where x.conrelid=c.oid
+               and x.conname='schema_migrations_checksum_source_check'
+               and x.contype='c' and x.convalidated) as checksum_source_definition
       from pg_catalog.pg_class c
      where c.oid='public.schema_migrations'::pg_catalog.regclass
   `);
   if (
     !invariants.rows[0]?.relrowsecurity ||
     invariants.rows[0]?.primary_keys !== 1 ||
-    invariants.rows[0]?.public_grants !== 0
+    invariants.rows[0]?.public_grants !== 0 ||
+    (ledgerMode === 'checksummed' && invariants.rows[0]?.checksum_source_constraints !== 0) ||
+    (ledgerMode === 'provenance' &&
+      (invariants.rows[0]?.checksum_source_constraints !== 1 ||
+        invariants.rows[0]?.checksum_source_definition !==
+          "CHECK ((((checksum_source = 'legacy_unverifiable'::text) AND (checksum IS NULL)) OR ((checksum_source = ANY (ARRAY['manifest_backfill'::text, 'migration_file'::text])) AND (checksum IS NOT NULL))))"))
   ) {
     throw new Error(
       'BASELINE_MISMATCH: migration ledger security/primary-key contract is invalid.'
     );
   }
+  const selectedColumns = {
+    'legacy-two-column': 'filename, applied_at',
+    checksummed: 'filename, applied_at, checksum',
+    provenance: 'filename, applied_at, checksum, checksum_source',
+  }[ledgerMode];
+  const orderBy = ledgerMode === 'checksummed' ? 'filename' : 'applied_at, filename';
   const rows = await client.query(
-    established
-      ? 'select filename, checksum from public.schema_migrations order by filename'
-      : 'select filename, null::text as checksum from public.schema_migrations order by filename'
-  );
-  const expected = established
-    ? manifest.migrations.slice(0, rows.rowCount)
-    : manifest.migrations.filter((entry) => entry.legacyChecksumBackfillAllowed);
-  compareExact(
-    rows.rows.map((row) => row.filename),
-    expected.map((entry) => entry.filename),
-    established ? 'Established ledger migration prefix' : 'Legacy ledger migration set'
+    `select ${selectedColumns} from public.schema_migrations order by ${orderBy}`
   );
   if (established) {
-    const expectedByName = new Map(expected.map((entry) => [entry.filename, entry.sha256]));
-    for (const row of rows.rows) {
-      if (row.checksum !== expectedByName.get(row.filename)) {
-        throw new Error(`MIGRATION_CHECKSUM_MISMATCH: ${row.filename}`);
-      }
-    }
+    return {
+      appliedMigrations:
+        ledgerMode === 'provenance'
+          ? validateEstablishedLedger(rows.rows, manifest.migrations)
+          : validateChecksummedLedger(rows.rows, manifest.migrations),
+      legacyState: 'established',
+      ledgerMode,
+    };
   }
-  return new Set(rows.rows.map((row) => row.filename));
+  return {
+    appliedMigrations: new Set(rows.rows.map((row) => row.filename)),
+    legacyState: classifyLegacyLedger(rows.rows, manifest.migrations),
+    ledgerMode,
+  };
 }
 
-async function attestBaselineCatalog(client, manifest, ownerState, appliedMigrations) {
+async function attestBaselineCatalog(
+  client,
+  manifest,
+  ownerState,
+  appliedMigrations,
+  legacyOwnerProfile,
+  ledgerMode
+) {
   const catalog = await getCatalog(client);
   const expected = expectedCatalog(
     manifest,
     appliedMigrations,
     catalog.functions.rows.map((row) => row.identity)
   );
+  if (ownerState === 'target' && ledgerMode === 'provenance') {
+    expected.constraints.push('public.schema_migrations.schema_migrations_checksum_source_check');
+  }
   compareExact(
     catalog.schemas.rows.map((row) => row.identity),
     expected.schemas,
@@ -1039,25 +1133,30 @@ async function attestBaselineCatalog(client, manifest, ownerState, appliedMigrat
     .filter((migration) => appliedMigrations.has(migration.filename))
     .flatMap((migration) => migration.catalogAdditions || [])
     .filter((addition) => addition.kind === 'function' || addition.kind === 'table');
-  const expectedAdditionOwner = ownerState === 'legacy' ? 'cocinacore' : SCHEMA_OWNER;
+  const expectedAdditionOwner =
+    ownerState === 'legacy' ? legacyOwnerProfile?.objectOwner || 'cocinacore' : SCHEMA_OWNER;
   const appliedOwnerEntries = new Map();
   for (const addition of appliedOwnerAdditions) {
     const rows = addition.kind === 'function' ? catalog.functions.rows : catalog.tables.rows;
-    const identity = addition.kind === 'function'
-      ? `${addition.schema}.${addition.identity.split('.')[1]}`
-      : addition.identity;
-    const matches = addition.kind === 'function'
-      ? rows.filter((row) => row.identity.startsWith(`${identity}(`))
-      : rows.filter((row) => row.identity === identity);
+    const identity =
+      addition.kind === 'function'
+        ? `${addition.schema}.${addition.identity.split('.')[1]}`
+        : addition.identity;
+    const matches =
+      addition.kind === 'function'
+        ? rows.filter((row) => row.identity.startsWith(`${identity}(`))
+        : rows.filter((row) => row.identity === identity);
     if (matches.length !== 1 || matches[0].owner !== expectedAdditionOwner) {
       throw new Error(`BASELINE_MISMATCH: applied ${addition.kind} owner differs for ${identity}.`);
     }
     const key = `${addition.kind}|${matches[0].identity}`;
     if (appliedOwnerEntries.has(key)) {
-      throw new Error(`BASELINE_MISMATCH: duplicate applied ${addition.kind} owner policy for ${matches[0].identity}.`);
+      throw new Error(
+        `BASELINE_MISMATCH: duplicate applied ${addition.kind} owner policy for ${matches[0].identity}.`
+      );
     }
     appliedOwnerEntries.set(key, {
-      expectedLegacyOwner: 'cocinacore',
+      expectedLegacyOwner: expectedAdditionOwner,
       targetOwner: SCHEMA_OWNER,
     });
   }
@@ -1074,7 +1173,9 @@ async function attestBaselineCatalog(client, manifest, ownerState, appliedMigrat
   );
   for (const [key, ownerPolicy] of appliedOwnerEntries) {
     if (byKey.has(key)) {
-      throw new Error(`BASELINE_MISMATCH: conflicting owner policy for ${key.slice('function|'.length)}.`);
+      throw new Error(
+        `BASELINE_MISMATCH: conflicting owner policy for ${key.slice('function|'.length)}.`
+      );
     }
     byKey.set(key, ownerPolicy);
   }
@@ -1089,7 +1190,11 @@ async function attestBaselineCatalog(client, manifest, ownerState, appliedMigrat
         throw new Error(`BASELINE_MISMATCH: missing owner policy for ${kind} ${row.identity}.`);
       }
       const expectedOwner =
-        ownerState === 'legacy' ? object.expectedLegacyOwner : object.targetOwner;
+        ownerState === 'legacy'
+          ? object.kind === 'schema' && object.schema === 'public' && legacyOwnerProfile
+            ? legacyOwnerProfile.publicSchemaOwner
+            : legacyOwnerProfile?.objectOwner || object.expectedLegacyOwner
+          : object.targetOwner;
       if (row.owner !== expectedOwner) {
         throw new Error(`BASELINE_MISMATCH: unexpected owner for ${kind} ${row.identity}.`);
       }
@@ -1175,13 +1280,13 @@ async function assertReservedRoleOwnership(client, manifest, appliedMigrations) 
        select pg_catalog.pg_get_userbyid(n.nspowner), 'schema', n.nspname
          from pg_catalog.pg_namespace n
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select pg_catalog.pg_get_userbyid(c.relowner), 'relation', n.nspname || '.' || c.relname
          from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid=c.relnamespace
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
           and not exists (
             select 1 from pg_catalog.pg_depend d
@@ -1192,7 +1297,7 @@ async function assertReservedRoleOwnership(client, manifest, appliedMigrations) 
        select pg_catalog.pg_get_userbyid(p.proowner), 'function', n.nspname || '.' || p.proname || '(' || pg_catalog.pg_get_function_identity_arguments(p.oid) || ')'
          from pg_catalog.pg_proc p join pg_catalog.pg_namespace n on n.oid=p.pronamespace
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
           and not exists (
             select 1 from pg_catalog.pg_depend d
@@ -1203,7 +1308,7 @@ async function assertReservedRoleOwnership(client, manifest, appliedMigrations) 
        select pg_catalog.pg_get_userbyid(t.typowner), 'type', n.nspname || '.' || t.typname
          from pg_catalog.pg_type t join pg_catalog.pg_namespace n on n.oid=t.typnamespace
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
           and not exists (
             select 1 from pg_catalog.pg_depend d
@@ -1214,37 +1319,37 @@ async function assertReservedRoleOwnership(client, manifest, appliedMigrations) 
        select pg_catalog.pg_get_userbyid(c.conowner), 'conversion', n.nspname || '.' || c.conname
          from pg_catalog.pg_conversion c join pg_catalog.pg_namespace n on n.oid=c.connamespace
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select pg_catalog.pg_get_userbyid(o.oprowner), 'operator', n.nspname || '.' || o.oprname
          from pg_catalog.pg_operator o join pg_catalog.pg_namespace n on n.oid=o.oprnamespace
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select pg_catalog.pg_get_userbyid(o.opcowner), 'operator class', n.nspname || '.' || o.opcname
          from pg_catalog.pg_opclass o join pg_catalog.pg_namespace n on n.oid=o.opcnamespace
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select pg_catalog.pg_get_userbyid(o.opfowner), 'operator family', n.nspname || '.' || o.opfname
          from pg_catalog.pg_opfamily o join pg_catalog.pg_namespace n on n.oid=o.opfnamespace
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select pg_catalog.pg_get_userbyid(t.dictowner), 'text search dictionary', n.nspname || '.' || t.dictname
          from pg_catalog.pg_ts_dict t join pg_catalog.pg_namespace n on n.oid=t.dictnamespace
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select pg_catalog.pg_get_userbyid(t.cfgowner), 'text search configuration', n.nspname || '.' || t.cfgname
          from pg_catalog.pg_ts_config t join pg_catalog.pg_namespace n on n.oid=t.cfgnamespace
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select pg_catalog.pg_get_userbyid(f.fdwowner), 'foreign data wrapper', f.fdwname
@@ -1278,14 +1383,16 @@ async function assertReservedRoleOwnership(client, manifest, appliedMigrations) 
   for (const addition of appliedAdditions.filter((entry) => entry.kind === 'table')) {
     const [schema] = addition.identity.split('.');
     if (schema !== addition.schema || allowed.has(`table|${addition.identity}`)) {
-      throw new Error(`ROLE_STATE_MISMATCH: invalid or duplicate applied table ${addition.identity}.`);
+      throw new Error(
+        `ROLE_STATE_MISMATCH: invalid or duplicate applied table ${addition.identity}.`
+      );
     }
     allowed.add(`table|${addition.identity}`);
   }
   for (const row of ordinary.rows.filter((entry) => entry.owner === SCHEMA_OWNER)) {
-    const isAppliedFunction = row.kind === 'function' && [...appliedFunctionNames].some(
-      (name) => row.identity.startsWith(`${name}(`)
-    );
+    const isAppliedFunction =
+      row.kind === 'function' &&
+      [...appliedFunctionNames].some((name) => row.identity.startsWith(`${name}(`));
     if (!allowed.has(`${row.kind}|${row.identity}`) && !isAppliedFunction) {
       throw new Error(
         `ROLE_STATE_MISMATCH: schema owner owns unexpected object ${row.kind} ${row.identity}.`
@@ -1299,7 +1406,7 @@ async function assertReservedRoleOwnership(client, manifest, appliedMigrations) 
          from pg_catalog.pg_namespace n
          cross join lateral pg_catalog.aclexplode(n.nspacl) a
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select a.grantee
@@ -1307,7 +1414,7 @@ async function assertReservedRoleOwnership(client, manifest, appliedMigrations) 
          join pg_catalog.pg_namespace n on n.oid=c.relnamespace
          cross join lateral pg_catalog.aclexplode(c.relacl) a
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select a.grantee
@@ -1315,7 +1422,7 @@ async function assertReservedRoleOwnership(client, manifest, appliedMigrations) 
          join pg_catalog.pg_namespace n on n.oid=p.pronamespace
          cross join lateral pg_catalog.aclexplode(p.proacl) a
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select a.grantee
@@ -1323,7 +1430,7 @@ async function assertReservedRoleOwnership(client, manifest, appliedMigrations) 
          join pg_catalog.pg_namespace n on n.oid=t.typnamespace
          cross join lateral pg_catalog.aclexplode(t.typacl) a
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select a.grantee
@@ -1415,23 +1522,84 @@ async function transferObject(client, object) {
   }
 }
 
+async function transferAppliedMigrationObjects(client, manifest, appliedMigrations) {
+  const additions = manifest.migrations
+    .filter((migration) => appliedMigrations.has(migration.filename))
+    .flatMap((migration) => migration.catalogAdditions || [])
+    .filter((addition) => addition.kind === 'table' || addition.kind === 'function');
+  for (const addition of additions.filter((entry) => entry.kind === 'table')) {
+    const [schema, name] = addition.identity.split('.');
+    if (schema !== addition.schema || !name) {
+      throw new Error(`BASELINE_MISMATCH: invalid applied table identity ${addition.identity}.`);
+    }
+    await transferObject(client, { kind: 'table', schema, name });
+  }
+  for (const addition of additions.filter((entry) => entry.kind === 'function')) {
+    const name = addition.identity.split('.').at(-1);
+    const matches = await client.query(
+      `select pg_catalog.pg_get_function_identity_arguments(p.oid) as arguments
+         from pg_catalog.pg_proc p
+         join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+        where n.nspname = $1 and p.proname = $2
+          and not exists (
+            select 1 from pg_catalog.pg_depend d
+             where d.classid = 'pg_catalog.pg_proc'::pg_catalog.regclass
+               and d.objid = p.oid and d.deptype = 'e'
+          )`,
+      [addition.schema, name]
+    );
+    if (matches.rowCount !== 1) {
+      throw new Error(
+        `BASELINE_MISMATCH: applied function ${addition.identity} is ambiguous or missing.`
+      );
+    }
+    await transferObject(client, {
+      kind: 'function',
+      schema: addition.schema,
+      name,
+      arguments: matches.rows[0].arguments,
+    });
+  }
+}
+
 function quoteIdentifier(identifier) {
   return `"${String(identifier).replaceAll('"', '""')}"`;
 }
 
-async function backfillTrustedLegacyChecksums(client, manifest) {
+async function backfillTrustedLegacyChecksums(client, manifest, legacyState) {
   await client.query('alter table public.schema_migrations add column checksum text');
+  await client.query('alter table public.schema_migrations add column checksum_source text');
   for (const entry of manifest.migrations.filter(
     (migration) => migration.legacyChecksumBackfillAllowed
   )) {
     const result = await client.query(
-      'update public.schema_migrations set checksum=$1 where filename=$2 and checksum is null',
-      [entry.sha256, entry.filename]
+      'update public.schema_migrations set checksum=$1, checksum_source=$2 where filename=$3 and checksum is null and checksum_source is null',
+      [entry.sha256, MANIFEST_BACKFILL, entry.filename]
     );
     if (result.rowCount !== 1)
       throw new Error(`Trusted checksum backfill failed for ${entry.filename}.`);
   }
-  await client.query('alter table public.schema_migrations alter column checksum set not null');
+  if (legacyState === 'production-017-unverifiable') {
+    for (const entry of manifest.migrations.slice(10, 17)) {
+      const result = await client.query(
+        'update public.schema_migrations set checksum_source=$1 where filename=$2 and checksum is null and checksum_source is null',
+        [LEGACY_UNVERIFIABLE, entry.filename]
+      );
+      if (result.rowCount !== 1) {
+        throw new Error(`Legacy checksum provenance marking failed for ${entry.filename}.`);
+      }
+    }
+  }
+  await client.query(
+    'alter table public.schema_migrations alter column checksum_source set not null'
+  );
+  await client.query(`
+    alter table public.schema_migrations
+      add constraint schema_migrations_checksum_source_check check (
+        (checksum_source = 'legacy_unverifiable' and checksum is null)
+        or (checksum_source in ('manifest_backfill', 'migration_file') and checksum is not null)
+      )
+  `);
 }
 
 async function main() {
@@ -1460,15 +1628,29 @@ async function main() {
     const roleState = await inspectReservedRoles(client);
     const hasLedger = await ledgerExists(client);
     let appliedMigrations = new Set();
+    let legacyState;
+    let ledgerMode;
     await preflightExtensions(client, manifest, { established: hasLedger });
     if (hasLedger) {
-      appliedMigrations = await attestLedger(client, manifest, roleState === 'established');
+      const ledger = await attestLedger(client, manifest, roleState === 'established');
+      appliedMigrations = ledger.appliedMigrations;
+      legacyState = ledger.legacyState;
+      ledgerMode = ledger.ledgerMode;
+      const legacyOwnerProfile =
+        legacyState === 'production-017-unverifiable'
+          ? await resolveLegacy017OwnerProfile(client)
+          : undefined;
       await attestBaselineCatalog(
         client,
         manifest,
         roleState === 'absent' ? 'legacy' : 'target',
-        appliedMigrations
+        appliedMigrations,
+        legacyOwnerProfile,
+        ledgerMode
       );
+      if (legacyState === 'production-017-unverifiable') {
+        await attestLegacy017Structure(client);
+      }
     } else {
       await attestFreshCatalog(client, manifest, roleState === 'absent' ? 'legacy' : 'target');
     }
@@ -1487,7 +1669,9 @@ async function main() {
         if (hasLedger) {
           for (const object of manifest.baselineObjects.transferable)
             await transferObject(client, object);
-          await backfillTrustedLegacyChecksums(client, manifest);
+          await transferAppliedMigrationObjects(client, manifest, appliedMigrations);
+          await backfillTrustedLegacyChecksums(client, manifest, legacyState);
+          ledgerMode = 'provenance';
         } else {
           const publicSchema = manifest.baselineObjects.transferable.find(
             (object) => object.kind === 'schema' && object.schema === 'public'
@@ -1503,8 +1687,20 @@ async function main() {
       await assertReservedRoleAclState(client);
       await assertReservedRoleOwnership(client, manifest, appliedMigrations);
       if (hasLedger) {
-        appliedMigrations = await attestLedger(client, manifest, true);
-        await attestBaselineCatalog(client, manifest, 'target', appliedMigrations);
+        const ledger = await attestLedger(client, manifest, true);
+        appliedMigrations = ledger.appliedMigrations;
+        ledgerMode = ledger.ledgerMode;
+        await attestBaselineCatalog(
+          client,
+          manifest,
+          'target',
+          appliedMigrations,
+          undefined,
+          ledgerMode
+        );
+        if (legacyState === 'production-017-unverifiable') {
+          await attestLegacy017Structure(client);
+        }
       } else {
         await attestFreshCatalog(client, manifest, 'target');
       }
@@ -1535,4 +1731,12 @@ if (require.main === module) {
   });
 }
 
-module.exports = { attestBaselineCatalog };
+module.exports = {
+  assertPublicSchemaAcl,
+  assertReservedRoleOwnership,
+  attestLedger,
+  attestBaselineCatalog,
+  backfillTrustedLegacyChecksums,
+  expectedCatalog,
+  resolveLegacy017OwnerProfile,
+};

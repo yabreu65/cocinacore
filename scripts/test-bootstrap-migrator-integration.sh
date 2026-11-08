@@ -108,7 +108,7 @@ vector_unavailable_diagnostics_self_test() {
 #   classify_verify_error LOG_PATH -> one closed error_class:phase value
 #   report_verify_failure LOG_PATH EXIT_CODE -> safe diagnostic; returns EXIT_CODE
 bootstrap_migrator_regression_self_test() {
-  REGRESSION_TEST_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+  REGRESSION_TEST_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
   REGRESSION_TEST_SCRIPT="$REGRESSION_TEST_ROOT/scripts/test-bootstrap-migrator-integration.sh"
   REGRESSION_TEST_MANIFEST="$REGRESSION_TEST_ROOT/db/migrations/manifest.json"
   REGRESSION_TEST_TMP=$(mktemp -d)
@@ -144,7 +144,7 @@ PY
     in_main && /select count\(\*\) from/ && /schema_migrations/ && /EXPECTED_MIGRATION_COUNT/ { count++ }
     END { print count+0 }
   ' "$REGRESSION_TEST_SCRIPT")
-  regression_assert "$( [ "$REGRESSION_TOTAL_COUNT_LINES" = 2 ] && printf yes || printf no )" 'both total ledger assertions use the manifest count'
+  regression_assert "$( [ "$REGRESSION_TOTAL_COUNT_LINES" = 3 ] && printf yes || printf no )" 'all three total ledger assertions use the manifest count'
   if awk '
     /^STAGE=initialization$/ { in_main=1 }
     in_main && /select count\(\*\) from/ && /schema_migrations/ && / = 12/ { stale=1 }
@@ -355,7 +355,7 @@ STAGE=initialization
 CHECK=initialization
 printf '%s\n' 'integration stage: initialization' >&2
 printf '%s\n' 'integration check: initialization' >&2
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 EXPECTED_MIGRATION_COUNT=$(manifest_migration_count "$ROOT/db/migrations/manifest.json")
 PREFIX="cocinacore-pr0a-cp21-$$"
 TMP_ROOT=$(mktemp -d)
@@ -378,6 +378,7 @@ start_container() {
   until docker exec "$CONTAINER" pg_isready -h 127.0.0.1 -U cocinacore -d "$DB" >/dev/null 2>&1; do
     attempt=$((attempt + 1)); [ "$attempt" -lt 60 ] || fail 'PostgreSQL did not become ready'; sleep 1
   done
+  admin_sql "$DB" 'create role cocinacore_user nologin nosuperuser nobypassrls'
   PORT=$(docker port "$CONTAINER" 5432/tcp | sed 's/.*://')
   ADMIN_URL="postgresql://cocinacore:$ADMIN_PASSWORD@127.0.0.1:$PORT/$DB"
   MIGRATION_URL="postgresql://migration_admin:$MIGRATION_PASSWORD@127.0.0.1:$PORT/$DB"
@@ -408,6 +409,12 @@ provision() {
 migrate() {
   COCINACORE_SEPARATED_DB_LANES_ENABLED=true MIGRATION_DATABASE_URL="$MIGRATION_URL" \
   node "$ROOT/frontend/scripts/run-migrations.js" --lane migration "$@"
+}
+
+migrate_m5_pending() {
+  COCINACORE_SEPARATED_DB_LANES_ENABLED=true MIGRATION_DATABASE_URL="$MIGRATION_URL" \
+  MIGRATION_EXPECTED_PENDING='018_cooking_sessions.sql,019_real_consumption_reconciliation.sql' \
+  node "$ROOT/frontend/scripts/run-migrations.js" --lane migration
 }
 
 expect_provision_failure() {
@@ -987,10 +994,122 @@ set_check product_legacy_provisioner_rerun
 provision >"$LOG" 2>&1
 set_check assert_legacy_idempotent_data
 [ "$(admin_sql "$DB" "select count(*) from tenants where name in ('legacy-before','legacy-after')")" = 2 ] || fail 'reprovision changed application data'
+stop_container
+
+# Exact production-017 legacy shape, fixed non-default owner profile, and 018/019 continuation.
+STAGE=legacy-017-adoption
+set_check legacy017_container_start
+printf '%s\n' 'integration stage: legacy-017-adoption' >&2
+start_container legacy017 cocinacore_legacy017
+LEGACY017_MIGRATIONS=$(node -e "const m=require(process.argv[1]); console.log(m.migrations.slice(0,17).map(x=>x.filename).join('\\n'))" "$ROOT/db/migrations/manifest.json")
+for filename in $LEGACY017_MIGRATIONS; do
+  set_check "legacy017_schema_migration_${filename%%_*}"
+  docker exec -i "$CONTAINER" psql -X -1 -v ON_ERROR_STOP=1 -U cocinacore -d "$DB" >/dev/null <"$ROOT/db/migrations/$filename"
+done
+set_check legacy017_ledger_create
+admin_sql "$DB" "create schema if not exists internal;
+  create table public.schema_migrations(filename text primary key, applied_at timestamptz not null default now());
+  alter table public.schema_migrations enable row level security;
+  revoke all on public.schema_migrations from public"
+for filename in $LEGACY017_MIGRATIONS; do
+  set_check "legacy017_ledger_seed_${filename%%_*}"
+  admin_sql "$DB" "insert into public.schema_migrations(filename, applied_at) values ('$filename', '2026-01-01 00:00:00+00')"
+done
+set_check legacy017_fixture_data
+LEGACY017_TENANT=$(admin_sql "$DB" "insert into public.tenants(name) values ('legacy017-before') returning id")
+set_check legacy017_owner_profile
+admin_sql "$DB" "DO \$\$
+DECLARE
+  item record;
+BEGIN
+  ALTER SCHEMA public OWNER TO cocinacore_user;
+  ALTER SCHEMA internal OWNER TO cocinacore_user;
+  FOR item IN
+    SELECT c.oid::regclass AS object_name
+      FROM pg_catalog.pg_class c
+      JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+     WHERE n.nspname IN ('public','internal') AND c.relkind IN ('r','p')
+       AND NOT EXISTS (
+         SELECT 1 FROM pg_catalog.pg_depend d
+          WHERE d.classid='pg_catalog.pg_class'::pg_catalog.regclass
+            AND d.objid=c.oid AND d.deptype='e'
+       )
+  LOOP
+    EXECUTE format('ALTER TABLE %s OWNER TO %I', item.object_name, 'cocinacore_user');
+  END LOOP;
+  FOR item IN
+    SELECT p.oid::regprocedure AS object_name
+      FROM pg_catalog.pg_proc p
+      JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
+     WHERE n.nspname IN ('public','internal')
+       AND NOT EXISTS (
+         SELECT 1 FROM pg_catalog.pg_depend d
+          WHERE d.classid='pg_catalog.pg_proc'::pg_catalog.regclass
+            AND d.objid=p.oid AND d.deptype='e'
+       )
+  LOOP
+    EXECUTE format('ALTER FUNCTION %s OWNER TO %I', item.object_name, 'cocinacore_user');
+  END LOOP;
+END
+\$\$"
+set_check legacy017_provisioner_adoption
+provision >"$LOG" 2>&1
+grep -q 'trusted ownership are provisioned' "$LOG" || fail 'legacy 017 adoption did not finish'
+set_check legacy017_provenance_rows
+[ "$(admin_sql "$DB" "select count(*) from schema_migrations where checksum_source='legacy_unverifiable' and checksum is null")" = 7 ] || fail 'legacy 017 checksums were not preserved as unverifiable'
+[ "$(admin_sql "$DB" "select count(*) from schema_migrations where checksum_source='manifest_backfill' and checksum is not null")" = 10 ] || fail 'manifest checksums were not backfilled for 001-010'
+[ "$(admin_sql "$DB" "select count(*) from schema_migrations where checksum_source is null")" = 0 ] || fail 'legacy 017 provenance is incomplete'
+set_check legacy017_owner_transfer
+[ "$(admin_sql "$DB" "select pg_catalog.pg_get_userbyid(c.relowner) from pg_catalog.pg_class c where c.oid='public.schema_migrations'::pg_catalog.regclass")" = cocinacore_schema_owner ] || fail 'legacy 017 ledger ownership was not transferred'
+[ "$(admin_sql "$DB" "select pg_catalog.pg_get_userbyid(p.proowner) from pg_catalog.pg_proc p join pg_catalog.pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='is_valid_culinary_profile_text_list'")" = cocinacore_schema_owner ] || fail 'legacy 017 application function ownership was not transferred'
+set_check legacy017_data_preservation
+[ "$(admin_sql "$DB" "select count(*) from tenants where id='$LEGACY017_TENANT' and name='legacy017-before'")" = 1 ] || fail 'legacy 017 fixture data was lost'
+set_check legacy017_exact_pending_m5
+migrate_m5_pending >"$LOG" 2>&1
+grep -q 'DONE 018_cooking_sessions.sql' "$LOG" || fail 'legacy 017 continuation did not apply 018'
+grep -q 'DONE 019_real_consumption_reconciliation.sql' "$LOG" || fail 'legacy 017 continuation did not apply 019'
+set_check legacy017_verify_complete
+migrate --verify-complete >"$LOG" 2>&1
+grep -q 'Migration ledger is complete' "$LOG" || fail 'legacy 017 continuation did not verify complete'
+[ "$(admin_sql "$DB" "select count(*) from schema_migrations")" = "$EXPECTED_MIGRATION_COUNT" ] || fail 'legacy 017 ledger is not complete through 019'
+[ "$(admin_sql "$DB" "select count(*) from schema_migrations where filename in ('018_cooking_sessions.sql','019_real_consumption_reconciliation.sql') and checksum_source='migration_file' and checksum is not null")" = 2 ] || fail '018/019 migration-file provenance is missing'
+[ "$(admin_sql "$DB" "select count(*) from schema_migrations where checksum_source='legacy_unverifiable' and checksum is null")" = 7 ] || fail '018/019 continuation changed unknown historic checksums'
+set_check assert_m5_runtime_grants
+M5_RUNTIME_PRIVILEGES=$(admin_sql "$DB" "select
+  has_table_privilege('cocinacore_user','public.cooking_sessions','select') || ',' ||
+  has_table_privilege('cocinacore_user','public.cooking_sessions','insert') || ',' ||
+  has_table_privilege('cocinacore_user','public.cooking_sessions','update') || ',' ||
+  has_table_privilege('cocinacore_user','public.cooking_sessions','delete') || ',' ||
+  has_table_privilege('cocinacore_user','public.cooking_session_events','select') || ',' ||
+  has_table_privilege('cocinacore_user','public.cooking_session_events','insert') || ',' ||
+  has_table_privilege('cocinacore_user','public.cooking_session_events','update') || ',' ||
+  has_table_privilege('cocinacore_user','public.cooking_session_events','delete') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_operations','select') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_operations','insert') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_operations','update') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_operations','delete') || ',' ||
+  has_table_privilege('cocinacore_user','public.meal_consumption_claims','select') || ',' ||
+  has_table_privilege('cocinacore_user','public.meal_consumption_claims','insert') || ',' ||
+  has_table_privilege('cocinacore_user','public.meal_consumption_claims','update') || ',' ||
+  has_table_privilege('cocinacore_user','public.meal_consumption_claims','delete') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_items','select') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_items','insert') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_items','update') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_items','delete') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_substitutions','select') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_substitutions','insert') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_substitutions','update') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_substitutions','delete') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_movement_links','select') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_movement_links','insert') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_movement_links','update') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_movement_links','delete')")
+[ "$M5_RUNTIME_PRIVILEGES" = 'true,true,true,false,true,true,false,false,true,true,false,false,true,true,false,false,true,true,false,false,true,true,false,false,true,true,false,false' ] || fail 'runtime privileges on 018/019 tables are not minimal'
+[ "$(admin_sql "$DB" "select count(*) from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid=c.relnamespace cross join lateral pg_catalog.aclexplode(coalesce(c.relacl, pg_catalog.acldefault('r', c.relowner))) a where n.nspname='public' and c.relname in ('cooking_sessions','cooking_session_events','real_consumption_operations','meal_consumption_claims','real_consumption_items','real_consumption_substitutions','real_consumption_movement_links') and a.grantee=0")" = 0 ] || fail 'PUBLIC has a direct grant on an M5 table'
 
 STAGE=final-cleanup
 set_check cleanup
 printf '%s\n' 'integration stage: final-cleanup' >&2
 stop_container
 [ "$(docker ps -a --format '{{.Names}}' | grep -c "^$PREFIX" || true)" = 0 ] || fail 'temporary containers remain'
-printf '%s\n' 'bootstrap/migrator integration passed: fresh legacy extensions baseline roles locks transactions activation'
+printf '%s\n' 'bootstrap/migrator integration passed: fresh legacy 010 and 017 adoption, extensions, roles, locks, transactions, activation'

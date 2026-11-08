@@ -61,6 +61,12 @@ admin_sql() {
   docker exec -i "$CONTAINER" psql -X -v ON_ERROR_STOP=1 -U cocinacore -d "$DB" -Atqc "$*"
 }
 
+create_runtime_role() {
+  admin_sql "create role cocinacore_user nologin nosuperuser nobypassrls"
+  role_attributes=$(admin_sql "select rolcanlogin::text || '|' || rolsuper::text || '|' || rolbypassrls::text from pg_roles where rolname='cocinacore_user'")
+  [ "$role_attributes" = 'false|false|false' ] || fail 'disposable runtime role is not NOLOGIN/NOSUPERUSER/NOBYPASSRLS'
+}
+
 admin_psql() {
   docker exec -i "$CONTAINER" psql -X -v ON_ERROR_STOP=1 -v VERBOSITY=verbose \
     -U cocinacore -d "$DB" "$@"
@@ -127,6 +133,7 @@ assert_failed_011_is_atomic() {
 
 # Fresh install and runtime invariant matrix.
 start_container fresh cocinacore_canonical_fresh
+create_runtime_role
 provision >"$LOG" 2>&1
 migrate >"$LOG" 2>&1
 grep -q 'DONE 011_canonical_email_invariant.sql' "$LOG" || fail 'fresh 001-011 did not complete'
@@ -189,6 +196,7 @@ stop_container
 
 # Non-colliding legacy data normalizes and records 011 atomically.
 start_container clean-upgrade cocinacore_canonical_clean
+create_runtime_role
 apply_historical
 admin_sql "insert into users(email,password_hash) values ('Alice@Example.com','hash'),('  bob@example.com  ','hash')"
 provision >"$LOG" 2>&1
@@ -202,6 +210,7 @@ stop_container
 
 # Case-only legacy collision fails before normalization and leaves no ledger row.
 start_container case-collision cocinacore_canonical_case
+create_runtime_role
 apply_historical
 admin_sql "insert into users(email,password_hash) values ('Alice@Example.com','hash'),('alice@example.com','hash')"
 CASE_BEFORE=$(admin_sql "select string_agg(encode(convert_to(email,'UTF8'),'hex'),',' order by id) from users")
@@ -211,6 +220,7 @@ stop_container
 
 # Surrounding-space legacy collision has the same atomic failure contract.
 start_container trim-collision cocinacore_canonical_trim
+create_runtime_role
 apply_historical
 admin_sql "insert into users(email,password_hash) values ('  bob@example.com  ','hash'),('bob@example.com','hash')"
 TRIM_BEFORE=$(admin_sql "select string_agg(encode(convert_to(email,'UTF8'),'hex'),',' order by id) from users")

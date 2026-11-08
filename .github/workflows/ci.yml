@@ -158,6 +158,24 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
+      - name: Create the disposable application role for migration grants
+        run: |
+          node -e '
+            const { Client } = require("pg");
+            (async () => {
+              const client = new Client({ connectionString: process.env.DATABASE_URL });
+              await client.connect();
+              try {
+                await client.query("create role cocinacore_user nologin nosuperuser nobypassrls");
+              } finally {
+                await client.end();
+              }
+            })().catch(() => {
+              console.error("Could not create disposable application role.");
+              process.exit(1);
+            });
+          '
+
       - name: Provision database migration roles
         run: npm run db:provision
 

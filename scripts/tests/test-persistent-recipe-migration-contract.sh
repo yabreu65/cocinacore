@@ -124,7 +124,8 @@ for (const [source, label] of [[runner, 'migration runner'], [provisioner, 'data
   }
 }
 if (!/addition\.kind\s*===\s*'table'[\s\S]*?expected\.tables\.push\(addition\.identity\)[\s\S]*?expected\.types\.push\(`\$\{schema\}\.\$\{tableName\}`\)[\s\S]*?expected\.types\.push\(`\$\{schema\}\._\$\{tableName\}`\)/.test(provisioner) ||
-    !/addition\.kind\s*===\s*'index'[\s\S]*?expected\.indexes\.push\(`\$\{addition\.schema\}\.\$\{addition\.identity\}`\)/.test(provisioner)) {
+    !/addition\.kind\s*===\s*'index'[\s\S]*?expected\.indexes\.push\(qualifyRelationObjectIdentity\(addition\)\)/.test(provisioner) ||
+    !/function qualifyRelationObjectIdentity\(addition\)[\s\S]*?identityParts\.length\s*!==\s*2[\s\S]*?return `\$\{addition\.schema\}\.\$\{addition\.identity\}`/.test(provisioner)) {
   fail('database provisioner must project table, row-type, and index additions into catalog expectations');
 }
 if (!/addition\.kind\s*===\s*'table'[\s\S]*?addition\.kind\s*!==\s*'function'/.test(runner)) {

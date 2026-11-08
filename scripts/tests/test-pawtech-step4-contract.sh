@@ -13,6 +13,9 @@ fail() {
 
 sh -n "$DEPLOY" || fail 'deploy script syntax is invalid'
 node --check "$RUNNER" || fail 'migration runner syntax is invalid'
+grep -Fq 'insert into public.schema_migrations (filename, checksum, checksum_source)' "$RUNNER" ||
+  fail 'provenance ledger writes must record their source'
+grep -Fq 'MIGRATION_FILE' "$RUNNER" || fail 'provenance ledger writes must use the trusted migration-file source'
 
 for expected in \
   'BACKUP_VERIFICATION' \
@@ -121,13 +124,20 @@ for expected in \
   'if (options.verifyComplete)' \
   'Migration ledger is complete.' \
   'begin read only' \
-  'if (separated) await assertAndAssumeMigrationIdentity(client, manifest, migrations, separated);' \
+  'assertAndAssumeMigrationIdentity(client, manifest, migrations, separated);' \
   'Migration ledger is missing.'; do
   grep -Fq -- "$expected" "$RUNNER" || fail "missing migration runner contract: $expected"
 done
 
 verify_begin_line=$(grep -nF "await client.query('begin read only')" "$RUNNER" | head -n 1 | cut -d: -f1)
-verify_call_line=$(grep -nF 'if (separated) await assertAndAssumeMigrationIdentity(client, manifest, migrations, separated);' "$RUNNER" | tail -n 1 | cut -d: -f1)
+verify_call_line=$(awk '
+  /^[[:space:]]*if \(separated\)[[:space:]]+await assertAndAssumeMigrationIdentity\(client, manifest, migrations, separated\);[[:space:]]*$/ { line=NR; next }
+  /^[[:space:]]*if \(separated\)[[:space:]]*$/ { pending=NR; next }
+  pending && /^[[:space:]]*await assertAndAssumeMigrationIdentity\(client, manifest, migrations, separated\);[[:space:]]*$/ { line=pending; pending=0; next }
+  pending && /^[[:space:]]*$/ { next }
+  pending { pending=0 }
+  END { if (line) print line }
+' "$RUNNER")
 verify_identity_line=$(grep -nF 'const identity = await client.query(`' "$RUNNER" | cut -d: -f1)
 verify_authority_line=$(grep -nF 'const authority = await client.query(' "$RUNNER" | cut -d: -f1)
 verify_membership_line=$(grep -nF 'const memberships = await client.query(' "$RUNNER" | cut -d: -f1)
@@ -156,6 +166,8 @@ const originalLoad = Module._load;
 const originalReadFileSync = fs.readFileSync.bind(fs);
 const originalReaddirSync = fs.readdirSync.bind(fs);
 const manifest = JSON.parse(originalReadFileSync(process.env.MANIFEST_PATH, 'utf8'));
+const provenanceLedger = originalReadFileSync(process.env.RUNNER_PATH, 'utf8').includes('schema_migrations_checksum_source_check');
+const useProvenanceLedger = provenanceLedger && process.env.LEDGER_FORMAT !== 'checksummed';
 const migrationSql = new Set(manifest.migrations.map((entry) =>
   originalReadFileSync(path.join(path.dirname(process.env.MANIFEST_PATH), entry.filename), 'utf8').trim().toLowerCase()
 ));
@@ -256,7 +268,7 @@ class Pool {
           ]);
           const functions = ownerFunctions
             .filter((fn) => fn.schema === params[0] && fn.name === params[1])
-            .filter((fn) => process.env.LEDGER !== 'pending' || !unapplied019Functions.has(fn.name))
+            .filter((fn) => !['pending', 'adopted-017'].includes(process.env.LEDGER) || !unapplied019Functions.has(fn.name))
             .map((fn) => ({ ...fn, owner: schemaOwner }));
           if (fixture === 'wrong-owner' && params[1] === 'is_valid_culinary_profile_text_list') {
             functions[0].owner = 'cocinacore';
@@ -282,7 +294,7 @@ class Pool {
               'public.validate_real_consumption_movement_link()',
             ]);
             let functions = ownerFunctions
-              .filter((fn) => process.env.LEDGER !== 'pending' || !unapplied019Functions.has(functionIdentity(fn)))
+              .filter((fn) => !['pending', 'adopted-017'].includes(process.env.LEDGER) || !unapplied019Functions.has(functionIdentity(fn)))
               .map(functionIdentity);
             if (fixture === 'wrong-owner') functions = functions.slice(1);
             if (fixture === 'overload') functions.push('public.is_valid_culinary_profile_text_list(text[], integer, boolean)');
@@ -291,6 +303,9 @@ class Pool {
             const appliedFilenames = new Set(manifest.migrations.map((entry) => entry.filename));
             if (['pending', 'pending-020'].includes(process.env.LEDGER)) {
               appliedFilenames.delete(manifest.migrations.at(-1).filename);
+            }
+            if (process.env.LEDGER === 'adopted-017') {
+              for (const migration of manifest.migrations.slice(17)) appliedFilenames.delete(migration.filename);
             }
             for (const migration of manifest.migrations) {
               if (!appliedFilenames.has(migration.filename)) continue;
@@ -310,10 +325,27 @@ class Pool {
           const rows = [
             { attname: 'filename', data_type: 'text', attnotnull: true },
             { attname: 'applied_at', data_type: 'timestamp with time zone', attnotnull: true, default_expression: 'now()' },
-            ...(process.env.SEPARATED === 'yes' ? [{ attname: 'checksum', data_type: 'text', attnotnull: true }] : []),
+            ...(process.env.SEPARATED === 'yes'
+              ? useProvenanceLedger
+                ? [
+                    { attname: 'checksum', data_type: 'text', attnotnull: false },
+                    { attname: 'checksum_source', data_type: 'text', attnotnull: true },
+                  ]
+                : [{ attname: 'checksum', data_type: 'text', attnotnull: true }]
+              : []),
           ];
           return { rowCount: rows.length, rows };
         }
+        if (useProvenanceLedger && text.includes('from pg_catalog.pg_constraint x') && text.includes("x.contype = 'c'")) return {
+          rowCount: 1,
+          rows: [{
+            conname: 'schema_migrations_checksum_source_check',
+            definition: process.env.PROVENANCE_CONSTRAINT === 'invalid'
+              ? 'CHECK ((checksum IS NOT NULL))'
+              : "CHECK ((((checksum_source = 'legacy_unverifiable'::text) AND (checksum IS NULL)) OR ((checksum_source = ANY (ARRAY['manifest_backfill'::text, 'migration_file'::text])) AND (checksum IS NOT NULL))))",
+            convalidated: true,
+          }],
+        };
         if (text.includes('from pg_catalog.pg_class c') && text.includes('relrowsecurity')) return { rows: [
           {
             relrowsecurity: ledgerProvisioning.rowLevelSecurity,
@@ -328,13 +360,32 @@ class Pool {
           }
           let entries = manifest.migrations.map((entry, index) => ({
             filename: entry.filename, checksum: entry.sha256,
+            ...(process.env.SEPARATED === 'yes' && useProvenanceLedger ? { checksum_source: 'migration_file' } : {}),
             applied_at: '2026-01-01T00:00:' + String(index).padStart(2, '0') + '.000Z',
           }));
+          if (process.env.LEDGER === 'checksummed-010') {
+            entries = manifest.migrations.slice(0, 10).map((entry, index) => ({
+              filename: entry.filename,
+              checksum: entry.sha256,
+              applied_at: '2026-01-01T00:00:' + String(index).padStart(2, '0') + '.000Z',
+            }));
+          }
+          if (process.env.LEDGER === 'adopted-017') {
+            entries = manifest.migrations.slice(0, 17).map((entry, index) => ({
+              filename: entry.filename,
+              checksum: index >= 10 ? null : entry.sha256,
+              ...(process.env.SEPARATED === 'yes' && useProvenanceLedger
+                ? { checksum_source: index >= 10 ? 'legacy_unverifiable' : 'manifest_backfill' }
+                : {}),
+              applied_at: '2026-01-01T00:00:' + String(index).padStart(2, '0') + '.000Z',
+            }));
+          }
           if (process.env.LEDGER === 'altered') entries[0].checksum = 'f'.repeat(64);
           if (process.env.LEDGER === 'pending' || process.env.LEDGER === 'pending-020') entries = entries.slice(0, -1);
           if (process.env.DRIFT_AFTER_PROVISION === 'yes' && queries.some((sql) => sql.startsWith('create table if not exists public.schema_migrations'))) {
             entries = manifest.migrations.map((entry, index) => ({
               filename: entry.filename, checksum: entry.sha256,
+              ...(process.env.SEPARATED === 'yes' && useProvenanceLedger ? { checksum_source: 'migration_file' } : {}),
               applied_at: '2026-01-01T00:00:' + String(index).padStart(2, '0') + '.000Z',
             }));
           }
@@ -347,6 +398,7 @@ class Pool {
           if (process.env.LEDGER.startsWith('legacy-')) {
             const canonicalPrefix = manifest.migrations.slice(0, 10).map((entry, index) => ({
               filename: entry.filename, checksum: entry.sha256,
+              ...(process.env.SEPARATED === 'yes' && provenanceLedger ? { checksum_source: 'migration_file' } : {}),
               applied_at: '2026-01-01T00:00:' + String(index).padStart(2, '0') + '.000Z',
             }));
             const legacy = [
@@ -416,6 +468,13 @@ setTimeout(() => {
   console.log('MIGRATION_SQL_QUERIES=' + JSON.stringify(queries.filter((sql) => migrationSql.has(sql))));
   if (['--verify-complete', '--dry-run'].includes(process.env.RUNNER_MODE) && !queries.includes('begin read only')) process.exitCode = 2;
   if (process.env.RUNNER_MODE === '--verify-complete' && queries.some((sql) => /^(create|alter|drop|revoke|grant|insert|update|delete|set|reset)\\b/.test(sql) && sql !== 'set role cocinacore_schema_owner')) process.exitCode = 3;
+  if (process.env.SEPARATED === 'yes') {
+    const authorityQuery = queries.find((sql) => sql.includes('select count(*)::integer as count from authority'));
+    if (!authorityQuery || !authorityQuery.includes("n.nspname !~ '^pg_'") || authorityQuery.includes("not like 'pg_%'")) {
+      console.error('migration authority query must exclude pg_ schemas with a literal-safe predicate');
+      process.exitCode = 7;
+    }
+  }
   const roleAssumptions = queries.filter((sql) => sql === 'set role cocinacore_schema_owner');
   const roleVerification = queries.findIndex((sql) =>
     sql.includes('select session_user, current_user, r.rolname') && sql.includes('where r.rolname = current_user'));
@@ -549,7 +608,10 @@ if (exactLegacySuffixResult.status !== 1 || !`${exactLegacySuffixResult.stdout}$
   process.exit(1);
 }
 const separatedLegacyResult = run('--verify-complete', 'legacy-exact', false, true, 'valid');
-if (separatedLegacyResult.status === 0 || !`${separatedLegacyResult.stdout}${separatedLegacyResult.stderr}`.includes('legacy migration lineage is incompatible with separated ledger mode')) {
+const separatedLegacyOutput = `${separatedLegacyResult.stdout}${separatedLegacyResult.stderr}`;
+if (separatedLegacyResult.status !== 1 ||
+    (!separatedLegacyOutput.includes('Established ledger does not match the trusted ordered prefix') &&
+      !separatedLegacyOutput.includes('legacy migration lineage is incompatible with separated ledger mode'))) {
   console.error(`offline separated legacy lineage rejection failed: status=${separatedLegacyResult.status} stdout=${separatedLegacyResult.stdout} stderr=${separatedLegacyResult.stderr}`);
   process.exit(1);
 }
@@ -611,6 +673,27 @@ for (const [ledger, fixture, label] of [
 const futureResult = run('--verify-complete', 'pending-020', true);
 if (futureResult.status !== 1 || !`${futureResult.stdout}${futureResult.stderr}`.includes('Pending migration: 020_future.sql')) {
   console.error(`offline future migration contract failed: ${futureResult.stderr}`);
+  process.exit(1);
+}
+const checksummedLedger = run('--verify-complete', 'checksummed-010', false, true, 'none', 'valid', 'valid', {
+  LEDGER_FORMAT: 'checksummed',
+});
+if (checksummedLedger.status !== 1 || !`${checksummedLedger.stdout}${checksummedLedger.stderr}`.includes('Pending migration: 011_canonical_email_invariant.sql')) {
+  console.error(`offline three-column checksummed ledger compatibility failed: status=${checksummedLedger.status} stdout=${checksummedLedger.stdout} stderr=${checksummedLedger.stderr}`);
+  process.exit(1);
+}
+const adopted017Ledger = run('--dry-run', 'adopted-017', false, true, 'valid', 'valid', 'valid', {
+  MIGRATION_EXPECTED_PENDING: '018_cooking_sessions.sql,019_real_consumption_reconciliation.sql',
+});
+if (adopted017Ledger.status !== 0 || !`${adopted017Ledger.stdout}${adopted017Ledger.stderr}`.includes('018_cooking_sessions.sql')) {
+  console.error(`offline provenance ledger 017 baseline compatibility failed: status=${adopted017Ledger.status} stdout=${adopted017Ledger.stdout} stderr=${adopted017Ledger.stderr}`);
+  process.exit(1);
+}
+const alteredProvenanceConstraint = run('--verify-complete', 'complete', false, true, 'none', 'valid', 'valid', {
+  PROVENANCE_CONSTRAINT: 'invalid',
+});
+if (alteredProvenanceConstraint.status !== 1 || !`${alteredProvenanceConstraint.stdout}${alteredProvenanceConstraint.stderr}`.includes('checksum provenance constraint is invalid')) {
+  console.error(`offline provenance constraint drift rejection failed: status=${alteredProvenanceConstraint.status} stdout=${alteredProvenanceConstraint.stdout} stderr=${alteredProvenanceConstraint.stderr}`);
   process.exit(1);
 }
 NODE

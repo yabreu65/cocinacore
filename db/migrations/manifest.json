@@ -8,10 +8,7 @@
     "derivation": "pg_catalog.hashtextextended(namespacePrefix || current_database(), 0)",
     "scope": "session"
   },
-  "managedSchemas": [
-    "internal",
-    "public"
-  ],
+  "managedSchemas": ["internal", "public"],
   "extensions": [
     {
       "name": "vector",
@@ -81,9 +78,7 @@
           "setOption": true
         }
       ],
-      "databasePrivileges": [
-        "CONNECT"
-      ],
+      "databasePrivileges": ["CONNECT"],
       "roleSettings": [],
       "allowedOwnedObjects": []
     },
@@ -99,9 +94,7 @@
       "connectionLimit": -1,
       "validUntil": null,
       "memberOf": [],
-      "databasePrivileges": [
-        "CREATE"
-      ],
+      "databasePrivileges": ["CREATE"],
       "roleSettings": [],
       "allowedOwnedObjects": "baselineObjects.transferable"
     }
@@ -112,10 +105,7 @@
   },
   "bootstrapPolicy": {
     "durableOrdinaryObjectsAllowed": 0,
-    "reservedRoles": [
-      "cocinacore_schema_owner",
-      "migration_admin"
-    ],
+    "reservedRoles": ["cocinacore_schema_owner", "migration_admin"],
     "autoRunOnDeploy": false
   },
   "legacyLineages": [
@@ -514,8 +504,8 @@
       "id": "018",
       "filename": "018_cooking_sessions.sql",
       "lane": "migration",
-      "sha256": "b5e25bb76feed66fec8d767968aead734912d97e9cd6c98206edc99400c2cd7d",
-      "byteLength": 6681,
+      "sha256": "42236a98bc3e7f5fd87da40e650a9f0b0591390bec0f9bd6cdaa6fd8f66546eb",
+      "byteLength": 7109,
       "transactional": "required",
       "legacyChecksumBackfillAllowed": false,
       "catalogAdditions": [
@@ -715,8 +705,8 @@
       "id": "019",
       "filename": "019_real_consumption_reconciliation.sql",
       "lane": "migration",
-      "sha256": "509ec1b9ad8bd4f480d3a78ddb6e167647b0d54231bb68e9eb947882b560d587",
-      "byteLength": 18798,
+      "sha256": "cb7ecf08c252f5cbfa5e30d00351a1063e0ddb65e17b6f238281c293cbd3d373",
+      "byteLength": 19451,
       "transactional": "required",
       "legacyChecksumBackfillAllowed": false,
       "catalogAdditions": [

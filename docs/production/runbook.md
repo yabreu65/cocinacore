@@ -18,10 +18,52 @@ Pawtech live topology.
 - Local uploads bind: `/opt/pawtech/data/cocinacore/uploads:/app/uploads`; `STORAGE_DRIVER=local`
   is supported and requires this directory to exist.
 - Email is optional; absent or partial `RESEND_API_KEY` / `EMAIL_FROM` does not block M1. Legacy
-  session duration remains 30 days. Separated database lanes remain disabled.
-- Secrets stay on the VPS. No `.env.production`, `.env.migration`, `migration_admin`,
-  `db:provision`, standalone Compose deployment, or shared infrastructure creation/mutation is part
-  of this release path.
+  session duration remains 30 days. Separated database lanes remain disabled for the application.
+- Secrets stay on the VPS. Application deployment does not use migration credentials or run a
+  provisioner. M5 schema migrations use the separate manual workflow and VPS-local migration
+  identity described below; they are never injected into the app container.
+
+## M5 schema migration: 018 → 019
+
+This is a separate, explicitly dispatched production operation; it is not part of ordinary app
+deployment. It must run from `main` against an exact SHA already integrated there. The only allowed
+pending set is the ordered pair `018_cooking_sessions.sql,019_real_consumption_reconciliation.sql`
+from a verified 017 baseline. Migration 020 is out of scope.
+
+Before dispatch, the operator must confirm the previously rehearsed restore/acceptance evidence,
+review the fresh scheduled backup, and separately obtain owner authorization for the exact SHA and
+018/019 operation. The workflow's `approval_reference` is only an operator receipt bound to that
+SHA; it is not proof of identity and does not replace any required reviewer configured on the
+GitHub `production` Environment. Do not dispatch while those approvals or the environment gate are
+uncertain.
+
+The migration runner requires the dedicated VPS file
+`/opt/pawtech/env/cocinacore.migration.env`, a regular non-symlink file with mode `0600` containing
+only `MIGRATION_DATABASE_URL=...`. Its URL must connect as the non-superuser `migration_admin` to
+`cocinacore_db` through `pawtech-postgres`. This identity and
+`cocinacore_schema_owner` must already have been provisioned by the separately reviewed procedure;
+the workflow does not create roles or credentials. The application keeps using
+`/opt/pawtech/env/cocinacore.env` as `cocinacore_user`.
+
+The migration procedure then:
+
+1. Takes the existing shared deploy/migration lock and verifies the pinned CocinaCore path,
+   candidate image/source SHA, runtime database identity and health-safe preconditions.
+2. Uses the runtime identity only for read-only checks, and separately verifies the migration
+   identity is `migration_admin`, non-superuser, non-BYPASSRLS, and connected to the expected DB.
+3. Runs the canonical runner's read-only dry-run with the exact 018/019 pending set, verifies the
+   existing scheduled backup, applies only those migrations through `MIGRATION_DATABASE_URL`, and
+   runs `--verify-complete` through the same dedicated migration lane.
+4. Checks the resulting table privileges via the runtime connection: `cooking_sessions` gets
+   SELECT/INSERT/UPDATE; session events and the five reconciliation audit tables get SELECT/INSERT;
+   runtime UPDATE/DELETE on the append-only tables are denied. It records only secretless evidence.
+
+Do not deploy the M5 application until the workflow reports the complete 019 ledger and runtime ACL
+verification. If 018 commits but 019 or a post-migration check fails, stop and preserve evidence;
+there is no automatic database rollback. Do not manually delete migration rows or run 020. Use the
+separately approved recovery plan and restore rehearsal before any corrective database action. A
+subsequent application deployment remains a separate exact-SHA operation with ordinary health and
+application-only rollback controls.
 
 ## Controlled release sequence
 

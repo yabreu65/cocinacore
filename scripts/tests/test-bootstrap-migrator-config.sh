@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 BASE=2069fc1f5a1ffc8407bd99cd91f9fadfbd04c6c4
 PROVISIONER="$ROOT/frontend/scripts/provision-database.js"
 RUNNER="$ROOT/frontend/scripts/run-migrations.js"
@@ -46,6 +46,10 @@ grep -Fq '[ "$(admin_sql "select count(*) from schema_migrations")" = "$EXPECTED
   || fail 'canonical fresh ledger count does not use manifest-derived expectation'
 grep -Fq "grep -q 'DONE 011_canonical_email_invariant.sql' \"\$LOG\"" "$CANONICAL_HELPER" \
   || fail 'canonical fresh migration completion assertion for 011 is missing'
+grep -Fq 'create role cocinacore_user nologin nosuperuser nobypassrls' "$CANONICAL_HELPER" \
+  || fail 'canonical email PostgreSQL test does not provision its restricted M5 runtime role'
+grep -Fq "[ \"\$role_attributes\" = 'false|false|false' ]" "$CANONICAL_HELPER" \
+  || fail 'canonical email PostgreSQL test does not verify restricted runtime role attributes'
 
 node --check "$PROVISIONER"
 node --check "$RUNNER"
@@ -58,7 +62,7 @@ const HISTORICAL_BASELINE_COUNT = 10;
 const CURRENT_MIGRATION_COUNT = 19;
 const manifestBytes = fs.readFileSync(manifestPath);
 const manifest = JSON.parse(manifestBytes.toString('utf8'));
-const EXPECTED_MANIFEST_SHA256 = 'a72a8f8c6e289444189ec055d9f86ecc2a7e0384b90fffdef698f53ad353b11b';
+const EXPECTED_MANIFEST_SHA256 = '459bcf0cb65e222553b99552405d75678f9efb255e0111bbf3cc35db2e32ba03';
 if (crypto.createHash('sha256').update(manifestBytes).digest('hex') !== EXPECTED_MANIFEST_SHA256) process.exit(1);
 if (manifest.manifestVersion !== 1 || manifest.trustedBaseCommit !== base) process.exit(1);
 if (manifest.migrationLaneVersion !== 1) process.exit(1);
@@ -66,9 +70,9 @@ if (manifest.lockContract?.namespacePrefix !== 'cocinacore:database-change:v1:')
 if (manifest.migrations?.length !== CURRENT_MIGRATION_COUNT) process.exit(1);
 if (manifest.migrations.some((entry, index) => entry.id !== String(index + 1).padStart(3, '0'))) process.exit(1);
 if (manifest.migrations[17]?.filename !== '018_cooking_sessions.sql' ||
-    manifest.migrations[17]?.sha256 !== 'b5e25bb76feed66fec8d767968aead734912d97e9cd6c98206edc99400c2cd7d' ||
+    manifest.migrations[17]?.sha256 !== '42236a98bc3e7f5fd87da40e650a9f0b0591390bec0f9bd6cdaa6fd8f66546eb' ||
     manifest.migrations[18]?.filename !== '019_real_consumption_reconciliation.sql' ||
-    manifest.migrations[18]?.sha256 !== '509ec1b9ad8bd4f480d3a78ddb6e167647b0d54231bb68e9eb947882b560d587' ||
+    manifest.migrations[18]?.sha256 !== 'cb7ecf08c252f5cbfa5e30d00351a1063e0ddb65e17b6f238281c293cbd3d373' ||
     manifest.migrations.some((entry) => entry.id === '020' || entry.filename.startsWith('020_'))) process.exit(1);
 if (manifest.baselineObjects?.transferable?.length !== 38) process.exit(1);
 const kinds = manifest.baselineObjects.transferable.reduce((counts, object) => {
@@ -147,6 +151,15 @@ grep -Fq 'npm run db:migrate:verify' "$PAWTECH_DEPLOY" || fail 'read-only runtim
 ! grep -Eq 'npm run db:migrate([[:space:]]|$)' "$PAWTECH_DEPLOY" || fail 'mutating runtime migration command is forbidden'
 grep -Fq "$IMAGE" "$ROOT/.github/workflows/ci.yml" || fail 'CI PostgreSQL image policy is missing'
 grep -q 'COCINACORE_SEPARATED_DB_LANES_ENABLED: "true"' "$ROOT/.github/workflows/ci.yml" || fail 'CI separated test gate missing'
+grep -Fq 'create role cocinacore_user nologin nosuperuser nobypassrls' "$ROOT/.github/workflows/ci.yml" || fail 'E2E disposable PostgreSQL role for M5 grants is missing'
+runtime_role_line=$(grep -nF 'Create the disposable application role for migration grants' "$ROOT/.github/workflows/ci.yml" | cut -d: -f1)
+migration_line=$(grep -nF 'run: npm run db:migrate' "$ROOT/.github/workflows/ci.yml" | tail -n 1 | cut -d: -f1)
+[ -n "$runtime_role_line" ] && [ "$runtime_role_line" -lt "$migration_line" ] || fail 'E2E runtime role must exist before applying migrations'
+grep -Fq 'revoke all privileges on table public.cooking_sessions, public.cooking_session_events' "$ROOT/db/migrations/018_cooking_sessions.sql" || fail '018 runtime grants are not preceded by a fail-closed revoke'
+grep -Fq 'grant select, insert, update on table public.cooking_sessions to cocinacore_user' "$ROOT/db/migrations/018_cooking_sessions.sql" || fail '018 cooking session runtime grant is missing'
+grep -Fq 'grant select, insert on table public.cooking_session_events to cocinacore_user' "$ROOT/db/migrations/018_cooking_sessions.sql" || fail '018 event runtime grant is missing'
+grep -Fq 'from public, cocinacore_user;' "$ROOT/db/migrations/019_real_consumption_reconciliation.sql" || fail '019 runtime grants are not preceded by a fail-closed revoke'
+grep -Fq 'to cocinacore_user;' "$ROOT/db/migrations/019_real_consumption_reconciliation.sql" || fail '019 runtime grant is missing'
 pull_line=$(grep -nF 'run: docker pull pgvector/pgvector:pg16' "$ROOT/.github/workflows/ci.yml" | head -n 1 | cut -d: -f1)
 contract_line=$(grep -nF 'run: sh ../scripts/tests/test-bootstrap-migrator-config.sh' "$ROOT/.github/workflows/ci.yml" | head -n 1 | cut -d: -f1)
 integration_line=$(grep -nF 'run: sh ../scripts/test-bootstrap-migrator-integration.sh' "$ROOT/.github/workflows/ci.yml" | head -n 1 | cut -d: -f1)
