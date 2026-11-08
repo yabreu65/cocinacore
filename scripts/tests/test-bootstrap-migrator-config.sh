@@ -46,6 +46,10 @@ grep -Fq '[ "$(admin_sql "select count(*) from schema_migrations")" = "$EXPECTED
   || fail 'canonical fresh ledger count does not use manifest-derived expectation'
 grep -Fq "grep -q 'DONE 011_canonical_email_invariant.sql' \"\$LOG\"" "$CANONICAL_HELPER" \
   || fail 'canonical fresh migration completion assertion for 011 is missing'
+grep -Fq 'create role cocinacore_user nologin nosuperuser nobypassrls' "$CANONICAL_HELPER" \
+  || fail 'canonical email PostgreSQL test does not provision its restricted M5 runtime role'
+grep -Fq "[ \"\$role_attributes\" = 'false|false|false' ]" "$CANONICAL_HELPER" \
+  || fail 'canonical email PostgreSQL test does not verify restricted runtime role attributes'
 
 node --check "$PROVISIONER"
 node --check "$RUNNER"
