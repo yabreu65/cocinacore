@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/auth/server';
+import type { AuthUser } from '@/lib/auth/types';
 import { getGeminiApiKey, getGeminiBaseUrl, getGeminiModel } from '@/lib/ai/gemini-config';
 import { serverLogger } from '@/lib/serverLogger';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { getRetryAfterSeconds } from '@/lib/rate-limit-identity';
 import {
   findCulinaryProfileByUserId,
   findCulinaryProfileTermsByUserId,
@@ -146,7 +148,9 @@ function userReason(candidate: LocalFirstRecommendation) {
   return {
     title: candidate.title,
     slot: candidate.slot,
-    ingredients: candidate.ingredients.map((ingredient) => typeof ingredient === 'string' ? ingredient : ingredient.name),
+    ingredients: candidate.ingredients.map((ingredient) =>
+      typeof ingredient === 'string' ? ingredient : ingredient.name
+    ),
     prepMinutes: candidate.prepMinutes,
     ...(candidate.servings === undefined ? {} : { servings: candidate.servings }),
     source: candidate.provenance,
@@ -267,6 +271,7 @@ async function loadProviderOptions(
   context: TodayProviderContext,
   apiKey: string,
   tenantId: string,
+  userId: string,
   configuredModel: string
 ): Promise<ProviderLoadResult> {
   let ragText = '';
@@ -276,6 +281,7 @@ async function loadProviderOptions(
       retrieveServerRagContext({
         apiKey,
         tenantId,
+        userId,
         ingredients: context.inventory.map(({ name }) => name).slice(0, 20),
         mealType: context.slot,
         restrictions: { allergies: context.allergies, dietaryRules: context.hardAvoid },
@@ -371,7 +377,7 @@ async function loadProviderOptions(
 }
 
 export async function POST(request: NextRequest) {
-  let user;
+  let user: AuthUser;
   try {
     user = await requireUser(request);
   } catch {
@@ -389,14 +395,21 @@ export async function POST(request: NextRequest) {
   const slot = parseBody(rawBody);
   if (!slot) return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
 
-  const rateLimit = await checkRateLimit('today', 'authenticated-user', user.id);
+  const rateLimit = await checkRateLimit('today', tenantId, user.id, {
+    requireSharedStore: true,
+  });
   if (!rateLimit.success) {
-    const nowSeconds = Date.now() / 1000;
-    const retryAfter = Math.max(0, Math.ceil(rateLimit.resetAt - nowSeconds));
+    const retryAfter = getRetryAfterSeconds(rateLimit.resetAt);
     return NextResponse.json(
-      { error: 'Rate limit exceeded', retryAfter },
       {
-        status: 429,
+        error:
+          rateLimit.storage === 'unavailable'
+            ? 'El recomendador no está disponible temporalmente.'
+            : 'Rate limit exceeded',
+        retryAfter,
+      },
+      {
+        status: rateLimit.storage === 'unavailable' ? 503 : 429,
         headers: {
           'Retry-After': String(retryAfter),
           'X-RateLimit-Limit': String(rateLimit.limit),
@@ -410,12 +423,18 @@ export async function POST(request: NextRequest) {
   const now = new Date();
   const asOf = now.toISOString().slice(0, 10);
   const since = `${asOf}T00:00:00.000Z`;
-  let loaded;
+  let loaded: [
+    Awaited<ReturnType<typeof findCulinaryProfileByUserId>>,
+    Awaited<ReturnType<typeof findCulinaryProfileTermsByUserId>>,
+    Awaited<ReturnType<typeof listTodayInventoryContextByTenant>>,
+    Awaited<ReturnType<typeof listTodayRecipeHistoryByUserAndTenant>>,
+    Awaited<ReturnType<typeof findLatestMealPlanByUserAndTenant>>,
+  ];
   try {
     loaded = await Promise.all([
-      findCulinaryProfileByUserId(user.id),
-      findCulinaryProfileTermsByUserId(user.id),
-      listTodayInventoryContextByTenant(tenantId, asOf, 50),
+      findCulinaryProfileByUserId(user.id, tenantId),
+      findCulinaryProfileTermsByUserId(user.id, tenantId),
+      listTodayInventoryContextByTenant(tenantId, asOf, 50, { tenantId, userId: user.id }),
       listTodayRecipeHistoryByUserAndTenant(user.id, tenantId, since, 20),
       findLatestMealPlanByUserAndTenant(user.id, tenantId),
     ]);
@@ -443,7 +462,7 @@ export async function POST(request: NextRequest) {
   const model = safeModelIdentifier(configuredModel);
   const apiKey = getGeminiApiKey();
   const providerLoad = apiKey
-    ? await loadProviderOptions(context, apiKey, tenantId, configuredModel)
+    ? await loadProviderOptions(context, apiKey, tenantId, user.id, configuredModel)
     : { options: null, outcome: 'not_configured' as const, ragOutcome: 'not_attempted' as const };
   const providerOptions = providerLoad.options;
   const rankedProvider = rankOneSlotOptions(providerOptions ?? [], {
@@ -464,41 +483,55 @@ export async function POST(request: NextRequest) {
   ).catch(() => []);
 
   const localCandidates: LocalFirstCandidate[] = [
-    ...persistentRecipes.map((recipe): LocalFirstCandidate => ({
-      id: recipe.id,
-      title: recipe.current_version.title,
-      slot,
-      ingredients: recipe.current_version.ingredients.map(({ name, quantity, unit }) => {
-        const parsed = typeof quantity === 'string' ? parseQuantity(quantity) : null;
-        return {
-          name,
-          quantity: parsed?.structured ? parsed.value : null,
-          unit: unit ?? (parsed?.structured ? parsed.unit : null),
-        };
-      }),
-      prepMinutes: null,
-      servings: recipe.current_version.servings,
-      source: 'saved_recipe',
-      ...(recipe.current_version.ingredients.some(({ quantity }) => typeof quantity === 'string' && quantity.trim().length > 0)
-        ? { quantityProvenance: recipe.current_version.source_recipe_history_id ? 'ai_estimate' as const : 'unknown' as const }
-        : {}),
-      identity: { userId: recipe.user_id, tenantId: recipe.tenant_id },
-    })),
-    ...contextResult.localSignals.historyCandidates.map((candidate, index): LocalFirstCandidate => ({
-      ...candidate,
-      id: `history-${index}-${candidate.title}`,
-      identity: { userId: user.id, tenantId },
-    })),
-    ...contextResult.localSignals.savedPlanCandidates.map((candidate, index): LocalFirstCandidate => ({
-      ...candidate,
-      id: `saved-plan-${index}-${candidate.title}`,
-      identity: { userId: user.id, tenantId },
-      plannedDate: null,
-    })),
-    ...safeProvider.map((candidate, index): LocalFirstCandidate => ({
-      ...candidate,
-      id: `provider-${index}-${candidate.title}`,
-    })),
+    ...persistentRecipes.map(
+      (recipe): LocalFirstCandidate => ({
+        id: recipe.id,
+        title: recipe.current_version.title,
+        slot,
+        ingredients: recipe.current_version.ingredients.map(({ name, quantity, unit }) => {
+          const parsed = typeof quantity === 'string' ? parseQuantity(quantity) : null;
+          return {
+            name,
+            quantity: parsed?.structured ? parsed.value : null,
+            unit: unit ?? (parsed?.structured ? parsed.unit : null),
+          };
+        }),
+        prepMinutes: null,
+        servings: recipe.current_version.servings,
+        source: 'saved_recipe',
+        ...(recipe.current_version.ingredients.some(
+          ({ quantity }) => typeof quantity === 'string' && quantity.trim().length > 0
+        )
+          ? {
+              quantityProvenance: recipe.current_version.source_recipe_history_id
+                ? ('ai_estimate' as const)
+                : ('unknown' as const),
+            }
+          : {}),
+        identity: { userId: recipe.user_id, tenantId: recipe.tenant_id },
+      })
+    ),
+    ...contextResult.localSignals.historyCandidates.map(
+      (candidate, index): LocalFirstCandidate => ({
+        ...candidate,
+        id: `history-${index}-${candidate.title}`,
+        identity: { userId: user.id, tenantId },
+      })
+    ),
+    ...contextResult.localSignals.savedPlanCandidates.map(
+      (candidate, index): LocalFirstCandidate => ({
+        ...candidate,
+        id: `saved-plan-${index}-${candidate.title}`,
+        identity: { userId: user.id, tenantId },
+        plannedDate: null,
+      })
+    ),
+    ...safeProvider.map(
+      (candidate, index): LocalFirstCandidate => ({
+        ...candidate,
+        id: `provider-${index}-${candidate.title}`,
+      })
+    ),
   ];
   const recommendations = recommendLocalFirst({
     asOf,
@@ -527,7 +560,12 @@ export async function POST(request: NextRequest) {
     slot,
     ragOutcome: providerLoad.ragOutcome,
     generationOutcome: providerLoad.outcome,
-    rankingOutcome: rankedProvider.status === 'invalid' ? 'invalid' : providerSucceeded ? 'sufficient_safe_options' : 'insufficient_safe_options',
+    rankingOutcome:
+      rankedProvider.status === 'invalid'
+        ? 'invalid'
+        : providerSucceeded
+          ? 'sufficient_safe_options'
+          : 'insufficient_safe_options',
     model,
     ...(providerLoad.httpStatus === undefined ? {} : { httpStatus: providerLoad.httpStatus }),
     providerOptionCount: Math.min(providerOptions?.length ?? 0, 5),
@@ -541,9 +579,11 @@ export async function POST(request: NextRequest) {
   });
   return NextResponse.json({
     status: providerSucceeded ? 'success' : 'degraded',
-    ...(!providerSucceeded ? {
-      reason: providerOptions === null ? 'provider-unavailable' : 'insufficient-safe-options',
-    } : {}),
+    ...(!providerSucceeded
+      ? {
+          reason: providerOptions === null ? 'provider-unavailable' : 'insufficient-safe-options',
+        }
+      : {}),
     options: options.map((option) => userReason(option)),
     ...(context.profileConfigured ? {} : { warnings: ['PROFILE_NOT_CONFIGURED'] }),
   });

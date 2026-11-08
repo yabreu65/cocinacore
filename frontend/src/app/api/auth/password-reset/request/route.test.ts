@@ -2,16 +2,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NextRequest } from 'next/server';
 
 const checkRateLimitMock = vi.fn();
-const findUserByEmailMock = vi.fn();
+const findUserByEmailForAuthMock = vi.fn();
 const createPasswordResetTokenMock = vi.fn();
 const sendPasswordResetEmailMock = vi.fn();
+const loggerErrorMock = vi.fn();
 
 vi.mock('@/lib/rate-limit', () => ({
   checkRateLimit: checkRateLimitMock,
 }));
 
 vi.mock('@/lib/db/repositories/userRepository', () => ({
-  findUserByEmail: findUserByEmailMock,
+  findUserByEmailForAuth: findUserByEmailForAuthMock,
 }));
 
 vi.mock('@/lib/db/repositories/passwordResetRepository', () => ({
@@ -21,6 +22,10 @@ vi.mock('@/lib/db/repositories/passwordResetRepository', () => ({
 vi.mock('@/lib/email/resend', () => ({
   getAppPublicUrl: () => 'https://app.example.test',
   sendPasswordResetEmail: sendPasswordResetEmailMock,
+}));
+
+vi.mock('@/lib/serverLogger', () => ({
+  serverLogger: { error: loggerErrorMock, warn: vi.fn(), info: vi.fn() },
 }));
 
 const { POST } = await import('./route');
@@ -39,26 +44,30 @@ describe('POST /api/auth/password-reset/request', () => {
     vi.stubEnv('EMAIL_FROM', 'CocinaCore <no-reply@example.test>');
     vi.stubEnv('APP_PUBLIC_URL', 'https://app.example.test');
     checkRateLimitMock.mockResolvedValue({ success: true, limit: 3, remaining: 2, resetAt: 1 });
-    findUserByEmailMock.mockReset();
+    findUserByEmailForAuthMock.mockReset();
     createPasswordResetTokenMock.mockReset();
     sendPasswordResetEmailMock.mockReset();
+    loggerErrorMock.mockReset();
   });
 
   it('returns a generic success for unknown email without sending email', async () => {
-    findUserByEmailMock.mockResolvedValue(null);
+    findUserByEmailForAuthMock.mockResolvedValue(null);
 
-    const response = await POST(request({ email: 'missing@example.test' }) as unknown as NextRequest);
+    const response = await POST(
+      request({ email: 'missing@example.test' }) as unknown as NextRequest
+    );
 
     expect(response.status).toBe(200);
     expect(sendPasswordResetEmailMock).not.toHaveBeenCalled();
   });
 
   it('creates a reset token and sends email for existing users', async () => {
-    findUserByEmailMock.mockResolvedValue({ id: 'user-1', email: 'user@example.test' });
+    findUserByEmailForAuthMock.mockResolvedValue({ id: 'user-1', email: 'user@example.test' });
 
     const response = await POST(request({ email: 'user@example.test' }) as unknown as NextRequest);
 
     expect(response.status).toBe(200);
+    expect(findUserByEmailForAuthMock).toHaveBeenCalledWith('user@example.test');
     expect(createPasswordResetTokenMock).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'user-1' })
     );
@@ -67,41 +76,69 @@ describe('POST /api/auth/password-reset/request', () => {
     );
   });
 
-
+  it('returns the same generic response for existing and unknown email', async () => {
+    findUserByEmailForAuthMock.mockResolvedValueOnce(null).mockResolvedValueOnce({
+      id: 'user-1',
+      email: 'user@example.test',
+    });
+    const unknown = await POST(
+      request({ email: 'missing@example.test' }) as unknown as NextRequest
+    );
+    const existing = await POST(request({ email: 'user@example.test' }) as unknown as NextRequest);
+    expect(unknown.status).toBe(200);
+    expect(existing.status).toBe(200);
+    expect(await unknown.json()).toEqual(await existing.json());
+    expect(createPasswordResetTokenMock).toHaveBeenCalledOnce();
+    expect(sendPasswordResetEmailMock).toHaveBeenCalledOnce();
+    expect(createPasswordResetTokenMock.mock.invocationCallOrder[0]).toBeLessThan(
+      sendPasswordResetEmailMock.mock.invocationCallOrder[0]
+    );
+  });
 
   it.each([
     { label: 'both values absent', apiKey: undefined, sender: undefined },
     { label: 'API key absent', apiKey: undefined, sender: 'CocinaCore <no-reply@example.test>' },
     { label: 'sender absent', apiKey: 're_test', sender: undefined },
-  ])('returns generic success without lookup when email config is incomplete ($label)', async ({ apiKey, sender }) => {
-    if (apiKey === undefined) delete process.env.RESEND_API_KEY;
-    else vi.stubEnv('RESEND_API_KEY', apiKey);
-    if (sender === undefined) delete process.env.EMAIL_FROM;
-    else vi.stubEnv('EMAIL_FROM', sender);
+  ])(
+    'returns generic success without lookup when email config is incomplete ($label)',
+    async ({ apiKey, sender }) => {
+      if (apiKey === undefined) delete process.env.RESEND_API_KEY;
+      else vi.stubEnv('RESEND_API_KEY', apiKey);
+      if (sender === undefined) delete process.env.EMAIL_FROM;
+      else vi.stubEnv('EMAIL_FROM', sender);
 
-    const response = await POST(request({ email: 'user@example.test' }) as unknown as NextRequest);
+      const response = await POST(
+        request({ email: 'user@example.test' }) as unknown as NextRequest
+      );
 
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({
-      ok: true,
-      message: 'Si el correo existe en CocinaCore, te enviaremos instrucciones para restablecer la contraseña.',
-    });
-    expect(findUserByEmailMock).not.toHaveBeenCalled();
-    expect(createPasswordResetTokenMock).not.toHaveBeenCalled();
-    expect(sendPasswordResetEmailMock).not.toHaveBeenCalled();
-  });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        ok: true,
+        message:
+          'Si el correo existe en CocinaCore, te enviaremos instrucciones para restablecer la contraseña.',
+      });
+      expect(findUserByEmailForAuthMock).not.toHaveBeenCalled();
+      expect(createPasswordResetTokenMock).not.toHaveBeenCalled();
+      expect(sendPasswordResetEmailMock).not.toHaveBeenCalled();
+    }
+  );
 
   it('returns a generic success when email sending fails', async () => {
-    findUserByEmailMock.mockResolvedValue({ id: 'user-1', email: 'user@example.test' });
+    findUserByEmailForAuthMock.mockResolvedValue({ id: 'user-1', email: 'user@example.test' });
     sendPasswordResetEmailMock.mockRejectedValue(new Error('resend unavailable'));
 
     const response = await POST(request({ email: 'user@example.test' }) as unknown as NextRequest);
 
     expect(response.status).toBe(200);
     expect(createPasswordResetTokenMock).toHaveBeenCalled();
+    expect(loggerErrorMock).toHaveBeenCalledWith(
+      'auth.password_reset.request_failed',
+      expect.objectContaining({ reason: 'unknown_error' })
+    );
+    const logPayload = loggerErrorMock.mock.calls[0]?.[1] as { requestId?: unknown };
+    expect(typeof logPayload.requestId).toBe('string');
+    expect(JSON.stringify(loggerErrorMock.mock.calls)).not.toContain('resend unavailable');
   });
-
-
 
   it('rate limits password reset requests before user lookup', async () => {
     checkRateLimitMock.mockResolvedValue({ success: false, limit: 3, remaining: 0, resetAt: 100 });
@@ -109,7 +146,7 @@ describe('POST /api/auth/password-reset/request', () => {
     const response = await POST(request({ email: 'user@example.test' }) as unknown as NextRequest);
 
     expect(response.status).toBe(429);
-    expect(findUserByEmailMock).not.toHaveBeenCalled();
+    expect(findUserByEmailForAuthMock).not.toHaveBeenCalled();
   });
 
   it('rejects invalid email', async () => {

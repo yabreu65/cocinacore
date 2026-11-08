@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from 'next/server';
-import { requireRole, requireTenant } from '@/lib/auth/server';
+import { requireRole } from '@/lib/auth/server';
 import {
   countTenantPdfsByBookId,
   deleteTenantBookById,
@@ -18,8 +18,9 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
   const { id: pdfId } = await context.params;
   try {
     const user = await requireRole(['owner', 'admin', 'member'], request, 'Unauthorized');
-    const tenant = await requireTenant(request, 'Forbidden');
-    const pdfRow = await findTenantPdfById(tenant.tenantId, pdfId);
+    const tenant = user.tenant;
+    const scope = { tenantId: tenant.tenantId, userId: user.id };
+    const pdfRow = await findTenantPdfById(tenant.tenantId, pdfId, scope);
 
     if (!pdfRow) {
       return NextResponse.json({ error: 'PDF not found.' }, { status: 404 });
@@ -34,16 +35,22 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
-    await deleteTenantPdfById(tenant.tenantId, pdfId);
+    await deleteTenantPdfById(tenant.tenantId, pdfId, scope);
 
     if (pdfRow.tenant_book_id) {
-      const remainingCount = await countTenantPdfsByBookId(tenant.tenantId, pdfRow.tenant_book_id);
+      const remainingCount = await countTenantPdfsByBookId(
+        tenant.tenantId,
+        pdfRow.tenant_book_id,
+        scope
+      );
       if (remainingCount === 0) {
-        await deleteTenantBookById(tenant.tenantId, pdfRow.tenant_book_id);
+        await deleteTenantBookById(tenant.tenantId, pdfRow.tenant_book_id, scope);
       }
     }
 
-    await getStorageAdapter().deleteFile(pdfRow.storage_path).catch(() => undefined);
+    await getStorageAdapter()
+      .deleteFile(pdfRow.storage_path)
+      .catch(() => undefined);
 
     return NextResponse.json({ ok: true });
   } catch (error) {

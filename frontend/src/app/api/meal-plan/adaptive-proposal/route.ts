@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/auth/server';
 import type { AuthUser } from '@/lib/auth/types';
+import type { UserMealPlanRow } from '@/lib/db/types';
 import { listInventoryItemsByTenant } from '@/lib/db/repositories/inventoryRepository';
 import { findMealPlanByIdForUserAndTenant } from '@/lib/db/repositories/mealPlanRepository';
 import {
@@ -47,7 +48,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'El menú requerido no es válido.' }, { status: 400 });
   }
 
-  let persistedPlan;
+  let persistedPlan: UserMealPlanRow | null;
   try {
     persistedPlan = await findMealPlanByIdForUserAndTenant(
       mealPlanId,
@@ -74,9 +75,18 @@ export async function POST(request: NextRequest) {
 
   try {
     const [inventoryItems, profileRow, profileTerms] = await Promise.all([
-      listInventoryItemsByTenant(user.tenant.tenantId),
-      findCulinaryProfileByUserId(user.id),
-      findCulinaryProfileTermsByUserId(user.id),
+      listInventoryItemsByTenant(
+        user.tenant.tenantId,
+        undefined,
+        undefined,
+        {},
+        {
+          tenantId: user.tenant.tenantId,
+          userId: user.id,
+        }
+      ),
+      findCulinaryProfileByUserId(user.id, user.tenant.tenantId),
+      findCulinaryProfileTermsByUserId(user.id, user.tenant.tenantId),
     ]);
     const profile = buildPersistedMealPlanProfileContext(
       profileRow,

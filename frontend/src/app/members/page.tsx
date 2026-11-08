@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { getCurrentUser } from '@/lib/auth/server';
-import { query } from '@/lib/db';
+import { scopedTransaction } from '@/lib/db';
 import type { InvitationStatus, TenantRole, UserRow } from '@/lib/db/types';
 
 export const dynamic = 'force-dynamic';
@@ -28,7 +28,10 @@ export default async function MembersPage() {
         <section className="mx-auto w-full max-w-4xl rounded-3xl border border-[#E8DDD2] bg-white/80 p-5 premium-shadow">
           <h1 className="text-3xl font-semibold">Miembros</h1>
           <p className="mt-2 text-[#6B5A50]">Necesitás iniciar sesión para ver el tenant.</p>
-          <Link href="/login" className="mt-4 inline-flex rounded-xl bg-[#C56A1A] px-4 py-2 font-semibold text-white">
+          <Link
+            href="/login"
+            className="mt-4 inline-flex rounded-xl bg-[#C56A1A] px-4 py-2 font-semibold text-white"
+          >
             Ir a login
           </Link>
         </section>
@@ -37,23 +40,27 @@ export default async function MembersPage() {
   }
 
   const tenantId = user.tenant.tenantId;
-  const [usersResult, invitationsResult] = await Promise.all([
-    query<Pick<UserRow, 'id' | 'full_name' | 'email' | 'role' | 'created_at'>>(
-      `select id, full_name, email, role, created_at
+  const [usersResult, invitationsResult] = await scopedTransaction(
+    { tenantId, userId: user.id },
+    async (client) =>
+      Promise.all([
+        client.query<Pick<UserRow, 'id' | 'full_name' | 'email' | 'role' | 'created_at'>>(
+          `select id, full_name, email, role, created_at
        from public.users
        where tenant_id = $1
        order by created_at asc`,
-      [tenantId]
-    ),
-    query<InvitationRow>(
-      `select id, email, status, expires_at, created_at
+          [tenantId]
+        ),
+        client.query<InvitationRow>(
+          `select id, email, status, expires_at, created_at
        from public.tenant_invitations
        where tenant_id = $1
        order by created_at desc
        limit 40`,
-      [tenantId]
-    ),
-  ]);
+          [tenantId]
+        ),
+      ])
+  );
 
   const users = usersResult.rows;
   const invitations = invitationsResult.rows;
@@ -65,7 +72,9 @@ export default async function MembersPage() {
         <div className="mb-4 flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-semibold">Miembros</h1>
-            <p className="text-[#6B5A50]">Vista migrada a PostgreSQL directo, en modo solo lectura.</p>
+            <p className="text-[#6B5A50]">
+              Vista migrada a PostgreSQL directo, en modo solo lectura.
+            </p>
           </div>
           <Link href="/app" className="text-sm font-semibold text-[#A55412]">
             Volver
@@ -100,7 +109,9 @@ export default async function MembersPage() {
                   </span>
                 </li>
               ))}
-              {users.length === 0 ? <li className="text-sm text-[#6B5A50]">No hay miembros cargados.</li> : null}
+              {users.length === 0 ? (
+                <li className="text-sm text-[#6B5A50]">No hay miembros cargados.</li>
+              ) : null}
             </ul>
           </article>
 
@@ -111,14 +122,20 @@ export default async function MembersPage() {
             </div>
             <ul className="mt-3 space-y-2">
               {invitations.map((invitation) => (
-                <li key={invitation.id} className="rounded-xl border border-[#E8DDD2] bg-white/80 p-3 text-sm">
+                <li
+                  key={invitation.id}
+                  className="rounded-xl border border-[#E8DDD2] bg-white/80 p-3 text-sm"
+                >
                   <p className="font-medium">{invitation.email}</p>
                   <p className="text-xs text-[#6B5A50]">
-                    Estado: {invitation.status} · expira {new Date(invitation.expires_at).toLocaleDateString()}
+                    Estado: {invitation.status} · expira{' '}
+                    {new Date(invitation.expires_at).toLocaleDateString()}
                   </p>
                 </li>
               ))}
-              {invitations.length === 0 ? <li className="text-sm text-[#6B5A50]">No hay invitaciones todavía.</li> : null}
+              {invitations.length === 0 ? (
+                <li className="text-sm text-[#6B5A50]">No hay invitaciones todavía.</li>
+              ) : null}
             </ul>
           </article>
         </div>

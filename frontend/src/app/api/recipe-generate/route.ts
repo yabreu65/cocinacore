@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { serverLogger } from '@/lib/serverLogger';
+import { extractGeminiTextResponse } from '@/services/apiDtos';
 import { getGeminiApiKey, getGeminiBaseUrl, getGeminiModel } from '@/lib/ai/gemini-config';
 import {
   buildRecipeCacheKey,
@@ -22,6 +23,11 @@ import { loadPersistedRecipeContext } from '@/lib/recipes/persisted-context';
 import { retrieveServerRagContext } from '@/lib/recipes/server-rag-context';
 import { createRecipeHistory } from '@/lib/db/repositories/recipeRepository';
 import type { Citation } from '@/services/types';
+import { getRetryAfterSeconds, getTrustedClientIdentity } from '@/lib/rate-limit-identity';
+import {
+  hashCapabilityPayload,
+  resolveMealPlanWarmupCapability,
+} from '@/lib/auth/internal-capability';
 
 const AI_REQUEST_TIMEOUT_MS = 60_000;
 const RECIPE_PROMPT_CONTEXT_VERSION = 'recipe-persisted-context-v1';
@@ -85,7 +91,10 @@ function normalizeHardAllergies(values: readonly string[]): string[] {
       .replace(/\s+/g, ' ')
       .trim()
       .slice(0, 100);
-    const key = normalized.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const key = normalized
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
     if (!normalized || seen.has(key) || allergies.length >= 32) continue;
     seen.add(key);
     allergies.push(normalized);
@@ -110,6 +119,46 @@ interface CanonicalRecipeResult {
   model?: string;
   mode: 'free' | 'rag';
   structuredIngredients: StructuredRecipeIngredient[];
+}
+
+async function requestGeminiRecipe(
+  url: string,
+  prompt: string,
+  clientSignal: AbortSignal
+): Promise<string> {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  clientSignal.addEventListener('abort', abort, { once: true });
+  if (clientSignal.aborted) abort();
+  const timeoutId = setTimeout(abort, AI_REQUEST_TIMEOUT_MS);
+  let onAbort: (() => void) | undefined;
+  try {
+    const aborted = new Promise<never>((_, reject) => {
+      onAbort = () => reject(new Error('Gemini provider request aborted'));
+      if (controller.signal.aborted) onAbort();
+      else controller.signal.addEventListener('abort', onAbort, { once: true });
+    });
+    const request = async () => {
+      if (controller.signal.aborted) throw new Error('Gemini provider request aborted');
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted) throw new Error('Gemini provider request aborted');
+      if (!response.ok) throw new Error('Gemini provider request failed');
+      const payload: unknown = await response.json();
+      const recipe = extractGeminiTextResponse(payload);
+      if (!recipe) throw new Error('Gemini no devolvió contenido de receta.');
+      return recipe;
+    };
+    return await Promise.race([request(), aborted]);
+  } finally {
+    clearTimeout(timeoutId);
+    clientSignal.removeEventListener('abort', abort);
+    if (onAbort) controller.signal.removeEventListener('abort', onAbort);
+  }
 }
 
 async function persistAuthenticatedRecipeHistory({
@@ -177,29 +226,60 @@ export async function POST(request: NextRequest) {
   const apiKey = getGeminiApiKey();
   const model = getGeminiModel();
   const geminiBaseUrl = getGeminiBaseUrl();
+  const warmupCapability = request.headers.get('X-CocinaCore-Warmup-Capability');
 
-  const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
-  const rateLimit = await checkRateLimit('recipe-generate', ip);
+  let user: AuthUser | null = null;
+  let internalWarmupAuthorized = false;
+  try {
+    user = await requireUser(request, 'Unauthorized');
+  } catch {
+    user = null;
+  }
+
+  if (!user && warmupCapability) {
+    try {
+      const resolvedCapability = await resolveMealPlanWarmupCapability(warmupCapability, {
+        method: 'POST',
+        path: '/api/recipe-generate',
+        operation: 'recipe-generate',
+        jobId: request.headers.get('X-CocinaCore-Warmup-Job-Id') ?? '',
+        bodyHash: hashCapabilityPayload(body),
+      });
+      user = resolvedCapability?.user ?? null;
+      internalWarmupAuthorized = Boolean(resolvedCapability);
+    } catch {
+      user = null;
+    }
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const tenantId = user?.tenant?.tenantId;
+  const rateLimit = await checkRateLimit(
+    'recipe-generate',
+    tenantId ?? getTrustedClientIdentity(request),
+    user?.id,
+    { requireSharedStore: true }
+  );
   if (!rateLimit.success) {
+    const retryAfter = getRetryAfterSeconds(rateLimit.resetAt);
+    const storageUnavailable = rateLimit.storage === 'unavailable';
     return Response.json(
-      { error: 'Rate limit exceeded', retryAfter: rateLimit.resetAt },
       {
-        status: 429,
+        error: storageUnavailable
+          ? 'El generador no está disponible temporalmente.'
+          : 'Rate limit exceeded',
+        retryAfter,
+      },
+      {
+        status: storageUnavailable ? 503 : 429,
         headers: {
-          'Retry-After': String(rateLimit.resetAt),
+          'Retry-After': String(retryAfter),
           'X-RateLimit-Limit': String(rateLimit.limit),
           'X-RateLimit-Remaining': String(rateLimit.remaining),
           'X-RateLimit-Reset': String(rateLimit.resetAt),
         },
       }
     );
-  }
-
-  let user: AuthUser | null = null;
-  try {
-    user = await requireUser(request, 'Unauthorized');
-  } catch {
-    user = null;
   }
 
   let persistedContext: Awaited<ReturnType<typeof loadPersistedRecipeContext>> | null = null;
@@ -209,7 +289,7 @@ export async function POST(request: NextRequest) {
     } catch (error) {
       serverLogger.error('recipe_generate.persisted_context_failed', {
         requestId,
-        error: error instanceof Error ? error.message : 'Persisted context error',
+        reason: error instanceof Error ? error.name : 'unknown',
       });
       return NextResponse.json(
         { error: 'No se pudo cargar el contexto culinario persistido.' },
@@ -263,12 +343,15 @@ export async function POST(request: NextRequest) {
     }
 
     const ragIngredients =
-      requestedIngredients.length > 0 ? requestedIngredients : persistedContext?.inventoryNames ?? [];
+      requestedIngredients.length > 0
+        ? requestedIngredients
+        : (persistedContext?.inventoryNames ?? []);
 
     try {
       ragContext = await retrieveServerRagContext({
         apiKey,
         tenantId: ragUser.tenant.tenantId,
+        userId: ragUser.id,
         ingredients: ragIngredients,
         recipeName: requestedRecipeName || undefined,
         mealType: requestedMealType || undefined,
@@ -281,7 +364,7 @@ export async function POST(request: NextRequest) {
     } catch (error) {
       serverLogger.error('recipe_generate.rag_retrieval_failed', {
         requestId,
-        error: error instanceof Error ? error.message : 'RAG retrieval error',
+        reason: error instanceof Error ? error.name : 'unknown',
       });
       return NextResponse.json(
         { error: 'No se pudo recuperar el contexto documental.' },
@@ -300,9 +383,6 @@ export async function POST(request: NextRequest) {
     inventoryCount: persistedContext?.inventoryLines.length ?? 0,
     chunksCount: mode === 'rag' ? ragContext.citations.length : 0,
     hasPersistedProfile: Boolean(persistedContext?.profile),
-    requestedRecipeName,
-    requestedMealType,
-    requestedDay,
   });
 
   const focusedRecipeInstruction = requestedRecipeName
@@ -316,7 +396,8 @@ export async function POST(request: NextRequest) {
       ? `Contexto del slot: ${requestedDay || 'Día no especificado'} · ${requestedMealType || 'Comida no especificada'}`
       : 'Contexto del slot: no especificado';
 
-  const inventoryContext = persistedContext?.inventoryContext ?? 'Sin inventario persistido para este hogar.';
+  const inventoryContext =
+    persistedContext?.inventoryContext ?? 'Sin inventario persistido para este hogar.';
   const profileContext = persistedContext?.profileContext ?? formatRequestProfile(requestProfile);
   const profileSectionTitle = persistedContext
     ? 'Perfil culinario persistido del usuario autenticado:'
@@ -454,18 +535,20 @@ Reglas:
 
     let recipeHistoryId: string | null;
     try {
-      recipeHistoryId = await persistAuthenticatedRecipeHistory({
-        user,
-        result: cached,
-        requestedIngredients,
-        peopleCount,
-        persistedContext,
-        ragContext,
-      });
+      recipeHistoryId = internalWarmupAuthorized
+        ? null
+        : await persistAuthenticatedRecipeHistory({
+            user,
+            result: cached,
+            requestedIngredients,
+            peopleCount,
+            persistedContext,
+            ragContext,
+          });
     } catch (error) {
       serverLogger.error('recipe_generate.history_persist_failed', {
         requestId,
-        error: error instanceof Error ? error.message : 'Recipe history error',
+        reason: error instanceof Error ? error.name : 'unknown',
       });
       return NextResponse.json(
         { error: 'No se pudo guardar la receta en el historial.' },
@@ -488,47 +571,16 @@ Reglas:
     });
   }
 
-  const fetchWithTimeout = async (url: string, init: RequestInit) => {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
-    try {
-      return await fetch(url, { ...init, signal: controller.signal });
-    } finally {
-      clearTimeout(timeoutId);
-    }
-  };
-
   try {
     if (!apiKey) {
-      throw new Error('GEMINI_API_KEY no está configurada.');
+      throw new Error('Provider unavailable');
     }
 
-    let response: Response;
-    try {
-      response = await fetchWithTimeout(
-        `${geminiBaseUrl}/models/${model}:generateContent?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
-        }
-      );
-    } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Gemini timeout/error');
-    }
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`No se pudo generar receta con Gemini: ${errorText}`);
-    }
-
-    const payload = (await response.json()) as {
-      candidates?: { content?: { parts?: { text?: string }[] } }[];
-    };
-    const recipe = payload.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-    if (!recipe) {
-      throw new Error('Gemini no devolvió contenido de receta.');
-    }
+    const recipe = await requestGeminiRecipe(
+      `${geminiBaseUrl}/models/${model}:generateContent?key=${apiKey}`,
+      prompt,
+      request.signal
+    );
 
     const title = inferTitleFromRecipe(recipe);
     const structuredIngredients = extractStructuredIngredients(recipe);
@@ -561,18 +613,20 @@ Reglas:
 
     let recipeHistoryId: string | null;
     try {
-      recipeHistoryId = await persistAuthenticatedRecipeHistory({
-        user,
-        result,
-        requestedIngredients,
-        peopleCount,
-        persistedContext,
-        ragContext,
-      });
+      recipeHistoryId = internalWarmupAuthorized
+        ? null
+        : await persistAuthenticatedRecipeHistory({
+            user,
+            result,
+            requestedIngredients,
+            peopleCount,
+            persistedContext,
+            ragContext,
+          });
     } catch (error) {
       serverLogger.error('recipe_generate.history_persist_failed', {
         requestId,
-        error: error instanceof Error ? error.message : 'Recipe history error',
+        reason: error instanceof Error ? error.name : 'unknown',
       });
       return NextResponse.json(
         { error: 'No se pudo guardar la receta en el historial.' },
@@ -606,12 +660,10 @@ Reglas:
     serverLogger.error('recipe_generate.failed', {
       requestId,
       durationMs: Date.now() - startedAt,
-      error: error instanceof Error ? error.message : 'Gemini error desconocido',
+      reason: error instanceof Error ? error.name : 'unknown',
     });
     return NextResponse.json(
-      {
-        error: `Falló Gemini: ${error instanceof Error ? error.message : 'error desconocido'}`,
-      },
+      { error: 'No se pudo generar la receta temporalmente.' },
       { status: 502 }
     );
   }

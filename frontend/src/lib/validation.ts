@@ -72,9 +72,24 @@ export const MealPlanRequestSchema = MealPlanSchema.extend({
 export type MealPlanRequestBody = z.infer<typeof MealPlanRequestSchema>;
 
 /** Schema for POST /api/embeddings */
-export const EmbeddingsSchema = z.object({
-  texts: z.array(z.string().min(1).max(5000)).min(1).max(120),
-});
+export const EmbeddingsSchema = z
+  .object({
+    texts: z.array(z.string().min(1).max(5000)).min(1).max(120),
+  })
+  .superRefine((value, context) => {
+    const totalCharacters = value.texts.reduce((total, text) => total + text.length, 0);
+    if (totalCharacters > 100_000) {
+      context.addIssue({
+        code: z.ZodIssueCode.too_big,
+        origin: 'string',
+        maximum: 100_000,
+        type: 'string',
+        inclusive: true,
+        message: 'El volumen total de texto excede el límite permitido.',
+        path: ['texts'],
+      });
+    }
+  });
 
 export type EmbeddingsBody = z.infer<typeof EmbeddingsSchema>;
 
@@ -87,10 +102,72 @@ export const InventorySuggestionSchema = z.object({
 export type InventorySuggestionBody = z.infer<typeof InventorySuggestionSchema>;
 
 /** Schema for POST /api/meal-plan/warmup */
-export const MealPlanWarmupSchema = z.object({
-  calendar: z.array(z.unknown()).min(1, 'calendar is required and must be non-empty'),
-  targetDays: z.array(z.unknown()).min(1, 'targetDays is required and must be non-empty'),
-});
+const StructuredWarmupIngredientSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200),
+    normalized_name: z.string().trim().min(1).max(200),
+    quantity: z.number().finite().nullable(),
+    unit: z.string().trim().max(50).nullable(),
+    optional_quantity_text: z.string().trim().max(100).nullable(),
+    category: z.string().trim().max(100).nullable(),
+    estimated_cost_optional: z.number().finite().nullable(),
+    structured: z.boolean(),
+  })
+  .strict();
+
+const WarmupMealCardSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200),
+    time: z.string().trim().min(1).max(100),
+    difficulty: z.enum(['Fácil', 'Media', 'Alta']),
+    badge: z.string().max(100),
+    fusionTag: z.string().max(100),
+    missing: z.number().int().min(0).max(100),
+    aiScore: z.number().finite().min(0).max(100),
+    structured_ingredients: z.array(StructuredWarmupIngredientSchema).max(100).optional(),
+    recipe_content: z.string().max(20_000).nullable().optional(),
+    rag_context: z.array(z.string().max(2_000)).max(20).optional(),
+  })
+  .strict();
+
+const WarmupPlannerDaySchema = z
+  .object({
+    day: z.string().trim().min(1).max(50),
+    meals: z
+      .object({
+        Desayuno: WarmupMealCardSchema,
+        Almuerzo: WarmupMealCardSchema,
+        Cena: WarmupMealCardSchema,
+      })
+      .strict(),
+  })
+  .strict();
+
+export const MealPlanWarmupSchema = z
+  .object({
+    calendar: z
+      .array(WarmupPlannerDaySchema)
+      .min(1, 'calendar is required and must be non-empty')
+      .max(7, 'calendar cannot contain more than 7 days'),
+    targetDays: z
+      .array(z.string().trim().min(1).max(50))
+      .min(1, 'targetDays is required and must be non-empty')
+      .max(7, 'targetDays cannot contain more than 7 days')
+      .refine((days) => new Set(days).size === days.length, 'targetDays must be unique'),
+    inventory: z.array(z.string().trim().min(1).max(200)).max(120),
+    baseCuisine: z.string().trim().min(1).max(100),
+    fusionCuisines: z.array(z.string().trim().min(1).max(100)).max(2),
+    peopleCount: z.number().int().min(1).max(100),
+    culinaryProfile: z
+      .object({
+        level: z.string().trim().max(50).nullable().optional(),
+        preferred: z.array(z.string().trim().max(100)).max(10).optional(),
+        avoid: z.array(z.string().trim().max(100)).max(10).optional(),
+        goals: z.array(z.string().trim().max(100)).max(10).optional(),
+      })
+      .strict(),
+  })
+  .strict();
 
 export type MealPlanWarmupBody = z.infer<typeof MealPlanWarmupSchema>;
 

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { transaction } from '@/lib/db';
+import { transaction, type DbOperationOptions } from '@/lib/db';
 import type { DbTransactionClient } from '@/lib/db/transaction-client';
 import type {
   CookingSessionEventRow,
@@ -300,16 +300,26 @@ export async function revalidateCookingSessionSourceInTransaction(
 export async function getCookingSession(
   sessionId: string,
   tenantId: string,
-  userId: string
+  userId: string,
+  statementTimeoutMs?: number,
+  options: DbOperationOptions = {}
 ): Promise<CookingSessionRow | null> {
   return transaction(async (client) => {
     await setRlsContext(client, tenantId, userId);
+    if (statementTimeoutMs !== undefined) {
+      await client.query("select set_config('statement_timeout', $1, true)", [
+        `${statementTimeoutMs}ms`,
+      ]);
+      await client.query("select set_config('lock_timeout', $1, true)", [
+        `${statementTimeoutMs}ms`,
+      ]);
+    }
     const result = await client.query<CookingSessionRow>(
       `select * from public.cooking_sessions where id = $1 and tenant_id = $2 and user_id = $3`,
       [sessionId, tenantId, userId]
     );
     return result.rows[0] ?? null;
-  });
+  }, options);
 }
 
 export async function transitionCookingSessionInTransaction(

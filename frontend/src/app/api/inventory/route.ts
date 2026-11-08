@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireTenant } from '@/lib/auth/server';
+import { requireUser } from '@/lib/auth/server';
 import {
-  listInventoryItemsByTenant,
+  listInventoryItemsScoped,
   createInventoryItem,
   updateInventoryItem,
   deleteInventoryItem,
 } from '@/lib/db/repositories/inventoryRepository';
-import { detectInventoryCategory, normalizeInventoryName } from '@/lib/inventory/normalize-inventory';
+import {
+  detectInventoryCategory,
+  normalizeInventoryName,
+} from '@/lib/inventory/normalize-inventory';
 
 interface InventoryItemBody {
   id?: string;
@@ -38,28 +41,31 @@ function isInventoryItemBody(body: unknown): body is InventoryItemBody {
     'notes',
   ] as const;
 
-  return textFields.every((field) => candidate[field] === undefined || typeof candidate[field] === 'string');
+  return textFields.every(
+    (field) => candidate[field] === undefined || typeof candidate[field] === 'string'
+  );
 }
 
 export async function GET() {
-  let tenant: Awaited<ReturnType<typeof requireTenant>>;
+  let user: Awaited<ReturnType<typeof requireUser>>;
   try {
-    tenant = await requireTenant();
+    user = await requireUser();
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     throw error;
   }
-
-  const items = await listInventoryItemsByTenant(tenant.tenantId);
+  if (!user.tenant) throw new Error('Tenant context required');
+  const items = await listInventoryItemsScoped({ tenantId: user.tenant.tenantId, userId: user.id });
   return NextResponse.json({ items });
 }
 
 export async function POST(request: NextRequest) {
-  const tenant = await requireTenant();
-  const { requireUser } = await import('@/lib/auth/server');
   const authUser = await requireUser();
+  if (!authUser.tenant) throw new Error('Tenant context required');
+  const tenant = authUser.tenant;
+  const scope = { tenantId: tenant.tenantId, userId: authUser.id };
 
   const body: unknown = await request.json().catch(() => null);
   if (!isInventoryItemBody(body)) {
@@ -80,9 +86,7 @@ export async function POST(request: NextRequest) {
   } = body;
 
   const name = ingredientName?.trim();
-  const parsedEstimatedUnitPrice = estimatedUnitPrice?.trim()
-    ? Number(estimatedUnitPrice)
-    : null;
+  const parsedEstimatedUnitPrice = estimatedUnitPrice?.trim() ? Number(estimatedUnitPrice) : null;
   const parsedLowStockThreshold = lowStockThreshold?.trim() ? Number(lowStockThreshold) : null;
 
   if (
@@ -97,18 +101,23 @@ export async function POST(request: NextRequest) {
   }
 
   if (id) {
-    const updated = await updateInventoryItem(id, tenant.tenantId, {
-      ingredientName: name,
-      quantity: quantity?.trim() || null,
-      unit: unit?.trim() || null,
-      category: category?.trim() || detectInventoryCategory(name),
-      expirationDate: expirationDate || null,
-      estimatedUnitPrice: parsedEstimatedUnitPrice,
-      purchaseLocation: purchaseLocation?.trim() || null,
-      lowStockThreshold: parsedLowStockThreshold,
-      normalizedName: normalizeInventoryName(name),
-      notes: notes?.trim() || null,
-    });
+    const updated = await updateInventoryItem(
+      id,
+      tenant.tenantId,
+      {
+        ingredientName: name,
+        quantity: quantity?.trim() || null,
+        unit: unit?.trim() || null,
+        category: category?.trim() || detectInventoryCategory(name),
+        expirationDate: expirationDate || null,
+        estimatedUnitPrice: parsedEstimatedUnitPrice,
+        purchaseLocation: purchaseLocation?.trim() || null,
+        lowStockThreshold: parsedLowStockThreshold,
+        normalizedName: normalizeInventoryName(name),
+        notes: notes?.trim() || null,
+      },
+      scope
+    );
     return NextResponse.json({ item: updated });
   }
 
@@ -131,12 +140,14 @@ export async function POST(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
-  const tenant = await requireTenant();
+  const user = await requireUser();
+  if (!user.tenant) throw new Error('Tenant context required');
+  const tenant = user.tenant;
   const id = request.nextUrl.searchParams.get('id');
   if (!id) {
     return NextResponse.json({ error: 'ID is required' }, { status: 400 });
   }
 
-  await deleteInventoryItem(id, tenant.tenantId);
+  await deleteInventoryItem(id, tenant.tenantId, { tenantId: tenant.tenantId, userId: user.id });
   return NextResponse.json({ ok: true });
 }

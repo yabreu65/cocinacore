@@ -3,16 +3,26 @@ import { CreatePersistentRecipeSchema } from '@/lib/validation';
 
 const { transactionMock } = vi.hoisted(() => ({ transactionMock: vi.fn() }));
 const queryMock = vi.fn();
+const scopedMock = vi.fn(
+  async (_scope: unknown, callback: (client: { query: typeof queryMock }) => unknown) =>
+    callback({ query: queryMock })
+);
 const mapSingleRowMock = vi.fn();
 
 vi.mock('@/lib/db', () => ({
   query: queryMock,
   mapSingleRow: mapSingleRowMock,
   transaction: transactionMock,
+  scopedTransaction: scopedMock,
 }));
 
 const {
   toggleRecipeSaved,
+  listRecipeHistoryByTenant,
+  findRecipeHistoryById,
+  createRecipeHistory,
+  deleteRecipeHistory,
+  updateRecipeFeedback,
   listTodayRecipeHistoryByUserAndTenant,
   createPersistentRecipe,
   appendPersistentRecipeVersion,
@@ -83,6 +93,38 @@ describe('listTodayRecipeHistoryByUserAndTenant', () => {
   });
 });
 
+describe('history scoped operations', () => {
+  beforeEach(() => {
+    queryMock.mockReset();
+    scopedMock.mockClear();
+    mapSingleRowMock.mockImplementation((result: { rows: unknown[] }) => result.rows[0] ?? null);
+  });
+  it('preserves tenant-shared reads without adding a user predicate', async () => {
+    queryMock.mockResolvedValue({ rows: [ownedRow] });
+    const scope = { tenantId: 'tenant-1', userId: 'actor-2' };
+    await expect(listRecipeHistoryByTenant('tenant-1', {}, scope)).resolves.toEqual([ownedRow]);
+    expect(scopedMock).toHaveBeenCalledWith(scope, expect.any(Function));
+    expect(queryMock.mock.calls[0][0]).not.toMatch(/user_id\s*=/);
+    await expect(findRecipeHistoryById('recipe-1', 'tenant-1', scope)).resolves.toEqual(ownedRow);
+    expect(queryMock.mock.calls[1][0]).not.toMatch(/user_id\s*=/);
+    await expect(listRecipeHistoryByTenant('other', {}, scope)).rejects.toThrow('scope mismatch');
+    await expect(findRecipeHistoryById('recipe-1', 'other', scope)).rejects.toThrow(
+      'scope mismatch'
+    );
+  });
+  it('uses authenticated scope for creation, feedback and deletion', async () => {
+    queryMock.mockResolvedValue({ rows: [ownedRow] });
+    const scope = { tenantId: 'tenant-1', userId: 'user-1' };
+    await createRecipeHistory({ ...scope, source: 'manual', recipeTitle: null, recipePayload: {} });
+    await updateRecipeFeedback('recipe-1', scope.tenantId, scope.userId, 'accepted');
+    await deleteRecipeHistory('recipe-1', scope.tenantId, scope.userId);
+    expect(scopedMock).toHaveBeenCalledTimes(3);
+    for (const call of scopedMock.mock.calls) expect(call[0]).toEqual(scope);
+    expect(queryMock.mock.calls[1][0]).toContain('tenant_id = $3 and user_id = $4');
+    expect(queryMock.mock.calls[2][0]).toContain('tenant_id = $2 and user_id = $3');
+  });
+});
+
 const recipeScope = { tenantId: 'tenant-1', userId: 'user-1' };
 const recipeContent = {
   title: 'Tomato soup',
@@ -111,25 +153,50 @@ describe('persistent recipe repository', () => {
       ingredients: [{ name: 'Tomato', quantity: '2', unit: 'cups' }],
     });
     expect(valid.success).toBe(true);
-    if (valid.success) expect(valid.data.ingredients[0]).toMatchObject({ name: 'Tomato', quantity: '2', unit: 'cups' });
-    expect(CreatePersistentRecipeSchema.safeParse({
-      title: 'Recipe', instructions: 'Cook.', ingredients: [{ name: 'Tomato', unexpected: true }],
-    }).success).toBe(false);
-    expect(CreatePersistentRecipeSchema.safeParse({
-      title: 'Recipe', instructions: 'Cook.', ingredients: [{ name: ' ' }],
-    }).success).toBe(false);
-    expect(CreatePersistentRecipeSchema.safeParse({
-      title: 'Recipe', instructions: 'Cook.', ingredients: [{ name: 'Tomato' }], userId: 'user-1',
-    }).success).toBe(false);
+    if (valid.success)
+      expect(valid.data.ingredients[0]).toMatchObject({
+        name: 'Tomato',
+        quantity: '2',
+        unit: 'cups',
+      });
+    expect(
+      CreatePersistentRecipeSchema.safeParse({
+        title: 'Recipe',
+        instructions: 'Cook.',
+        ingredients: [{ name: 'Tomato', unexpected: true }],
+      }).success
+    ).toBe(false);
+    expect(
+      CreatePersistentRecipeSchema.safeParse({
+        title: 'Recipe',
+        instructions: 'Cook.',
+        ingredients: [{ name: ' ' }],
+      }).success
+    ).toBe(false);
+    expect(
+      CreatePersistentRecipeSchema.safeParse({
+        title: 'Recipe',
+        instructions: 'Cook.',
+        ingredients: [{ name: 'Tomato' }],
+        userId: 'user-1',
+      }).success
+    ).toBe(false);
   });
 
   it('creates the parent and immutable version one in one scoped transaction', async () => {
     const recipe = {
-      id: 'recipe-1', tenant_id: 'tenant-1', user_id: 'user-1', category: null, tags: [],
-      archived_at: null, created_at: 'now', updated_at: 'now',
+      id: 'recipe-1',
+      tenant_id: 'tenant-1',
+      user_id: 'user-1',
+      category: null,
+      tags: [],
+      archived_at: null,
+      created_at: 'now',
+      updated_at: 'now',
     };
     const version = { id: 'version-1', recipe_id: 'recipe-1', version_number: 1, ...recipeContent };
-    const clientQuery = vi.fn()
+    const clientQuery = vi
+      .fn()
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [recipe] })
       .mockResolvedValueOnce({ rows: [version] });
@@ -150,7 +217,8 @@ describe('persistent recipe repository', () => {
   });
 
   it('locks the scoped parent before calculating and appending a new version', async () => {
-    const clientQuery = vi.fn()
+    const clientQuery = vi
+      .fn()
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [{ id: 'recipe-1', category: null, tags: [] }] })
       .mockResolvedValueOnce({ rows: [{ next_version: 4 }] })
@@ -164,19 +232,39 @@ describe('persistent recipe repository', () => {
     expect(sql[1]).toMatch(/tenant_id = \$2 and user_id = \$3[\s\S]*for update/i);
     expect(sql[2]).toContain('coalesce(max(version_number), 0) + 1');
     expect(clientQuery.mock.calls[1]?.[1]).toEqual(['recipe-1', 'tenant-1', 'user-1']);
-    expect(sql.some((statement) => /update\s+public\.user_recipe_versions|delete\s+from\s+public\.user_recipe/i.test(statement))).toBe(false);
+    expect(
+      sql.some((statement) =>
+        /update\s+public\.user_recipe_versions|delete\s+from\s+public\.user_recipe/i.test(statement)
+      )
+    ).toBe(false);
   });
 
   it('returns the saved-history link in the internal recipe list projection', async () => {
-    const clientQuery = vi.fn()
+    const clientQuery = vi
+      .fn()
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [{
-        id: 'recipe-1', tenant_id: 'tenant-1', user_id: 'user-1', category: null, tags: [],
-        archived_at: null, created_at: '', updated_at: '', current_version_id: 'version-1',
-        current_version_number: 1, current_version_title: 'Rice', current_version_instructions: 'Cook.',
-        current_version_servings: 2, current_version_ingredients: [{ name: 'rice', quantity: '1', unit: 'cup' }],
-        current_version_source_recipe_history_id: 'history-1', current_version_created_at: '',
-      }] });
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: 'recipe-1',
+            tenant_id: 'tenant-1',
+            user_id: 'user-1',
+            category: null,
+            tags: [],
+            archived_at: null,
+            created_at: '',
+            updated_at: '',
+            current_version_id: 'version-1',
+            current_version_number: 1,
+            current_version_title: 'Rice',
+            current_version_instructions: 'Cook.',
+            current_version_servings: 2,
+            current_version_ingredients: [{ name: 'rice', quantity: '1', unit: 'cup' }],
+            current_version_source_recipe_history_id: 'history-1',
+            current_version_created_at: '',
+          },
+        ],
+      });
     mockTransaction(clientQuery);
 
     const recipes = await listPersistentRecipes(recipeScope);
@@ -188,9 +276,17 @@ describe('persistent recipe repository', () => {
   });
 
   it('scopes list search and archive filtering with parameterized pagination', async () => {
-    const clientQuery = vi.fn().mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] });
+    const clientQuery = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
     mockTransaction(clientQuery);
-    await listPersistentRecipes(recipeScope, { search: 'soup', archived: 'active', limit: 10, offset: 5 });
+    await listPersistentRecipes(recipeScope, {
+      search: 'soup',
+      archived: 'active',
+      limit: 10,
+      offset: 5,
+    });
 
     const [contextSql, listSql] = clientQuery.mock.calls.map(([statement]) => String(statement));
     expect(contextSql).toContain("set_config('app.tenant_id'");
@@ -203,18 +299,28 @@ describe('persistent recipe repository', () => {
   });
 
   it('fetches one sentinel recipe when requested for safe projection bounds', async () => {
-    const clientQuery = vi.fn().mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] });
+    const clientQuery = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
     mockTransaction(clientQuery);
 
-    await listPersistentRecipes(recipeScope, { archived: 'active', limit: 100, includeSentinel: true });
+    await listPersistentRecipes(recipeScope, {
+      archived: 'active',
+      limit: 100,
+      includeSentinel: true,
+    });
 
     expect(clientQuery.mock.calls[1]?.[1]).toEqual(['tenant-1', 'user-1', 101, 0]);
   });
 
   it('returns duplicate-title candidates as advisory warnings without writes', async () => {
-    const clientQuery = vi.fn()
+    const clientQuery = vi
+      .fn()
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [{ recipe_id: 'existing', title: 'Tomato Soup', version_number: 2 }] });
+      .mockResolvedValueOnce({
+        rows: [{ recipe_id: 'existing', title: 'Tomato Soup', version_number: 2 }],
+      });
     mockTransaction(clientQuery);
 
     const candidates = await findDuplicatePersistentRecipeTitles(recipeScope, 'tomato soup');
@@ -230,7 +336,10 @@ describe('persistent recipe repository', () => {
   it('archives and unarchives only the owned recipe using archived_at', async () => {
     const owned = { id: 'recipe-1', tenant_id: 'tenant-1', user_id: 'user-1' };
     for (const archived of [true, false]) {
-      const clientQuery = vi.fn().mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [owned] });
+      const clientQuery = vi
+        .fn()
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [owned] });
       mockTransaction(clientQuery);
       await setPersistentRecipeArchived('recipe-1', recipeScope, archived);
       const [sql, params] = clientQuery.mock.calls[1] as [string, unknown[]];
@@ -241,26 +350,42 @@ describe('persistent recipe repository', () => {
   });
 
   it('returns null for out-of-scope rows and maps conflicts to safe typed errors', async () => {
-    const missingQuery = vi.fn().mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] });
+    const missingQuery = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
     mockTransaction(missingQuery);
-    await expect(setPersistentRecipeArchived('foreign-recipe', recipeScope, true)).resolves.toBeNull();
+    await expect(
+      setPersistentRecipeArchived('foreign-recipe', recipeScope, true)
+    ).resolves.toBeNull();
 
     const conflictQuery = vi.fn().mockResolvedValueOnce({ rows: [] }).mockRejectedValueOnce({
-      code: '23505', message: 'sensitive database detail',
+      code: '23505',
+      message: 'sensitive database detail',
     });
     mockTransaction(conflictQuery);
     await expect(createPersistentRecipe(recipeScope, recipeContent)).rejects.toMatchObject({
-      name: 'RecipeRepositoryError', code: 'conflict', message: 'Recipe changed concurrently. Please retry.',
+      name: 'RecipeRepositoryError',
+      code: 'conflict',
+      message: 'Recipe changed concurrently. Please retry.',
     });
   });
 
   it('restores a selected version by appending its contents and preserves immutable history', async () => {
     const selected = {
-      id: 'old-version', recipe_id: 'recipe-1', tenant_id: 'tenant-1', user_id: 'user-1',
-      version_number: 1, title: 'Old title', instructions: 'Old instructions', servings: 3,
-      ingredients: [{ name: 'Onion', quantity: '1' }], source_recipe_history_id: null,
+      id: 'old-version',
+      recipe_id: 'recipe-1',
+      tenant_id: 'tenant-1',
+      user_id: 'user-1',
+      version_number: 1,
+      title: 'Old title',
+      instructions: 'Old instructions',
+      servings: 3,
+      ingredients: [{ name: 'Onion', quantity: '1' }],
+      source_recipe_history_id: null,
     };
-    const clientQuery = vi.fn()
+    const clientQuery = vi
+      .fn()
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [selected] })
       .mockResolvedValueOnce({ rows: [{ id: 'recipe-1', category: null, tags: [] }] })
@@ -271,12 +396,26 @@ describe('persistent recipe repository', () => {
 
     await restorePersistentRecipeVersion('recipe-1', 'old-version', recipeScope);
 
-    expect(clientQuery.mock.calls[1]?.[1]).toEqual(['recipe-1', 'old-version', 'tenant-1', 'user-1']);
+    expect(clientQuery.mock.calls[1]?.[1]).toEqual([
+      'recipe-1',
+      'old-version',
+      'tenant-1',
+      'user-1',
+    ]);
     expect(clientQuery.mock.calls[4]?.[0]).toContain('insert into public.user_recipe_versions');
     expect(clientQuery.mock.calls[4]?.[1]).toEqual([
-      'recipe-1', 'tenant-1', 'user-1', 2, 'Old title', 'Old instructions', 3,
-      JSON.stringify(selected.ingredients), null,
+      'recipe-1',
+      'tenant-1',
+      'user-1',
+      2,
+      'Old title',
+      'Old instructions',
+      3,
+      JSON.stringify(selected.ingredients),
+      null,
     ]);
-    expect(clientQuery.mock.calls.map(([sql]) => String(sql)).join('\\n')).not.toMatch(/update\\s+public\\.user_recipe_versions|delete\\s+from\\s+public\\.user_recipe/i);
+    expect(clientQuery.mock.calls.map(([sql]) => String(sql)).join('\\n')).not.toMatch(
+      /update\\s+public\\.user_recipe_versions|delete\\s+from\\s+public\\.user_recipe/i
+    );
   });
 });

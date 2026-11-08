@@ -26,58 +26,40 @@ if (!/^  pull_request:\n    branches: \[main\]$/m.test(workflow) ||
   fail('existing pull_request and push triggers must remain limited to main');
 }
 
-const e2eJob = workflow.slice(workflow.indexOf('  e2e-tests:'));
-if (!e2eJob.startsWith('  e2e-tests:')) fail('hosted e2e-tests job is missing');
-const connectedStepName = '      - name: Run connected Today Playwright journey';
-const connectedStart = e2eJob.indexOf(connectedStepName);
-const connectedEnd = connectedStart < 0
-  ? -1
-  : e2eJob.indexOf('\n      - name:', connectedStart + connectedStepName.length);
-const connectedStep = connectedStart < 0
-  ? ''
-  : e2eJob.slice(connectedStart, connectedEnd < 0 ? undefined : connectedEnd);
+const setupName = '      - name: Provision 019, prepare and activate 020, then run isolated E2E';
+const start = workflow.indexOf(setupName);
+const end = start < 0 ? -1 : workflow.indexOf('\n      - name:', start + setupName.length);
+const setup = start < 0 ? '' : workflow.slice(start, end < 0 ? undefined : end);
 const requiredCondition =
-  "if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feat/m3-4-u5-hosted-e2e' && inputs.run_connected_today == true";
-if (!connectedStep ||
-    !connectedStep.includes(requiredCondition) ||
-    !/^        env:\n          COCINACORE_ISOLATED_E2E: "1"$/m.test(connectedStep) ||
-    !/^        run: npm run test:e2e -- e2e\/specs\/today-recommendations-connected\.spec\.ts$/m.test(connectedStep)) {
-  fail('the opt-in step must require manual dispatch, the exact M3.4 branch, and true input, and run only the connected Today spec');
+  "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feat/m3-4-u5-hosted-e2e' && inputs.run_connected_today == true";
+const connectedExpression = 'RUN_CONNECTED_TODAY: ${{ ' + requiredCondition + ' }}';
+if (!setup.includes(connectedExpression) ||
+    !setup.includes("if [ \"$RUN_CONNECTED_TODAY\" = 'true' ]; then") ||
+    !setup.includes('COCINACORE_ISOLATED_E2E=1 E2E_PROVIDER_PORT=4319') ||
+    !setup.includes('npm run test:e2e -- e2e/specs/today-recommendations-connected.spec.ts')) {
+  fail('connected Today must remain explicitly opted in for the exact manual branch/input and exact spec');
 }
-if (!/^          E2E_PROVIDER_PORT: "4319"$/m.test(connectedStep) ||
-    (workflow.match(/^ {10}E2E_PROVIDER_PORT:/gm) ?? []).length !== 1) {
-  fail('E2E_PROVIDER_PORT=4319 must be set only in the connected Today step');
+if ((workflow.match(/E2E_PROVIDER_PORT=4319/g) ?? []).length !== 1 ||
+    (workflow.match(/COCINACORE_ISOLATED_E2E=1/g) ?? []).length !== 1) {
+  fail('connected Today environment must appear only in the gated execution');
 }
-if ((workflow.match(/COCINACORE_ISOLATED_E2E/g) ?? []).length !== 1) {
-  fail('the isolated opt-in must exist only on the gated connected Today step');
-}
-if (!/^      - name: Run E2E tests\n        run: npm run test:e2e$/m.test(e2eJob)) {
-  fail('the existing general E2E suite must remain a separate unchanged invocation');
-}
-
-for (const [name, pattern] of [
-  ['runner PostgreSQL URL', /^      DATABASE_URL: postgresql:\/\/postgres:postgres@127\.0\.0\.1:5435\/cocinacore_local_db$/m],
-  ['isolated PostgreSQL URL', /^      E2E_DATABASE_URL: postgresql:\/\/postgres:postgres@127\.0\.0\.1:5435\/cocinacore_local_db$/m],
-  ['runner Redis URL', /^      REDIS_URL: redis:\/\/127\.0\.0\.1:6381\/15$/m],
-  ['isolated Redis URL', /^      E2E_REDIS_URL: redis:\/\/127\.0\.0\.1:6381\/15$/m],
-]) {
-  if (!pattern.test(e2eJob)) fail(`${name} must remain bound to the hosted loopback service`);
-}
-if (/^        env:[\s\S]*?\b(?:DATABASE_URL|REDIS_URL|E2E_DATABASE_URL|E2E_REDIS_URL):/m.test(connectedStep)) {
-  fail('connected step must inherit only the already-validated hosted target URLs, not override them');
+if (!setup.includes('npm run test:e2e\n') ||
+    setup.indexOf('npm run test:e2e\n') > setup.indexOf('if [ "$RUN_CONNECTED_TODAY" =')) {
+  fail('the standard E2E suite must run before the optional connected Today journey');
 }
 
 const targetValidator = read('frontend/e2e/database-target.ts');
 if (!/requireLoopbackPort\(database, 'E2E_DATABASE_URL', '5435'\)/.test(targetValidator) ||
-    !/requireLoopbackPort\(redis, 'E2E_REDIS_URL', '6381'\)/.test(targetValidator) ||
-    !/database\.pathname !== '\/cocinacore_local_db'/.test(targetValidator)) {
-  fail('existing E2E target validation must retain exact loopback ports and isolated database name');
+    !/requireLoopbackPort\(appDatabase, 'E2E_APP_DATABASE_URL', '5435'\)/.test(targetValidator) ||
+    !/decodeURIComponent\(appDatabase\.username\) !== 'cocinacore_runtime_rls'/.test(targetValidator) ||
+    !/requireLoopbackPort\(redis, 'E2E_REDIS_URL', '6381'\)/.test(targetValidator)) {
+  fail('fixture, runtime, and Redis targets must retain exact loopback port/database/role validation');
 }
 const playwrightConfig = read('frontend/playwright.config.ts');
 if (!/applyValidatedTargetsToRunner\(process\.env\)/.test(playwrightConfig) ||
-    !/DATABASE_URL: targets\.databaseUrl/.test(playwrightConfig) ||
-    !/REDIS_URL: targets\.redisUrl/.test(playwrightConfig)) {
-  fail('Playwright and its app server must continue using validated E2E-only target URLs');
+    !/DATABASE_URL: targets\.appDatabaseUrl/.test(playwrightConfig) ||
+    /DATABASE_URL: targets\.databaseUrl/.test(playwrightConfig)) {
+  fail('Playwright and its app server must use only the validated restricted runtime URL');
 }
 
 console.log('hosted Today E2E workflow contract passed');

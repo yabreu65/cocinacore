@@ -1,4 +1,4 @@
-import { query, mapSingleRow } from '@/lib/db';
+import { query, mapSingleRow, scopedTransaction, type AuthenticatedDbScope } from '@/lib/db';
 import {
   BookChunkRow,
   GlobalBookRow,
@@ -38,39 +38,64 @@ interface BookChunkInsert {
 
 export async function findTenantPdfById(
   tenantId: string,
-  pdfId: string
+  pdfId: string,
+  scope: AuthenticatedDbScope
 ): Promise<TenantPdfLibraryRow | null> {
-  const result = await query<TenantPdfLibraryRow>(
-    'select * from public.tenant_pdf_library where id = $1 and tenant_id = $2 limit 1',
-    [pdfId, tenantId]
+  if (!scope || scope.tenantId !== tenantId) throw new Error('PDF scope mismatch');
+  const result = await scopedTransaction(scope, (client) =>
+    client.query<TenantPdfLibraryRow>(
+      'select * from public.tenant_pdf_library where id = $1 and tenant_id = $2 limit 1',
+      [pdfId, tenantId]
+    )
   );
 
   return mapSingleRow(result);
 }
 
-export async function deleteTenantPdfById(tenantId: string, pdfId: string): Promise<void> {
-  await query('delete from public.tenant_pdf_library where id = $1 and tenant_id = $2', [
-    pdfId,
-    tenantId,
-  ]);
+export async function deleteTenantPdfById(
+  tenantId: string,
+  pdfId: string,
+  scope: AuthenticatedDbScope
+): Promise<void> {
+  if (!scope || scope.tenantId !== tenantId) throw new Error('PDF scope mismatch');
+  await scopedTransaction(scope, (client) =>
+    client.query('delete from public.tenant_pdf_library where id = $1 and tenant_id = $2', [
+      pdfId,
+      tenantId,
+    ])
+  );
 }
 
 export async function countTenantPdfsByBookId(
   tenantId: string,
-  tenantBookId: string
+  tenantBookId: string,
+  scope: AuthenticatedDbScope
 ): Promise<number> {
-  const result = await query<{ count: string }>(
-    `select count(*)::text as count
+  if (!scope || scope.tenantId !== tenantId) throw new Error('PDF scope mismatch');
+  const result = await scopedTransaction(scope, (client) =>
+    client.query<{ count: string }>(
+      `select count(*)::text as count
      from public.tenant_pdf_library
      where tenant_id = $1 and tenant_book_id = $2`,
-    [tenantId, tenantBookId]
+      [tenantId, tenantBookId]
+    )
   );
 
   return Number.parseInt(result.rows[0]?.count ?? '0', 10);
 }
 
-export async function deleteTenantBookById(tenantId: string, bookId: string): Promise<void> {
-  await query('delete from public.tenant_books where id = $1 and tenant_id = $2', [bookId, tenantId]);
+export async function deleteTenantBookById(
+  tenantId: string,
+  bookId: string,
+  scope: AuthenticatedDbScope
+): Promise<void> {
+  if (!scope || scope.tenantId !== tenantId) throw new Error('PDF scope mismatch');
+  await scopedTransaction(scope, (client) =>
+    client.query('delete from public.tenant_books where id = $1 and tenant_id = $2', [
+      bookId,
+      tenantId,
+    ])
+  );
 }
 
 export async function createGlobalBook(input: CreateGlobalBookInput): Promise<GlobalBookRow> {
@@ -156,11 +181,15 @@ export async function insertBookChunks(rows: BookChunkInsert[]): Promise<void> {
 
 export async function findTenantBookById(
   tenantId: string,
-  bookId: string
+  bookId: string,
+  scope: AuthenticatedDbScope
 ): Promise<TenantBookRow | null> {
-  const result = await query<TenantBookRow>(
-    'select * from public.tenant_books where id = $1 and tenant_id = $2 limit 1',
-    [bookId, tenantId]
+  if (!scope || scope.tenantId !== tenantId) throw new Error('PDF scope mismatch');
+  const result = await scopedTransaction(scope, (client) =>
+    client.query<TenantBookRow>(
+      'select * from public.tenant_books where id = $1 and tenant_id = $2 limit 1',
+      [bookId, tenantId]
+    )
   );
 
   return mapSingleRow(result);

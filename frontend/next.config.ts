@@ -2,8 +2,14 @@ import type { NextConfig } from 'next';
 import { withSentryConfig } from '@sentry/nextjs';
 import bundleAnalyzer from '@next/bundle-analyzer';
 
+const e2eDistDir = process.env.COCINACORE_E2E_NEXT_DIST_DIR;
+if (e2eDistDir && !/^\.next-e2e-[A-Za-z0-9_-]{1,96}$/.test(e2eDistDir)) {
+  throw new Error('COCINACORE_E2E_NEXT_DIST_DIR must be a safe isolated output directory.');
+}
+
 const nextConfig: NextConfig = {
   output: 'standalone',
+  distDir: e2eDistDir ?? '.next',
 
   async headers() {
     const isDev = process.env.NODE_ENV !== 'production';

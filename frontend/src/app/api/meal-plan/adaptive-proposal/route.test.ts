@@ -113,7 +113,14 @@ describe('POST /api/meal-plan/adaptive-proposal', () => {
 
     expect(response.status).toBe(200);
     expect(mockFindMealPlan).toHaveBeenCalledWith(planId, 'user-1', 'tenant-1');
-    expect(mockListInventory).toHaveBeenCalledWith('tenant-1');
+    expect(mockRequireUser).toHaveBeenCalledOnce();
+    expect(mockListInventory).toHaveBeenCalledWith(
+      'tenant-1',
+      undefined,
+      undefined,
+      {},
+      { tenantId: 'tenant-1', userId: 'user-1' }
+    );
     expect(await response.json()).toMatchObject({
       mealPlanId: planId,
       expectedUpdatedAt: '2026-10-27T00:00:00.000Z',

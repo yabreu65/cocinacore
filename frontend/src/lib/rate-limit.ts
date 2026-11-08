@@ -1,4 +1,5 @@
 import Redis from 'ioredis';
+import { randomUUID } from 'node:crypto';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -16,6 +17,16 @@ export interface RateLimitResult {
   limit: number;
   remaining: number;
   resetAt: number; // unix timestamp in seconds
+  storage: 'redis' | 'memory' | 'unavailable';
+}
+
+export interface RateLimitOptions {
+  /** Requires the shared atomic store; never fall back to process-local state. */
+  requireSharedStore?: boolean;
+  signal?: AbortSignal;
+  deadlineAt?: number;
+  /** Stable per-request id for an explicit retry; never reuse across requests. */
+  requestId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -28,12 +39,22 @@ const ROUTE_CONFIGS: Record<string, RateLimitConfig> = {
   'meal-plan': { limit: 5, windowSeconds: 60 },
   'meal-plan/warmup': { limit: 3, windowSeconds: 60 },
   'inventory-suggestion': { limit: 8, windowSeconds: 60 },
+  'cooking-teacher-user': { limit: 20, windowSeconds: 60 },
+  'cooking-teacher-tenant': { limit: 120, windowSeconds: 60 },
   embeddings: { limit: 25, windowSeconds: 60 },
   'auth/password-reset': { limit: 3, windowSeconds: 900 },
   'auth/password-update': { limit: 5, windowSeconds: 900 },
   'auth/login': { limit: 8, windowSeconds: 900 },
   'auth/signup': { limit: 5, windowSeconds: 900 },
   'auth/invite-accept': { limit: 8, windowSeconds: 900 },
+  'auth/login:anonymous-global': { limit: 100, windowSeconds: 900 },
+  'auth/login:trusted-client': { limit: 40, windowSeconds: 900 },
+  'auth/password-reset:anonymous-global': { limit: 50, windowSeconds: 900 },
+  'auth/password-reset:trusted-client': { limit: 20, windowSeconds: 900 },
+  'auth/signup:anonymous-global': { limit: 100, windowSeconds: 900 },
+  'auth/signup:trusted-client': { limit: 40, windowSeconds: 900 },
+  'auth/password-update:anonymous-global': { limit: 50, windowSeconds: 900 },
+  'auth/password-update:trusted-client': { limit: 20, windowSeconds: 900 },
 };
 
 // ---------------------------------------------------------------------------
@@ -41,35 +62,52 @@ const ROUTE_CONFIGS: Record<string, RateLimitConfig> = {
 // ---------------------------------------------------------------------------
 
 let redis: Redis | null = null;
-let redisUnavailable = false;
+let redisUnavailableUntil = 0;
+
+function resetRedisClient(client?: Redis): void {
+  if (!client || redis === client) {
+    try {
+      redis?.disconnect();
+    } catch {
+      // The stale client is discarded below.
+    }
+    redis = null;
+  }
+  redisUnavailableUntil = Date.now() + 1_000;
+}
 
 function getRedisClient(): Redis | null {
-  if (redisUnavailable) return null;
+  if (redisUnavailableUntil > Date.now()) return null;
+  redisUnavailableUntil = 0;
   if (redis) return redis;
 
   const redisUrl = process.env.REDIS_URL;
 
   if (!redisUrl) {
-    redisUnavailable = true;
+    redisUnavailableUntil = Date.now() + 1_000;
     return null;
   }
 
   try {
     redis = new Redis(redisUrl, {
-      maxRetriesPerRequest: 1,
+      maxRetriesPerRequest: 0,
+      connectTimeout: 1_000,
+      commandTimeout: 2_000,
       retryStrategy() {
-        redisUnavailable = true;
+        redis = null;
+        redisUnavailableUntil = Date.now() + 1_000;
         return null; // stop retrying
       },
       lazyConnect: true,
     });
+    redis.on('error', () => undefined);
+    const client = redis;
     // Fire-and-forget connect; if it fails we fall back to in-memory
     redis.connect().catch(() => {
-      redisUnavailable = true;
-      redis = null;
+      resetRedisClient(client);
     });
   } catch {
-    redisUnavailable = true;
+    resetRedisClient();
     return null;
   }
 
@@ -83,8 +121,7 @@ function getRedisClient(): Redis | null {
 const MAX_IN_MEMORY_ENTRIES = 10_000;
 
 interface WindowRecord {
-  count: number;
-  windowStart: number; // ms timestamp
+  timestamps: number[]; // request timestamps in milliseconds, oldest first
 }
 
 const memoryMap = new Map<string, WindowRecord>();
@@ -103,11 +140,11 @@ function evictIfNeeded(): void {
 // Key builder
 // ---------------------------------------------------------------------------
 
-function buildKey(route: string, ip: string, userId?: string): string {
+function buildKey(route: string, identity: string, userId?: string): string {
   if (userId) {
-    return `rl:${route}:${ip}:${userId}`;
+    return `rl:${route}:${identity}:${userId}`;
   }
-  return `rl:${route}:${ip}`;
+  return `rl:${route}:${identity}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -127,14 +164,19 @@ redis.call('ZREMRANGEBYSCORE', key, '-inf', now - window * 1000)
 -- Count current entries within window
 local count = redis.call('ZCARD', key)
 local success = 0
+local requestId = ARGV[4]
 
-if count < limit then
-  -- Add current millisecond timestamp with uniqueness
-  redis.call('ZADD', key, now, now .. ':' .. count)
-  -- Set expiry on the key slightly longer than the window
-  redis.call('PEXPIRE', key, window * 1000 + 1000)
-  count = redis.call('ZCARD', key)
+-- A caller retry with the same request id is idempotent and must not consume
+-- the window twice after a response timeout.
+if redis.call('ZSCORE', key, requestId) then
   success = 1
+else
+  if count < limit then
+    redis.call('ZADD', key, now, requestId)
+    redis.call('PEXPIRE', key, window * 1000 + 1000)
+    count = redis.call('ZCARD', key)
+    success = 1
+  end
 end
 
 local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
@@ -146,28 +188,49 @@ end
 return { success, count, oldestScore }
 `;
 
-let loadedScript: string | null = null;
+function unavailableResult(config: RateLimitConfig): RateLimitResult {
+  const resetAt = Math.ceil((Date.now() + config.windowSeconds * 1000) / 1000);
+  return { success: false, limit: config.limit, remaining: 0, resetAt, storage: 'unavailable' };
+}
 
-async function redisCheck(key: string, config: RateLimitConfig): Promise<RateLimitResult> {
+async function redisCheck(
+  key: string,
+  config: RateLimitConfig,
+  options: RateLimitOptions = {}
+): Promise<RateLimitResult> {
+  if (
+    options.signal?.aborted ||
+    (options.deadlineAt !== undefined && options.deadlineAt <= Date.now())
+  ) {
+    return unavailableResult(config);
+  }
   const client = getRedisClient();
   if (!client) {
-    return memoryCheck(key, config);
+    return options.requireSharedStore ? unavailableResult(config) : memoryCheck(key, config);
   }
 
   const nowMs = Date.now();
 
   try {
-    if (!loadedScript) {
-      loadedScript = (await client.script('LOAD', SLIDING_WINDOW_LUA)) as string;
-    }
+    const commandTimeoutMs = 2_000;
+    const remainingMs =
+      options.deadlineAt === undefined ? commandTimeoutMs : options.deadlineAt - Date.now();
+    if (remainingMs < commandTimeoutMs) return unavailableResult(config);
 
-    const result: unknown = await client.evalsha(
-      loadedScript,
+    // ioredis applies commandTimeout and maxRetriesPerRequest to this single
+    // atomic EVAL. We do not race it with a logical timer: a race would return
+    // fail-closed while the Redis mutation kept running in the background.
+    // If Redis accepted the command before a transport timeout, the result is
+    // intentionally treated as unknown and the caller must not retry it with
+    // a new request id during the same operation.
+    const result: unknown = await client.eval(
+      SLIDING_WINDOW_LUA,
       1,
       key,
       nowMs,
       config.windowSeconds,
-      config.limit
+      config.limit,
+      options.requestId ?? randomUUID()
     );
 
     if (
@@ -192,24 +255,18 @@ async function redisCheck(key: string, config: RateLimitConfig): Promise<RateLim
     }
 
     const remaining = Math.max(0, config.limit - result[1]);
-    const resetAt = Math.ceil(
-      (oldestLiveScoreMs + config.windowSeconds * 1000) / 1000
-    );
+    const resetAt = Math.ceil((oldestLiveScoreMs + config.windowSeconds * 1000) / 1000);
 
     return {
       success: result[0] === 1,
       limit: config.limit,
       remaining,
       resetAt,
+      storage: 'redis',
     };
   } catch {
-    // Redis script might not be loaded yet; load and retry
-    try {
-      loadedScript = null; // reset so we reload next time
-    } catch {
-      // ignore
-    }
-    return memoryCheck(key, config);
+    resetRedisClient(client);
+    return options.requireSharedStore ? unavailableResult(config) : memoryCheck(key, config);
   }
 }
 
@@ -221,40 +278,32 @@ function memoryCheck(key: string, config: RateLimitConfig): RateLimitResult {
   evictIfNeeded();
 
   const now = Date.now();
-  const windowStart = now - config.windowSeconds * 1000;
+  const windowMs = config.windowSeconds * 1000;
+  const cutoff = now - windowMs;
+  const record = memoryMap.get(key) ?? { timestamps: [] };
+  record.timestamps = record.timestamps.filter((timestamp) => timestamp > cutoff);
 
-  const record = memoryMap.get(key);
-
-  // No record or window expired → reset
-  if (!record || record.windowStart <= windowStart) {
-    memoryMap.set(key, { count: 1, windowStart: now });
-    return {
-      success: true,
-      limit: config.limit,
-      remaining: config.limit - 1,
-      resetAt: Math.ceil((now + config.windowSeconds * 1000) / 1000),
-    };
-  }
-
-  // Window still active
-  if (record.count >= config.limit) {
-    const resetAt = Math.ceil((record.windowStart + config.windowSeconds * 1000) / 1000);
+  if (record.timestamps.length >= config.limit) {
+    const oldestTimestamp = record.timestamps[0] ?? now;
+    memoryMap.set(key, record);
     return {
       success: false,
       limit: config.limit,
       remaining: 0,
-      resetAt,
+      resetAt: Math.ceil((oldestTimestamp + windowMs) / 1000),
+      storage: 'memory',
     };
   }
 
-  record.count += 1;
+  record.timestamps.push(now);
   memoryMap.set(key, record);
 
   return {
     success: true,
     limit: config.limit,
-    remaining: config.limit - record.count,
-    resetAt: Math.ceil((record.windowStart + config.windowSeconds * 1000) / 1000),
+    remaining: config.limit - record.timestamps.length,
+    resetAt: Math.ceil(((record.timestamps[0] ?? now) + windowMs) / 1000),
+    storage: 'memory',
   };
 }
 
@@ -266,19 +315,24 @@ function memoryCheck(key: string, config: RateLimitConfig): RateLimitResult {
  * Checks whether the request is within the rate limit for the given route.
  *
  * @param route - one of the configured route keys (e.g. "recipe-generate")
- * @param ip - client IP address
+ * @param identity - client IP or authenticated identity, depending on the route
  * @param userId - optional user ID; when present, the key is scoped per user
  */
 export async function checkRateLimit(
   route: string,
-  ip: string,
-  userId?: string
+  identity: string,
+  userId?: string,
+  options: RateLimitOptions = {}
 ): Promise<RateLimitResult> {
   const config = ROUTE_CONFIGS[route];
   if (!config) {
     // Unknown route — default to a generous limit as safety net
-    return redisCheck(buildKey(route, ip, userId), { limit: 100, windowSeconds: 60 });
+    return redisCheck(
+      buildKey(route, identity, userId),
+      { limit: 100, windowSeconds: 60 },
+      options
+    );
   }
 
-  return redisCheck(buildKey(route, ip, userId), config);
+  return redisCheck(buildKey(route, identity, userId), config, options);
 }

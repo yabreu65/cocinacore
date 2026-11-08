@@ -51,7 +51,7 @@ describe('/api/shopping-list/[id]', () => {
     deleteShoppingListItemMock.mockReset();
 
     requireTenantMock.mockResolvedValue({ tenantId: 'tenant-1' });
-    requireUserMock.mockResolvedValue({ id: 'user-1' });
+    requireUserMock.mockResolvedValue({ id: 'user-1', tenant: { tenantId: 'tenant-1' } });
     updateShoppingListItemStatusMock.mockResolvedValue(item);
     deleteShoppingListItemMock.mockResolvedValue(item);
   });
@@ -155,4 +155,11 @@ describe('/api/shopping-list/[id]', () => {
     expect(response.status).toBe(401);
     expect(deleteShoppingListItemMock).not.toHaveBeenCalled();
   });
+});
+
+it('rejects sessions without tenant without repository access', async () => {
+  requireUserMock.mockReset().mockResolvedValue({ id: 'user-1', tenant: null });
+  const response = await DELETE(request({ method: 'DELETE' }), context());
+  expect(response.status).toBe(401);
+  expect(requireUserMock).toHaveBeenCalledTimes(1);
 });

@@ -2,6 +2,7 @@ import { cookies } from 'next/headers';
 import { type NextRequest } from 'next/server';
 import { getSessionFromCookies, getSessionFromRequest, resolveSessionToken } from './session';
 import { AuthUser, TenantContext, TenantRole } from './types';
+import type { DbOperationOptions } from '@/lib/db';
 
 export async function getCurrentUser(): Promise<AuthUser | null> {
   const session = await getSessionFromCookies();
@@ -10,9 +11,12 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
 
 export async function requireUser(
   request?: NextRequest,
-  errorMessage = 'Unauthorized'
+  errorMessage = 'Unauthorized',
+  options?: DbOperationOptions
 ): Promise<AuthUser> {
-  const session = request ? await getSessionFromRequest(request) : await getSessionFromCookies();
+  const session = request
+    ? await getSessionFromRequest(request, options)
+    : await getSessionFromCookies();
   if (!session?.user) {
     throw new Error(errorMessage);
   }

@@ -1,5 +1,5 @@
 import { PoolClient } from 'pg';
-import { query, transaction, mapSingleRow } from '@/lib/db';
+import { authQuery, authTransaction, mapSingleRow } from '@/lib/db';
 
 export interface PasswordResetTokenRow {
   id: string;
@@ -33,7 +33,7 @@ export async function invalidateActivePasswordResetTokens(
 export async function createPasswordResetToken(
   input: CreatePasswordResetTokenInput
 ): Promise<PasswordResetTokenRow> {
-  return transaction(async (client) => {
+  return authTransaction(async (client) => {
     await invalidateActivePasswordResetTokens(client, input.userId);
 
     const result = await client.query<PasswordResetTokenRow>(
@@ -55,7 +55,7 @@ export async function createPasswordResetToken(
 export async function findActivePasswordResetToken(
   tokenHash: string
 ): Promise<PasswordResetTokenRow | null> {
-  const result = await query<PasswordResetTokenRow>(
+  const result = await authQuery<PasswordResetTokenRow>(
     `select * from public.password_reset_tokens
      where token_hash = $1
        and used_at is null
@@ -67,7 +67,7 @@ export async function findActivePasswordResetToken(
 }
 
 export async function markPasswordResetTokenUsed(tokenId: string): Promise<void> {
-  await query(
+  await authQuery(
     `update public.password_reset_tokens
      set used_at = now()
      where id = $1 and used_at is null`,
@@ -79,7 +79,7 @@ export async function consumePasswordResetToken<T>(
   tokenHash: string,
   callback: (client: PoolClient, token: PasswordResetTokenRow) => Promise<T>
 ): Promise<T | null> {
-  return transaction(async (client) => {
+  return authTransaction(async (client) => {
     const result = await client.query<PasswordResetTokenRow>(
       `select * from public.password_reset_tokens
        where token_hash = $1

@@ -80,14 +80,20 @@ describe('loadPersistedRecipeContext', () => {
 
   it('loads only exact tenant inventory and preserves quantity, unit, and retrieval names', async () => {
     listInventoryItemsByTenantMock.mockResolvedValue([
-      inventory(),
+      inventory({ user_id: 'user-2' }),
       inventory({ id: 'other-tenant', tenant_id: 'tenant-2', ingredient_name: 'Dato ajeno' }),
       inventory({ id: 'unknown', ingredient_name: 'Lentejas', quantity: null, unit: null }),
     ]);
 
     const context = await loadPersistedRecipeContext('user-1', 'tenant-1');
 
-    expect(listInventoryItemsByTenantMock).toHaveBeenCalledWith('tenant-1');
+    expect(listInventoryItemsByTenantMock).toHaveBeenCalledWith(
+      'tenant-1',
+      undefined,
+      undefined,
+      {},
+      { tenantId: 'tenant-1', userId: 'user-1' }
+    );
     expect(context.inventoryLines).toEqual([
       '- tomate: 2 kg',
       '- lentejas: cantidad no especificada',
@@ -122,8 +128,8 @@ describe('loadPersistedRecipeContext', () => {
 
     const context = await loadPersistedRecipeContext('user-1', 'tenant-1');
 
-    expect(findCulinaryProfileByUserIdMock).toHaveBeenCalledWith('user-1');
-    expect(findCulinaryProfileTermsByUserIdMock).toHaveBeenCalledWith('user-1');
+    expect(findCulinaryProfileByUserIdMock).toHaveBeenCalledWith('user-1', 'tenant-1');
+    expect(findCulinaryProfileTermsByUserIdMock).toHaveBeenCalledWith('user-1', 'tenant-1');
     expect(context.profile).toEqual({
       identity: ['Mediterránea'],
       preferred: ['Legumbres'],

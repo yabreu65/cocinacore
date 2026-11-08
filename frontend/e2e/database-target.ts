@@ -15,7 +15,10 @@ export interface E2ERedisTarget {
 }
 
 export interface ValidatedE2ETargets {
+  /** Privileged disposable connection for test setup and assertions only. */
   databaseUrl: string;
+  /** Restricted runtime connection passed to the Next.js application. */
+  appDatabaseUrl: string;
   redisUrl: string;
   databaseTarget: E2EDatabaseTarget;
   redisTarget: E2ERedisTarget;
@@ -46,7 +49,7 @@ export function applyValidatedTargetsToRunner(
   environment: Record<string, string | undefined>
 ): ValidatedE2ETargets {
   const targets = validateE2ETargets(environment);
-  environment.DATABASE_URL = targets.databaseUrl;
+  environment.DATABASE_URL = targets.appDatabaseUrl;
   environment.REDIS_URL = targets.redisUrl;
   return targets;
 }
@@ -62,6 +65,28 @@ export function validateE2ETargets(environment: E2ETargetEnvironment): Validated
     throw new Error('E2E_DATABASE_URL database must be /cocinacore_local_db.');
   }
 
+  const appDatabaseUrl = environment.E2E_APP_DATABASE_URL;
+  const appDatabase = parseTarget(appDatabaseUrl, 'E2E_APP_DATABASE_URL');
+  if (appDatabase.protocol !== 'postgres:' && appDatabase.protocol !== 'postgresql:') {
+    throw new Error('E2E_APP_DATABASE_URL protocol must be postgres: or postgresql:.');
+  }
+  requireLoopbackPort(appDatabase, 'E2E_APP_DATABASE_URL', '5435');
+  if (appDatabase.pathname !== '/cocinacore_local_db') {
+    throw new Error('E2E_APP_DATABASE_URL database must be /cocinacore_local_db.');
+  }
+  if (decodeURIComponent(appDatabase.username) !== 'cocinacore_runtime_rls') {
+    throw new Error('E2E_APP_DATABASE_URL must use the restricted cocinacore_runtime_rls role.');
+  }
+  if (
+    database.hostname !== appDatabase.hostname ||
+    database.port !== appDatabase.port ||
+    database.pathname !== appDatabase.pathname
+  ) {
+    throw new Error(
+      'E2E fixture and application database URLs must target the same disposable database.'
+    );
+  }
+
   const redisUrl = environment.E2E_REDIS_URL;
   const redis = parseTarget(redisUrl, 'E2E_REDIS_URL');
   if (redis.protocol !== 'redis:') {
@@ -74,6 +99,7 @@ export function validateE2ETargets(environment: E2ETargetEnvironment): Validated
 
   return {
     databaseUrl: databaseUrl!,
+    appDatabaseUrl: appDatabaseUrl!,
     redisUrl: redisUrl!,
     databaseTarget: {
       protocol: database.protocol,

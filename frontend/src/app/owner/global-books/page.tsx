@@ -22,7 +22,7 @@ export default async function OwnerGlobalBooksPage() {
     redirect('/login');
   }
 
-  if (!(await isPlatformOwner(user.id))) {
+  if (!(await isPlatformOwner(user))) {
     redirect('/app');
   }
 
@@ -49,11 +49,15 @@ export default async function OwnerGlobalBooksPage() {
         </p>
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
           <div className="rounded-2xl border border-[#E8DDD2] bg-white/70 p-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#6B5A50]">Libros</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#6B5A50]">
+              Libros
+            </p>
             <p className="mt-1 text-2xl font-semibold text-[#241A14]">{rows.length}</p>
           </div>
           <div className="rounded-2xl border border-[#E8DDD2] bg-white/70 p-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#6B5A50]">Regiones</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#6B5A50]">
+              Regiones
+            </p>
             <p className="mt-1 text-2xl font-semibold text-[#241A14]">{regions.length}</p>
           </div>
           <div className="rounded-2xl border border-[#E8DDD2] bg-white/70 p-3">
@@ -65,10 +69,14 @@ export default async function OwnerGlobalBooksPage() {
 
       <ul className="grid gap-3 md:grid-cols-2">
         {rows.map((row) => (
-          <li key={row.id} className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-4 premium-shadow">
+          <li
+            key={row.id}
+            className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-4 premium-shadow"
+          >
             <p className="line-clamp-2 text-base font-semibold text-[#241A14]">{row.title}</p>
             <p className="mt-2 inline-flex items-center gap-2 text-xs text-[#6B5A50]">
-              <Globe2 size={12} /> {row.cuisine_region} · {row.cuisine_country ?? 'País no definido'}
+              <Globe2 size={12} /> {row.cuisine_region} ·{' '}
+              {row.cuisine_country ?? 'País no definido'}
             </p>
             <p className="mt-1 text-xs text-[#6B5A50]">Estilo: {row.cuisine_style ?? 'General'}</p>
             <p className="mt-1 text-xs text-[#6B5A50]">Autor: {row.author ?? 'No especificado'}</p>
@@ -90,7 +98,9 @@ export default async function OwnerGlobalBooksPage() {
             </div>
           </li>
         ))}
-        {rows.length === 0 ? <li className="text-sm text-[#6B5A50]">No hay libros globales cargados.</li> : null}
+        {rows.length === 0 ? (
+          <li className="text-sm text-[#6B5A50]">No hay libros globales cargados.</li>
+        ) : null}
       </ul>
     </section>
   );

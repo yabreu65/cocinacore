@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { SignJWT, jwtVerify } from 'jose';
 import { cookies } from 'next/headers';
 import { type NextRequest, type NextResponse } from 'next/server';
@@ -8,10 +9,11 @@ import {
   deleteSessionByTokenHash,
   touchSessionLastSeen,
 } from '@/lib/db/repositories/sessionRepository';
-import { findUserById } from '@/lib/db/repositories/userRepository';
-import { findTenantById } from '@/lib/db/repositories/tenantRepository';
+import { findUserByIdForAuth } from '@/lib/db/repositories/userRepository';
+import { findTenantByIdForAuth } from '@/lib/db/repositories/tenantRepository';
 import { AuthUser, AuthSession, TenantContext } from './types';
 import { serverLogger } from '@/lib/serverLogger';
+import type { DbOperationOptions } from '@/lib/db';
 
 const DEFAULT_SESSION_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
 
@@ -114,17 +116,19 @@ export async function verifySessionToken(token: string): Promise<VerifiedTokenPa
   }
 }
 
-export async function createSession(userId: string): Promise<AuthSession> {
+export async function createSession(userId: string, client?: PoolClient): Promise<AuthSession> {
   const secret = getSecret();
   const ttlSeconds = getSessionTtlSeconds();
   const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
 
-  const user = await findUserById(userId);
+  const user = await findUserByIdForAuth(userId, undefined, client);
   if (!user) {
     throw new Error('User not found during session creation');
   }
 
-  const tenantRow = user.tenant_id ? await findTenantById(user.tenant_id) : null;
+  const tenantRow = user.tenant_id
+    ? await findTenantByIdForAuth(user.tenant_id, undefined, client)
+    : null;
   const tenantType = tenantRow?.tenant_type ?? 'home';
 
   const token = await new SignJWT({
@@ -143,21 +147,24 @@ export async function createSession(userId: string): Promise<AuthSession> {
     .sign(secret);
 
   const tokenHash = await hashSessionToken(token);
-  await createSessionRow(userId, tokenHash, expiresAt);
+  if (client) await createSessionRow(userId, tokenHash, expiresAt, client);
+  else await createSessionRow(userId, tokenHash, expiresAt);
 
   return {
     token,
     expiresAt,
-    user: await buildAuthUser(user),
+    user: await buildAuthUser(user, {}, client),
   };
 }
 
 export async function buildAuthUser(
-  user: NonNullable<Awaited<ReturnType<typeof findUserById>>>
+  user: NonNullable<Awaited<ReturnType<typeof findUserByIdForAuth>>>,
+  options: DbOperationOptions = {},
+  client?: PoolClient
 ): Promise<AuthUser> {
   let tenant: TenantContext | null = null;
   if (user.tenant_id) {
-    const tenantRow = await findTenantById(user.tenant_id);
+    const tenantRow = await findTenantByIdForAuth(user.tenant_id, options, client);
     if (tenantRow) {
       tenant = {
         tenantId: tenantRow.id,
@@ -179,30 +186,36 @@ export async function buildAuthUser(
   };
 }
 
-export async function resolveSessionToken(token: string): Promise<AuthSession | null> {
+export async function resolveSessionToken(
+  token: string,
+  options?: DbOperationOptions
+): Promise<AuthSession | null> {
   const verified = await verifySessionToken(token);
   if (!verified) return null;
 
   const tokenHash = await hashSessionToken(token);
-  const sessionRow = await findSessionByTokenHash(tokenHash);
+  const sessionRow = await findSessionByTokenHash(tokenHash, options);
   if (!sessionRow) return null;
 
-  const user = await findUserById(verified.userId);
+  const user = await findUserByIdForAuth(verified.userId, options);
   if (!user) return null;
 
-  await touchSessionLastSeen(tokenHash);
+  await touchSessionLastSeen(tokenHash, options);
 
   return {
     token,
     expiresAt: verified.expiresAt,
-    user: await buildAuthUser(user),
+    user: await buildAuthUser(user, options),
   };
 }
 
-export async function getSessionFromRequest(request: NextRequest): Promise<AuthSession | null> {
+export async function getSessionFromRequest(
+  request: NextRequest,
+  options?: DbOperationOptions
+): Promise<AuthSession | null> {
   const cookieValue = request.cookies.get(getCookieName())?.value;
   if (!cookieValue) return null;
-  return resolveSessionToken(cookieValue);
+  return resolveSessionToken(cookieValue, options);
 }
 
 export async function getSessionFromCookies(): Promise<AuthSession | null> {
@@ -212,7 +225,10 @@ export async function getSessionFromCookies(): Promise<AuthSession | null> {
   return resolveSessionToken(cookieValue);
 }
 
-export async function setSessionCookie(response: NextResponse, session: AuthSession): Promise<void> {
+export async function setSessionCookie(
+  response: NextResponse,
+  session: AuthSession
+): Promise<void> {
   response.cookies.set(getCookieName(), session.token, buildCookieOptions());
 }
 

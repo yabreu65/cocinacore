@@ -1,4 +1,4 @@
-import { mapSingleRow, query, transaction } from '@/lib/db';
+import { mapSingleRow, query, scopedTransaction, type AuthenticatedDbScope } from '@/lib/db';
 import type {
   ShoppingItemStatus,
   ShoppingListItemRow,
@@ -57,7 +57,8 @@ export async function listShoppingListItems(
   tenantId: string,
   userId: string,
   filter: ShoppingListFilter = {},
-  limit?: number
+  limit?: number,
+  scope?: AuthenticatedDbScope
 ): Promise<ShoppingListItemRow[]> {
   const values: unknown[] = [tenantId, userId];
   const statusClause = filter.status ? ` and status = $${values.push(filter.status)}` : '';
@@ -65,24 +66,30 @@ export async function listShoppingListItems(
     typeof limit === 'number' && Number.isInteger(limit) && limit > 0 ? Math.min(limit, 501) : null;
   const limitClause = boundedLimit === null ? '' : ` limit $${values.push(boundedLimit)}`;
 
-  const result = await query<ShoppingListItemRow>(
-    `select * from public.shopping_list_items
+  const sql = `select * from public.shopping_list_items
      where tenant_id = $1 and user_id = $2${statusClause}
-     order by created_at desc, id desc${limitClause}`,
-    values
-  );
+     order by created_at desc, id desc${limitClause}`;
+  if (scope && (scope.tenantId !== tenantId || scope.userId !== userId))
+    throw new Error('Shopping scope mismatch');
+  const result = scope
+    ? await scopedTransaction(scope, (client) => client.query<ShoppingListItemRow>(sql, values))
+    : await query<ShoppingListItemRow>(sql, values);
   return result.rows;
 }
 
 export async function createShoppingListItem(
   input: CreateShoppingListItemInput
 ): Promise<ShoppingListItemRow> {
-  const result = await query<ShoppingListItemRow>(
-    `insert into public.shopping_list_items
+  const result = await scopedTransaction(
+    { tenantId: input.tenantId, userId: input.userId },
+    (client) =>
+      client.query<ShoppingListItemRow>(
+        `insert into public.shopping_list_items
      (tenant_id, user_id, source, ingredient_name, quantity)
      values ($1, $2, $3, $4, $5)
      returning *`,
-    [input.tenantId, input.userId, input.source, input.ingredientName, input.quantity ?? null]
+        [input.tenantId, input.userId, input.source, input.ingredientName, input.quantity ?? null]
+      )
   );
 
   const item = mapSingleRow(result);
@@ -93,7 +100,7 @@ export async function createShoppingListItem(
 export async function addMealPlanShoppingItems(
   input: AddMealPlanShoppingItemsInput
 ): Promise<AddMealPlanShoppingItemsResult> {
-  return transaction(async (client) => {
+  return scopedTransaction({ tenantId: input.tenantId, userId: input.userId }, async (client) => {
     const dedupeScope = input.dedupeScope ?? 'source';
     const lockKey = `${input.tenantId}:${input.userId}:${dedupeScope === 'user' ? 'shopping-list' : input.source}`;
     await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [lockKey]);
@@ -146,7 +153,7 @@ export async function transferPurchasedShoppingListItem(
   tenantId: string,
   userId: string
 ): Promise<ShoppingListTransferResult | null> {
-  return transaction(async (client) => {
+  return scopedTransaction({ tenantId, userId }, async (client) => {
     const itemResult = await client.query<ShoppingListItemRow>(
       `select * from public.shopping_list_items
        where id = $1 and tenant_id = $2 and user_id = $3
@@ -219,12 +226,14 @@ export async function updateShoppingListItemStatus(
   userId: string,
   status: ShoppingItemStatus
 ): Promise<ShoppingListItemRow | null> {
-  const result = await query<ShoppingListItemRow>(
-    `update public.shopping_list_items
+  const result = await scopedTransaction({ tenantId, userId }, (client) =>
+    client.query<ShoppingListItemRow>(
+      `update public.shopping_list_items
      set status = $1, updated_at = now()
      where id = $2 and tenant_id = $3 and user_id = $4
      returning *`,
-    [status, id, tenantId, userId]
+      [status, id, tenantId, userId]
+    )
   );
   return mapSingleRow(result);
 }
@@ -234,11 +243,13 @@ export async function deleteShoppingListItem(
   tenantId: string,
   userId: string
 ): Promise<ShoppingListItemRow | null> {
-  const result = await query<ShoppingListItemRow>(
-    `delete from public.shopping_list_items
+  const result = await scopedTransaction({ tenantId, userId }, (client) =>
+    client.query<ShoppingListItemRow>(
+      `delete from public.shopping_list_items
      where id = $1 and tenant_id = $2 and user_id = $3
      returning *`,
-    [id, tenantId, userId]
+      [id, tenantId, userId]
+    )
   );
   return mapSingleRow(result);
 }

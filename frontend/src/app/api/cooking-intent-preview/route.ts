@@ -16,7 +16,11 @@ import {
   parseStructuredMealPlanValue,
   type StructuredMealType,
 } from '@/lib/meal-planner/structured-plan';
-import { buildCookingIntentPreview, type CookingIntentSource } from '@/lib/cooking-intent-preview';
+import {
+  buildCookingIntentPreview,
+  type CookingIntentSource,
+  type CookingIntentMealSlot,
+} from '@/lib/cooking-intent-preview';
 import { PersistentRecipeIdSchema } from '@/lib/validation';
 import { serverLogger } from '@/lib/serverLogger';
 
@@ -88,8 +92,8 @@ export async function GET(request: NextRequest) {
   }
 
   const tenantId = loadedUser.tenant.tenantId;
-  let recipe;
-  let mealSlot;
+  let recipe: Awaited<ReturnType<typeof findPersistentRecipeDetail>> | undefined;
+  let mealSlot: CookingIntentMealSlot | undefined;
   let timeZone = requestedTimeZone ?? DEFAULT_TIME_ZONE;
 
   try {
@@ -155,9 +159,18 @@ export async function GET(request: NextRequest) {
     }
 
     const [inventory, profile, terms] = await Promise.all([
-      listInventoryItemsByTenant(tenantId, MAX_WASTE_PREVENTION_INVENTORY_LIMIT + 1),
-      findCulinaryProfileByUserId(loadedUser.id),
-      listWastePreventionCulinaryProfileTermsByUserId(loadedUser.id),
+      listInventoryItemsByTenant(
+        tenantId,
+        MAX_WASTE_PREVENTION_INVENTORY_LIMIT + 1,
+        undefined,
+        {},
+        {
+          tenantId,
+          userId: loadedUser.id,
+        }
+      ),
+      findCulinaryProfileByUserId(loadedUser.id, tenantId),
+      listWastePreventionCulinaryProfileTermsByUserId(loadedUser.id, tenantId),
     ]);
     if (inventory.length > MAX_WASTE_PREVENTION_INVENTORY_LIMIT) {
       return NextResponse.json({ error: 'Unable to load bounded preview data' }, { status: 409 });
@@ -174,7 +187,7 @@ export async function GET(request: NextRequest) {
 
     const preview = buildCookingIntentPreview({
       source,
-      recipe,
+      recipe: recipe as Exclude<typeof recipe, null>,
       mealSlot,
       inventoryItems: inventory.filter((item) => item.tenant_id === tenantId),
       allergies: profile?.allergies ?? [],

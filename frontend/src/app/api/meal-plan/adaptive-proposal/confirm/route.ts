@@ -102,8 +102,8 @@ export async function POST(request: NextRequest) {
   }
 
   const [profileRow, profileTerms] = await Promise.all([
-    findCulinaryProfileByUserId(user.id),
-    findCulinaryProfileTermsByUserId(user.id),
+    findCulinaryProfileByUserId(user.id, user.tenant.tenantId),
+    findCulinaryProfileTermsByUserId(user.id, user.tenant.tenantId),
   ]);
   const profile = buildPersistedMealPlanProfileContext(
     profileRow,

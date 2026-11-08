@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { checkRateLimit } from './rate-limit';
+import {
+  getRetryAfterSeconds,
+  getTrustedClientIdentity,
+  ANONYMOUS_RATE_LIMIT_IDENTITY,
+  getAuthenticationSecondaryRateLimitKey,
+} from './rate-limit-identity';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -40,6 +46,16 @@ describe('checkRateLimit', () => {
       expect(result.remaining).toBe(9 - i);
       expect(result.limit).toBe(10);
     }
+  });
+
+  it('fails closed instead of using process-local state when shared storage is required', async () => {
+    const result = await checkRateLimit('cooking-teacher-user', 'user-1', undefined, {
+      requireSharedStore: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.storage).toBe('unavailable');
+    expect(result.remaining).toBe(0);
   });
 
   it('blocks requests once the limit is exceeded', async () => {
@@ -317,5 +333,66 @@ describe('checkRateLimit', () => {
     for (let i = 0; i < 5; i++) {
       expect((await checkRateLimit('meal-plan', ip)).success).toBe(true);
     }
+  });
+});
+
+describe('rate-limit request identity and retry contracts', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('ignores client-controlled forwarded headers by default', () => {
+    const request = new Request('https://app.example.test', {
+      headers: { 'x-forwarded-for': '198.51.100.10' },
+    });
+
+    expect(getTrustedClientIdentity(request)).toBe(ANONYMOUS_RATE_LIMIT_IDENTITY);
+  });
+
+  it('uses only the explicitly configured trusted proxy header', () => {
+    vi.stubEnv('COCINACORE_TRUSTED_CLIENT_IDENTITY_HEADER', 'x-cocina-client-id');
+    const request = new Request('https://app.example.test', {
+      headers: {
+        'x-forwarded-for': '198.51.100.10',
+        'x-cocina-client-id': 'proxy-identity-1',
+      },
+    });
+
+    expect(getTrustedClientIdentity(request)).toBe('proxy-identity-1');
+  });
+
+  it('never promotes the standard forwarded headers to trusted configuration', () => {
+    vi.stubEnv('COCINACORE_TRUSTED_CLIENT_IDENTITY_HEADER', 'x-forwarded-for');
+    const request = new Request('https://app.example.test', {
+      headers: { 'x-forwarded-for': '198.51.100.10' },
+    });
+
+    expect(getTrustedClientIdentity(request)).toBe(ANONYMOUS_RATE_LIMIT_IDENTITY);
+  });
+
+  it('adds a high-capacity anonymous global bucket without trusting client headers', () => {
+    const request = new Request('https://app.example.test', {
+      headers: { 'x-forwarded-for': '198.51.100.10' },
+    });
+
+    expect(getAuthenticationSecondaryRateLimitKey(request, 'auth/login')).toEqual({
+      route: 'auth/login:anonymous-global',
+      identity: 'global',
+    });
+  });
+
+  it('uses a trusted client bucket only when ingress configuration is explicit', () => {
+    vi.stubEnv('COCINACORE_TRUSTED_CLIENT_IDENTITY_HEADER', 'x-cocina-client-id');
+    const request = new Request('https://app.example.test', {
+      headers: { 'x-cocina-client-id': 'proxy-identity-1' },
+    });
+
+    expect(getAuthenticationSecondaryRateLimitKey(request, 'auth/password-reset')).toEqual({
+      route: 'auth/password-reset:trusted-client',
+      identity: 'proxy-identity-1',
+    });
+  });
+
+  it('returns a positive number of seconds for Retry-After at the expiry boundary', () => {
+    expect(getRetryAfterSeconds(1_800_000_060, 1_800_000_055)).toBe(5);
+    expect(getRetryAfterSeconds(1_800_000_054, 1_800_000_055)).toBe(1);
   });
 });

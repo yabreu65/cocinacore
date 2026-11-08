@@ -49,7 +49,7 @@ describe('/api/recipe-history', () => {
     updateRecipeFeedbackMock.mockReset();
 
     requireTenantMock.mockResolvedValue({ tenantId: 'tenant-1' });
-    requireUserMock.mockResolvedValue({ id: 'user-1' });
+    requireUserMock.mockResolvedValue({ id: 'user-1', tenant: { tenantId: 'tenant-1' } });
     listRecipeHistoryByTenantMock.mockResolvedValue([historyRow]);
     deleteRecipeHistoryMock.mockResolvedValue(undefined);
     toggleRecipeSavedMock.mockResolvedValue(historyRow);
@@ -57,10 +57,16 @@ describe('/api/recipe-history', () => {
   });
 
   it('lists the authenticated user history with only the public item shape', async () => {
-    const response = await GET(request('/api/recipe-history?tenantId=other-tenant&userId=other-user'));
+    const response = await GET(
+      request('/api/recipe-history?tenantId=other-tenant&userId=other-user')
+    );
 
     expect(response.status).toBe(200);
-    expect(listRecipeHistoryByTenantMock).toHaveBeenCalledWith('tenant-1', { userId: 'user-1' });
+    expect(listRecipeHistoryByTenantMock).toHaveBeenCalledWith(
+      'tenant-1',
+      { userId: 'user-1' },
+      { tenantId: 'tenant-1', userId: 'user-1' }
+    );
     expect(await response.json()).toEqual({
       items: [
         {
@@ -79,17 +85,25 @@ describe('/api/recipe-history', () => {
     const response = await GET(request('/api/recipe-history?saved=true'));
 
     expect(response.status).toBe(200);
-    expect(listRecipeHistoryByTenantMock).toHaveBeenCalledWith('tenant-1', {
-      userId: 'user-1',
-      onlySaved: true,
-    });
+    expect(listRecipeHistoryByTenantMock).toHaveBeenCalledWith(
+      'tenant-1',
+      {
+        userId: 'user-1',
+        onlySaved: true,
+      },
+      { tenantId: 'tenant-1', userId: 'user-1' }
+    );
   });
 
   it('lists all authenticated history when saved=false', async () => {
     const response = await GET(request('/api/recipe-history?saved=false'));
 
     expect(response.status).toBe(200);
-    expect(listRecipeHistoryByTenantMock).toHaveBeenCalledWith('tenant-1', { userId: 'user-1' });
+    expect(listRecipeHistoryByTenantMock).toHaveBeenCalledWith(
+      'tenant-1',
+      { userId: 'user-1' },
+      { tenantId: 'tenant-1', userId: 'user-1' }
+    );
   });
 
   it('rejects invalid saved filters', async () => {
@@ -100,9 +114,7 @@ describe('/api/recipe-history', () => {
   });
 
   it('deletes only within the authenticated tenant and user scope', async () => {
-    const response = await DELETE(
-      request('/api/recipe-history?id=recipe-owned-by-someone-else')
-    );
+    const response = await DELETE(request('/api/recipe-history?id=recipe-owned-by-someone-else'));
 
     expect(response.status).toBe(200);
     expect(deleteRecipeHistoryMock).toHaveBeenCalledWith(
@@ -151,7 +163,9 @@ describe('/api/recipe-history', () => {
   });
 
   it('rejects ambiguous feedback and saved intents', async () => {
-    const response = await PATCH(request('/api/recipe-history?id=recipe-1&feedback=accepted&saved=true'));
+    const response = await PATCH(
+      request('/api/recipe-history?id=recipe-1&feedback=accepted&saved=true')
+    );
 
     expect(response.status).toBe(400);
     expect(updateRecipeFeedbackMock).not.toHaveBeenCalled();
@@ -184,7 +198,9 @@ describe('/api/recipe-history', () => {
   it('returns 404 when a scoped feedback update does not own a row', async () => {
     updateRecipeFeedbackMock.mockResolvedValueOnce(null);
 
-    const response = await PATCH(request('/api/recipe-history?id=other-user-recipe&feedback=accepted'));
+    const response = await PATCH(
+      request('/api/recipe-history?id=other-user-recipe&feedback=accepted')
+    );
 
     expect(response.status).toBe(404);
   });

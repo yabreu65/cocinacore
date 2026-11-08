@@ -105,6 +105,15 @@ describe('RecipeGenerateSchema', () => {
   });
 });
 
+describe('EmbeddingsSchema', () => {
+  it('rejects payloads that exceed the aggregate character budget', () => {
+    expect(
+      EmbeddingsSchema.safeParse({ texts: Array.from({ length: 21 }, () => 'a'.repeat(5000)) })
+        .success
+    ).toBe(false);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // MealPlanSchema
 // ---------------------------------------------------------------------------
@@ -307,11 +316,28 @@ describe('InventorySuggestionSchema', () => {
 // ---------------------------------------------------------------------------
 
 describe('MealPlanWarmupSchema', () => {
+  const meal = {
+    name: 'Arroz de verduras',
+    time: '30 min',
+    difficulty: 'Fácil' as const,
+    badge: 'Rápido',
+    fusionTag: 'Andina',
+    missing: 0,
+    aiScore: 86,
+  };
+
+  const validWarmup = {
+    calendar: [{ day: 'Lunes', meals: { Desayuno: meal, Almuerzo: meal, Cena: meal } }],
+    targetDays: ['Lunes'],
+    inventory: ['arroz'],
+    baseCuisine: 'Latinoamericana',
+    fusionCuisines: [],
+    peopleCount: 2,
+    culinaryProfile: { level: 'Intermedio', preferred: [], avoid: [], goals: [] },
+  };
+
   it('accepts valid calendar and targetDays arrays', () => {
-    const result = MealPlanWarmupSchema.safeParse({
-      calendar: [{ day: 'Lunes', meals: [] }],
-      targetDays: ['Lunes', 'Martes'],
-    });
+    const result = MealPlanWarmupSchema.safeParse(validWarmup);
     expect(result.success).toBe(true);
   });
 
@@ -338,11 +364,38 @@ describe('MealPlanWarmupSchema', () => {
   });
 
   it('rejects empty targetDays array', () => {
-    const result = MealPlanWarmupSchema.safeParse({
-      calendar: [{ day: 'Lunes' }],
-      targetDays: [],
-    });
+    const result = MealPlanWarmupSchema.safeParse({ ...validWarmup, targetDays: [] });
     expect(result.success).toBe(false);
+  });
+
+  it('caps warmup cardinality and rejects duplicate target days', () => {
+    const oversizedCalendar = Array.from({ length: 8 }, (_, index) => ({
+      ...validWarmup.calendar[0],
+      day: `Día ${index + 1}`,
+    }));
+    expect(
+      MealPlanWarmupSchema.safeParse({ ...validWarmup, calendar: oversizedCalendar }).success
+    ).toBe(false);
+    expect(
+      MealPlanWarmupSchema.safeParse({ ...validWarmup, targetDays: ['Lunes', 'Lunes'] }).success
+    ).toBe(false);
+  });
+
+  it('rejects wrong top-level types and invalid nested meal cards', () => {
+    expect(MealPlanWarmupSchema.safeParse({ ...validWarmup, peopleCount: '2' }).success).toBe(
+      false
+    );
+    expect(
+      MealPlanWarmupSchema.safeParse({
+        ...validWarmup,
+        calendar: [
+          {
+            ...validWarmup.calendar[0],
+            meals: { ...validWarmup.calendar[0].meals, Cena: { ...meal, missing: '0' } },
+          },
+        ],
+      }).success
+    ).toBe(false);
   });
 });
 

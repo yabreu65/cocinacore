@@ -1,10 +1,6 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/auth/server';
-import {
-  createGlobalBook,
-  createGlobalPdfRecord,
-  insertBookChunks,
-} from '@/lib/db/repositories/pdfRepository';
+import { createGlobalUpload } from '@/lib/owner/global-writer';
 import { isPlatformOwner } from '@/lib/db/repositories/platformOwnerRepository';
 import { getStorageAdapter } from '@/lib/storage';
 
@@ -61,7 +57,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const user = await requireUser(request, 'Unauthorized');
-    const owner = await isPlatformOwner(user.id);
+    const owner = await isPlatformOwner(user);
     if (!owner) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
@@ -85,7 +81,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Title is required.' }, { status: 400 });
     }
     if (chunks.length === 0) {
-      return NextResponse.json({ error: 'At least one embedded chunk is required.' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'At least one embedded chunk is required.' },
+        { status: 400 }
+      );
     }
 
     const checksum = await sha256Hex(file);
@@ -98,31 +97,24 @@ export async function POST(request: NextRequest) {
     });
     storedFilePath = storedFile.storagePath;
 
-    const bookRow = await createGlobalBook({
-      title,
-      author: author || null,
-      description: description || null,
-      cuisineRegion: region,
-      cuisineCountry: country || null,
-      cuisineStyle: style || null,
-      tags,
-    });
-
-    await createGlobalPdfRecord({
-      globalBookId: bookRow.id,
-      storagePath: storedFile.storagePath,
-      fileSizeBytes: file.size,
-      pageCount: Number.isFinite(pageCount) ? Math.max(pageCount, 1) : 1,
-      checksumSha256: checksum,
-      uploadedBy: user.id,
-    });
-
-    await insertBookChunks(
-      chunks.map((chunk) => ({
-        tenantId: null,
-        tenantBookId: null,
-        globalBookId: bookRow.id,
-        sourceType: 'global_pdf',
+    const bookId = await createGlobalUpload({
+      book: {
+        title,
+        author: author || null,
+        description: description || null,
+        cuisineRegion: region,
+        cuisineCountry: country || null,
+        cuisineStyle: style || null,
+        tags,
+      },
+      pdf: {
+        storagePath: storedFile.storagePath,
+        fileSizeBytes: file.size,
+        pageCount: Number.isFinite(pageCount) ? Math.max(pageCount, 1) : 1,
+        checksumSha256: checksum,
+        uploadedBy: user.id,
+      },
+      chunks: chunks.map((chunk) => ({
         content: chunk.content,
         metadata: {
           book_title: title,
@@ -134,10 +126,10 @@ export async function POST(request: NextRequest) {
           storage_path: storedFile.storagePath,
         },
         embedding: chunk.embedding,
-      }))
-    );
+      })),
+    });
 
-    return NextResponse.json({ ok: true, bookId: bookRow.id, chunkCount: chunks.length });
+    return NextResponse.json({ ok: true, bookId, chunkCount: chunks.length });
   } catch (error) {
     if (storedFilePath) {
       await storage.deleteFile(storedFilePath).catch(() => undefined);

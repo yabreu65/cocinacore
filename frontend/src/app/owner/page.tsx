@@ -11,12 +11,10 @@ import {
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth/server';
-import { query } from '@/lib/db';
+import { getOwnerMetrics } from '@/lib/owner/metrics';
 import { isPlatformOwner } from '@/lib/db/repositories/platformOwnerRepository';
 
 export const dynamic = 'force-dynamic';
-
-type CountRow = { count: string };
 
 function metricCard(label: string, value: number, icon: React.ReactNode) {
   return (
@@ -38,21 +36,11 @@ export default async function OwnerOverviewPage() {
     redirect('/login');
   }
 
-  if (!(await isPlatformOwner(user.id))) {
+  if (!(await isPlatformOwner(user))) {
     redirect('/app');
   }
 
-  const [tenants, users, books, pdfs, chunks, reports, owners] = await Promise.all([
-    query<CountRow>('select count(*)::text as count from public.tenants'),
-    query<CountRow>('select count(*)::text as count from public.users'),
-    query<CountRow>('select count(*)::text as count from public.global_books'),
-    query<CountRow>('select count(*)::text as count from public.global_pdf_library'),
-    query<CountRow>('select count(*)::text as count from public.book_chunks where global_book_id is not null'),
-    query<CountRow>('select count(*)::text as count from public.premium_review_reports'),
-    query<CountRow>('select count(*)::text as count from public.platform_owners'),
-  ]);
-
-  const toNumber = (value: string | undefined): number => Number(value ?? '0');
+  const metrics = await getOwnerMetrics();
 
   return (
     <section className="space-y-4">
@@ -67,28 +55,53 @@ export default async function OwnerOverviewPage() {
       </article>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {metricCard('Tenants totales', toNumber(tenants.rows[0]?.count), <Building2 size={14} />)}
-        {metricCard('Usuarios totales', toNumber(users.rows[0]?.count), <Users size={14} />)}
-        {metricCard('Global books', toNumber(books.rows[0]?.count), <Library size={14} />)}
-        {metricCard('Global PDFs', toNumber(pdfs.rows[0]?.count), <FileText size={14} />)}
-        {metricCard('Chunks globales', toNumber(chunks.rows[0]?.count), <Database size={14} />)}
-        {metricCard('Reports premium', toNumber(reports.rows[0]?.count), <AlertTriangle size={14} />)}
-        {metricCard('Owners registrados', toNumber(owners.rows[0]?.count), <Activity size={14} />)}
+        {metricCard('Tenants totales', metrics.tenants, <Building2 size={14} />)}
+        {metricCard('Usuarios totales', metrics.users, <Users size={14} />)}
+        {metricCard('Global books', metrics.books, <Library size={14} />)}
+        {metricCard('Global PDFs', metrics.pdfs, <FileText size={14} />)}
+        {metricCard('Chunks globales', metrics.chunks, <Database size={14} />)}
+        {metricCard('Reports premium', metrics.reports, <AlertTriangle size={14} />)}
+        {metricCard('Owners registrados', metrics.owners, <Activity size={14} />)}
       </div>
 
       <article className="rounded-2xl border border-[#E8DDD2] bg-white/80 p-4 premium-shadow">
         <h2 className="text-lg font-semibold">Secciones rápidas</h2>
         <p className="mt-1 text-sm text-[#6B5A50]">
-          Varias acciones siguen en reconstrucción, pero las vistas ya compilan sobre PostgreSQL directo.
+          Varias acciones siguen en reconstrucción, pero las vistas ya compilan sobre PostgreSQL
+          directo.
         </p>
         <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {[
-            { href: '/owner/global-books', title: 'Global Books', description: 'Catálogo global compartido.' },
-            { href: '/owner/global-pdfs', title: 'Global PDFs', description: 'Documentos globales del sistema.' },
-            { href: '/owner/indexing', title: 'Indexación', description: 'Estado y cobertura de chunks.' },
-            { href: '/owner/premium-moderation', title: 'Moderación Premium', description: 'Revisión de reportes.' },
-            { href: '/owner/tenants', title: 'Tenants', description: 'Visión general multi-tenant.' },
-            { href: '/owner/system-health', title: 'System Health', description: 'Salud operativa.' },
+            {
+              href: '/owner/global-books',
+              title: 'Global Books',
+              description: 'Catálogo global compartido.',
+            },
+            {
+              href: '/owner/global-pdfs',
+              title: 'Global PDFs',
+              description: 'Documentos globales del sistema.',
+            },
+            {
+              href: '/owner/indexing',
+              title: 'Indexación',
+              description: 'Estado y cobertura de chunks.',
+            },
+            {
+              href: '/owner/premium-moderation',
+              title: 'Moderación Premium',
+              description: 'Revisión de reportes.',
+            },
+            {
+              href: '/owner/tenants',
+              title: 'Tenants',
+              description: 'Visión general multi-tenant.',
+            },
+            {
+              href: '/owner/system-health',
+              title: 'System Health',
+              description: 'Salud operativa.',
+            },
           ].map((section) => (
             <Link
               key={section.href}

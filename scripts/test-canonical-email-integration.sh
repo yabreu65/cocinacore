@@ -2,7 +2,7 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-EXPECTED_MIGRATION_COUNT=$(node -e "const m=require('$ROOT/db/migrations/manifest.json'); console.log(m.migrations.length)")
+EXPECTED_MIGRATION_COUNT=$(node -e "const m=require('$ROOT/db/migrations/manifest.json'); console.log(m.migrations.filter(x => Number(x.id) <= 19).length)")
 IMAGE='pgvector/pgvector:pg16'
 PREFIX="cocinacore-pr0b-canonical-$$"
 TMP_ROOT=$(mktemp -d)
@@ -80,7 +80,7 @@ provision() {
 
 migrate() {
   COCINACORE_SEPARATED_DB_LANES_ENABLED=true MIGRATION_DATABASE_URL="$MIGRATION_URL" \
-  node "$ROOT/frontend/scripts/run-migrations.js" --lane migration "$@"
+  node "$ROOT/frontend/scripts/run-migrations.js" --lane migration --stop-after 019 "$@"
 }
 
 expect_sql_failure() {
@@ -136,8 +136,10 @@ start_container fresh cocinacore_canonical_fresh
 create_runtime_role
 provision >"$LOG" 2>&1
 migrate >"$LOG" 2>&1
-grep -q 'DONE 011_canonical_email_invariant.sql' "$LOG" || fail 'fresh 001-011 did not complete'
+grep -q 'DONE 011_canonical_email_invariant.sql' "$LOG" || fail 'fresh canonical email migration 011 did not complete'
 [ "$(admin_sql "select count(*) from schema_migrations")" = "$EXPECTED_MIGRATION_COUNT" ] || fail 'fresh ledger count does not match migration manifest'
+[ "$(admin_sql "select count(*) from schema_migrations where filename='019_real_consumption_reconciliation.sql'")" = 1 ] || fail 'fresh migration did not record 019'
+[ "$(admin_sql "select count(*) from schema_migrations where filename='020_tenant_rls_hardening.sql'")" = 0 ] || fail 'fresh canonical test crossed the 019 boundary'
 [ "$(admin_sql "select count(*) from pg_constraint where conrelid='public.users'::regclass and conname='users_email_canonical_check'")" = 1 ] || fail 'canonical check is absent'
 [ "$(admin_sql "select count(*) from pg_constraint where conrelid='public.users'::regclass and conname='users_email_key' and contype='u'")" = 1 ] || fail 'users_email_key is absent'
 [ "$(admin_sql "select count(*) from pg_indexes where schemaname='public' and tablename='users' and indexname='idx_users_email'")" = 1 ] || fail 'idx_users_email is absent'
@@ -204,6 +206,8 @@ migrate >"$LOG" 2>&1
 grep -q 'DONE 011_canonical_email_invariant.sql' "$LOG" || fail 'noncolliding upgrade did not apply 011'
 [ "$(admin_sql "select string_agg(email,',' order by email) from users")" = 'alice@example.com,bob@example.com' ] || fail 'noncolliding legacy emails were not normalized'
 [ "$(admin_sql "select count(*) from schema_migrations where filename='011_canonical_email_invariant.sql'")" = 1 ] || fail 'noncolliding upgrade did not record 011'
+[ "$(admin_sql "select count(*) from schema_migrations where filename='019_real_consumption_reconciliation.sql'")" = 1 ] || fail 'noncolliding upgrade did not record 019'
+[ "$(admin_sql "select count(*) from schema_migrations where filename='020_tenant_rls_hardening.sql'")" = 0 ] || fail 'noncolliding upgrade crossed the 019 boundary'
 [ "$(admin_sql "select count(*) from pg_constraint where conrelid='public.users'::regclass and conname='users_email_canonical_check'")" = 1 ] || fail 'noncolliding upgrade did not add canonical check'
 provision >"$LOG" 2>&1
 stop_container

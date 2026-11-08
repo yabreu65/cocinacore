@@ -128,31 +128,49 @@ function parseTodayPayload(value: unknown): TodayPayload {
       ingredients: parseStringArray(option.ingredients),
       availableIngredients: parseStringArray(option.availableIngredients),
       missingIngredients: parseStringArray(option.missingIngredients),
-      ...(option.unknownIngredients === undefined ? {} : { unknownIngredients: parseStringArray(option.unknownIngredients) }),
-      ...(Array.isArray(option.ingredientAvailability) ? {
-        ingredientAvailability: option.ingredientAvailability.filter(isRecord).map((item) => ({
-          name: String(item.name),
-          availability: item.availability as TodayIngredientAvailabilityPayload['availability'],
-          present: Boolean(item.present),
-          requiredQuantity: typeof item.requiredQuantity === 'number' ? item.requiredQuantity : null,
-          requiredUnit: String(item.requiredUnit),
-          availableQuantity: typeof item.availableQuantity === 'number' ? item.availableQuantity : null,
-          availableUnit: String(item.availableUnit),
-          missingQuantity: typeof item.missingQuantity === 'number' ? item.missingQuantity : null,
-          remainingQuantity: typeof item.remainingQuantity === 'number' ? item.remainingQuantity : null,
-          ...(item.quantityProvenance === 'ai_estimate' || item.quantityProvenance === 'unknown'
-            ? { quantityProvenance: item.quantityProvenance }
-            : {}),
-        })),
-      } : {}),
-      ...(typeof option.availability === 'string' ? { availability: option.availability as TodayOptionPayload['availability'] } : {}),
+      ...(option.unknownIngredients === undefined
+        ? {}
+        : { unknownIngredients: parseStringArray(option.unknownIngredients) }),
+      ...(Array.isArray(option.ingredientAvailability)
+        ? {
+            ingredientAvailability: option.ingredientAvailability.filter(isRecord).map((item) => ({
+              name: String(item.name),
+              availability: item.availability as TodayIngredientAvailabilityPayload['availability'],
+              present: Boolean(item.present),
+              requiredQuantity:
+                typeof item.requiredQuantity === 'number' ? item.requiredQuantity : null,
+              requiredUnit: String(item.requiredUnit),
+              availableQuantity:
+                typeof item.availableQuantity === 'number' ? item.availableQuantity : null,
+              availableUnit: String(item.availableUnit),
+              missingQuantity:
+                typeof item.missingQuantity === 'number' ? item.missingQuantity : null,
+              remainingQuantity:
+                typeof item.remainingQuantity === 'number' ? item.remainingQuantity : null,
+              ...(item.quantityProvenance === 'ai_estimate' || item.quantityProvenance === 'unknown'
+                ? { quantityProvenance: item.quantityProvenance }
+                : {}),
+            })),
+          }
+        : {}),
+      ...(typeof option.availability === 'string'
+        ? { availability: option.availability as TodayOptionPayload['availability'] }
+        : {}),
       ...(typeof option.provenance === 'string' ? { provenance: option.provenance } : {}),
       ...(option.quantityProvenance === 'ai_estimate' || option.quantityProvenance === 'unknown'
         ? { quantityProvenance: option.quantityProvenance }
         : {}),
-      ...(isRecord(option.uncertainty) && typeof option.uncertainty.inventory === 'boolean' &&
-        typeof option.uncertainty.prepTime === 'boolean' && typeof option.uncertainty.planDate === 'boolean'
-        ? { uncertainty: { inventory: option.uncertainty.inventory, prepTime: option.uncertainty.prepTime, planDate: option.uncertainty.planDate } }
+      ...(isRecord(option.uncertainty) &&
+      typeof option.uncertainty.inventory === 'boolean' &&
+      typeof option.uncertainty.prepTime === 'boolean' &&
+      typeof option.uncertainty.planDate === 'boolean'
+        ? {
+            uncertainty: {
+              inventory: option.uncertainty.inventory,
+              prepTime: option.uncertainty.prepTime,
+              planDate: option.uncertainty.planDate,
+            },
+          }
         : {}),
     };
   });
@@ -445,7 +463,9 @@ describe('POST /api/today', () => {
       expect(response.headers.get('X-RateLimit-Remaining')).toBe('0');
       expect(response.headers.get('X-RateLimit-Reset')).toBe('1800000060');
       expect(await response.json()).toMatchObject({ retryAfter: 5 });
-      expect(rateLimitMock).toHaveBeenCalledWith('today', 'authenticated-user', 'user-1');
+      expect(rateLimitMock).toHaveBeenCalledWith('today', 'tenant-1', 'user-1', {
+        requireSharedStore: true,
+      });
       expect(profileMock).not.toHaveBeenCalled();
       expect(termsMock).not.toHaveBeenCalled();
       expect(inventoryMock).not.toHaveBeenCalled();
@@ -470,8 +490,12 @@ describe('POST /api/today', () => {
     ).toBe(200);
 
     expect(rateLimitMock).toHaveBeenCalledTimes(2);
-    expect(rateLimitMock).toHaveBeenNthCalledWith(1, 'today', 'authenticated-user', 'user-1');
-    expect(rateLimitMock).toHaveBeenNthCalledWith(2, 'today', 'authenticated-user', 'user-1');
+    expect(rateLimitMock).toHaveBeenNthCalledWith(1, 'today', 'tenant-1', 'user-1', {
+      requireSharedStore: true,
+    });
+    expect(rateLimitMock).toHaveBeenNthCalledWith(2, 'today', 'tenant-1', 'user-1', {
+      requireSharedStore: true,
+    });
   });
 
   it('authenticates before reads and requires a tenant', async () => {
@@ -558,9 +582,12 @@ describe('POST /api/today', () => {
   it('scopes every repository read to authenticated user and tenant and keeps private context out of prompt', async () => {
     const { POST } = await import('./route');
     await POST(request({ slot: 'lunch' }));
-    expect(profileMock).toHaveBeenCalledWith('user-1');
-    expect(termsMock).toHaveBeenCalledWith('user-1');
-    expect(inventoryMock).toHaveBeenCalledWith('tenant-1', expect.any(String), expect.any(Number));
+    expect(profileMock).toHaveBeenCalledWith('user-1', 'tenant-1');
+    expect(termsMock).toHaveBeenCalledWith('user-1', 'tenant-1');
+    expect(inventoryMock).toHaveBeenCalledWith('tenant-1', expect.any(String), 50, {
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    });
     expect(historyMock).toHaveBeenCalledWith(
       'user-1',
       'tenant-1',
@@ -581,25 +608,27 @@ describe('POST /api/today', () => {
 
   it('keeps provider recommendations when the saved recipe library exceeds the engine candidate bound', async () => {
     const { POST } = await import('./route');
-    persistentRecipesMock.mockResolvedValueOnce(Array.from({ length: 50 }, (_, index) => ({
-      id: `saved-${index}`,
-      tenant_id: 'tenant-1',
-      user_id: 'user-1',
-      category: null,
-      tags: [],
-      archived_at: null,
-      created_at: '',
-      updated_at: '',
-      current_version: {
-        id: `version-${index}`,
-        version_number: 1,
-        title: `Saved rice ${index}`,
-        instructions: 'Cook rice.',
-        servings: 2,
-        ingredients: [{ name: 'rice', quantity: 1, unit: 'cups' }],
+    persistentRecipesMock.mockResolvedValueOnce(
+      Array.from({ length: 50 }, (_, index) => ({
+        id: `saved-${index}`,
+        tenant_id: 'tenant-1',
+        user_id: 'user-1',
+        category: null,
+        tags: [],
+        archived_at: null,
         created_at: '',
-      },
-    })));
+        updated_at: '',
+        current_version: {
+          id: `version-${index}`,
+          version_number: 1,
+          title: `Saved rice ${index}`,
+          instructions: 'Cook rice.',
+          servings: 2,
+          ingredients: [{ name: 'rice', quantity: 1, unit: 'cups' }],
+          created_at: '',
+        },
+      }))
+    );
     fetchMock.mockResolvedValueOnce(providerResponse(options));
 
     const response = await POST(request({ slot: 'lunch' }));
@@ -616,25 +645,27 @@ describe('POST /api/today', () => {
 
   it('uses saved recipes as read-only offline recommendations and reports absent stock as unknown', async () => {
     const { POST } = await import('./route');
-    persistentRecipesMock.mockResolvedValueOnce([{
-      id: 'recipe-42',
-      tenant_id: 'tenant-1',
-      user_id: 'user-1',
-      category: null,
-      tags: [],
-      archived_at: null,
-      created_at: '',
-      updated_at: '',
-      current_version: {
-        id: 'version-1',
-        version_number: 1,
-        title: 'Saved turmeric rice',
-        instructions: 'Cook rice.',
-        servings: 2,
-        ingredients: [{ name: 'turmeric', quantity: null, unit: null }],
+    persistentRecipesMock.mockResolvedValueOnce([
+      {
+        id: 'recipe-42',
+        tenant_id: 'tenant-1',
+        user_id: 'user-1',
+        category: null,
+        tags: [],
+        archived_at: null,
         created_at: '',
+        updated_at: '',
+        current_version: {
+          id: 'version-1',
+          version_number: 1,
+          title: 'Saved turmeric rice',
+          instructions: 'Cook rice.',
+          servings: 2,
+          ingredients: [{ name: 'turmeric', quantity: null, unit: null }],
+          created_at: '',
+        },
       },
-    }]);
+    ]);
     fetchMock.mockRejectedValueOnce(new Error('provider offline'));
 
     const response = await POST(request({ slot: 'lunch' }));
@@ -660,29 +691,37 @@ describe('POST /api/today', () => {
 
   it('keeps linked saved recipe quantities as AI estimates and does not claim sufficient inventory', async () => {
     const { POST } = await import('./route');
-    persistentRecipesMock.mockResolvedValueOnce([{
-      id: 'recipe-43',
-      tenant_id: 'tenant-1',
-      user_id: 'user-1',
-      category: null,
-      tags: [],
-      archived_at: null,
-      created_at: '',
-      updated_at: '',
-      current_version: {
-        id: 'version-2',
-        version_number: 1,
-        title: 'Saved rice',
-        instructions: 'Cook rice.',
-        servings: 2,
-        ingredients: [{ name: 'rice', quantity: '1', unit: 'kg' }],
-        source_recipe_history_id: 'history-43',
+    persistentRecipesMock.mockResolvedValueOnce([
+      {
+        id: 'recipe-43',
+        tenant_id: 'tenant-1',
+        user_id: 'user-1',
+        category: null,
+        tags: [],
+        archived_at: null,
         created_at: '',
+        updated_at: '',
+        current_version: {
+          id: 'version-2',
+          version_number: 1,
+          title: 'Saved rice',
+          instructions: 'Cook rice.',
+          servings: 2,
+          ingredients: [{ name: 'rice', quantity: '1', unit: 'kg' }],
+          source_recipe_history_id: 'history-43',
+          created_at: '',
+        },
       },
-    }]);
-    inventoryMock.mockResolvedValueOnce([{
-      tenant_id: 'tenant-1', ingredient_name: 'rice', quantity: '2', unit: 'kg', expiration_date: null,
-    }]);
+    ]);
+    inventoryMock.mockResolvedValueOnce([
+      {
+        tenant_id: 'tenant-1',
+        ingredient_name: 'rice',
+        quantity: '2',
+        unit: 'kg',
+        expiration_date: null,
+      },
+    ]);
     fetchMock.mockRejectedValueOnce(new Error('provider offline'));
 
     const response = await POST(request({ slot: 'lunch' }));
@@ -695,14 +734,16 @@ describe('POST /api/today', () => {
       quantityProvenance: 'ai_estimate',
       availability: 'unknown',
       unknownIngredients: ['rice'],
-      ingredientAvailability: [{
-        name: 'rice',
-        quantityProvenance: 'ai_estimate',
-        availability: 'unknown',
-        requiredQuantity: 1,
-        missingQuantity: null,
-        remainingQuantity: null,
-      }],
+      ingredientAvailability: [
+        {
+          name: 'rice',
+          quantityProvenance: 'ai_estimate',
+          availability: 'unknown',
+          requiredQuantity: 1,
+          missingQuantity: null,
+          remainingQuantity: null,
+        },
+      ],
     });
     expect(createPersistentRecipeMock).not.toHaveBeenCalled();
   });
@@ -722,9 +763,12 @@ describe('POST /api/today', () => {
       const response = await POST(request({ slot: 'lunch' }));
 
       expect(response.status).toBe(200);
-      expect(profileMock).toHaveBeenCalledWith('user-2');
-      expect(termsMock).toHaveBeenCalledWith('user-2');
-      expect(inventoryMock).toHaveBeenCalledWith(tenantId, expect.any(String), expect.any(Number));
+      expect(profileMock).toHaveBeenCalledWith('user-2', tenantId);
+      expect(termsMock).toHaveBeenCalledWith('user-2', tenantId);
+      expect(inventoryMock).toHaveBeenCalledWith(tenantId, expect.any(String), 50, {
+        tenantId,
+        userId: 'user-2',
+      });
       expect(historyMock).toHaveBeenCalledWith(
         'user-2',
         tenantId,
@@ -732,6 +776,7 @@ describe('POST /api/today', () => {
         expect.any(Number)
       );
       expect(planMock).toHaveBeenCalledWith('user-2', tenantId);
+      expect(ragMock).toHaveBeenCalledWith(expect.objectContaining({ tenantId, userId: 'user-2' }));
       expect(persistentRecipesMock).toHaveBeenCalledWith(
         { tenantId, userId: 'user-2' },
         { limit: 50 }
@@ -817,17 +862,19 @@ describe('POST /api/today', () => {
       unknownIngredients: ['rice vinegar'],
       availability: 'unknown',
       reason: 'Una opción para el horario elegido.',
-      ingredientAvailability: [{
-        name: 'rice vinegar',
-        availability: 'unknown',
-        present: false,
-        requiredQuantity: null,
-        requiredUnit: 'unknown',
-        availableQuantity: null,
-        availableUnit: 'unknown',
-        missingQuantity: null,
-        remainingQuantity: null,
-      }],
+      ingredientAvailability: [
+        {
+          name: 'rice vinegar',
+          availability: 'unknown',
+          present: false,
+          requiredQuantity: null,
+          requiredUnit: 'unknown',
+          availableQuantity: null,
+          availableUnit: 'unknown',
+          missingQuantity: null,
+          remainingQuantity: null,
+        },
+      ],
     });
     expect(result.options[0].reason).not.toMatch(/inventario|disponibles/i);
   });
@@ -873,55 +920,59 @@ describe('POST /api/today', () => {
       unknownIngredients: ['1 kg tomate'],
       reason: 'Una opción para el horario elegido.',
     },
-  ] as const)('projects $label without false availability', async ({
-    quantity,
-    unit,
-    availability,
-    availableIngredients,
-    missingIngredients,
-    unknownIngredients,
-    reason,
-  }) => {
-    const { POST } = await import('./route');
-    inventoryMock.mockResolvedValueOnce([
-      {
-        tenant_id: 'tenant-1',
-        ingredient_name: 'tomate',
-        quantity,
-        unit,
-        expiration_date: null,
-      },
-    ]);
-    fetchMock.mockResolvedValueOnce(
-      providerResponse(options.map((option) => ({ ...option, ingredients: ['1 kg tomate'] })))
-    );
-
-    const result = await readTodayPayload(await POST(request({ slot: 'lunch' })));
-
-    expect(result.options[0]).toMatchObject({
+  ] as const)(
+    'projects $label without false availability',
+    async ({
+      quantity,
+      unit,
       availability,
       availableIngredients,
       missingIngredients,
       unknownIngredients,
       reason,
-    });
-    expect(result.options[0].ingredientAvailability?.[0]).toMatchObject({
-      name: '1 kg tomate',
-      availability,
-      present: true,
-      requiredQuantity: 1,
-      requiredUnit: 'kg',
-      availableQuantity: unit === 'cups' ? null : Number(quantity),
-      availableUnit: unit === 'cups' ? 'unknown' : 'kg',
-      missingQuantity: unit === 'cups' ? null : quantity === '0.5' ? 0.5 : quantity === '0' ? 1 : 0,
-      remainingQuantity: unit === 'cups' ? null : quantity === '2' ? 1 : 0,
-    });
-    expect(
-      result.options[0].availableIngredients.filter((ingredient) =>
-        result.options[0].missingIngredients.includes(ingredient)
-      )
-    ).toEqual([]);
-  });
+    }) => {
+      const { POST } = await import('./route');
+      inventoryMock.mockResolvedValueOnce([
+        {
+          tenant_id: 'tenant-1',
+          ingredient_name: 'tomate',
+          quantity,
+          unit,
+          expiration_date: null,
+        },
+      ]);
+      fetchMock.mockResolvedValueOnce(
+        providerResponse(options.map((option) => ({ ...option, ingredients: ['1 kg tomate'] })))
+      );
+
+      const result = await readTodayPayload(await POST(request({ slot: 'lunch' })));
+
+      expect(result.options[0]).toMatchObject({
+        availability,
+        availableIngredients,
+        missingIngredients,
+        unknownIngredients,
+        reason,
+      });
+      expect(result.options[0].ingredientAvailability?.[0]).toMatchObject({
+        name: '1 kg tomate',
+        availability,
+        present: true,
+        requiredQuantity: 1,
+        requiredUnit: 'kg',
+        availableQuantity: unit === 'cups' ? null : Number(quantity),
+        availableUnit: unit === 'cups' ? 'unknown' : 'kg',
+        missingQuantity:
+          unit === 'cups' ? null : quantity === '0.5' ? 0.5 : quantity === '0' ? 1 : 0,
+        remainingQuantity: unit === 'cups' ? null : quantity === '2' ? 1 : 0,
+      });
+      expect(
+        result.options[0].availableIngredients.filter((ingredient) =>
+          result.options[0].missingIngredients.includes(ingredient)
+        )
+      ).toEqual([]);
+    }
+  );
 
   it('matches normalized exact inventory names including supported plurals', async () => {
     const { POST } = await import('./route');

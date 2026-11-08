@@ -3,10 +3,12 @@ import { serverLogger } from '@/lib/serverLogger';
 import { validateRequest, EmbeddingsSchema, type EmbeddingsBody } from '@/lib/validation';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { getGeminiApiKey, getGeminiEmbeddingModel } from '@/lib/ai/gemini-config';
+import { getRetryAfterSeconds, getTrustedClientIdentity } from '@/lib/rate-limit-identity';
+import { requireUser } from '@/lib/auth/server';
+import type { AuthUser } from '@/lib/auth/types';
+import { isPlatformOwner } from '@/lib/db/repositories/platformOwnerRepository';
 
-type GeminiBatchEmbedResponse = {
-  embeddings?: Array<{ values?: number[]; embedding?: { values?: number[] } }>;
-};
+const EMBEDDINGS_TIMEOUT_MS = 15_000;
 
 const ENV_MODEL = getGeminiEmbeddingModel();
 const TARGET_EMBEDDING_DIM = Number(process.env.EMBEDDING_DIMENSIONS ?? '1536');
@@ -28,55 +30,96 @@ function normalizeDimensions(values: number[]): number[] {
   return [...values, ...Array.from({ length: TARGET_EMBEDDING_DIM - values.length }, () => 0)];
 }
 
-async function requestEmbeddings(apiKey: string, model: string, texts: string[]) {
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:batchEmbedContents?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        requests: texts.map((text) => ({
-          model: `models/${model}`,
-          content: { parts: [{ text }] },
-          outputDimensionality: TARGET_EMBEDDING_DIM,
-        })),
-      }),
+async function requestEmbeddings(
+  apiKey: string,
+  model: string,
+  texts: string[],
+  signal: AbortSignal
+) {
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:batchEmbedContents?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal,
+        body: JSON.stringify({
+          requests: texts.map((text) => ({
+            model: `models/${model}`,
+            content: { parts: [{ text }] },
+            outputDimensionality: TARGET_EMBEDDING_DIM,
+          })),
+        }),
+      }
+    );
+
+    if (!response.ok) return { ok: false as const, status: response.status };
+
+    const payload: unknown = await response.json();
+    if (
+      !payload ||
+      typeof payload !== 'object' ||
+      !('embeddings' in payload) ||
+      !Array.isArray(payload.embeddings) ||
+      payload.embeddings.length !== texts.length
+    ) {
+      return { ok: false as const, status: 502 };
     }
-  );
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    return { ok: false as const, errorText, status: response.status };
+    const embeddings: number[][] = [];
+    for (const item of payload.embeddings as unknown[]) {
+      if (!item || typeof item !== 'object') return { ok: false as const, status: 502 };
+      const record = item as Record<string, unknown>;
+      const nested = record.embedding;
+      const values =
+        record.values ??
+        (nested && typeof nested === 'object'
+          ? (nested as Record<string, unknown>).values
+          : undefined);
+      if (
+        !Array.isArray(values) ||
+        values.length === 0 ||
+        !(values as unknown[]).every(
+          (value): value is number => typeof value === 'number' && Number.isFinite(value)
+        )
+      ) {
+        return { ok: false as const, status: 502 };
+      }
+      embeddings.push(normalizeDimensions(values as number[]));
+    }
+
+    return { ok: true as const, embeddings };
+  } catch (error) {
+    serverLogger.warn('embeddings.provider_error', {
+      model,
+      reason: error instanceof Error ? error.name : 'unknown',
+    });
+    return { ok: false as const, status: 502 };
   }
-
-  const payload = (await response.json()) as GeminiBatchEmbedResponse;
-  const embeddings = (payload.embeddings ?? [])
-    .map((item) => item.values ?? item.embedding?.values)
-    .filter((values): values is number[] => Array.isArray(values))
-    .map((values) => normalizeDimensions(values));
-
-  if (embeddings.length !== texts.length) {
-    return {
-      ok: false as const,
-      errorText: `La respuesta de embeddings no coincide con los textos enviados. enviados=${texts.length}, recibidos=${embeddings.length}, raw=${JSON.stringify(payload).slice(0, 400)}`,
-      status: 502,
-    };
-  }
-
-  return { ok: true as const, embeddings };
 }
 
 export async function POST(request: NextRequest) {
   const startedAt = Date.now();
   const requestId = crypto.randomUUID();
+  let user: AuthUser;
+  try {
+    user = await requireUser(request, 'Unauthorized');
+    if (!(await isPlatformOwner(user))) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Forbidden') {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   const apiKey = getGeminiApiKey();
 
   if (!apiKey) {
     serverLogger.warn('embeddings.misconfigured', { requestId });
     return NextResponse.json(
       {
-        error:
-          'GEMINI_API_KEY no está configurada en el servidor. Configurala para usar embeddings.',
+        error: 'El servicio de embeddings no está disponible temporalmente.',
       },
       { status: 503 }
     );
@@ -92,16 +135,25 @@ export async function POST(request: NextRequest) {
   const texts = body.texts.map((text) => text.trim()).filter((text) => text.length > 0);
 
   // 2. Rate limit via ioredis (replaces in-memory Map)
-  const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
-  const rateLimit = await checkRateLimit('embeddings', ip);
+  const clientIdentity = user.id || getTrustedClientIdentity(request);
+  const rateLimit = await checkRateLimit('embeddings', clientIdentity, user.id, {
+    requireSharedStore: true,
+  });
   if (!rateLimit.success) {
-    serverLogger.warn('embeddings.rate_limited', { requestId, ip });
+    const retryAfter = getRetryAfterSeconds(rateLimit.resetAt);
+    const storageUnavailable = rateLimit.storage === 'unavailable';
+    serverLogger.warn('embeddings.rate_limited', { requestId, storage: rateLimit.storage });
     return Response.json(
-      { error: 'Rate limit exceeded', retryAfter: rateLimit.resetAt },
       {
-        status: 429,
+        error: storageUnavailable
+          ? 'El servicio de embeddings no está disponible temporalmente.'
+          : 'Rate limit exceeded',
+        retryAfter,
+      },
+      {
+        status: storageUnavailable ? 503 : 429,
         headers: {
-          'Retry-After': String(rateLimit.resetAt),
+          'Retry-After': String(retryAfter),
           'X-RateLimit-Limit': String(rateLimit.limit),
           'X-RateLimit-Remaining': String(rateLimit.remaining),
           'X-RateLimit-Reset': String(rateLimit.resetAt),
@@ -112,27 +164,39 @@ export async function POST(request: NextRequest) {
 
   serverLogger.info('embeddings.request', {
     requestId,
-    ip,
+    storage: rateLimit.storage,
     textsCount: texts.length,
     modelsTried: [...new Set([ENV_MODEL, ...FALLBACK_MODELS].filter(Boolean) as string[])],
   });
 
   const modelsToTry = [...new Set([ENV_MODEL, ...FALLBACK_MODELS].filter(Boolean) as string[])];
-  const errors: string[] = [];
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), EMBEDDINGS_TIMEOUT_MS);
+  const abortFromRequest = () => controller.abort();
+  request.signal.addEventListener('abort', abortFromRequest, { once: true });
+  try {
+    for (const model of modelsToTry) {
+      if (controller.signal.aborted) break;
+      const result = await requestEmbeddings(apiKey, model, texts, controller.signal);
+      if (result.ok) {
+        serverLogger.info('embeddings.success', {
+          requestId,
+          durationMs: Date.now() - startedAt,
+          modelUsed: model,
+          embeddingsCount: result.embeddings.length,
+        });
+        return NextResponse.json({ embeddings: result.embeddings, modelUsed: model });
+      }
 
-  for (const model of modelsToTry) {
-    const result = await requestEmbeddings(apiKey, model, texts);
-    if (result.ok) {
-      serverLogger.info('embeddings.success', {
+      serverLogger.warn('embeddings.model_failed', {
         requestId,
-        durationMs: Date.now() - startedAt,
-        modelUsed: model,
-        embeddingsCount: result.embeddings.length,
+        model,
+        status: result.status,
       });
-      return NextResponse.json({ embeddings: result.embeddings, modelUsed: model });
     }
-
-    errors.push(`[${model}] ${result.errorText}`);
+  } finally {
+    clearTimeout(timeout);
+    request.signal.removeEventListener('abort', abortFromRequest);
   }
 
   serverLogger.error('embeddings.failure', {
@@ -143,7 +207,7 @@ export async function POST(request: NextRequest) {
 
   return NextResponse.json(
     {
-      error: `No se pudieron generar embeddings con Gemini. Modelos probados: ${modelsToTry.join(', ')}. Detalles: ${errors.join(' | ')}`,
+      error: 'No se pudieron generar embeddings temporalmente.',
     },
     { status: 502 }
   );

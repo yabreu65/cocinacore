@@ -1,4 +1,12 @@
-import { query, mapSingleRow } from '@/lib/db';
+import type { PoolClient } from 'pg';
+import {
+  authQuery,
+  query,
+  mapSingleRow,
+  scopedTransaction,
+  type AuthenticatedDbScope,
+  type DbOperationOptions,
+} from '@/lib/db';
 import { TenantRow, TenantType } from '@/lib/db/types';
 
 interface CreateTenantInput {
@@ -7,17 +15,48 @@ interface CreateTenantInput {
   trialDays?: number;
 }
 
-export async function findTenantById(id: string): Promise<TenantRow | null> {
-  const result = await query<TenantRow>('select * from public.tenants where id = $1', [id]);
+const FIND_TENANT_BY_ID_SQL = 'select * from public.tenants where id = $1';
+
+export async function findTenantById(
+  id: string,
+  options?: DbOperationOptions,
+  client?: PoolClient,
+  scope?: AuthenticatedDbScope
+): Promise<TenantRow | null> {
+  if (scope && scope.tenantId !== id) throw new Error('Tenant scope mismatch.');
+  if (scope && client) throw new Error('Scoped tenant read requires its own transaction.');
+  const result = scope
+    ? await scopedTransaction(
+        scope,
+        (tx) => tx.query<TenantRow>(FIND_TENANT_BY_ID_SQL, [id]),
+        options
+      )
+    : client
+      ? await client.query<TenantRow>(FIND_TENANT_BY_ID_SQL, [id])
+      : await query<TenantRow>(FIND_TENANT_BY_ID_SQL, [id], options);
   return mapSingleRow(result);
 }
 
-export async function createTenant(input: CreateTenantInput = { name: '' }): Promise<TenantRow> {
+export async function findTenantByIdForAuth(
+  id: string,
+  options?: DbOperationOptions,
+  client?: PoolClient
+): Promise<TenantRow | null> {
+  const result = client
+    ? await client.query<TenantRow>(FIND_TENANT_BY_ID_SQL, [id])
+    : await authQuery<TenantRow>(FIND_TENANT_BY_ID_SQL, [id], options);
+  return mapSingleRow(result);
+}
+
+export async function createTenant(
+  input: CreateTenantInput = { name: '' },
+  client?: PoolClient
+): Promise<TenantRow> {
   const name = input.name || 'New Tenant';
   const tenantType = input.tenantType ?? 'home';
   const trialDays = input.trialDays ?? 14;
 
-  const result = await query<TenantRow>(
+  const result = await (client ? client.query.bind(client) : query)<TenantRow>(
     `insert into public.tenants (name, tenant_type, trial_started_at, trial_ends_at)
      values ($1, $2, now(), now() + ($3 || ' days')::interval)
      returning *`,
@@ -34,7 +73,9 @@ export async function createTenant(input: CreateTenantInput = { name: '' }): Pro
 
 export async function updateTenant(
   id: string,
-  input: Partial<Pick<TenantRow, 'name' | 'trial_started_at' | 'trial_ends_at' | 'trial_soft_blocked_at'>>
+  input: Partial<
+    Pick<TenantRow, 'name' | 'trial_started_at' | 'trial_ends_at' | 'trial_soft_blocked_at'>
+  >
 ): Promise<TenantRow | null> {
   const fields: string[] = [];
   const values: unknown[] = [];
