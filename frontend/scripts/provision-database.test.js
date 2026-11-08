@@ -4,8 +4,13 @@
 const assert = require('node:assert/strict');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- Keep this test's Node harness in CommonJS.
 const test = require('node:test');
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- Load the provisioner's CommonJS exports directly.
-const { attestBaselineCatalog } = require('./provision-database');
+const {
+  assertPublicSchemaAcl,
+  assertReservedRoleOwnership,
+  attestBaselineCatalog,
+  expectedCatalog,
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- Load the provisioner's CommonJS exports directly.
+} = require('./provision-database');
 
 const appliedFilename = '014_culinary_profile_field_constraints.sql';
 const addition = {
@@ -82,14 +87,21 @@ async function attest(options = {}, ownerState = 'legacy', applied = [appliedFil
 }
 
 function isControlledBaselineMismatch(error) {
-  return error instanceof Error && !(error instanceof TypeError) && /BASELINE_MISMATCH/.test(error.message);
+  return (
+    error instanceof Error &&
+    !(error instanceof TypeError) &&
+    /BASELINE_MISMATCH/.test(error.message)
+  );
 }
 
 test('admits an applied 014-declared function for both legacy and target ownership', async () => {
   for (const ownerState of ['legacy', 'target']) {
     const owner = ownerState === 'legacy' ? 'cocinacore' : 'cocinacore_schema_owner';
     await assert.doesNotReject(
-      attest({ functions: [{ identity: additionIdentity, owner, security_definer: false }] }, ownerState)
+      attest(
+        { functions: [{ identity: additionIdentity, owner, security_definer: false }] },
+        ownerState
+      )
     );
   }
 });
@@ -97,7 +109,9 @@ test('admits an applied 014-declared function for both legacy and target ownersh
 test('rejects an applied declared function with the wrong owner', async () => {
   await assert.rejects(
     attest({
-      functions: [{ identity: additionIdentity, owner: 'unexpected_owner', security_definer: false }],
+      functions: [
+        { identity: additionIdentity, owner: 'unexpected_owner', security_definer: false },
+      ],
     }),
     /BASELINE_MISMATCH: applied function owner differs/
   );
@@ -146,7 +160,9 @@ test('rejects a physical function from an unapplied migration as unexpected cata
 test('does not admit an undeclared function', async () => {
   await assert.rejects(
     attest({
-      functions: [{ identity: 'public.untrusted_function()', owner: 'cocinacore', security_definer: false }],
+      functions: [
+        { identity: 'public.untrusted_function()', owner: 'cocinacore', security_definer: false },
+      ],
     }),
     isControlledBaselineMismatch
   );
@@ -161,5 +177,103 @@ test('rejects unknown catalog objects with a controlled contract error', async (
       ],
     }),
     isControlledBaselineMismatch
+  );
+});
+
+test('checks PUBLIC schema ACL through the pseudo-role ACL entry', async () => {
+  let statement;
+  await assertPublicSchemaAcl({
+    async query(text) {
+      statement = text;
+      return { rows: [{ public_usage: true, public_create: false }] };
+    },
+  });
+  assert.match(statement, /a\.grantee\s*=\s*0/);
+  assert.match(statement, /pg_catalog\.aclexplode/);
+  assert.doesNotMatch(statement, /has_schema_privilege/);
+
+  await assert.rejects(
+    assertPublicSchemaAcl({
+      async query() {
+        return { rows: [{ public_usage: true, public_create: true }] };
+      },
+    }),
+    /public schema ACL does not match/
+  );
+});
+
+test('preserves custom pg-prefixed schemas in the role ownership and ACL audits', async () => {
+  const statements = [];
+  const client = {
+    async query(text) {
+      statements.push(text);
+      if (statements.length === 2) return { rows: [{ count: 0 }] };
+      return { rows: [], rowCount: 0 };
+    },
+  };
+
+  await assertReservedRoleOwnership(
+    client,
+    { baselineObjects: { transferable: [] }, migrations: [] },
+    new Set()
+  );
+
+  assert.equal(statements.length, 3);
+  for (const statement of statements.slice(0, 2)) {
+    assert.ok(statement.includes("n.nspname not like 'pg!_%' escape '!'"));
+  }
+});
+
+test('qualifies relation-bound migration additions exactly once', () => {
+  const migration = {
+    filename: '018_test.sql',
+    catalogAdditions: [
+      { kind: 'index', schema: 'public', identity: 'cooking_sessions.idx_sessions' },
+      { kind: 'constraint', schema: 'public', identity: 'cooking_sessions.sessions_owner' },
+      { kind: 'trigger', schema: 'public', identity: 'cooking_sessions.sessions_guard' },
+    ],
+  };
+  const actual = expectedCatalog(
+    {
+      baselineObjects: {
+        transferable: [],
+        dependent: { indexes: [], constraints: [], types: [] },
+      },
+      extensions: [],
+      migrations: [migration],
+    },
+    new Set([migration.filename]),
+    []
+  );
+
+  assert.deepEqual(actual.indexes, ['public.cooking_sessions.idx_sessions']);
+  assert.deepEqual(actual.constraints, ['public.cooking_sessions.sessions_owner']);
+  assert.deepEqual(actual.triggers, ['public.cooking_sessions.sessions_guard']);
+  assert.throws(
+    () =>
+      expectedCatalog(
+        {
+          baselineObjects: {
+            transferable: [],
+            dependent: { indexes: [], constraints: [], types: [] },
+          },
+          extensions: [],
+          migrations: [
+            {
+              ...migration,
+              catalogAdditions: [
+                {
+                  kind: 'index',
+                  schema: 'public',
+                  identity: 'public.cooking_sessions.idx_sessions',
+                },
+              ],
+            },
+          ],
+        },
+        new Set([migration.filename]),
+        []
+      ),
+    /BASELINE_MISMATCH: invalid index identity/
   );
 });

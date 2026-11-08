@@ -143,7 +143,8 @@ function loadTrustedManifest() {
           throw new Error(`Trusted catalog addition is unsupported: ${entry.filename}.`);
         }
         const key = `${addition.kind}|${addition.schema}|${addition.identity}`;
-        if (catalogAdditions.has(key)) throw new Error(`Duplicate trusted catalog addition: ${key}`);
+        if (catalogAdditions.has(key))
+          throw new Error(`Duplicate trusted catalog addition: ${key}`);
         catalogAdditions.add(key);
       }
     }
@@ -567,9 +568,18 @@ async function assertReservedRoleAclState(client) {
     throw new Error('ROLE_STATE_MISMATCH: reserved roles have unexpected tablespace authority.');
   }
 
+  await assertPublicSchemaAcl(client);
+}
+
+async function assertPublicSchemaAcl(client) {
   const publicAcl = await client.query(`
-    select pg_catalog.has_schema_privilege('public', 'public', 'USAGE') as public_usage,
-           pg_catalog.has_schema_privilege('public', 'public', 'CREATE') as public_create
+    select coalesce(bool_or(a.grantee = 0 and a.privilege_type = 'USAGE'), false) as public_usage,
+           coalesce(bool_or(a.grantee = 0 and a.privilege_type = 'CREATE'), false) as public_create
+      from pg_catalog.pg_namespace n
+      left join lateral pg_catalog.aclexplode(
+        coalesce(n.nspacl, pg_catalog.acldefault('n', n.nspowner))
+      ) a on true
+     where n.nspname = 'public'
   `);
   if (!publicAcl.rows[0].public_usage || publicAcl.rows[0].public_create) {
     throw new Error('ROLE_STATE_MISMATCH: public schema ACL does not match the trusted contract.');
@@ -879,22 +889,38 @@ function expectedCatalog(manifest, appliedMigrations, catalogFunctions) {
         expected.types.push(`${schema}.${tableName}`);
         expected.types.push(`${schema}._${tableName}`);
       } else if (addition.kind === 'index') {
-        expected.indexes.push(`${addition.schema}.${addition.identity}`);
+        expected.indexes.push(qualifyRelationObjectIdentity(addition));
       } else if (addition.kind === 'constraint') {
-        expected.constraints.push(`${addition.schema}.${addition.identity}`);
+        expected.constraints.push(qualifyRelationObjectIdentity(addition));
       } else if (addition.kind === 'function') {
         const functionName = `${addition.schema}.${addition.identity.split('.')[1]}`;
-        const matches = catalogFunctions.filter((identity) => identity.startsWith(`${functionName}(`));
+        const matches = catalogFunctions.filter((identity) =>
+          identity.startsWith(`${functionName}(`)
+        );
         if (matches.length !== 1) {
-          throw new Error(`BASELINE_MISMATCH: applied function ${functionName} must exist exactly once.`);
+          throw new Error(
+            `BASELINE_MISMATCH: applied function ${functionName} must exist exactly once.`
+          );
         }
         expected.functions.push(matches[0]);
       } else if (addition.kind === 'trigger') {
-        expected.triggers.push(`${addition.schema}.${addition.identity}`);
+        expected.triggers.push(qualifyRelationObjectIdentity(addition));
       }
     }
   }
   return expected;
+}
+
+function qualifyRelationObjectIdentity(addition) {
+  const identityParts = addition.identity.split('.');
+  if (
+    !['internal', 'public'].includes(addition.schema) ||
+    identityParts.length !== 2 ||
+    identityParts.some((part) => !/^[a-z_][a-z0-9_]*$/.test(part))
+  ) {
+    throw new Error(`BASELINE_MISMATCH: invalid ${addition.kind} identity.`);
+  }
+  return `${addition.schema}.${addition.identity}`;
 }
 
 async function ledgerExists(client) {
@@ -1043,18 +1069,22 @@ async function attestBaselineCatalog(client, manifest, ownerState, appliedMigrat
   const appliedOwnerEntries = new Map();
   for (const addition of appliedOwnerAdditions) {
     const rows = addition.kind === 'function' ? catalog.functions.rows : catalog.tables.rows;
-    const identity = addition.kind === 'function'
-      ? `${addition.schema}.${addition.identity.split('.')[1]}`
-      : addition.identity;
-    const matches = addition.kind === 'function'
-      ? rows.filter((row) => row.identity.startsWith(`${identity}(`))
-      : rows.filter((row) => row.identity === identity);
+    const identity =
+      addition.kind === 'function'
+        ? `${addition.schema}.${addition.identity.split('.')[1]}`
+        : addition.identity;
+    const matches =
+      addition.kind === 'function'
+        ? rows.filter((row) => row.identity.startsWith(`${identity}(`))
+        : rows.filter((row) => row.identity === identity);
     if (matches.length !== 1 || matches[0].owner !== expectedAdditionOwner) {
       throw new Error(`BASELINE_MISMATCH: applied ${addition.kind} owner differs for ${identity}.`);
     }
     const key = `${addition.kind}|${matches[0].identity}`;
     if (appliedOwnerEntries.has(key)) {
-      throw new Error(`BASELINE_MISMATCH: duplicate applied ${addition.kind} owner policy for ${matches[0].identity}.`);
+      throw new Error(
+        `BASELINE_MISMATCH: duplicate applied ${addition.kind} owner policy for ${matches[0].identity}.`
+      );
     }
     appliedOwnerEntries.set(key, {
       expectedLegacyOwner: 'cocinacore',
@@ -1074,7 +1104,9 @@ async function attestBaselineCatalog(client, manifest, ownerState, appliedMigrat
   );
   for (const [key, ownerPolicy] of appliedOwnerEntries) {
     if (byKey.has(key)) {
-      throw new Error(`BASELINE_MISMATCH: conflicting owner policy for ${key.slice('function|'.length)}.`);
+      throw new Error(
+        `BASELINE_MISMATCH: conflicting owner policy for ${key.slice('function|'.length)}.`
+      );
     }
     byKey.set(key, ownerPolicy);
   }
@@ -1175,13 +1207,13 @@ async function assertReservedRoleOwnership(client, manifest, appliedMigrations) 
        select pg_catalog.pg_get_userbyid(n.nspowner), 'schema', n.nspname
          from pg_catalog.pg_namespace n
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select pg_catalog.pg_get_userbyid(c.relowner), 'relation', n.nspname || '.' || c.relname
          from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid=c.relnamespace
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
           and not exists (
             select 1 from pg_catalog.pg_depend d
@@ -1192,7 +1224,7 @@ async function assertReservedRoleOwnership(client, manifest, appliedMigrations) 
        select pg_catalog.pg_get_userbyid(p.proowner), 'function', n.nspname || '.' || p.proname || '(' || pg_catalog.pg_get_function_identity_arguments(p.oid) || ')'
          from pg_catalog.pg_proc p join pg_catalog.pg_namespace n on n.oid=p.pronamespace
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
           and not exists (
             select 1 from pg_catalog.pg_depend d
@@ -1203,7 +1235,7 @@ async function assertReservedRoleOwnership(client, manifest, appliedMigrations) 
        select pg_catalog.pg_get_userbyid(t.typowner), 'type', n.nspname || '.' || t.typname
          from pg_catalog.pg_type t join pg_catalog.pg_namespace n on n.oid=t.typnamespace
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
           and not exists (
             select 1 from pg_catalog.pg_depend d
@@ -1214,37 +1246,37 @@ async function assertReservedRoleOwnership(client, manifest, appliedMigrations) 
        select pg_catalog.pg_get_userbyid(c.conowner), 'conversion', n.nspname || '.' || c.conname
          from pg_catalog.pg_conversion c join pg_catalog.pg_namespace n on n.oid=c.connamespace
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select pg_catalog.pg_get_userbyid(o.oprowner), 'operator', n.nspname || '.' || o.oprname
          from pg_catalog.pg_operator o join pg_catalog.pg_namespace n on n.oid=o.oprnamespace
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select pg_catalog.pg_get_userbyid(o.opcowner), 'operator class', n.nspname || '.' || o.opcname
          from pg_catalog.pg_opclass o join pg_catalog.pg_namespace n on n.oid=o.opcnamespace
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select pg_catalog.pg_get_userbyid(o.opfowner), 'operator family', n.nspname || '.' || o.opfname
          from pg_catalog.pg_opfamily o join pg_catalog.pg_namespace n on n.oid=o.opfnamespace
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select pg_catalog.pg_get_userbyid(t.dictowner), 'text search dictionary', n.nspname || '.' || t.dictname
          from pg_catalog.pg_ts_dict t join pg_catalog.pg_namespace n on n.oid=t.dictnamespace
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select pg_catalog.pg_get_userbyid(t.cfgowner), 'text search configuration', n.nspname || '.' || t.cfgname
          from pg_catalog.pg_ts_config t join pg_catalog.pg_namespace n on n.oid=t.cfgnamespace
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select pg_catalog.pg_get_userbyid(f.fdwowner), 'foreign data wrapper', f.fdwname
@@ -1278,14 +1310,16 @@ async function assertReservedRoleOwnership(client, manifest, appliedMigrations) 
   for (const addition of appliedAdditions.filter((entry) => entry.kind === 'table')) {
     const [schema] = addition.identity.split('.');
     if (schema !== addition.schema || allowed.has(`table|${addition.identity}`)) {
-      throw new Error(`ROLE_STATE_MISMATCH: invalid or duplicate applied table ${addition.identity}.`);
+      throw new Error(
+        `ROLE_STATE_MISMATCH: invalid or duplicate applied table ${addition.identity}.`
+      );
     }
     allowed.add(`table|${addition.identity}`);
   }
   for (const row of ordinary.rows.filter((entry) => entry.owner === SCHEMA_OWNER)) {
-    const isAppliedFunction = row.kind === 'function' && [...appliedFunctionNames].some(
-      (name) => row.identity.startsWith(`${name}(`)
-    );
+    const isAppliedFunction =
+      row.kind === 'function' &&
+      [...appliedFunctionNames].some((name) => row.identity.startsWith(`${name}(`));
     if (!allowed.has(`${row.kind}|${row.identity}`) && !isAppliedFunction) {
       throw new Error(
         `ROLE_STATE_MISMATCH: schema owner owns unexpected object ${row.kind} ${row.identity}.`
@@ -1299,7 +1333,7 @@ async function assertReservedRoleOwnership(client, manifest, appliedMigrations) 
          from pg_catalog.pg_namespace n
          cross join lateral pg_catalog.aclexplode(n.nspacl) a
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select a.grantee
@@ -1307,7 +1341,7 @@ async function assertReservedRoleOwnership(client, manifest, appliedMigrations) 
          join pg_catalog.pg_namespace n on n.oid=c.relnamespace
          cross join lateral pg_catalog.aclexplode(c.relacl) a
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select a.grantee
@@ -1315,7 +1349,7 @@ async function assertReservedRoleOwnership(client, manifest, appliedMigrations) 
          join pg_catalog.pg_namespace n on n.oid=p.pronamespace
          cross join lateral pg_catalog.aclexplode(p.proacl) a
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select a.grantee
@@ -1323,7 +1357,7 @@ async function assertReservedRoleOwnership(client, manifest, appliedMigrations) 
          join pg_catalog.pg_namespace n on n.oid=t.typnamespace
          cross join lateral pg_catalog.aclexplode(t.typacl) a
         where n.nspname not in ('public','internal')
-          and n.nspname not like 'pg\_%' escape '\\'
+          and n.nspname not like 'pg!_%' escape '!'
           and n.nspname<>'information_schema'
        union all
        select a.grantee
@@ -1535,4 +1569,9 @@ if (require.main === module) {
   });
 }
 
-module.exports = { attestBaselineCatalog };
+module.exports = {
+  assertPublicSchemaAcl,
+  assertReservedRoleOwnership,
+  attestBaselineCatalog,
+  expectedCatalog,
+};
