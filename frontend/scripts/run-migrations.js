@@ -5,6 +5,11 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { Pool } = require('pg');
+const {
+  MIGRATION_FILE,
+  assertM5ExpectedPending,
+  validateEstablishedLedger,
+} = require('./migration-ledger-contract');
 
 if (process.env.COCINACORE_SKIP_DOTENV !== '1') {
   try {
@@ -265,12 +270,15 @@ function loadManifestAndMigrations() {
   }
   const legacyLineages = manifest.legacyLineages;
   if (
-    !Array.isArray(legacyLineages) || legacyLineages.length !== 1 ||
-    !legacyLineages[0] || Object.keys(legacyLineages[0]).sort().join(',') !== 'anchor,filenames,ledgerMode' ||
+    !Array.isArray(legacyLineages) ||
+    legacyLineages.length !== 1 ||
+    !legacyLineages[0] ||
+    Object.keys(legacyLineages[0]).sort().join(',') !== 'anchor,filenames,ledgerMode' ||
     legacyLineages[0].anchor !== '010_password_reset_tokens.sql' ||
     legacyLineages[0].ledgerMode !== 'legacy-two-column' ||
     !Array.isArray(legacyLineages[0].filenames) ||
-    legacyLineages[0].filenames.join(',') !== '011_mfa.sql,012_tenant_rls_stage.sql,013_platform_operator_stage.sql'
+    legacyLineages[0].filenames.join(',') !==
+      '011_mfa.sql,012_tenant_rls_stage.sql,013_platform_operator_stage.sql'
   ) {
     throw new Error('Trusted legacy migration lineage declaration is invalid.');
   }
@@ -565,20 +573,20 @@ async function assertMigrationRoleDatabaseAuthority(client) {
      ), authority as (
        select n.nspowner as owner, null::oid as grantee
          from pg_catalog.pg_namespace n
-        where n.nspname not like 'pg\_%' escape '\\'
+        where n.nspname !~ '^pg_'
           and n.nspname<>'information_schema'
        union all
        select null, a.grantee
          from pg_catalog.pg_namespace n
          cross join lateral pg_catalog.aclexplode(n.nspacl) a
-        where n.nspname not like 'pg\_%' escape '\\'
+        where n.nspname !~ '^pg_'
           and n.nspname<>'information_schema'
        union all
        select c.relowner, a.grantee
          from pg_catalog.pg_class c
          join pg_catalog.pg_namespace n on n.oid=c.relnamespace
          left join lateral pg_catalog.aclexplode(c.relacl) a on true
-        where n.nspname not like 'pg\_%' escape '\\'
+        where n.nspname !~ '^pg_'
           and n.nspname<>'information_schema'
           and not exists (
             select 1 from pg_catalog.pg_depend d
@@ -590,7 +598,7 @@ async function assertMigrationRoleDatabaseAuthority(client) {
          from pg_catalog.pg_proc p
          join pg_catalog.pg_namespace n on n.oid=p.pronamespace
          left join lateral pg_catalog.aclexplode(p.proacl) a on true
-        where n.nspname not like 'pg\_%' escape '\\'
+        where n.nspname !~ '^pg_'
           and n.nspname<>'information_schema'
           and not exists (
             select 1 from pg_catalog.pg_depend d
@@ -602,7 +610,7 @@ async function assertMigrationRoleDatabaseAuthority(client) {
          from pg_catalog.pg_type t
          join pg_catalog.pg_namespace n on n.oid=t.typnamespace
          left join lateral pg_catalog.aclexplode(t.typacl) a on true
-        where n.nspname not like 'pg\_%' escape '\\'
+        where n.nspname !~ '^pg_'
           and n.nspname<>'information_schema'
           and not exists (
             select 1 from pg_catalog.pg_depend d
@@ -613,37 +621,37 @@ async function assertMigrationRoleDatabaseAuthority(client) {
        select c.conowner, null
          from pg_catalog.pg_conversion c
          join pg_catalog.pg_namespace n on n.oid=c.connamespace
-        where n.nspname not like 'pg\_%' escape '\\'
+        where n.nspname !~ '^pg_'
           and n.nspname<>'information_schema'
        union all
        select o.oprowner, null
          from pg_catalog.pg_operator o
          join pg_catalog.pg_namespace n on n.oid=o.oprnamespace
-        where n.nspname not like 'pg\_%' escape '\\'
+        where n.nspname !~ '^pg_'
           and n.nspname<>'information_schema'
        union all
        select o.opcowner, null
          from pg_catalog.pg_opclass o
          join pg_catalog.pg_namespace n on n.oid=o.opcnamespace
-        where n.nspname not like 'pg\_%' escape '\\'
+        where n.nspname !~ '^pg_'
           and n.nspname<>'information_schema'
        union all
        select o.opfowner, null
          from pg_catalog.pg_opfamily o
          join pg_catalog.pg_namespace n on n.oid=o.opfnamespace
-        where n.nspname not like 'pg\_%' escape '\\'
+        where n.nspname !~ '^pg_'
           and n.nspname<>'information_schema'
        union all
        select t.dictowner, null
          from pg_catalog.pg_ts_dict t
          join pg_catalog.pg_namespace n on n.oid=t.dictnamespace
-        where n.nspname not like 'pg\_%' escape '\\'
+        where n.nspname !~ '^pg_'
           and n.nspname<>'information_schema'
        union all
        select t.cfgowner, null
          from pg_catalog.pg_ts_config t
          join pg_catalog.pg_namespace n on n.oid=t.cfgnamespace
-        where n.nspname not like 'pg\_%' escape '\\'
+        where n.nspname !~ '^pg_'
           and n.nspname<>'information_schema'
        union all
        select f.fdwowner, a.grantee
@@ -763,11 +771,15 @@ async function assertSchemaOwnerDatabaseAuthority(client, manifest, applied) {
         if (addition.kind === 'table') {
           const [schema, name] = addition.identity.split('.');
           if (schema !== addition.schema) {
-            throw new Error(`ROLE_STATE_MISMATCH: invalid applied table declaration ${addition.identity}.`);
+            throw new Error(
+              `ROLE_STATE_MISMATCH: invalid applied table declaration ${addition.identity}.`
+            );
           }
           const identity = `table,${schema}.${name}`;
           if (allowed.has(identity)) {
-            throw new Error(`ROLE_STATE_MISMATCH: applied table ${addition.identity} duplicates a baseline owner target.`);
+            throw new Error(
+              `ROLE_STATE_MISMATCH: applied table ${addition.identity} duplicates a baseline owner target.`
+            );
           }
           allowed.add(identity);
           continue;
@@ -956,8 +968,13 @@ async function assertAndAssumeMigrationIdentity(client, manifest, migrations, se
   const hasLedger = await migrationLedgerExists(client);
   let applied = null;
   if (hasLedger) {
-    await assertLedgerShape(client, separated);
-    applied = await getAppliedMigrations(client, migrations, separated, manifest.legacyLineages[0]);
+    const ledgerMode = await assertLedgerShape(client, separated);
+    applied = await getAppliedMigrations(
+      client,
+      migrations,
+      ledgerMode,
+      manifest.legacyLineages[0]
+    );
     assertGlobalOrder(migrations, applied);
   }
 
@@ -986,15 +1003,24 @@ function parseExpectedPending(migrations) {
   for (const filename of filenames) {
     const index = canonical.indexOf(filename);
     if (index === -1 || index <= previousIndex) {
-      throw new Error('MIGRATION_EXPECTED_PENDING must be an exact, ordered set of canonical migration filenames.');
+      throw new Error(
+        'MIGRATION_EXPECTED_PENDING must be an exact, ordered set of canonical migration filenames.'
+      );
     }
     previousIndex = index;
   }
   return new Set(filenames);
 }
 
-function assertExpectedPending(migrations, applied, expected) {
+function assertExpectedPending(migrations, applied, expected, separated = false) {
   if (expected === undefined) return;
+  if (
+    separated &&
+    (expected.has('018_cooking_sessions.sql') ||
+      expected.has('019_real_consumption_reconciliation.sql'))
+  ) {
+    assertM5ExpectedPending(migrations, applied, expected);
+  }
   const actual = migrations
     .filter((migration) => !applied.has(migration.filename))
     .map((migration) => migration.filename);
@@ -1177,7 +1203,7 @@ async function migrationLedgerExists(client) {
   return result.rows[0].exists;
 }
 
-async function assertLedgerShape(client, checksummed) {
+async function assertLedgerShape(client, separated) {
   const columns = await client.query(`
     select a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod) as data_type,
            a.attnotnull, pg_catalog.pg_get_expr(d.adbin, d.adrelid) as default_expression
@@ -1187,12 +1213,20 @@ async function assertLedgerShape(client, checksummed) {
        and a.attnum > 0 and not a.attisdropped
      order by a.attnum
   `);
-  const expected = checksummed
-    ? ['filename', 'applied_at', 'checksum']
-    : ['filename', 'applied_at'];
+  const columnNames = columns.rows.map((row) => row.attname);
+  const ledgerMode = !separated
+    ? 'legacy-two-column'
+    : columnNames.length === 4 && columnNames.includes('checksum_source')
+      ? 'provenance'
+      : 'checksummed';
+  const expected = {
+    'legacy-two-column': ['filename', 'applied_at'],
+    checksummed: ['filename', 'applied_at', 'checksum'],
+    provenance: ['filename', 'applied_at', 'checksum', 'checksum_source'],
+  }[ledgerMode];
   if (
-    columns.rowCount !== expected.length ||
-    columns.rows.some((row) => !expected.includes(row.attname))
+    columnNames.length !== expected.length ||
+    columnNames.some((name, index) => name !== expected[index])
   ) {
     throw new Error('schema_migrations has an unexpected shape.');
   }
@@ -1205,7 +1239,12 @@ async function assertLedgerShape(client, checksummed) {
     appliedAt?.data_type !== 'timestamp with time zone' ||
     !appliedAt.attnotnull ||
     appliedAt.default_expression !== 'now()' ||
-    (checksummed && (checksum?.data_type !== 'text' || !checksum.attnotnull))
+    (ledgerMode === 'checksummed' && (checksum?.data_type !== 'text' || !checksum.attnotnull)) ||
+    (ledgerMode === 'provenance' &&
+      (checksum?.data_type !== 'text' ||
+        checksum.attnotnull ||
+        columns.rows.find((row) => row.attname === 'checksum_source')?.data_type !== 'text' ||
+        !columns.rows.find((row) => row.attname === 'checksum_source')?.attnotnull))
   ) {
     throw new Error('schema_migrations has an unexpected shape.');
   }
@@ -1228,6 +1267,26 @@ async function assertLedgerShape(client, checksummed) {
       'BASELINE_MISMATCH: schema_migrations security/primary-key contract is invalid.'
     );
   }
+  if (ledgerMode === 'provenance') {
+    const checksumConstraints = await client.query(`
+      select x.conname, pg_catalog.pg_get_constraintdef(x.oid) as definition, x.convalidated
+        from pg_catalog.pg_constraint x
+       where x.conrelid = 'public.schema_migrations'::pg_catalog.regclass
+         and x.contype = 'c'
+    `);
+    if (
+      checksumConstraints.rowCount !== 1 ||
+      checksumConstraints.rows[0]?.conname !== 'schema_migrations_checksum_source_check' ||
+      !checksumConstraints.rows[0]?.convalidated ||
+      checksumConstraints.rows[0]?.definition !==
+        "CHECK ((((checksum_source = 'legacy_unverifiable'::text) AND (checksum IS NULL)) OR ((checksum_source = ANY (ARRAY['manifest_backfill'::text, 'migration_file'::text])) AND (checksum IS NOT NULL))))"
+    ) {
+      throw new Error(
+        'BASELINE_MISMATCH: schema_migrations checksum provenance constraint is invalid.'
+      );
+    }
+  }
+  return ledgerMode;
 }
 
 async function ensureSeparatedLedger(client) {
@@ -1255,7 +1314,7 @@ async function ensureSeparatedLedger(client) {
       throw error;
     }
   }
-  await assertLedgerShape(client, true);
+  const ledgerMode = await assertLedgerShape(client, true);
   const ownership = await client.query(`
     select pg_catalog.pg_get_userbyid(c.relowner) as owner
       from pg_catalog.pg_class c
@@ -1264,6 +1323,7 @@ async function ensureSeparatedLedger(client) {
   if (ownership.rows[0]?.owner !== SCHEMA_OWNER) {
     throw new Error('schema_migrations has an unexpected owner.');
   }
+  return ledgerMode;
 }
 
 async function ensureLegacyLedger(client) {
@@ -1278,23 +1338,36 @@ async function ensureLegacyLedger(client) {
     alter table public.schema_migrations enable row level security;
     revoke all on public.schema_migrations from public
   `);
+  return assertLedgerShape(client, false);
 }
 
-async function getAppliedMigrations(client, migrations, separated, legacyLineage) {
-  const columns = separated ? 'filename, applied_at, checksum' : 'filename, applied_at';
+async function getAppliedMigrations(client, migrations, ledgerMode, legacyLineage) {
+  const columns = {
+    'legacy-two-column': 'filename, applied_at',
+    checksummed: 'filename, applied_at, checksum',
+    provenance: 'filename, applied_at, checksum, checksum_source',
+  }[ledgerMode];
   const result = await client.query(
     `select ${columns}, count(*) over (partition by applied_at) as timestamp_count from public.schema_migrations order by applied_at, filename`
   );
+  if (ledgerMode === 'provenance') {
+    return validateEstablishedLedger(result.rows, migrations);
+  }
+  const separated = ledgerMode === 'checksummed';
   const expected = new Map(migrations.map((migration) => [migration.filename, migration]));
   const legacyNames = new Set(legacyLineage.filenames);
   const seen = new Set();
   const positions = new Map();
   for (const [index, row] of result.rows.entries()) {
-    if (seen.has(row.filename)) throw new Error(`BASELINE_MISMATCH: duplicate applied migration ${row.filename}`);
+    if (seen.has(row.filename))
+      throw new Error(`BASELINE_MISMATCH: duplicate applied migration ${row.filename}`);
     seen.add(row.filename);
     positions.set(row.filename, index);
     if (legacyNames.has(row.filename)) {
-      if (separated) throw new Error('BASELINE_MISMATCH: legacy migration lineage is incompatible with separated ledger mode.');
+      if (separated)
+        throw new Error(
+          'BASELINE_MISMATCH: legacy migration lineage is incompatible with separated ledger mode.'
+        );
       continue;
     }
     const migration = expected.get(row.filename);
@@ -1305,42 +1378,69 @@ async function getAppliedMigrations(client, migrations, separated, legacyLineage
   }
   const legacyRows = result.rows.filter((row) => legacyNames.has(row.filename));
   if (legacyRows.length > 0) {
-    if (legacyRows.length !== legacyLineage.filenames.length ||
-        legacyRows.some((row, index) => row.filename !== legacyLineage.filenames[index])) {
-      throw new Error('BASELINE_MISMATCH: legacy migration lineage must be the complete ordered suffix.');
+    if (
+      legacyRows.length !== legacyLineage.filenames.length ||
+      legacyRows.some((row, index) => row.filename !== legacyLineage.filenames[index])
+    ) {
+      throw new Error(
+        'BASELINE_MISMATCH: legacy migration lineage must be the complete ordered suffix.'
+      );
     }
     const anchorPosition = positions.get(legacyLineage.anchor);
     const firstLegacyPosition = positions.get(legacyRows[0].filename);
-    if (anchorPosition === undefined || !migrations.slice(0, HISTORICAL_BASELINE_COUNT).every((migration) => {
-      const appliedPosition = positions.get(migration.filename);
-      return appliedPosition !== undefined && appliedPosition < firstLegacyPosition;
-    })) {
-      throw new Error('BASELINE_MISMATCH: canonical historical baseline must precede legacy migration lineage.');
+    if (
+      anchorPosition === undefined ||
+      !migrations.slice(0, HISTORICAL_BASELINE_COUNT).every((migration) => {
+        const appliedPosition = positions.get(migration.filename);
+        return appliedPosition !== undefined && appliedPosition < firstLegacyPosition;
+      })
+    ) {
+      throw new Error(
+        'BASELINE_MISMATCH: canonical historical baseline must precede legacy migration lineage.'
+      );
     }
-    if (anchorPosition >= firstLegacyPosition || legacyRows.some((row) => row.applied_at == null || row.timestamp_count > 1)) {
-      throw new Error('BASELINE_MISMATCH: legacy migration lineage does not follow its canonical anchor.');
+    if (
+      anchorPosition >= firstLegacyPosition ||
+      legacyRows.some((row) => row.applied_at == null || row.timestamp_count > 1)
+    ) {
+      throw new Error(
+        'BASELINE_MISMATCH: legacy migration lineage does not follow its canonical anchor.'
+      );
     }
     for (let index = 1; index < legacyRows.length; index += 1) {
-      if (positions.get(legacyRows[index - 1].filename) >= positions.get(legacyRows[index].filename) ||
-          legacyRows[index - 1].applied_at == null || legacyRows[index].applied_at == null ||
-          legacyRows[index].timestamp_count > 1) {
+      if (
+        positions.get(legacyRows[index - 1].filename) >=
+          positions.get(legacyRows[index].filename) ||
+        legacyRows[index - 1].applied_at == null ||
+        legacyRows[index].applied_at == null ||
+        legacyRows[index].timestamp_count > 1
+      ) {
         throw new Error('BASELINE_MISMATCH: legacy migration timestamps must strictly increase.');
       }
     }
-    const appliedCanonical = new Set(result.rows.filter((row) => expected.has(row.filename)).map((row) => row.filename));
+    const appliedCanonical = new Set(
+      result.rows.filter((row) => expected.has(row.filename)).map((row) => row.filename)
+    );
     const expectedSequence = [
       ...migrations.slice(0, HISTORICAL_BASELINE_COUNT).map((migration) => migration.filename),
       ...legacyLineage.filenames,
-      ...migrations.slice(HISTORICAL_BASELINE_COUNT)
+      ...migrations
+        .slice(HISTORICAL_BASELINE_COUNT)
         .filter((migration) => appliedCanonical.has(migration.filename))
         .map((migration) => migration.filename),
     ];
-    if (result.rows.length !== expectedSequence.length ||
-        result.rows.some((row, index) => row.filename !== expectedSequence[index])) {
-      throw new Error('BASELINE_MISMATCH: applied migration history does not match the canonical and legacy sequence.');
+    if (
+      result.rows.length !== expectedSequence.length ||
+      result.rows.some((row, index) => row.filename !== expectedSequence[index])
+    ) {
+      throw new Error(
+        'BASELINE_MISMATCH: applied migration history does not match the canonical and legacy sequence.'
+      );
     }
   }
-  return new Set(result.rows.filter((row) => !legacyNames.has(row.filename)).map((row) => row.filename));
+  return new Set(
+    result.rows.filter((row) => !legacyNames.has(row.filename)).map((row) => row.filename)
+  );
 }
 
 function assertGlobalOrder(migrations, applied) {
@@ -1355,11 +1455,16 @@ function assertGlobalOrder(migrations, applied) {
   }
 }
 
-async function runMigration(client, migration, separated) {
+async function runMigration(client, migration, ledgerMode) {
   await client.query('begin');
   try {
     await client.query(migration.sql);
-    if (separated) {
+    if (ledgerMode === 'provenance') {
+      await client.query(
+        'insert into public.schema_migrations (filename, checksum, checksum_source) values ($1, $2, $3)',
+        [migration.filename, migration.sha256, MIGRATION_FILE]
+      );
+    } else if (ledgerMode === 'checksummed') {
       await client.query(
         'insert into public.schema_migrations (filename, checksum) values ($1, $2)',
         [migration.filename, migration.sha256]
@@ -1416,10 +1521,10 @@ async function main() {
       try {
         const hasMigrationLedger = await migrationLedgerExists(client);
         if (!hasMigrationLedger) throw new Error('Migration ledger is missing.');
-        await assertLedgerShape(client, separated);
-        const applied = await getAppliedMigrations(client, migrations, separated, legacyLineage);
+        const ledgerMode = await assertLedgerShape(client, separated);
+        const applied = await getAppliedMigrations(client, migrations, ledgerMode, legacyLineage);
         assertGlobalOrder(migrations, applied);
-        assertExpectedPending(migrations, applied, expectedPending);
+        assertExpectedPending(migrations, applied, expectedPending, separated);
         await client.query('commit');
       } catch (error) {
         await client.query('rollback');
@@ -1439,13 +1544,14 @@ async function main() {
     if (options.verifyComplete) {
       await client.query('begin read only');
       try {
-        if (separated) await assertAndAssumeMigrationIdentity(client, manifest, migrations, separated);
+        if (separated)
+          await assertAndAssumeMigrationIdentity(client, manifest, migrations, separated);
         hadLedger = await migrationLedgerExists(client);
         if (!hadLedger) throw new Error('Migration ledger is missing.');
-        await assertLedgerShape(client, separated);
-        const applied = await getAppliedMigrations(client, migrations, separated, legacyLineage);
+        const ledgerMode = await assertLedgerShape(client, separated);
+        const applied = await getAppliedMigrations(client, migrations, ledgerMode, legacyLineage);
         assertGlobalOrder(migrations, applied);
-        assertExpectedPending(migrations, applied, expectedPending);
+        assertExpectedPending(migrations, applied, expectedPending, separated);
         const pending = firstPendingMigration(migrations, applied);
         if (pending) {
           throw new Error(`Pending migration: ${pending.filename} (${pending.lane} lane).`);
@@ -1463,10 +1569,15 @@ async function main() {
     hadLedger = await migrationLedgerExists(client);
     if (expectedPending !== undefined) {
       if (hadLedger) {
-        await assertLedgerShape(client, separated);
-        const baselineApplied = await getAppliedMigrations(client, migrations, separated, legacyLineage);
+        const ledgerMode = await assertLedgerShape(client, separated);
+        const baselineApplied = await getAppliedMigrations(
+          client,
+          migrations,
+          ledgerMode,
+          legacyLineage
+        );
         assertGlobalOrder(migrations, baselineApplied);
-        assertExpectedPending(migrations, baselineApplied, expectedPending);
+        assertExpectedPending(migrations, baselineApplied, expectedPending, separated);
       } else {
         throw new Error('MIGRATION_EXPECTED_PENDING requires an existing ledger.');
       }
@@ -1481,11 +1592,12 @@ async function main() {
       return;
     }
 
-    if (separated) await ensureSeparatedLedger(client);
-    else await ensureLegacyLedger(client);
-    const applied = await getAppliedMigrations(client, migrations, separated, legacyLineage);
+    const ledgerMode = separated
+      ? await ensureSeparatedLedger(client)
+      : await ensureLegacyLedger(client);
+    const applied = await getAppliedMigrations(client, migrations, ledgerMode, legacyLineage);
     assertGlobalOrder(migrations, applied);
-    assertExpectedPending(migrations, applied, expectedPending);
+    assertExpectedPending(migrations, applied, expectedPending, separated);
 
     for (const migration of migrations) {
       if (applied.has(migration.filename)) {
@@ -1497,7 +1609,7 @@ async function main() {
         return;
       }
       console.log(`APPLY ${migration.filename}`);
-      await runMigration(client, migration, separated);
+      await runMigration(client, migration, ledgerMode);
       console.log(`DONE ${migration.filename}`);
     }
     if (separated) await assertRunnerExtensionState(client, manifest, { pgcryptoRequired: true });
