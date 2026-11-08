@@ -144,7 +144,7 @@ PY
     in_main && /select count\(\*\) from/ && /schema_migrations/ && /EXPECTED_MIGRATION_COUNT/ { count++ }
     END { print count+0 }
   ' "$REGRESSION_TEST_SCRIPT")
-  regression_assert "$( [ "$REGRESSION_TOTAL_COUNT_LINES" = 3 ] && printf yes || printf no )" 'all three total ledger assertions use the manifest count'
+  regression_assert "$( [ "$REGRESSION_TOTAL_COUNT_LINES" = 4 ] && printf yes || printf no )" 'all four total ledger assertions use the manifest count'
   if awk '
     /^STAGE=initialization$/ { in_main=1 }
     in_main && /select count\(\*\) from/ && /schema_migrations/ && / = 12/ { stale=1 }
