@@ -42,7 +42,9 @@ function context(itemId = id): { params: Promise<{ id: string }> } {
 describe('POST /api/shopping-list/[id]/inventory', () => {
   beforeEach(() => {
     requireTenantMock.mockReset().mockResolvedValue({ tenantId: 'tenant-1' });
-    requireUserMock.mockReset().mockResolvedValue({ id: 'user-1' });
+    requireUserMock
+      .mockReset()
+      .mockResolvedValue({ id: 'user-1', tenant: { tenantId: 'tenant-1' } });
     transferPurchasedShoppingListItemMock.mockReset().mockResolvedValue({ item, inventoryItem });
   });
 
@@ -50,6 +52,8 @@ describe('POST /api/shopping-list/[id]/inventory', () => {
     const response = await POST(request(), context());
 
     expect(response.status).toBe(200);
+    expect(requireUserMock).toHaveBeenCalledOnce();
+    expect(requireTenantMock).not.toHaveBeenCalled();
     expect(transferPurchasedShoppingListItemMock).toHaveBeenCalledWith(id, 'tenant-1', 'user-1');
     expect(await response.json()).toEqual({
       item: {
@@ -72,6 +76,13 @@ describe('POST /api/shopping-list/[id]/inventory', () => {
     });
   });
 
+  it('rejects a user without tenant before accessing rows', async () => {
+    requireUserMock.mockResolvedValueOnce({ id: 'user-1', tenant: null });
+    const response = await POST(request(), context());
+    expect(response.status).toBe(401);
+    expect(transferPurchasedShoppingListItemMock).not.toHaveBeenCalled();
+  });
+
   it('rejects malformed ids without calling the repository', async () => {
     const response = await POST(request(), context('not-a-uuid'));
 
@@ -89,7 +100,7 @@ describe('POST /api/shopping-list/[id]/inventory', () => {
   });
 
   it('returns unauthorized without accessing rows when authentication fails', async () => {
-    requireTenantMock.mockRejectedValueOnce(new Error('Unauthorized'));
+    requireUserMock.mockRejectedValueOnce(new Error('Unauthorized'));
 
     const response = await POST(request(), context());
 

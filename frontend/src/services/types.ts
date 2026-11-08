@@ -78,8 +78,8 @@ export interface Chunk {
 }
 
 export interface EmbeddingService {
-  generateEmbedding(text: string): Promise<number[]>;
-  generateEmbeddings(texts: string[]): Promise<number[][]>;
+  generateEmbedding(text: string, signal?: AbortSignal): Promise<number[]>;
+  generateEmbeddings(texts: string[], signal?: AbortSignal): Promise<number[][]>;
 }
 
 export interface RecipeGenerationOptions {
@@ -167,6 +167,8 @@ export interface SemanticSearchService {
       matchThreshold?: number;
       matchCount?: number;
       bookIds?: string[];
+      signal?: AbortSignal;
+      deadlineAt?: number;
     }
   ): Promise<RecipeBookChunk[]>;
 

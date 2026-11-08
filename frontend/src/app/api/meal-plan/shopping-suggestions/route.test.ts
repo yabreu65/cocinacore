@@ -160,9 +160,23 @@ describe('GET /api/meal-plan/shopping-suggestions', () => {
   it('returns actionable buy/review candidates from the current tenant inventory without ownership data', async () => {
     const response = await GET(request() as unknown as NextRequest);
     expect(response.status).toBe(200);
-    expect(findMealPlanByIdForUserAndTenantMock).toHaveBeenCalledWith(planId, 'user-1', 'tenant-1');
-    expect(listInventoryItemsByTenantMock).toHaveBeenCalledWith('tenant-1', 501);
-    expect(listShoppingListItemsMock).toHaveBeenCalledWith('tenant-1', 'user-1', {}, 501);
+    expect(findMealPlanByIdForUserAndTenantMock).toHaveBeenCalledWith(
+      planId,
+      'user-1',
+      'tenant-1',
+      { tenantId: 'tenant-1', userId: 'user-1' }
+    );
+    expect(listInventoryItemsByTenantMock).toHaveBeenCalledWith(
+      'tenant-1',
+      501,
+      undefined,
+      {},
+      { tenantId: 'tenant-1', userId: 'user-1' }
+    );
+    expect(listShoppingListItemsMock).toHaveBeenCalledWith('tenant-1', 'user-1', {}, 501, {
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    });
     const body = (await response.json()) as { items: Array<Record<string, unknown>> };
     expect(body.items).toEqual(
       expect.arrayContaining([
@@ -358,7 +372,23 @@ describe('POST /api/meal-plan/shopping-suggestions', () => {
   it('recomputes current candidates and persists only selected actionable keys with server-owned data', async () => {
     const response = await POST(postRequest(await confirmationBody(['arroz', 'sal', 'harina'])));
     expect(response.status).toBe(200);
-    expect(listInventoryItemsByTenantMock).toHaveBeenCalledWith('tenant-1', 501);
+    expect(findMealPlanByIdForUserAndTenantMock).toHaveBeenLastCalledWith(
+      planId,
+      'user-1',
+      'tenant-1',
+      { tenantId: 'tenant-1', userId: 'user-1' }
+    );
+    expect(listShoppingListItemsMock).toHaveBeenLastCalledWith('tenant-1', 'user-1', {}, 501, {
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    });
+    expect(listInventoryItemsByTenantMock).toHaveBeenCalledWith(
+      'tenant-1',
+      501,
+      undefined,
+      {},
+      { tenantId: 'tenant-1', userId: 'user-1' }
+    );
     expect(addMealPlanShoppingItemsMock).toHaveBeenCalledWith({
       tenantId: 'tenant-1',
       userId: 'user-1',

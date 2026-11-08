@@ -3,12 +3,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const queryMock = vi.fn();
 const mapSingleRowMock = vi.fn();
 const transactionMock = vi.fn();
+const scopedTransactionMock = vi.fn(
+  async (
+    _scope: unknown,
+    callback: (client: { query: typeof queryMock }) => unknown
+  ): Promise<unknown> => transactionMock(callback) as unknown
+);
 const createInventoryItemInTransactionMock = vi.fn();
 
 vi.mock('@/lib/db', () => ({
   query: queryMock,
   mapSingleRow: mapSingleRowMock,
   transaction: transactionMock,
+  scopedTransaction: scopedTransactionMock,
 }));
 vi.mock('@/lib/db/repositories/inventoryRepository', () => ({
   createInventoryItemInTransaction: createInventoryItemInTransactionMock,
@@ -61,6 +68,18 @@ describe('shoppingListRepository', () => {
     queryMock.mockReset();
     mapSingleRowMock.mockReset();
     transactionMock.mockReset();
+    transactionMock.mockImplementation(
+      async (
+        callback: (client: { query: typeof queryMock }) => Promise<unknown>
+      ): Promise<unknown> => callback({ query: queryMock })
+    );
+    scopedTransactionMock.mockReset();
+    scopedTransactionMock.mockImplementation(
+      async (
+        _scope: unknown,
+        callback: (client: { query: typeof queryMock }) => unknown
+      ): Promise<unknown> => transactionMock(callback) as unknown
+    );
     createInventoryItemInTransactionMock.mockReset();
     mapSingleRowMock.mockImplementation((result: { rows: unknown[] }) => result.rows[0] ?? null);
   });
@@ -74,6 +93,19 @@ describe('shoppingListRepository', () => {
     expect(sql).toMatch(/where tenant_id = \$1 and user_id = \$2/);
     expect(sql).toMatch(/order by created_at desc, id desc/);
     expect(params).toEqual(['tenant-1', 'user-1']);
+  });
+
+  it('uses one scoped client for HTTP list and rejects scope mismatch', async () => {
+    queryMock.mockResolvedValue({ rows: [row] });
+    const scope = { tenantId: 'tenant-1', userId: 'user-1' };
+    await expect(
+      listShoppingListItems('tenant-1', 'user-1', {}, undefined, scope)
+    ).resolves.toEqual([row]);
+    expect(scopedTransactionMock).toHaveBeenCalledWith(scope, expect.any(Function));
+    expect(queryMock).toHaveBeenCalledOnce();
+    await expect(
+      listShoppingListItems('tenant-1', 'user-1', {}, undefined, { ...scope, userId: 'other' })
+    ).rejects.toThrow('Shopping scope mismatch');
   });
 
   it('applies an optional status filter inside the tenant and user scope', async () => {
@@ -109,6 +141,10 @@ describe('shoppingListRepository', () => {
       })
     ).resolves.toEqual(row);
 
+    expect(scopedTransactionMock).toHaveBeenCalledWith(
+      { tenantId: 'tenant-1', userId: 'user-1' },
+      expect.any(Function)
+    );
     const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain('insert into public.shopping_list_items');
     expect(sql).not.toContain('premium_recipe_id');
@@ -123,8 +159,8 @@ describe('shoppingListRepository', () => {
       .mockResolvedValueOnce({
         rows: [{ ...row, id: 'shopping-2', ingredient_name: 'Sal', quantity: null }],
       });
-    transactionMock.mockImplementation(
-      async (callback: (client: { query: typeof clientQuery }) => unknown) =>
+    scopedTransactionMock.mockImplementation(
+      async (_scope: unknown, callback: (client: { query: typeof clientQuery }) => unknown) =>
         callback({ query: clientQuery })
     );
 
@@ -138,7 +174,13 @@ describe('shoppingListRepository', () => {
       ],
     });
 
-    expect(transactionMock).toHaveBeenCalledOnce();
+    expect(scopedTransactionMock).toHaveBeenCalledOnce();
+    expect(scopedTransactionMock).toHaveBeenCalledWith(
+      { tenantId: 'tenant-1', userId: 'user-1' },
+      expect.any(Function)
+    );
+    expect(transactionMock).not.toHaveBeenCalled();
+    expect(queryMock).not.toHaveBeenCalled();
     const clientQueries = clientQuery.mock.calls as unknown as Array<[string, ...unknown[]]>;
     expect(clientQueries.map(([sql]) => sql)).toEqual([
       'select pg_advisory_xact_lock(hashtextextended($1, 0))',
@@ -166,8 +208,8 @@ describe('shoppingListRepository', () => {
       .fn()
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [existingManual] });
-    transactionMock.mockImplementation(
-      async (callback: (client: { query: typeof clientQuery }) => unknown) =>
+    scopedTransactionMock.mockImplementation(
+      async (_scope: unknown, callback: (client: { query: typeof clientQuery }) => unknown) =>
         callback({ query: clientQuery })
     );
 
@@ -191,9 +233,13 @@ describe('shoppingListRepository', () => {
 
   it('propagates a transaction failure without performing follow-up writes', async () => {
     const failure = new Error('insert failed');
-    const clientQuery = vi.fn().mockRejectedValue(failure);
-    transactionMock.mockImplementation(
-      async (callback: (client: { query: typeof clientQuery }) => unknown) =>
+    const clientQuery = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockRejectedValueOnce(failure);
+    scopedTransactionMock.mockImplementation(
+      async (_scope: unknown, callback: (client: { query: typeof clientQuery }) => unknown) =>
         callback({ query: clientQuery })
     );
 
@@ -205,7 +251,44 @@ describe('shoppingListRepository', () => {
         items: [{ ingredientName: 'Sal', quantity: null }],
       })
     ).rejects.toBe(failure);
-    expect(clientQuery).toHaveBeenCalledOnce();
+    expect(clientQuery).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not insert duplicates on retry or within the same request', async () => {
+    const inserted = { ...row, id: 'shopping-2', ingredient_name: 'Sal', quantity: null };
+    const clientQuery = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [inserted] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [inserted] });
+    scopedTransactionMock.mockImplementation(
+      async (_scope: unknown, callback: (client: { query: typeof clientQuery }) => unknown) =>
+        callback({ query: clientQuery })
+    );
+    const input = {
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+      source: 'meal-plan:plan-1',
+      items: [
+        { ingredientName: 'Sal', quantity: null },
+        { ingredientName: ' SAL ', quantity: null },
+      ],
+    };
+
+    await expect(addMealPlanShoppingItems(input)).resolves.toEqual({
+      added: [inserted],
+      alreadyPresent: [],
+    });
+    await expect(addMealPlanShoppingItems(input)).resolves.toEqual({
+      added: [],
+      alreadyPresent: [inserted],
+    });
+    expect(clientQuery).toHaveBeenCalledTimes(5);
+    expect(scopedTransactionMock).toHaveBeenCalledTimes(2);
+    expect(transactionMock).not.toHaveBeenCalled();
+    expect(queryMock).not.toHaveBeenCalled();
   });
 
   it('atomically transfers purchased rows and returns the existing inventory item on replay', async () => {
@@ -234,6 +317,10 @@ describe('shoppingListRepository', () => {
     });
 
     expect(transactionMock).toHaveBeenCalledOnce();
+    expect(scopedTransactionMock).toHaveBeenCalledWith(
+      { tenantId: 'tenant-1', userId: 'user-1' },
+      expect.any(Function)
+    );
     expect(createInventoryItemInTransactionMock).toHaveBeenCalledWith(
       clientQuery.mock.calls.length ? expect.anything() : null,
       {
@@ -393,6 +480,10 @@ describe('shoppingListRepository', () => {
       updateShoppingListItemStatus('shopping-1', 'tenant-1', 'user-1', 'purchased')
     ).resolves.toEqual({ ...row, status: 'purchased' });
 
+    expect(scopedTransactionMock).toHaveBeenCalledWith(
+      { tenantId: 'tenant-1', userId: 'user-1' },
+      expect.any(Function)
+    );
     const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
     expect(sql).toMatch(/where id = \$2 and tenant_id = \$3 and user_id = \$4/);
     expect(params).toEqual(['purchased', 'shopping-1', 'tenant-1', 'user-1']);

@@ -188,9 +188,9 @@ describe.skipIf(!enabled)('provisioned runtime PostgreSQL access', () => {
     );
 
     const profile = await upsertCulinaryProfile({ userId, tenantId });
-    expect((await findCulinaryProfileByUserId(userId))?.user_id).toBe(profile.user_id);
+    expect((await findCulinaryProfileByUserId(userId, tenantId))?.user_id).toBe(profile.user_id);
     expect(Array.isArray(await listCulinaryDimensions())).toBe(true);
-    await setCulinaryProfileTerms(userId, []);
+    await setCulinaryProfileTerms(userId, tenantId, []);
 
     const recipe = await createPersistentRecipe(
       { tenantId, userId },
@@ -239,7 +239,8 @@ describe.skipIf(!enabled)('provisioned runtime PostgreSQL access', () => {
     ]);
     const chunks = await searchChunks({
       embedding,
-      tenantId: null,
+      tenantId,
+      userId,
       matchThreshold: 0,
       matchCount: 5,
       statementTimeoutMs: 5_000,

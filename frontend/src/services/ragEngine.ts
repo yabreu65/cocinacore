@@ -34,6 +34,7 @@ export interface RecipeContextRetrievalOptions {
   bookIds?: string[];
   matchCount?: number;
   matchThreshold?: number;
+  signal?: AbortSignal;
 }
 
 export interface RecipeContextRetrievalResult {
@@ -226,9 +227,11 @@ export async function retrieveRecipeContext(
   const searchQuery = boundSearchQuery(buildRecipeSearchQuery(searchInput));
   const matchCount = Math.min(Math.max(options.matchCount ?? RAG_MATCH_COUNT, 1), RAG_MATCH_COUNT);
 
+  if (options.signal?.aborted) throw new DOMException('The operation was aborted.', 'AbortError');
   serverLogger.info('rag_engine.query_embedding', { ingredientCount: ingredients.length });
-  const queryEmbedding = await dependencies.embedder.generateEmbedding(searchQuery);
+  const queryEmbedding = await dependencies.embedder.generateEmbedding(searchQuery, options.signal);
 
+  if (options.signal?.aborted) throw new DOMException('The operation was aborted.', 'AbortError');
   serverLogger.info('rag_engine.querying_match_chunks');
   const matchedChunks = await dependencies.dbAdapter.searchChunks(queryEmbedding, {
     matchThreshold: options.matchThreshold ?? RAG_MATCH_THRESHOLD,
@@ -276,6 +279,7 @@ export class RagEngine {
       chunkOverlap?: number;
       trialState?: TrialState;
       tenantContext?: TenantContext;
+      signal?: AbortSignal;
     }
   ): Promise<number> {
     assertTrialAllows('upload', options?.trialState);
@@ -311,7 +315,7 @@ export class RagEngine {
     const contents = chunks.map((c) => c.content);
 
     // Batch embeddings to prevent multiple roundtrips and respect rate limits
-    const embeddings = await this.embedder.generateEmbeddings(contents);
+    const embeddings = await this.embedder.generateEmbeddings(contents, options?.signal);
 
     // 3. Attach embeddings back to chunk records
     const fullyConfiguredChunks = chunks.map((chunk, idx) => ({

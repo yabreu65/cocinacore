@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/auth/server';
 import type { AuthUser } from '@/lib/auth/types';
+import type { UserMealPlanRow } from '@/lib/db/types';
 import { listInventoryItemsByTenant } from '@/lib/db/repositories/inventoryRepository';
 import { findLatestMealPlanByUserAndTenant } from '@/lib/db/repositories/mealPlanRepository';
 import { serverLogger } from '@/lib/serverLogger';
@@ -35,7 +36,7 @@ export async function GET(request: NextRequest) {
   const horizonDays = Number(rawHorizon);
   const tenantId = user.tenant.tenantId;
 
-  let persistedPlan;
+  let persistedPlan: UserMealPlanRow | null;
   try {
     persistedPlan = await findLatestMealPlanByUserAndTenant(user.id, tenantId);
   } catch {
@@ -90,7 +91,10 @@ export async function GET(request: NextRequest) {
 
   let inventoryItems;
   try {
-    inventoryItems = await listInventoryItemsByTenant(tenantId);
+    inventoryItems = await listInventoryItemsByTenant(tenantId, undefined, undefined, {}, {
+      tenantId,
+      userId: user.id,
+    });
   } catch {
     serverLogger.warn('meal_plan.coverage_inventory_lookup_failed', { requestId });
     return NextResponse.json({ error: 'No se pudo recuperar el inventario.' }, { status: 500 });

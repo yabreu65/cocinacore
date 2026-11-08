@@ -132,6 +132,17 @@ describe('GET /api/waste-prevention', () => {
     expect(mockListRecipes).not.toHaveBeenCalled();
   });
 
+  it('rejects users without a tenant before reading data', async () => {
+    mockRequireUser.mockResolvedValue({ ...user, tenant: null });
+
+    const response = await GET(request());
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: 'Unauthorized' });
+    expect(mockListInventory).not.toHaveBeenCalled();
+    expect(mockListRecipes).not.toHaveBeenCalled();
+  });
+
   it('rejects invalid query controls before database reads', async () => {
     expect((await GET(request('timeZone=Not%2FAZone'))).status).toBe(400);
     expect((await GET(request('timeZone=UTC&dueSoonDays=0'))).status).toBe(400);
@@ -143,7 +154,11 @@ describe('GET /api/waste-prevention', () => {
     const body = await readBody(response);
 
     expect(response.status).toBe(200);
-    expect(mockListInventory).toHaveBeenCalledWith('tenant-1');
+    expect(mockRequireUser).toHaveBeenCalledOnce();
+    expect(mockListInventory).toHaveBeenCalledWith('tenant-1', undefined, {
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    });
     expect(mockListRecipes).toHaveBeenCalledWith(
       { tenantId: 'tenant-1', userId: 'user-1' },
       { archived: 'active', limit: 100, offset: 0, includeSentinel: true }

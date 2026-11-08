@@ -2,16 +2,20 @@ import { type NextRequest, NextResponse } from 'next/server';
 import { mapAuthError } from '@/lib/auth/errors';
 import { LoginSchema } from '@/lib/auth/schemas';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { findUserByEmail } from '@/lib/db/repositories/userRepository';
+import { findUserByEmailForAuth } from '@/lib/db/repositories/userRepository';
 import { verifyPassword } from '@/lib/auth/password';
 import { createSession, setSessionCookie } from '@/lib/auth/session';
-
-function getIp(request: NextRequest): string {
-  return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
-}
+import {
+  getAuthenticationSecondaryRateLimitKey,
+  getRetryAfterSeconds,
+  getTargetRateLimitKey,
+} from '@/lib/rate-limit-identity';
 
 async function hashIdentity(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value.toLowerCase()));
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(value.toLowerCase())
+  );
   return Array.from(new Uint8Array(digest))
     .map((byte) => byte.toString(16).padStart(2, '0'))
     .join('');
@@ -27,20 +31,35 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const rateLimit = await checkRateLimit(
+  const targetKey = await hashIdentity(parsed.data.email);
+  const rateLimitKey = getTargetRateLimitKey(request, targetKey);
+  const targetRateLimit = await checkRateLimit(
     'auth/login',
-    getIp(request),
-    await hashIdentity(parsed.data.email)
+    rateLimitKey.identity,
+    rateLimitKey.userId,
+    {
+      requireSharedStore: true,
+    }
   );
+  const secondaryKey = getAuthenticationSecondaryRateLimitKey(request, 'auth/login');
+  const secondaryRateLimit = targetRateLimit.success
+    ? await checkRateLimit(secondaryKey.route, secondaryKey.identity, undefined, {
+        requireSharedStore: true,
+      })
+    : targetRateLimit;
+  const rateLimit = targetRateLimit.success ? secondaryRateLimit : targetRateLimit;
   if (!rateLimit.success) {
-    const retryAfter = Math.max(1, rateLimit.resetAt - Math.floor(Date.now() / 1000));
+    const retryAfter = getRetryAfterSeconds(rateLimit.resetAt);
     return NextResponse.json(
       { error: 'Demasiados intentos. Esperá unos minutos y volvé a probar.' },
-      { status: 429, headers: { 'Retry-After': String(retryAfter) } }
+      {
+        status: rateLimit.storage === 'unavailable' ? 503 : 429,
+        headers: { 'Retry-After': String(retryAfter) },
+      }
     );
   }
 
-  const user = await findUserByEmail(parsed.data.email);
+  const user = await findUserByEmailForAuth(parsed.data.email);
   if (!user) {
     return NextResponse.json(
       { error: mapAuthError({ message: 'Invalid login credentials' }, 'login') },

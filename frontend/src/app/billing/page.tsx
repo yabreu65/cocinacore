@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { getCurrentUser } from '@/lib/auth/server';
-import { query } from '@/lib/db';
+import { scopedTransaction } from '@/lib/db';
 import type { TenantType } from '@/lib/auth/types';
 
 export const dynamic = 'force-dynamic';
@@ -27,8 +27,13 @@ export default async function BillingPage() {
       <main className="texture-paper min-h-screen bg-[#FAF6F1] px-4 py-6 text-[#241A14] md:px-6">
         <section className="mx-auto w-full max-w-3xl rounded-3xl border border-[#E8DDD2] bg-white/80 p-5 premium-shadow">
           <h1 className="text-3xl font-semibold">Facturación</h1>
-          <p className="mt-2 text-[#6B5A50]">Necesitás iniciar sesión para ver el estado comercial.</p>
-          <Link href="/login" className="mt-4 inline-flex rounded-xl bg-[#C56A1A] px-4 py-2 font-semibold text-white">
+          <p className="mt-2 text-[#6B5A50]">
+            Necesitás iniciar sesión para ver el estado comercial.
+          </p>
+          <Link
+            href="/login"
+            className="mt-4 inline-flex rounded-xl bg-[#C56A1A] px-4 py-2 font-semibold text-white"
+          >
             Ir a login
           </Link>
         </section>
@@ -37,14 +42,24 @@ export default async function BillingPage() {
   }
 
   const tenantId = user.tenant.tenantId;
-  const [tenantResult, membersResult, invitationsResult] = await Promise.all([
-    query<TenantSummaryRow>('select trial_ends_at, tenant_type from public.tenants where id = $1', [tenantId]),
-    query<CountRow>('select count(*)::text as count from public.users where tenant_id = $1', [tenantId]),
-    query<CountRow>(
-      "select count(*)::text as count from public.tenant_invitations where tenant_id = $1 and status = 'pending'",
-      [tenantId]
-    ),
-  ]);
+  const [tenantResult, membersResult, invitationsResult] = await scopedTransaction(
+    { tenantId, userId: user.id },
+    async (client) =>
+      Promise.all([
+        client.query<TenantSummaryRow>(
+          'select trial_ends_at, tenant_type from public.tenants where id = $1',
+          [tenantId]
+        ),
+        client.query<CountRow>(
+          'select count(*)::text as count from public.users where tenant_id = $1',
+          [tenantId]
+        ),
+        client.query<CountRow>(
+          "select count(*)::text as count from public.tenant_invitations where tenant_id = $1 and status = 'pending'",
+          [tenantId]
+        ),
+      ])
+  );
 
   const tenant = tenantResult.rows[0] ?? { trial_ends_at: null, tenant_type: 'home' as const };
   const membersCount = Number(membersResult.rows[0]?.count ?? '0');
@@ -81,7 +96,11 @@ export default async function BillingPage() {
           <article className="rounded-2xl border border-[#E8DDD2] bg-white/70 p-4">
             <p className="text-sm text-[#6B5A50]">Trial</p>
             <p className="text-xl font-semibold">
-              {remaining === null ? 'No disponible' : remaining > 0 ? `${remaining} días restantes` : 'Vencido'}
+              {remaining === null
+                ? 'No disponible'
+                : remaining > 0
+                  ? `${remaining} días restantes`
+                  : 'Vencido'}
             </p>
             <p className="mt-1 text-xs text-[#6B5A50]">
               Fin: {tenant.trial_ends_at ? new Date(tenant.trial_ends_at).toLocaleString() : '-'}
@@ -92,7 +111,8 @@ export default async function BillingPage() {
         <article className="mt-4 rounded-2xl border border-[#E8DDD2] bg-white/70 p-4">
           <p className="text-sm text-[#6B5A50]">Estado comercial actual</p>
           <p className="mt-1 text-sm text-[#241A14]">
-            Invitaciones pendientes: {pendingInvitations}. Esta pantalla ya no depende del backend anterior.
+            Invitaciones pendientes: {pendingInvitations}. Esta pantalla ya no depende del backend
+            anterior.
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <Link

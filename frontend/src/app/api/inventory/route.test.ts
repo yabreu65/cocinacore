@@ -6,28 +6,31 @@ const requireUserMock = vi.fn();
 const listInventoryItemsByTenantMock = vi.fn();
 const createInventoryItemMock = vi.fn();
 const updateInventoryItemMock = vi.fn();
+const deleteInventoryItemMock = vi.fn();
 
 vi.mock('@/lib/auth/server', () => ({
   requireTenant: requireTenantMock,
   requireUser: requireUserMock,
 }));
 vi.mock('@/lib/db/repositories/inventoryRepository', () => ({
-  listInventoryItemsByTenant: listInventoryItemsByTenantMock,
+  listInventoryItemsScoped: listInventoryItemsByTenantMock,
   createInventoryItem: createInventoryItemMock,
   updateInventoryItem: updateInventoryItemMock,
-  deleteInventoryItem: vi.fn(),
+  deleteInventoryItem: deleteInventoryItemMock,
 }));
 
-const { GET, POST } = await import('./route');
+const { GET, POST, DELETE } = await import('./route');
 
 describe('GET /api/inventory', () => {
   beforeEach(() => {
-    requireTenantMock.mockReset().mockResolvedValue({ tenantId: 'tenant-1' });
+    requireUserMock
+      .mockReset()
+      .mockResolvedValue({ id: 'user-1', tenant: { tenantId: 'tenant-1' } });
     listInventoryItemsByTenantMock.mockReset().mockResolvedValue([]);
   });
 
   it('returns unauthorized without calling the repository when authentication fails', async () => {
-    requireTenantMock.mockRejectedValueOnce(new Error('Unauthorized'));
+    requireUserMock.mockRejectedValueOnce(new Error('Unauthorized'));
 
     const response = await GET();
 
@@ -38,7 +41,7 @@ describe('GET /api/inventory', () => {
 
   it('does not convert unrelated tenant-authentication errors to unauthorized', async () => {
     const error = new Error('tenant service unavailable');
-    requireTenantMock.mockRejectedValueOnce(error);
+    requireUserMock.mockRejectedValueOnce(error);
 
     await expect(GET()).rejects.toBe(error);
     expect(listInventoryItemsByTenantMock).not.toHaveBeenCalled();
@@ -47,8 +50,12 @@ describe('GET /api/inventory', () => {
 
 describe('POST /api/inventory', () => {
   beforeEach(() => {
-    requireTenantMock.mockReset().mockResolvedValue({ tenantId: 'tenant-1' });
-    requireUserMock.mockReset().mockResolvedValue({ id: 'user-1' });
+    requireUserMock
+      .mockReset()
+      .mockResolvedValue({ id: 'user-1', tenant: { tenantId: 'tenant-1' } });
+    requireUserMock
+      .mockReset()
+      .mockResolvedValue({ id: 'user-1', tenant: { tenantId: 'tenant-1' } });
     createInventoryItemMock.mockReset();
     updateInventoryItemMock.mockReset();
   });
@@ -99,5 +106,66 @@ describe('POST /api/inventory', () => {
     expect(response.status).toBe(400);
     expect(createInventoryItemMock).not.toHaveBeenCalled();
     expect(updateInventoryItemMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('authenticated inventory scope', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    requireUserMock.mockResolvedValue({ id: 'user-1', tenant: { tenantId: 'tenant-1' } });
+    listInventoryItemsByTenantMock.mockResolvedValue([]);
+    createInventoryItemMock.mockResolvedValue({ id: 'new' });
+    updateInventoryItemMock.mockResolvedValue({ id: 'item-1' });
+  });
+  it('GET uses actor and tenant from the same user', async () => {
+    expect((await GET()).status).toBe(200);
+    expect(listInventoryItemsByTenantMock).toHaveBeenCalledWith({
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    });
+    expect(requireUserMock).toHaveBeenCalledTimes(1);
+  });
+  it('POST create ignores client identity fields', async () => {
+    const req = new NextRequest('http://localhost/api/inventory', {
+      method: 'POST',
+      body: JSON.stringify({ ingredientName: 'Rice', userId: 'attacker', tenantId: 'other' }),
+    });
+    expect((await POST(req)).status).toBe(201);
+    expect(createInventoryItemMock).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantId: 'tenant-1', userId: 'user-1' })
+    );
+    expect(requireUserMock).toHaveBeenCalledTimes(1);
+  });
+  it('POST update uses server actor and tenant', async () => {
+    const req = new NextRequest('http://localhost/api/inventory', {
+      method: 'POST',
+      body: JSON.stringify({
+        id: 'item-1',
+        ingredientName: 'Rice',
+        tenantId: 'other',
+        userId: 'attacker',
+      }),
+    });
+    expect((await POST(req)).status).toBe(200);
+    expect(updateInventoryItemMock).toHaveBeenCalledWith('item-1', 'tenant-1', expect.any(Object), {
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    });
+  });
+  it('DELETE uses server actor and tenant', async () => {
+    const req = new NextRequest(
+      'http://localhost/api/inventory?id=item-1&tenantId=other&userId=attacker',
+      { method: 'DELETE' }
+    );
+    expect((await DELETE(req)).status).toBe(200);
+    expect(deleteInventoryItemMock).toHaveBeenCalledWith('item-1', 'tenant-1', {
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    });
+  });
+  it('denies session without tenant before reading data', async () => {
+    requireUserMock.mockResolvedValueOnce({ id: 'user-1', tenant: null });
+    await expect(GET()).rejects.toThrow('Tenant context required');
+    expect(listInventoryItemsByTenantMock).not.toHaveBeenCalled();
   });
 });

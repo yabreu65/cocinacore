@@ -1,5 +1,13 @@
 import { PoolClient } from 'pg';
-import { query, mapSingleRow, transaction } from '@/lib/db';
+import {
+  authQuery,
+  query,
+  mapSingleRow,
+  transaction,
+  scopedTransaction,
+  type AuthenticatedDbScope,
+  type DbOperationOptions,
+} from '@/lib/db';
 import { UserRow, TenantRole } from '@/lib/db/types';
 
 interface CreateUserInput {
@@ -22,21 +30,56 @@ interface UpdateUserInput {
   emailConfirmed?: boolean;
 }
 
-export async function findUserByEmail(email: string): Promise<UserRow | null> {
-  const result = await query<UserRow>(
-    'select * from public.users where email = pg_catalog.lower(pg_catalog.btrim($1))',
+/** User data returned to non-authentication consumers; excludes credential material. */
+export type DataUserRow = Omit<UserRow, 'password_hash'>;
+export type UserProfileUpdateRow = Pick<UserRow, 'id' | 'full_name' | 'onboarding_completed'>;
+
+const DATA_USER_COLUMNS =
+  'id, email, email_confirmed, full_name, tenant_id, role, terms_accepted_at, terms_version, onboarding_completed, created_at, updated_at';
+const PROFILE_UPDATE_COLUMNS = 'id, full_name, onboarding_completed';
+const EMAIL_PREDICATE = 'email = pg_catalog.lower(pg_catalog.btrim($1))';
+
+export async function findUserByEmail(email: string): Promise<DataUserRow | null> {
+  const result = await query<DataUserRow>(
+    `select ${DATA_USER_COLUMNS} from public.users where ${EMAIL_PREDICATE}`,
     [email]
   );
   return mapSingleRow(result);
 }
 
-export async function findUserById(id: string): Promise<UserRow | null> {
-  const result = await query<UserRow>('select * from public.users where id = $1', [id]);
+export async function findUserByEmailForAuth(email: string): Promise<UserRow | null> {
+  const result = await authQuery<UserRow>(`select * from public.users where ${EMAIL_PREDICATE}`, [
+    email,
+  ]);
   return mapSingleRow(result);
 }
 
-export async function createUser(input: CreateUserInput): Promise<UserRow> {
-  const result = await query<UserRow>(
+export async function findUserById(
+  id: string,
+  options?: DbOperationOptions,
+  client?: PoolClient
+): Promise<DataUserRow | null> {
+  const sql = `select ${DATA_USER_COLUMNS} from public.users where id = $1`;
+  const result = client
+    ? await client.query<DataUserRow>(sql, [id])
+    : await query<DataUserRow>(sql, [id], options);
+  return mapSingleRow(result);
+}
+
+export async function findUserByIdForAuth(
+  id: string,
+  options?: DbOperationOptions,
+  client?: PoolClient
+): Promise<UserRow | null> {
+  const sql = 'select * from public.users where id = $1';
+  const result = client
+    ? await client.query<UserRow>(sql, [id])
+    : await authQuery<UserRow>(sql, [id], options);
+  return mapSingleRow(result);
+}
+
+export async function createUser(input: CreateUserInput, client?: PoolClient): Promise<UserRow> {
+  const result = await (client ? client.query.bind(client) : authQuery)<UserRow>(
     `insert into public.users
      (email, password_hash, full_name, tenant_id, role, terms_accepted_at, terms_version, email_confirmed)
      values (pg_catalog.lower(pg_catalog.btrim($1)), $2, $3, $4, $5, $6, $7, true)
@@ -60,20 +103,21 @@ export async function createUser(input: CreateUserInput): Promise<UserRow> {
   return user;
 }
 
-export async function updateUser(id: string, input: UpdateUserInput): Promise<UserRow | null> {
+export async function updateUser(
+  id: string,
+  input: UpdateUserInput
+): Promise<UserProfileUpdateRow | null> {
   return transaction((client) => updateUserInTransaction(client, id, input));
 }
 
 export interface UserUpdateQueryClient {
-  queryUser(queryText: string, values?: unknown[]): Promise<{ rows: UserRow[] }>;
+  queryUser(queryText: string, values?: unknown[]): Promise<{ rows: UserProfileUpdateRow[] }>;
 }
 
-function userUpdateQueryClient(
-  client: PoolClient | UserUpdateQueryClient
-): UserUpdateQueryClient {
+function userUpdateQueryClient(client: PoolClient | UserUpdateQueryClient): UserUpdateQueryClient {
   if ('queryUser' in client) return client;
   return {
-    queryUser: (queryText, values) => client.query<UserRow>(queryText, values),
+    queryUser: (queryText, values) => client.query<UserProfileUpdateRow>(queryText, values),
   };
 }
 
@@ -81,7 +125,7 @@ export async function updateUserInTransaction(
   client: PoolClient | UserUpdateQueryClient,
   id: string,
   input: UpdateUserInput
-): Promise<UserRow | null> {
+): Promise<UserProfileUpdateRow | null> {
   const typedClient = userUpdateQueryClient(client);
   const fields: string[] = [];
   const values: unknown[] = [];
@@ -117,7 +161,10 @@ export async function updateUserInTransaction(
   }
 
   if (fields.length === 0) {
-    const result = await typedClient.queryUser('select * from public.users where id = $1', [id]);
+    const result = await typedClient.queryUser(
+      `select ${PROFILE_UPDATE_COLUMNS} from public.users where id = $1`,
+      [id]
+    );
     return result.rows[0] ?? null;
   }
 
@@ -125,7 +172,7 @@ export async function updateUserInTransaction(
   values.push(id);
 
   const result = await typedClient.queryUser(
-    `update public.users set ${fields.join(', ')} where id = $${paramIndex} returning *`,
+    `update public.users set ${fields.join(', ')} where id = $${paramIndex} returning ${PROFILE_UPDATE_COLUMNS}`,
     values
   );
 
@@ -133,17 +180,26 @@ export async function updateUserInTransaction(
 }
 
 export async function updatePassword(id: string, passwordHash: string): Promise<void> {
-  await query('update public.users set password_hash = $1, updated_at = now() where id = $2', [
+  await authQuery('update public.users set password_hash = $1, updated_at = now() where id = $2', [
     passwordHash,
     id,
   ]);
 }
 
-export async function listUsersByTenant(tenantId: string): Promise<UserRow[]> {
-  const result = await query<UserRow>(
-    'select * from public.users where tenant_id = $1 order by created_at desc',
-    [tenantId]
-  );
+export async function listUsersByTenant(
+  tenantId: string,
+  scope?: AuthenticatedDbScope,
+  options: DbOperationOptions = {}
+): Promise<DataUserRow[]> {
+  if (scope && scope.tenantId !== tenantId) throw new Error('User scope mismatch.');
+  const sql = `select ${DATA_USER_COLUMNS} from public.users where tenant_id = $1 order by created_at desc`;
+  const result = scope
+    ? await scopedTransaction(
+        scope,
+        (client) => client.query<DataUserRow>(sql, [tenantId]),
+        options
+      )
+    : await query<DataUserRow>(sql, [tenantId], options);
   return result.rows;
 }
 

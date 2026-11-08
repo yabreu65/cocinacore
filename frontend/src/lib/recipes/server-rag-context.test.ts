@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type {
+  MatchChunkResult,
+  SearchChunksInput,
+} from '@/lib/db/repositories/bookChunkRepository';
 
 const generateEmbeddingMock = vi.fn();
-const searchChunksMock = vi.fn();
+const searchChunksMock = vi.fn<(input: SearchChunksInput) => Promise<MatchChunkResult[]>>();
 
 vi.mock('@/services/gemini', () => ({
   GeminiEmbeddingService: class {
@@ -73,6 +77,7 @@ describe('retrieveServerRagContext', () => {
     const result = await retrieveServerRagContext({
       apiKey: 'test-api-key',
       tenantId: 'tenant-1',
+      userId: 'user-1',
       ingredients: ['tomate'],
       recipeName: 'Sopa de tomate',
       mealType: 'Cena',
@@ -87,6 +92,7 @@ describe('retrieveServerRagContext', () => {
     expect(searchChunksMock).toHaveBeenCalledWith({
       embedding: [0.1, 0.2, 0.3],
       tenantId: 'tenant-1',
+      userId: 'user-1',
       matchThreshold: 0.35,
       matchCount: 6,
       statementTimeoutMs: 10_000,
@@ -116,6 +122,89 @@ describe('retrieveServerRagContext', () => {
     ]);
   });
 
+  it('rejects missing identity before embedding or database work', async () => {
+    await expect(
+      retrieveServerRagContext({
+        apiKey: 'test-api-key',
+        tenantId: 'tenant-1',
+        userId: '',
+        ingredients: ['tomato'],
+        restrictions: { allergies: [], dietaryRules: [] },
+      })
+    ).rejects.toThrow('Authenticated RAG scope required');
+    expect(generateEmbeddingMock).not.toHaveBeenCalled();
+    expect(searchChunksMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects ambiguous source relationships even if a database adapter returns them', async () => {
+    searchChunksMock.mockResolvedValue([
+      matchRow({ source_type: 'global_pdf', global_book_id: 'global', tenant_book_id: 'private' }),
+      matchRow({
+        source_type: 'tenant_pdf',
+        tenant_id: 'tenant-1',
+        tenant_book_id: 'private',
+        global_book_id: 'global',
+      }),
+      matchRow({ source_type: 'ai_generated', tenant_id: null }),
+    ]);
+    const result = await retrieveServerRagContext({
+      apiKey: 'test-api-key',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+      ingredients: ['tomato'],
+      restrictions: { allergies: [], dietaryRules: [] },
+    });
+    expect(result.ragContextUsed).toBe(false);
+    expect(result.citations).toEqual([]);
+  });
+
+  it('forwards the shared deadline signal and bounds the database statement timeout', async () => {
+    const signalController = new AbortController();
+    const deadlineAt = Date.now() + 12_000;
+    searchChunksMock.mockResolvedValue([]);
+
+    await retrieveServerRagContext({
+      apiKey: 'test-api-key',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+      ingredients: ['tomate'],
+      restrictions: { allergies: [], dietaryRules: [] },
+      signal: signalController.signal,
+      deadlineAt,
+    });
+
+    expect(generateEmbeddingMock).toHaveBeenCalledWith(expect.any(String), signalController.signal);
+    expect(searchChunksMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: 'tenant-1',
+        statementTimeoutMs: expect.any(Number) as unknown as number,
+      })
+    );
+    const firstSearchInput = searchChunksMock.mock.calls[0]?.[0];
+    expect(firstSearchInput?.signal).toBe(signalController.signal);
+    expect(firstSearchInput?.deadlineAt).toBe(deadlineAt);
+    expect(firstSearchInput?.statementTimeoutMs).toBeLessThanOrEqual(10_000);
+  });
+
+  it('stops before retrieval when the request deadline has expired', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      retrieveServerRagContext({
+        apiKey: 'test-api-key',
+        tenantId: 'tenant-1',
+        userId: 'user-1',
+        ingredients: ['tomate'],
+        restrictions: { allergies: [], dietaryRules: [] },
+        signal: controller.signal,
+        deadlineAt: Date.now() + 10_000,
+      })
+    ).rejects.toThrow('time budget exceeded');
+    expect(generateEmbeddingMock).not.toHaveBeenCalled();
+    expect(searchChunksMock).not.toHaveBeenCalled();
+  });
+
   it('bounds formatted context including headers while retaining citations for included chunks', async () => {
     searchChunksMock.mockResolvedValue(
       ['A', 'B', 'C'].map((content, index) =>
@@ -132,6 +221,7 @@ describe('retrieveServerRagContext', () => {
     const result = await retrieveServerRagContext({
       apiKey: 'test-api-key',
       tenantId: 'tenant-1',
+      userId: 'user-1',
       ingredients: ['tomate'],
       restrictions: { allergies: [], dietaryRules: [] },
     });

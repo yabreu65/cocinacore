@@ -51,9 +51,9 @@ export async function loadPersistedRecipeContext(
   tenantId: string
 ): Promise<PersistedRecipeContext> {
   const [items, profile, terms] = await Promise.all([
-    listInventoryItemsByTenant(tenantId),
-    findCulinaryProfileByUserId(userId),
-    findCulinaryProfileTermsByUserId(userId),
+    listInventoryItemsByTenant(tenantId, undefined, undefined, {}, { tenantId, userId }),
+    findCulinaryProfileByUserId(userId, tenantId),
+    findCulinaryProfileTermsByUserId(userId, tenantId),
   ]);
 
   const inventoryLines = boundInventoryLines(buildMealPlanInventoryContext(items, tenantId));

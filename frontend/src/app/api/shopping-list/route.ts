@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from 'next/server';
-import { requireTenant, requireUser } from '@/lib/auth/server';
+import { requireUser } from '@/lib/auth/server';
 import {
   createShoppingListItem,
   listShoppingListItems,
@@ -42,19 +42,23 @@ function unauthorizedResponse(error: unknown): NextResponse | null {
 
 export async function GET(request: NextRequest) {
   try {
-    const [tenant, user] = await Promise.all([
-      requireTenant(request, 'Unauthorized'),
-      requireUser(request, 'Unauthorized'),
-    ]);
+    const user = await requireUser(request, 'Unauthorized');
+    if (!user.tenant) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     const status = request.nextUrl.searchParams.get('status');
 
     if (status !== null && status !== 'pending' && status !== 'purchased') {
       return NextResponse.json({ error: 'Invalid status filter' }, { status: 400 });
     }
 
-    const items = await listShoppingListItems(tenant.tenantId, user.id, {
-      ...(status ? { status } : {}),
-    });
+    const items = await listShoppingListItems(
+      user.tenant.tenantId,
+      user.id,
+      {
+        ...(status ? { status } : {}),
+      },
+      undefined,
+      { tenantId: user.tenant.tenantId, userId: user.id }
+    );
     return NextResponse.json({ items: items.map(toPublicShoppingListItem) });
   } catch (error) {
     return (
@@ -66,10 +70,8 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const [tenant, user] = await Promise.all([
-      requireTenant(request, 'Unauthorized'),
-      requireUser(request, 'Unauthorized'),
-    ]);
+    const user = await requireUser(request, 'Unauthorized');
+    if (!user.tenant) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     const validation = await validateRequest(request, ShoppingListCreateSchema);
 
     if (!validation.success) {
@@ -77,7 +79,7 @@ export async function POST(request: NextRequest) {
     }
 
     const item = await createShoppingListItem({
-      tenantId: tenant.tenantId,
+      tenantId: user.tenant.tenantId,
       userId: user.id,
       ingredientName: validation.data.ingredientName,
       quantity: validation.data.quantity,

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { serverLogger } from '@/lib/serverLogger';
+import { extractGeminiTextResponse } from '@/services/apiDtos';
 import { validateRequest, MealPlanRequestSchema, type MealPlanBody } from '@/lib/validation';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { getGeminiApiKey, getGeminiBaseUrl, getGeminiModel } from '@/lib/ai/gemini-config';
@@ -29,6 +30,7 @@ import {
   structuredMealPlanResponseJsonSchema,
 } from '@/lib/meal-planner/structured-plan';
 import { validateOperationalMealPlanRequest } from '@/lib/operational-domain';
+import { getRetryAfterSeconds } from '@/lib/rate-limit-identity';
 
 const AI_REQUEST_TIMEOUT_MS = 60_000;
 const DEFAULT_PEOPLE_COUNT = 4;
@@ -147,15 +149,23 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
-  const rateLimit = await checkRateLimit('meal-plan', ip);
+  const rateLimit = await checkRateLimit('meal-plan', tenantId, user.id, {
+    requireSharedStore: true,
+  });
   if (!rateLimit.success) {
+    const retryAfter = getRetryAfterSeconds(rateLimit.resetAt);
+    const storageUnavailable = rateLimit.storage === 'unavailable';
     return Response.json(
-      { error: 'Rate limit exceeded', retryAfter: rateLimit.resetAt },
       {
-        status: 429,
+        error: storageUnavailable
+          ? 'El planificador no está disponible temporalmente.'
+          : 'Rate limit exceeded',
+        retryAfter,
+      },
+      {
+        status: storageUnavailable ? 503 : 429,
         headers: {
-          'Retry-After': String(rateLimit.resetAt),
+          'Retry-After': String(retryAfter),
           'X-RateLimit-Limit': String(rateLimit.limit),
           'X-RateLimit-Remaining': String(rateLimit.remaining),
           'X-RateLimit-Reset': String(rateLimit.resetAt),
@@ -184,9 +194,9 @@ export async function POST(request: NextRequest) {
   const fusionIntensity = body.fusionIntensity ?? 'media';
   const restrictions = normalizeRestrictions(body.restrictions);
   const [inventoryItems, persistedProfile, persistedProfileTerms] = await Promise.all([
-    listInventoryItemsByTenant(tenantId),
-    findCulinaryProfileByUserId(user.id),
-    findCulinaryProfileTermsByUserId(user.id),
+    listInventoryItemsByTenant(tenantId, undefined, undefined, {}, { tenantId, userId: user.id }),
+    findCulinaryProfileByUserId(user.id, tenantId),
+    findCulinaryProfileTermsByUserId(user.id, tenantId),
   ]);
   const inventoryLines = buildMealPlanInventoryContext(inventoryItems, tenantId);
   const inventoryContext =
@@ -290,24 +300,27 @@ Reglas:
 - Si intensidad es alta: fusión protagonista manteniendo coherencia culinaria.
 - Español.`;
 
-  const fetchWithTimeout = async (url: string, init: RequestInit) => {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
-    try {
-      return await fetch(url, { ...init, signal: controller.signal });
-    } finally {
-      clearTimeout(timeoutId);
-    }
-  };
-
   try {
-    let response: Response;
+    const controller = new AbortController();
+    const abortFromClient = () => controller.abort();
+    request.signal.addEventListener('abort', abortFromClient, { once: true });
+    const timeoutId = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
+    let removeAbortListener = () => {};
+    let payload: unknown;
     try {
-      response = await fetchWithTimeout(
-        `${baseUrl}/models/${model}:generateContent?key=${apiKey}`,
-        {
+      if (request.signal.aborted) controller.abort();
+      const aborted = new Promise<never>((_, reject) => {
+        const onAbort = () => reject(new Error('provider_request_aborted'));
+        removeAbortListener = () => controller.signal.removeEventListener('abort', onAbort);
+        if (controller.signal.aborted) onAbort();
+        else controller.signal.addEventListener('abort', onAbort, { once: true });
+      });
+      const providerRequest = async (): Promise<unknown> => {
+        if (controller.signal.aborted) throw new Error('provider_request_aborted');
+        const response = await fetch(`${baseUrl}/models/${model}:generateContent?key=${apiKey}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
           body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
             generationConfig: {
@@ -315,25 +328,26 @@ Reglas:
               responseJsonSchema: structuredMealPlanResponseJsonSchema,
             },
           }),
+        });
+        if (!response.ok) {
+          serverLogger.warn('meal_plan.provider_response_failed', {
+            requestId,
+            model,
+            status: response.status,
+          });
+          throw new Error('provider_response_failed');
         }
-      );
-    } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Gemini timeout/error');
+        return response.json() as Promise<unknown>;
+      };
+      payload = await Promise.race([providerRequest(), aborted]);
+      if (controller.signal.aborted) throw new Error('provider_request_aborted');
+    } finally {
+      clearTimeout(timeoutId);
+      request.signal.removeEventListener('abort', abortFromClient);
+      removeAbortListener();
     }
 
-    if (!response.ok) {
-      serverLogger.warn('meal_plan.provider_response_failed', {
-        requestId,
-        model,
-        status: response.status,
-      });
-      throw new Error('provider_response_failed');
-    }
-
-    const payload = (await response.json()) as {
-      candidates?: { content?: { parts?: { text?: string }[] } }[];
-    };
-    const candidateText = payload.candidates?.[0]?.content?.parts?.[0]?.text;
+    const candidateText = extractGeminiTextResponse(payload);
 
     if (!candidateText) {
       serverLogger.warn('meal_plan.invalid_provider_response', {
@@ -407,7 +421,7 @@ Reglas:
       );
     }
 
-    let persistedPlan;
+    let persistedPlan: Awaited<ReturnType<typeof createMealPlan>>;
     try {
       persistedPlan = await createMealPlan({
         tenantId,
@@ -439,11 +453,11 @@ Reglas:
       dayCount: parsedPlan.plan.dayCount,
     });
     return NextResponse.json({ id: persistedPlan.id, content, plan: parsedPlan.plan });
-  } catch (error) {
+  } catch {
     serverLogger.warn('meal_plan.failed', {
       requestId,
       durationMs: Date.now() - startedAt,
-      reason: error instanceof Error ? error.message : 'provider_error',
+      reason: 'provider_error',
     });
     return NextResponse.json(
       { error: 'No se pudo generar menú con el proveedor IA.' },
@@ -469,7 +483,7 @@ export async function GET(request: NextRequest) {
   }
 
   const tenantId = user.tenant.tenantId;
-  let persistedPlan;
+  let persistedPlan: Awaited<ReturnType<typeof findLatestMealPlanByUserAndTenant>>;
   try {
     persistedPlan = await findLatestMealPlanByUserAndTenant(user.id, tenantId);
   } catch {
@@ -509,8 +523,8 @@ export async function GET(request: NextRequest) {
   let currentProfileTerms: Awaited<ReturnType<typeof findCulinaryProfileTermsByUserId>>;
   try {
     [currentProfile, currentProfileTerms] = await Promise.all([
-      findCulinaryProfileByUserId(user.id),
-      findCulinaryProfileTermsByUserId(user.id),
+      findCulinaryProfileByUserId(user.id, tenantId),
+      findCulinaryProfileTermsByUserId(user.id, tenantId),
     ]);
   } catch {
     serverLogger.warn('meal_plan.profile_retrieval_failed', { requestId });

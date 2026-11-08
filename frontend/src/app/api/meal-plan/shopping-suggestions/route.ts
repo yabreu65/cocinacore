@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/auth/server';
 import type { AuthUser } from '@/lib/auth/types';
-import type { ShoppingListItemRow } from '@/lib/db/types';
+import type { ShoppingListItemRow, UserMealPlanRow } from '@/lib/db/types';
 import { findMealPlanByIdForUserAndTenant } from '@/lib/db/repositories/mealPlanRepository';
 import { listInventoryItemsByTenant } from '@/lib/db/repositories/inventoryRepository';
 import {
@@ -97,8 +97,8 @@ async function loadProposalInputs(
   now: Date
 ) {
   const [inventoryItems, shoppingItems] = await Promise.all([
-    listInventoryItemsByTenant(tenantId, MAX_SOURCE_ROWS + 1),
-    listShoppingListItems(tenantId, userId, {}, MAX_SOURCE_ROWS + 1),
+    listInventoryItemsByTenant(tenantId, MAX_SOURCE_ROWS + 1, undefined, {}, { tenantId, userId }),
+    listShoppingListItems(tenantId, userId, {}, MAX_SOURCE_ROWS + 1, { tenantId, userId }),
   ]);
   if (!isSourceBounded(inventoryItems) || !isSourceBounded(shoppingItems)) {
     return { truncated: true as const };
@@ -155,12 +155,13 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Identificador u horizonte inválido.' }, { status: 400 });
   }
 
-  let persistedPlan;
+  let persistedPlan: UserMealPlanRow | null;
   try {
     persistedPlan = await findMealPlanByIdForUserAndTenant(
       mealPlanId,
       user.id,
-      user.tenant.tenantId
+      user.tenant.tenantId,
+      { tenantId: user.tenant.tenantId, userId: user.id }
     );
   } catch {
     return NextResponse.json({ error: 'No se pudo recuperar el menú.' }, { status: 500 });
@@ -216,12 +217,13 @@ export async function POST(request: NextRequest) {
   const body = parseConfirmationBody(rawBody);
   if (!body) return NextResponse.json({ error: 'Solicitud inválida.' }, { status: 400 });
 
-  let persistedPlan;
+  let persistedPlan: UserMealPlanRow | null;
   try {
     persistedPlan = await findMealPlanByIdForUserAndTenant(
       body.mealPlanId,
       user.id,
-      user.tenant.tenantId
+      user.tenant.tenantId,
+      { tenantId: user.tenant.tenantId, userId: user.id }
     );
   } catch {
     return NextResponse.json({ error: 'No se pudo recuperar el menú.' }, { status: 500 });

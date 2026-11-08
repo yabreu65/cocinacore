@@ -1,4 +1,9 @@
 import type { StructuredRecipeIngredient } from '@/lib/recipes/structured-ingredients';
+import {
+  createMealPlanWarmupCapability,
+  hashCapabilityPayload,
+  type MealPlanWarmupCapabilityContext,
+} from '@/lib/auth/internal-capability';
 
 export type WarmupMealType = 'Desayuno' | 'Almuerzo' | 'Cena';
 
@@ -34,6 +39,9 @@ export type WarmupMealPlanInput = {
     avoid?: string[];
     goals?: string[];
   };
+  actorUserId?: string;
+  actorTenantId?: string;
+  warmupRequestId?: string;
 };
 
 export type WarmupMealPlanResult = {
@@ -61,7 +69,7 @@ function sanitizeStructuredIngredients(input: unknown): StructuredRecipeIngredie
         Number.isFinite(item.estimated_cost_optional)
           ? item.estimated_cost_optional
           : null,
-      structured: Boolean(item.structured),
+      structured: item.structured === true,
     }))
     .filter((item) => item.name.length > 0 && item.normalized_name.length > 0);
 }
@@ -69,6 +77,8 @@ function sanitizeStructuredIngredients(input: unknown): StructuredRecipeIngredie
 function buildRecipeGenerationUrl(origin: string): string {
   return new URL('/api/recipe-generate', origin.replace(/\/$/, '')).toString();
 }
+
+export const MAX_WARMUP_GENERATION_SLOTS = 9;
 
 export async function hydrateMealPlanWarmup(
   input: WarmupMealPlanInput
@@ -95,28 +105,60 @@ export async function hydrateMealPlanWarmup(
         typeof meal.recipe_content === 'string' && meal.recipe_content.trim().length > 0;
       if (alreadyHasContent) continue;
 
+      if (warmedSlots + failed >= MAX_WARMUP_GENERATION_SLOTS) {
+        failed += 1;
+        continue;
+      }
+
       const cleanTitle = meal.name.replace(/\*\*/g, '').trim();
+      const generationBody = {
+        recipeName: cleanTitle,
+        mealType,
+        day: dayEntry.day,
+        ingredients: [cleanTitle, ...input.inventory.slice(0, 8)],
+        chunks: meal.rag_context ?? [],
+        mode: meal.rag_context?.length ? 'rag' : 'free',
+        provider: 'auto',
+        culinaryProfile: {
+          level: input.culinaryProfile.level,
+          preferred: input.culinaryProfile.preferred ?? [],
+          avoid: input.culinaryProfile.avoid ?? [],
+          goals: input.culinaryProfile.goals ?? [],
+          identity: [input.baseCuisine, ...input.fusionCuisines],
+        },
+        peopleCount: input.peopleCount,
+      };
+      const jobId =
+        input.actorUserId && input.actorTenantId
+          ? `warmup:${input.actorTenantId}:${input.actorUserId}:${dayEntry.day}:${mealType}:${crypto.randomUUID()}`
+          : undefined;
+      const capabilityContext: MealPlanWarmupCapabilityContext | undefined = jobId
+        ? {
+            method: 'POST',
+            path: '/api/recipe-generate',
+            operation: 'recipe-generate',
+            jobId,
+            bodyHash: hashCapabilityPayload(generationBody),
+          }
+        : undefined;
 
       try {
         const response = await fetch(buildRecipeGenerationUrl(input.origin), {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            recipeName: cleanTitle,
-            mealType,
-            day: dayEntry.day,
-            ingredients: [cleanTitle, ...input.inventory.slice(0, 8)],
-            chunks: meal.rag_context ?? [],
-            mode: meal.rag_context?.length ? 'rag' : 'free',
-            culinaryProfile: {
-              level: input.culinaryProfile.level,
-              preferred: input.culinaryProfile.preferred ?? [],
-              avoid: input.culinaryProfile.avoid ?? [],
-              goals: input.culinaryProfile.goals ?? [],
-              identity: [input.baseCuisine, ...input.fusionCuisines],
-            },
-            peopleCount: input.peopleCount,
-          }),
+          headers: {
+            'Content-Type': 'application/json',
+            ...(capabilityContext && input.actorUserId && input.actorTenantId
+              ? {
+                  'X-CocinaCore-Warmup-Capability': createMealPlanWarmupCapability(
+                    input.actorUserId,
+                    input.actorTenantId,
+                    capabilityContext
+                  ),
+                  'X-CocinaCore-Warmup-Job-Id': jobId,
+                }
+              : {}),
+          },
+          body: JSON.stringify(generationBody),
         });
 
         if (!response.ok) {
@@ -124,12 +166,12 @@ export async function hydrateMealPlanWarmup(
           continue;
         }
 
-        const payload = (await response.json()) as {
-          recipe?: string;
-          structuredIngredients?: StructuredRecipeIngredient[];
-        };
-
-        const recipe = payload.recipe?.trim();
+        const payload: unknown = await response.json();
+        if (!payload || typeof payload !== 'object' || !('recipe' in payload)) {
+          failed += 1;
+          continue;
+        }
+        const recipe = typeof payload.recipe === 'string' ? payload.recipe.trim() : '';
         if (!recipe) {
           failed += 1;
           continue;
@@ -138,7 +180,9 @@ export async function hydrateMealPlanWarmup(
         hydratedMeals[mealType] = {
           ...meal,
           recipe_content: recipe,
-          structured_ingredients: sanitizeStructuredIngredients(payload.structuredIngredients),
+          structured_ingredients: sanitizeStructuredIngredients(
+            'structuredIngredients' in payload ? payload.structuredIngredients : undefined
+          ),
         };
         warmedSlots += 1;
       } catch {

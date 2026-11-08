@@ -5,6 +5,7 @@ import { safeFetch } from '@/lib/api';
 import { normalizeInventoryName } from '@/lib/inventory/normalize-inventory';
 import type { MealPlanPublicResponse } from '@/lib/meal-planner/rehydration';
 import type { StructuredMealType } from '@/lib/meal-planner/structured-plan';
+import CookingTeacherPanel from './CookingTeacherPanel';
 
 type Props = { recipeId: string; versionId: string };
 type Session = {
@@ -19,14 +20,21 @@ type Session = {
   totalSteps: number;
   instructionSnapshot: {
     servings: number | null;
-    ingredients: Array<{ name: string; quantity: string | null; unit: string | null }>;
+    ingredients: Array<{
+      id?: string;
+      name: string;
+      quantity: string | null;
+      unit: string | null;
+    }>;
     steps: Array<{ index: number; title: string; instruction: string }>;
   };
   version: number;
 };
+type SessionIngredient = Session['instructionSnapshot']['ingredients'][number];
 type Slot = { dayIndex: number; mealType: StructuredMealType; title: string };
 type ReconciliationOutcome = 'used' | 'omitted' | 'unknown' | 'substituted';
 type ReconciliationItem = {
+  key: string;
   originalIngredient: string;
   outcome: ReconciliationOutcome;
   effectiveIngredient: string | null;
@@ -44,6 +52,25 @@ type InventoryOption = {
   unit: string | null;
   expirationDate: string | null;
 };
+type SafeFetchResult<T> = Awaited<ReturnType<typeof safeFetch<T>>>;
+
+export async function executeCookingSessionRequest<T>(
+  operation: () => Promise<SafeFetchResult<T>>,
+  onSuccess: (data: T) => void,
+  onError: (message: string) => void,
+  onFinally: () => void,
+  fallbackError: string
+): Promise<void> {
+  try {
+    const result = await operation();
+    if (result.ok) onSuccess(result.data);
+    else onError(result.error);
+  } catch {
+    onError(fallbackError);
+  } finally {
+    onFinally();
+  }
+}
 
 const storageKey = (recipeId: string, versionId: string) =>
   `cooking-session:${recipeId}:${versionId}`;
@@ -53,7 +80,8 @@ const startIdempotencyKey = (recipeId: string, versionId: string) =>
 const reconciliationIdempotencyKey = (sessionId: string) => `cooking-reconciliation:${sessionId}`;
 
 function initialReconciliationItems(session: Session): ReconciliationItem[] {
-  return session.instructionSnapshot.ingredients.map((ingredient) => ({
+  return stableIngredientRows(session.instructionSnapshot.ingredients).map((ingredient) => ({
+    key: ingredient.key,
     originalIngredient: ingredient.name,
     outcome: 'unknown',
     effectiveIngredient: null,
@@ -63,6 +91,26 @@ function initialReconciliationItems(session: Session): ReconciliationItem[] {
     substituteIngredient: null,
     substituteInventoryItemId: null,
   }));
+}
+
+export function stableIngredientRows(
+  ingredients: readonly SessionIngredient[]
+): Array<SessionIngredient & { key: string }> {
+  const occurrences = new Map<string, number>();
+  return ingredients.map((ingredient) => {
+    const persistentId = ingredient.id?.trim();
+    const base = [
+      normalizeInventoryName(ingredient.name),
+      ingredient.quantity ?? '',
+      ingredient.unit ?? '',
+    ].join(':');
+    const occurrence = occurrences.get(base) ?? 0;
+    occurrences.set(base, occurrence + 1);
+    return {
+      ...ingredient,
+      key: persistentId ? `ingredient:${persistentId}` : `ingredient:${base}:${occurrence}`,
+    };
+  });
 }
 
 export default function CookingSessionPanel({ recipeId, versionId }: Props) {
@@ -78,6 +126,22 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
   const [reconciliationWorking, setReconciliationWorking] = useState(false);
   const [reconciliationMessage, setReconciliationMessage] = useState('');
   const loadStarted = useRef(false);
+  const mountedRef = useRef(true);
+  const workingRequestRef = useRef<AbortController | null>(null);
+  const reconciliationRequestRef = useRef<AbortController | null>(null);
+  const stableSessionIngredients = useMemo(
+    () => (session ? stableIngredientRows(session.instructionSnapshot.ingredients) : []),
+    [session]
+  );
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      workingRequestRef.current?.abort();
+      reconciliationRequestRef.current?.abort();
+    };
+  }, []);
 
   const slots = useMemo<Slot[]>(
     () =>
@@ -106,6 +170,7 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
       : Promise.resolve(null);
     void load
       .then((storedResult) => {
+        if (!mountedRef.current) return null;
         if (storedResult?.ok) {
           setSession(storedResult.data.session);
           return null;
@@ -113,7 +178,7 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
         return safeFetch<MealPlanPublicResponse>('/api/meal-plan', { credentials: 'same-origin' });
       })
       .then((result) => {
-        if (!result) return;
+        if (!result || !mountedRef.current) return;
         if (!result.ok) {
           setMessage(result.error);
           return;
@@ -130,25 +195,64 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
           if (day) setSelectedSlot(`${day.dayIndex}:${first.mealType}`);
         }
       })
-      .catch(() => setMessage('No se pudo recuperar la preparación.'))
-      .finally(() => setLoading(false));
+      .catch(() => {
+        if (mountedRef.current) setMessage('No se pudo recuperar la preparación.');
+      })
+      .finally(() => {
+        if (mountedRef.current) setLoading(false);
+      });
   }, [loading, open, plan, recipeId, versionId]);
 
   useEffect(() => {
     if (!session || session.status !== 'completed') return;
     setReconciliationItems((current) =>
-      current.length === session.instructionSnapshot.ingredients.length
+      current.length === stableSessionIngredients.length &&
+      current.every((item, index) => item.key === stableSessionIngredients[index]?.key)
         ? current
         : initialReconciliationItems(session)
     );
     void safeFetch<{ inventory: InventoryOption[] }>(
       `/api/cooking-sessions/${encodeURIComponent(session.id)}/reconciliation`,
       { credentials: 'same-origin' }
-    ).then((result) => {
-      if (result.ok) setInventoryOptions(result.data.inventory);
-      else setReconciliationMessage(result.error);
-    });
-  }, [session]);
+    )
+      .then((result) => {
+        if (!mountedRef.current) return;
+        if (result.ok) setInventoryOptions(result.data.inventory);
+        else setReconciliationMessage(result.error);
+      })
+      .catch(() => {
+        if (mountedRef.current) setReconciliationMessage('No se pudo cargar el inventario.');
+      });
+  }, [session, stableSessionIngredients]);
+
+  const runSessionRequest = async <T,>(
+    operation: (signal: AbortSignal) => Promise<SafeFetchResult<T>>,
+    onSuccess: (data: T) => void,
+    fallbackError: string
+  ) => {
+    const controller = new AbortController();
+    workingRequestRef.current?.abort();
+    workingRequestRef.current = controller;
+    setWorking(true);
+    setMessage('');
+
+    await executeCookingSessionRequest(
+      () => operation(controller.signal),
+      (data) => {
+        if (mountedRef.current && !controller.signal.aborted) onSuccess(data);
+      },
+      (error) => {
+        if (mountedRef.current && !controller.signal.aborted) setMessage(error);
+      },
+      () => {
+        if (workingRequestRef.current === controller) {
+          workingRequestRef.current = null;
+          if (mountedRef.current) setWorking(false);
+        }
+      },
+      fallbackError
+    );
+  };
 
   const start = async () => {
     if (!plan?.id || !plan.updatedAt || !plan.plan || !selectedSlot) return;
@@ -157,51 +261,54 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
     const idempotencyKey =
       window.sessionStorage.getItem(idempotencyStorageKey) ?? crypto.randomUUID();
     window.sessionStorage.setItem(idempotencyStorageKey, idempotencyKey);
-    setWorking(true);
-    setMessage('');
-    const result = await safeFetch<{ status: string; session: Session }>('/api/cooking-sessions', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        mealPlanId: plan.id,
-        dayIndex: Number(dayIndexText),
-        mealType,
-        recipeId,
-        versionId,
-        expectedUpdatedAt: plan.updatedAt,
-        expectedCalendarPayload: plan.plan,
-        idempotencyKey,
-        confirmed: true,
-      }),
-    });
-    if (result.ok) {
-      setSession(result.data.session);
-      window.sessionStorage.setItem(storageKey(recipeId, versionId), result.data.session.id);
-    } else setMessage(result.error);
-    setWorking(false);
+    await runSessionRequest(
+      (signal) =>
+        safeFetch<{ status: string; session: Session }>('/api/cooking-sessions', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mealPlanId: plan.id,
+            dayIndex: Number(dayIndexText),
+            mealType,
+            recipeId,
+            versionId,
+            expectedUpdatedAt: plan.updatedAt,
+            expectedCalendarPayload: plan.plan,
+            idempotencyKey,
+            confirmed: true,
+          }),
+          signal,
+        }),
+      (data) => {
+        setSession(data.session);
+        window.sessionStorage.setItem(storageKey(recipeId, versionId), data.session.id);
+      },
+      'No se pudo iniciar la preparación.'
+    );
   };
 
   const transition = async (
     action: 'pause' | 'resume' | 'advance' | 'back' | 'complete' | 'cancel'
   ) => {
     if (!session) return;
-    setWorking(true);
-    setMessage('');
-    const result = await safeFetch<{ session: Session }>(`/api/cooking-sessions/${session.id}`, {
-      method: 'PATCH',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action,
-        expectedVersion: session.version,
-        idempotencyKey: `${action}:${session.version}`,
-        confirmed: true,
-      }),
-    });
-    if (result.ok) setSession(result.data.session);
-    else setMessage(result.error);
-    setWorking(false);
+    await runSessionRequest(
+      (signal) =>
+        safeFetch<{ session: Session }>(`/api/cooking-sessions/${session.id}`, {
+          method: 'PATCH',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action,
+            expectedVersion: session.version,
+            idempotencyKey: `${action}:${session.version}`,
+            confirmed: true,
+          }),
+          signal,
+        }),
+      (data) => setSession(data.session),
+      'No se pudo actualizar la preparación.'
+    );
   };
 
   const updateReconciliationItem = (index: number, patch: Partial<ReconciliationItem>) => {
@@ -230,30 +337,49 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
       window.sessionStorage.getItem(reconciliationIdempotencyKey(session.id)) ??
       crypto.randomUUID();
     window.sessionStorage.setItem(reconciliationIdempotencyKey(session.id), idempotencyKey);
+    const controller = new AbortController();
+    reconciliationRequestRef.current?.abort();
+    reconciliationRequestRef.current = controller;
     setReconciliationWorking(true);
     setReconciliationMessage('');
-    const result = await safeFetch<{ status: string; movementCount: number }>(
-      `/api/cooking-sessions/${encodeURIComponent(session.id)}/reconciliation`,
-      {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          expectedVersion: session.version,
-          idempotencyKey,
-          confirmed: true,
-          items: reconciliationItems,
-        }),
-      }
-    );
-    if (result.ok) {
-      setReconciliationMessage(
-        result.data.status === 'already_applied'
-          ? 'La reconciliación ya estaba registrada.'
-          : `Uso real registrado. Movimientos de inventario: ${result.data.movementCount}.`
+    try {
+      const result = await safeFetch<{ status: string; movementCount: number }>(
+        `/api/cooking-sessions/${encodeURIComponent(session.id)}/reconciliation`,
+        {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            expectedVersion: session.version,
+            idempotencyKey,
+            confirmed: true,
+            items: reconciliationItems.map((item) => {
+              const { key, ...payload } = item;
+              void key;
+              return payload;
+            }),
+          }),
+          signal: controller.signal,
+        }
       );
-    } else setReconciliationMessage(result.error);
-    setReconciliationWorking(false);
+      if (!mountedRef.current || controller.signal.aborted) return;
+      if (result.ok) {
+        setReconciliationMessage(
+          result.data.status === 'already_applied'
+            ? 'La reconciliación ya estaba registrada.'
+            : `Uso real registrado. Movimientos de inventario: ${result.data.movementCount}.`
+        );
+      } else setReconciliationMessage(result.error);
+    } catch {
+      if (mountedRef.current && !controller.signal.aborted) {
+        setReconciliationMessage('No se pudo registrar el uso real.');
+      }
+    } finally {
+      if (reconciliationRequestRef.current === controller) {
+        reconciliationRequestRef.current = null;
+        if (mountedRef.current) setReconciliationWorking(false);
+      }
+    }
   };
 
   return (
@@ -310,8 +436,8 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
                 Porciones previstas: {session.instructionSnapshot.servings ?? '—'}
               </p>
               <ul aria-label="Ingredientes previstos" className="grid gap-1 text-sm">
-                {session.instructionSnapshot.ingredients.map((ingredient) => (
-                  <li key={`${ingredient.name}:${ingredient.quantity}:${ingredient.unit}`}>
+                {stableSessionIngredients.map((ingredient) => (
+                  <li key={ingredient.key}>
                     {[ingredient.quantity, ingredient.unit, ingredient.name]
                       .filter(Boolean)
                       .join(' ') || 'Cantidad desconocida'}
@@ -326,6 +452,7 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
                   {session.instructionSnapshot.steps[session.currentStep - 1]?.instruction}
                 </p>
               </div>
+              <CookingTeacherPanel sessionId={session.id} />
               <div className="flex flex-wrap gap-2">
                 {session.status === 'active' && (
                   <button
@@ -403,7 +530,7 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
                       });
                       return (
                         <div
-                          key={item.originalIngredient}
+                          key={item.key}
                           className="grid gap-2 rounded-xl border border-[#D8E5D4] p-3"
                         >
                           <p className="font-medium">{item.originalIngredient}</p>

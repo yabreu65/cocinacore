@@ -5,19 +5,28 @@ import {
   retrieveRecipeContext,
   toCitation,
 } from '@/services/ragEngine';
-import type { Citation, EmbeddingService, RecipeBookChunk, RecipeSearchInput, RestrictionProfile } from '@/services/types';
+import type {
+  Citation,
+  EmbeddingService,
+  RecipeBookChunk,
+  RecipeSearchInput,
+  RestrictionProfile,
+} from '@/services/types';
+import { assertCookingTeacherBudget } from '@/lib/cooking-teacher-budget';
 
 const RAG_SQL_STATEMENT_TIMEOUT_MS = 10_000;
 
 export interface ServerRagContextInput {
   apiKey: string;
   tenantId: string;
+  userId: string;
   ingredients: string[];
   recipeName?: string;
   mealType?: string;
   day?: string;
   restrictions: RestrictionProfile;
   signal?: AbortSignal;
+  deadlineAt?: number;
 }
 
 export interface ServerRagContext {
@@ -57,7 +66,8 @@ function adaptMatchChunk(row: MatchChunkResult, tenantId: string): RecipeBookChu
   if (
     row.source_type === 'global_pdf' &&
     row.tenant_id === null &&
-    isNonEmptyString(row.global_book_id)
+    isNonEmptyString(row.global_book_id) &&
+    row.tenant_book_id === null
   ) {
     return {
       id: row.id,
@@ -78,7 +88,8 @@ function adaptMatchChunk(row: MatchChunkResult, tenantId: string): RecipeBookChu
   if (
     row.source_type === 'tenant_pdf' &&
     row.tenant_id === tenantId &&
-    isNonEmptyString(row.tenant_book_id)
+    isNonEmptyString(row.tenant_book_id) &&
+    row.global_book_id === null
   ) {
     return {
       id: row.id,
@@ -132,7 +143,12 @@ function formatCookbookContext(chunks: RecipeBookChunk[]): {
   return { context, includedChunks };
 }
 
-export async function retrieveServerRagContext(input: ServerRagContextInput): Promise<ServerRagContext> {
+export async function retrieveServerRagContext(
+  input: ServerRagContextInput
+): Promise<ServerRagContext> {
+  if (!isNonEmptyString(input.tenantId) || !isNonEmptyString(input.userId))
+    throw new Error('Authenticated RAG scope required.');
+  assertCookingTeacherBudget(input.deadlineAt, input.signal);
   const searchInput: RecipeSearchInput = {
     ingredients: input.ingredients,
     recipeName: input.recipeName,
@@ -146,7 +162,7 @@ export async function retrieveServerRagContext(input: ServerRagContextInput): Pr
       input.signal === undefined
         ? embedder.generateEmbedding(text)
         : embedder.generateEmbedding(text, input.signal),
-    generateEmbeddings: (texts) => embedder.generateEmbeddings(texts),
+    generateEmbeddings: (texts, signal) => embedder.generateEmbeddings(texts, signal),
   };
   const retrievedContext = await retrieveRecipeContext(
     searchInput,
@@ -154,20 +170,30 @@ export async function retrieveServerRagContext(input: ServerRagContextInput): Pr
       embedder: cancellableEmbedder,
       dbAdapter: {
         async searchChunks(embedding, options) {
+          const statementTimeoutMs = Math.min(
+            RAG_SQL_STATEMENT_TIMEOUT_MS,
+            assertCookingTeacherBudget(input.deadlineAt, input.signal)
+          );
           const rows = await searchChunks({
             embedding,
             tenantId: input.tenantId,
+            userId: input.userId,
             matchThreshold: options?.matchThreshold,
             matchCount: options?.matchCount,
-            statementTimeoutMs: RAG_SQL_STATEMENT_TIMEOUT_MS,
+            statementTimeoutMs,
+            signal: input.signal,
+            deadlineAt: input.deadlineAt,
           });
           return rows
             .map((row) => adaptMatchChunk(row, input.tenantId))
             .filter((chunk): chunk is RecipeBookChunk => chunk !== null);
         },
       },
-    }
+    },
+    { signal: input.signal }
   );
+
+  assertCookingTeacherBudget(input.deadlineAt, input.signal);
 
   const formattedContext = formatCookbookContext(retrievedContext.chunks);
 
