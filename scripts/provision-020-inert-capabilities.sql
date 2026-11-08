@@ -6,12 +6,56 @@
 SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('cocinacore:database-change:v1:' || pg_catalog.current_database(), 0));
 DO $preflight$
 DECLARE n integer; r record; role_name text;
+        v_provenance boolean; v_ambiguous_timestamp boolean;
 BEGIN
   IF pg_catalog.current_setting('server_version_num')::integer / 10000 <> 16 THEN
     RAISE EXCEPTION '020 inert preparation requires PostgreSQL 16';
   END IF;
   IF to_regclass('public.schema_migrations') IS NULL THEN
     RAISE EXCEPTION '020 inert preparation requires verified boundary 019';
+  END IF;
+  SELECT EXISTS (
+    SELECT 1 FROM pg_catalog.pg_attribute
+     WHERE attrelid='public.schema_migrations'::pg_catalog.regclass
+       AND attname='checksum_source' AND attnum > 0 AND NOT attisdropped
+  ) INTO v_provenance;
+  IF v_provenance THEN
+    EXECUTE $source_contract$
+      SELECT count(*) FROM public.schema_migrations
+       WHERE checksum_source NOT IN ('legacy_unverifiable','manifest_backfill','migration_file')
+          OR (checksum_source='legacy_unverifiable' AND (
+               checksum IS NOT NULL OR filename NOT IN (
+                 '011_canonical_email_invariant.sql',
+                 '012_meal_plan_consumption.sql',
+                 '013_culinary_profile_context.sql',
+                 '014_culinary_profile_field_constraints.sql',
+                 '015_shopping_inventory_transfer.sql',
+                 '016_persistent_user_recipes.sql',
+                 '017_persistent_recipe_archive.sql')))
+          OR (checksum_source='manifest_backfill' AND (
+               filename NOT IN (
+                 '001_extensions_and_core.sql', '002_books_and_rag.sql',
+                 '003_recipes_and_inventory.sql', '004_meal_plans.sql',
+                 '005_premium_and_shopping.sql', '006_culinary_profiles.sql',
+                 '007_functions.sql', '008_indexes.sql',
+                 '009_seed_culinary_base.sql', '010_password_reset_tokens.sql')
+               OR checksum IS NULL))
+          OR (checksum_source='migration_file' AND checksum IS NULL)
+    $source_contract$ INTO n;
+    IF n <> 0 THEN
+      RAISE EXCEPTION '020 inert preparation requires valid legacy checksum provenance';
+    END IF;
+    EXECUTE $timestamp_contract$
+      SELECT EXISTS (
+        SELECT 1 FROM public.schema_migrations GROUP BY applied_at
+        HAVING count(*) > 1 AND bool_or(checksum_source='migration_file')
+      )
+    $timestamp_contract$ INTO v_ambiguous_timestamp;
+  ELSE
+    SELECT EXISTS (
+      SELECT 1 FROM public.schema_migrations
+       GROUP BY applied_at HAVING count(*) > 1
+    ) INTO v_ambiguous_timestamp;
   END IF;
   IF EXISTS (
     WITH expected(filename,checksum) AS (VALUES
@@ -32,15 +76,29 @@ BEGIN
         ('015_shopping_inventory_transfer.sql','17f47c1faefb63d7bfeba95b3e503a2d5375a716a045b480779a603891026370'),
         ('016_persistent_user_recipes.sql','a5f28c75ceaa793213809d05dcbb11c888f553eeb4dc9d7eb988ec9e567890fd'),
         ('017_persistent_recipe_archive.sql','525e84bde0c63d1f2afc65a0bab7c55bec8d07fafa48732b7eb8ac7019012a87'),
-        ('018_cooking_sessions.sql','b5e25bb76feed66fec8d767968aead734912d97e9cd6c98206edc99400c2cd7d'),
-        ('019_real_consumption_reconciliation.sql','509ec1b9ad8bd4f480d3a78ddb6e167647b0d54231bb68e9eb947882b560d587')
-    ), actual AS (SELECT filename,checksum FROM public.schema_migrations), differences AS (
+        ('018_cooking_sessions.sql','42236a98bc3e7f5fd87da40e650a9f0b0591390bec0f9bd6cdaa6fd8f66546eb'),
+        ('019_real_consumption_reconciliation.sql','cb7ecf08c252f5cbfa5e30d00351a1063e0ddb65e17b6f238281c293cbd3d373')
+    ), actual AS (
+      SELECT a.filename,
+             COALESCE(a.checksum,
+               CASE WHEN v_provenance AND a.filename IN (
+                 '011_canonical_email_invariant.sql',
+                 '012_meal_plan_consumption.sql',
+                 '013_culinary_profile_context.sql',
+                 '014_culinary_profile_field_constraints.sql',
+                 '015_shopping_inventory_transfer.sql',
+                 '016_persistent_user_recipes.sql',
+                 '017_persistent_recipe_archive.sql'
+               ) THEN e.checksum END) AS checksum
+      FROM public.schema_migrations a LEFT JOIN expected e ON e.filename=a.filename
+    ), differences AS (
       (SELECT * FROM expected EXCEPT SELECT * FROM actual)
       UNION ALL (SELECT * FROM actual EXCEPT SELECT * FROM expected)
     ) SELECT 1 FROM differences
   ) OR (SELECT count(*) FROM public.schema_migrations) <> 19 OR
-    EXISTS (SELECT 1 FROM public.schema_migrations GROUP BY applied_at HAVING count(*) <> 1) OR
-    (SELECT array_agg(filename ORDER BY applied_at) IS DISTINCT FROM array_agg(filename ORDER BY filename) FROM public.schema_migrations) THEN
+    v_ambiguous_timestamp OR
+    (SELECT array_agg(filename ORDER BY applied_at,filename) IS DISTINCT FROM
+            array_agg(filename ORDER BY filename) FROM public.schema_migrations) THEN
     RAISE EXCEPTION '020 inert preparation requires exact boundary 019 checksums';
   END IF;
   IF EXISTS (SELECT 1 FROM pg_catalog.pg_policy WHERE polrelid IN (

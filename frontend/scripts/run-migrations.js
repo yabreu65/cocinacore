@@ -12,6 +12,7 @@ const {
   MIGRATION_FILE,
   assertM5ExpectedPending,
   validateEstablishedLedger,
+  validateChecksummedLedger,
 } = require('./migration-ledger-contract');
 
 if (process.env.COCINACORE_SKIP_DOTENV !== '1') {
@@ -1536,34 +1537,27 @@ async function assertBoundaryLedger(client, migrations, complete = true) {
   const ledgerMode = await assertLedgerShape(client, true);
   const sourceColumn = ledgerMode === 'provenance' ? ', checksum_source' : '';
   const result = await client.query(
-    `select filename, checksum${sourceColumn},
+    `select filename, applied_at, checksum${sourceColumn},
             count(*) over (partition by applied_at) as timestamp_count
        from public.schema_migrations order by applied_at, filename`
   );
+  // Reuse the canonical checksum/provenance validator; historical 011–017 may
+  // legitimately have no checksum after a separately attested legacy adoption.
+  if (ledgerMode === 'provenance') {
+    validateEstablishedLedger(result.rows, migrations);
+  } else {
+    validateChecksummedLedger(result.rows, migrations);
+  }
   if (
     result.rows.length > expected.length ||
     (complete && result.rows.length !== expected.length) ||
-    result.rows.some((row, index) => {
-      const historicalWithoutChecksum =
-        ledgerMode === 'provenance' &&
-        index >= 10 &&
-        index <= 16 &&
-        row.checksum_source === 'legacy_unverifiable' &&
-        row.checksum === null;
-      const authenticChecksum =
-        row.checksum === expected[index]?.sha256 &&
-        (ledgerMode !== 'provenance' ||
-          (index < 10
-            ? ['manifest_backfill', 'migration_file'].includes(row.checksum_source)
-            : row.checksum_source === 'migration_file'));
-      return (
-        row.filename !== expected[index]?.filename ||
-        Number(row.timestamp_count) !== 1 ||
-        (!historicalWithoutChecksum && !authenticChecksum)
-      );
-    })
+    result.rows.some((row, index) =>
+      row.filename !== expected[index]?.filename ||
+      (Number(row.timestamp_count) > 1 &&
+        (ledgerMode !== 'provenance' || row.checksum_source === 'migration_file'))
+    )
   ) {
-    throw new Error('BOUNDARY_INVALID: ledger order, checksum or provenance differs from the trusted manifest.');
+    throw new Error('BOUNDARY_INVALID: ledger exceeds 019 or differs from the trusted ordered prefix.');
   }
 }
 

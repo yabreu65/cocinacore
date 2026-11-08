@@ -438,6 +438,7 @@ migrate() {
 }
 
 migrate_m5_pending() {
+  MIGRATIONS_DIR="$ROOT/db/migrations" \
   COCINACORE_SEPARATED_DB_LANES_ENABLED=true MIGRATION_DATABASE_URL="$MIGRATION_URL" \
   MIGRATION_EXPECTED_PENDING='018_cooking_sessions.sql,019_real_consumption_reconciliation.sql' \
   node "$ROOT/frontend/scripts/run-migrations.js" --lane migration --stop-after 019
@@ -1348,7 +1349,7 @@ migrate_m5_pending >"$LOG" 2>&1
 grep -q 'DONE 018_cooking_sessions.sql' "$LOG" || fail 'legacy 017 continuation did not apply 018'
 grep -q 'DONE 019_real_consumption_reconciliation.sql' "$LOG" || fail 'legacy 017 continuation did not apply 019'
 set_check legacy017_verify_boundary
-migrate --verify-boundary 019 >"$LOG" 2>&1
+MIGRATIONS_DIR="$ROOT/db/migrations" migrate --verify-boundary 019 >"$LOG" 2>&1
 grep -q 'BOUNDARY 019 verified' "$LOG" || fail 'legacy 017 continuation did not verify the complete 001-019 prefix'
 [ "$(admin_sql "$DB" "select count(*) from schema_migrations")" = "$EXPECTED_PRE020_MIGRATION_COUNT" ] || fail 'legacy 017 ledger is not complete through 019'
 [ "$(admin_sql "$DB" "select count(*) from schema_migrations where filename in ('018_cooking_sessions.sql','019_real_consumption_reconciliation.sql') and checksum_source='migration_file' and checksum is not null")" = 2 ] || fail '018/019 migration-file provenance is missing'

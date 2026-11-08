@@ -70,8 +70,8 @@ The migration manifest's `020` entry must remain fixed to the checksum and size 
 | 015 | `015_shopping_inventory_transfer.sql`        | `17f47c1faefb63d7bfeba95b3e503a2d5375a716a045b480779a603891026370` |
 | 016 | `016_persistent_user_recipes.sql`            | `a5f28c75ceaa793213809d05dcbb11c888f553eeb4dc9d7eb988ec9e567890fd` |
 | 017 | `017_persistent_recipe_archive.sql`          | `525e84bde0c63d1f2afc65a0bab7c55bec8d07fafa48732b7eb8ac7019012a87` |
-| 018 | `018_cooking_sessions.sql`                   | `b5e25bb76feed66fec8d767968aead734912d97e9cd6c98206edc99400c2cd7d` |
-| 019 | `019_real_consumption_reconciliation.sql`    | `509ec1b9ad8bd4f480d3a78ddb6e167647b0d54231bb68e9eb947882b560d587` |
+| 018 | `018_cooking_sessions.sql`                   | `42236a98bc3e7f5fd87da40e650a9f0b0591390bec0f9bd6cdaa6fd8f66546eb` |
+| 019 | `019_real_consumption_reconciliation.sql`    | `cb7ecf08c252f5cbfa5e30d00351a1063e0ddb65e17b6f238281c293cbd3d373` |
 
 ## Compatible application release
 
