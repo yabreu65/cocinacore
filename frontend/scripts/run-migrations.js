@@ -1530,11 +1530,41 @@ function assertNoMigrationAfterBoundary(migrations, applied) {
 
 async function assertBoundaryLedger(client, migrations, complete = true) {
   const expected = migrations.filter((migration) => migration.prefix <= 19);
-  if (expected.length !== 19 || expected[18].id !== '019')
+  if (expected.length !== 19 || expected[18].id !== '019') {
     throw new Error('BOUNDARY_INVALID: canonical migrations 001–019 are required.');
-  const result = await client.query('select filename, checksum, count(*) over (partition by applied_at) as timestamp_count from public.schema_migrations order by applied_at, filename');
-  if (result.rows.length > expected.length || (complete && result.rows.length !== expected.length) || result.rows.some((row,index) => row.filename !== expected[index]?.filename || row.checksum !== expected[index]?.sha256 || Number(row.timestamp_count) !== 1))
-    throw new Error('BOUNDARY_INVALID: ledger order or checksum differs from the trusted manifest.');
+  }
+  const ledgerMode = await assertLedgerShape(client, true);
+  const sourceColumn = ledgerMode === 'provenance' ? ', checksum_source' : '';
+  const result = await client.query(
+    `select filename, checksum${sourceColumn},
+            count(*) over (partition by applied_at) as timestamp_count
+       from public.schema_migrations order by applied_at, filename`
+  );
+  if (
+    result.rows.length > expected.length ||
+    (complete && result.rows.length !== expected.length) ||
+    result.rows.some((row, index) => {
+      const historicalWithoutChecksum =
+        ledgerMode === 'provenance' &&
+        index >= 10 &&
+        index <= 16 &&
+        row.checksum_source === 'legacy_unverifiable' &&
+        row.checksum === null;
+      const authenticChecksum =
+        row.checksum === expected[index]?.sha256 &&
+        (ledgerMode !== 'provenance' ||
+          (index < 10
+            ? ['manifest_backfill', 'migration_file'].includes(row.checksum_source)
+            : row.checksum_source === 'migration_file'));
+      return (
+        row.filename !== expected[index]?.filename ||
+        Number(row.timestamp_count) !== 1 ||
+        (!historicalWithoutChecksum && !authenticChecksum)
+      );
+    })
+  ) {
+    throw new Error('BOUNDARY_INVALID: ledger order, checksum or provenance differs from the trusted manifest.');
+  }
 }
 
 async function main() {

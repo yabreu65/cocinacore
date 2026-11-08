@@ -440,7 +440,7 @@ migrate() {
 migrate_m5_pending() {
   COCINACORE_SEPARATED_DB_LANES_ENABLED=true MIGRATION_DATABASE_URL="$MIGRATION_URL" \
   MIGRATION_EXPECTED_PENDING='018_cooking_sessions.sql,019_real_consumption_reconciliation.sql' \
-  node "$ROOT/frontend/scripts/run-migrations.js" --lane migration
+  node "$ROOT/frontend/scripts/run-migrations.js" --lane migration --stop-after 019
 }
 
 expect_provision_failure() {
