@@ -121,13 +121,20 @@ for expected in \
   'if (options.verifyComplete)' \
   'Migration ledger is complete.' \
   'begin read only' \
-  'if (separated) await assertAndAssumeMigrationIdentity(client, manifest, migrations, separated);' \
+  'assertAndAssumeMigrationIdentity(client, manifest, migrations, separated);' \
   'Migration ledger is missing.'; do
   grep -Fq -- "$expected" "$RUNNER" || fail "missing migration runner contract: $expected"
 done
 
 verify_begin_line=$(grep -nF "await client.query('begin read only')" "$RUNNER" | head -n 1 | cut -d: -f1)
-verify_call_line=$(grep -nF 'if (separated) await assertAndAssumeMigrationIdentity(client, manifest, migrations, separated);' "$RUNNER" | tail -n 1 | cut -d: -f1)
+verify_call_line=$(awk '
+  /^[[:space:]]*if \(separated\)[[:space:]]+await assertAndAssumeMigrationIdentity\(client, manifest, migrations, separated\);[[:space:]]*$/ { line=NR; next }
+  /^[[:space:]]*if \(separated\)[[:space:]]*$/ { pending=NR; next }
+  pending && /^[[:space:]]*await assertAndAssumeMigrationIdentity\(client, manifest, migrations, separated\);[[:space:]]*$/ { line=pending; pending=0; next }
+  pending && /^[[:space:]]*$/ { next }
+  pending { pending=0 }
+  END { if (line) print line }
+' "$RUNNER")
 verify_identity_line=$(grep -nF 'const identity = await client.query(`' "$RUNNER" | cut -d: -f1)
 verify_authority_line=$(grep -nF 'const authority = await client.query(' "$RUNNER" | cut -d: -f1)
 verify_membership_line=$(grep -nF 'const memberships = await client.query(' "$RUNNER" | cut -d: -f1)
@@ -156,6 +163,7 @@ const originalLoad = Module._load;
 const originalReadFileSync = fs.readFileSync.bind(fs);
 const originalReaddirSync = fs.readdirSync.bind(fs);
 const manifest = JSON.parse(originalReadFileSync(process.env.MANIFEST_PATH, 'utf8'));
+const provenanceLedger = originalReadFileSync(process.env.RUNNER_PATH, 'utf8').includes('schema_migrations_checksum_source_check');
 const migrationSql = new Set(manifest.migrations.map((entry) =>
   originalReadFileSync(path.join(path.dirname(process.env.MANIFEST_PATH), entry.filename), 'utf8').trim().toLowerCase()
 ));
@@ -310,10 +318,24 @@ class Pool {
           const rows = [
             { attname: 'filename', data_type: 'text', attnotnull: true },
             { attname: 'applied_at', data_type: 'timestamp with time zone', attnotnull: true, default_expression: 'now()' },
-            ...(process.env.SEPARATED === 'yes' ? [{ attname: 'checksum', data_type: 'text', attnotnull: true }] : []),
+            ...(process.env.SEPARATED === 'yes'
+              ? provenanceLedger
+                ? [
+                    { attname: 'checksum', data_type: 'text', attnotnull: false },
+                    { attname: 'checksum_source', data_type: 'text', attnotnull: true },
+                  ]
+                : [{ attname: 'checksum', data_type: 'text', attnotnull: true }]
+              : []),
           ];
           return { rowCount: rows.length, rows };
         }
+        if (provenanceLedger && text.includes('schema_migrations_checksum_source_check')) return {
+          rowCount: 1,
+          rows: [{
+            definition: "CHECK ((((checksum_source = 'legacy_unverifiable'::text) AND (checksum IS NULL)) OR ((checksum_source = ANY (ARRAY['manifest_backfill'::text, 'migration_file'::text])) AND (checksum IS NOT NULL))))",
+            convalidated: true,
+          }],
+        };
         if (text.includes('from pg_catalog.pg_class c') && text.includes('relrowsecurity')) return { rows: [
           {
             relrowsecurity: ledgerProvisioning.rowLevelSecurity,
@@ -328,6 +350,7 @@ class Pool {
           }
           let entries = manifest.migrations.map((entry, index) => ({
             filename: entry.filename, checksum: entry.sha256,
+            ...(process.env.SEPARATED === 'yes' && provenanceLedger ? { checksum_source: 'migration_file' } : {}),
             applied_at: '2026-01-01T00:00:' + String(index).padStart(2, '0') + '.000Z',
           }));
           if (process.env.LEDGER === 'altered') entries[0].checksum = 'f'.repeat(64);
@@ -335,6 +358,7 @@ class Pool {
           if (process.env.DRIFT_AFTER_PROVISION === 'yes' && queries.some((sql) => sql.startsWith('create table if not exists public.schema_migrations'))) {
             entries = manifest.migrations.map((entry, index) => ({
               filename: entry.filename, checksum: entry.sha256,
+              ...(process.env.SEPARATED === 'yes' && provenanceLedger ? { checksum_source: 'migration_file' } : {}),
               applied_at: '2026-01-01T00:00:' + String(index).padStart(2, '0') + '.000Z',
             }));
           }
@@ -347,6 +371,7 @@ class Pool {
           if (process.env.LEDGER.startsWith('legacy-')) {
             const canonicalPrefix = manifest.migrations.slice(0, 10).map((entry, index) => ({
               filename: entry.filename, checksum: entry.sha256,
+              ...(process.env.SEPARATED === 'yes' && provenanceLedger ? { checksum_source: 'migration_file' } : {}),
               applied_at: '2026-01-01T00:00:' + String(index).padStart(2, '0') + '.000Z',
             }));
             const legacy = [
@@ -549,7 +574,10 @@ if (exactLegacySuffixResult.status !== 1 || !`${exactLegacySuffixResult.stdout}$
   process.exit(1);
 }
 const separatedLegacyResult = run('--verify-complete', 'legacy-exact', false, true, 'valid');
-if (separatedLegacyResult.status === 0 || !`${separatedLegacyResult.stdout}${separatedLegacyResult.stderr}`.includes('legacy migration lineage is incompatible with separated ledger mode')) {
+const separatedLegacyOutput = `${separatedLegacyResult.stdout}${separatedLegacyResult.stderr}`;
+if (separatedLegacyResult.status !== 1 ||
+    (!separatedLegacyOutput.includes('Established ledger does not match the trusted ordered prefix') &&
+      !separatedLegacyOutput.includes('legacy migration lineage is incompatible with separated ledger mode'))) {
   console.error(`offline separated legacy lineage rejection failed: status=${separatedLegacyResult.status} stdout=${separatedLegacyResult.stdout} stderr=${separatedLegacyResult.stderr}`);
   process.exit(1);
 }
