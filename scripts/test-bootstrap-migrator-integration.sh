@@ -378,6 +378,7 @@ start_container() {
   until docker exec "$CONTAINER" pg_isready -h 127.0.0.1 -U cocinacore -d "$DB" >/dev/null 2>&1; do
     attempt=$((attempt + 1)); [ "$attempt" -lt 60 ] || fail 'PostgreSQL did not become ready'; sleep 1
   done
+  admin_sql "$DB" 'create role cocinacore_user nologin nosuperuser nobypassrls'
   PORT=$(docker port "$CONTAINER" 5432/tcp | sed 's/.*://')
   ADMIN_URL="postgresql://cocinacore:$ADMIN_PASSWORD@127.0.0.1:$PORT/$DB"
   MIGRATION_URL="postgresql://migration_admin:$MIGRATION_PASSWORD@127.0.0.1:$PORT/$DB"
@@ -1006,8 +1007,7 @@ for filename in $LEGACY017_MIGRATIONS; do
   docker exec -i "$CONTAINER" psql -X -1 -v ON_ERROR_STOP=1 -U cocinacore -d "$DB" >/dev/null <"$ROOT/db/migrations/$filename"
 done
 set_check legacy017_ledger_create
-admin_sql "$DB" "create role cocinacore_user nologin;
-  create schema if not exists internal;
+admin_sql "$DB" "create schema if not exists internal;
   create table public.schema_migrations(filename text primary key, applied_at timestamptz not null default now());
   alter table public.schema_migrations enable row level security;
   revoke all on public.schema_migrations from public"
@@ -1074,6 +1074,38 @@ grep -q 'Migration ledger is complete' "$LOG" || fail 'legacy 017 continuation d
 [ "$(admin_sql "$DB" "select count(*) from schema_migrations")" = "$EXPECTED_MIGRATION_COUNT" ] || fail 'legacy 017 ledger is not complete through 019'
 [ "$(admin_sql "$DB" "select count(*) from schema_migrations where filename in ('018_cooking_sessions.sql','019_real_consumption_reconciliation.sql') and checksum_source='migration_file' and checksum is not null")" = 2 ] || fail '018/019 migration-file provenance is missing'
 [ "$(admin_sql "$DB" "select count(*) from schema_migrations where checksum_source='legacy_unverifiable' and checksum is null")" = 7 ] || fail '018/019 continuation changed unknown historic checksums'
+set_check assert_m5_runtime_grants
+M5_RUNTIME_PRIVILEGES=$(admin_sql "$DB" "select
+  has_table_privilege('cocinacore_user','public.cooking_sessions','select') || ',' ||
+  has_table_privilege('cocinacore_user','public.cooking_sessions','insert') || ',' ||
+  has_table_privilege('cocinacore_user','public.cooking_sessions','update') || ',' ||
+  has_table_privilege('cocinacore_user','public.cooking_sessions','delete') || ',' ||
+  has_table_privilege('cocinacore_user','public.cooking_session_events','select') || ',' ||
+  has_table_privilege('cocinacore_user','public.cooking_session_events','insert') || ',' ||
+  has_table_privilege('cocinacore_user','public.cooking_session_events','update') || ',' ||
+  has_table_privilege('cocinacore_user','public.cooking_session_events','delete') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_operations','select') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_operations','insert') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_operations','update') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_operations','delete') || ',' ||
+  has_table_privilege('cocinacore_user','public.meal_consumption_claims','select') || ',' ||
+  has_table_privilege('cocinacore_user','public.meal_consumption_claims','insert') || ',' ||
+  has_table_privilege('cocinacore_user','public.meal_consumption_claims','update') || ',' ||
+  has_table_privilege('cocinacore_user','public.meal_consumption_claims','delete') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_items','select') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_items','insert') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_items','update') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_items','delete') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_substitutions','select') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_substitutions','insert') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_substitutions','update') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_substitutions','delete') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_movement_links','select') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_movement_links','insert') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_movement_links','update') || ',' ||
+  has_table_privilege('cocinacore_user','public.real_consumption_movement_links','delete')")
+[ "$M5_RUNTIME_PRIVILEGES" = 'true,true,true,false,true,true,false,false,true,true,false,false,true,true,false,false,true,true,false,false,true,true,false,false,true,true,false,false' ] || fail 'runtime privileges on 018/019 tables are not minimal'
+[ "$(admin_sql "$DB" "select count(*) from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid=c.relnamespace cross join lateral pg_catalog.aclexplode(coalesce(c.relacl, pg_catalog.acldefault('r', c.relowner))) a where n.nspname='public' and c.relname in ('cooking_sessions','cooking_session_events','real_consumption_operations','meal_consumption_claims','real_consumption_items','real_consumption_substitutions','real_consumption_movement_links') and a.grantee=0")" = 0 ] || fail 'PUBLIC has a direct grant on an M5 table'
 
 STAGE=final-cleanup
 set_check cleanup

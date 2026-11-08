@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       approval_reference:
-        description: Manual owner approval receipt for U5 migrations 016/017 (not an enforced GitHub reviewer gate)
+        description: Operator receipt for separately approved M5 migrations 018/019, bound to the exact SHA
         required: true
         type: string
 
@@ -42,15 +42,18 @@ jobs:
           set -euo pipefail
           # Manual owner consent was obtained separately. This receipt is an
           # operator attestation, not a GitHub-enforced reviewer approval.
-          if [[ "$APPROVAL_REFERENCE" != 'U5-016-017-20261018-owner-approved' ]]; then
-            echo "Recorded U5 migrations 016/017 owner approval reference is missing or invalid." >&2
-            exit 1
-          fi
-          echo "MANUAL_APPROVAL_RECEIPT=U5-016-017-20261018-owner-approved"
           if [[ ! "$MIGRATION_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
             echo "Migration SHA must be exactly 40 hexadecimal characters." >&2
             exit 1
           fi
+          EXPECTED_APPROVAL_REFERENCE="M5-018-019-${MIGRATION_SHA,,}-owner-approved"
+          if [[ "$APPROVAL_REFERENCE" != "$EXPECTED_APPROVAL_REFERENCE" ]]; then
+            echo "M5 018/019 approval receipt is missing or does not match the selected SHA." >&2
+            exit 1
+          fi
+          # This receipt records separately obtained owner consent; it is not
+          # an identity proof or a substitute for GitHub Environment reviewers.
+          echo "MANUAL_APPROVAL_RECEIPT=$EXPECTED_APPROVAL_REFERENCE"
           # checkout with fetch-depth: 0 already fetched origin/main with its
           # authenticated checkout credential. Do not perform a second fetch:
           # persist-credentials is deliberately false for this private repo.
@@ -69,7 +72,7 @@ jobs:
           echo "migration_sha=${MIGRATION_SHA,,}" >> "$GITHUB_OUTPUT"
 
   migrate-production:
-    name: Apply migrations 016/017 on production VPS
+    name: Apply migrations 018/019 on production VPS
     runs-on: ubuntu-latest
     needs: validate-sha
     environment: production

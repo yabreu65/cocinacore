@@ -404,3 +404,20 @@ comment on table public.real_consumption_substitutions is
   'Immutable M5 U4 substitution audit details.';
 comment on table public.real_consumption_movement_links is
   'Immutable links from M5 U4 operations to inventory movements.';
+
+-- These audit records are append-only from the application. The reconciliation
+-- repository reads and inserts them; update/delete remain unavailable to runtime.
+revoke all privileges on table
+  public.real_consumption_operations,
+  public.meal_consumption_claims,
+  public.real_consumption_items,
+  public.real_consumption_substitutions,
+  public.real_consumption_movement_links
+  from public, cocinacore_user;
+grant select, insert on table
+  public.real_consumption_operations,
+  public.meal_consumption_claims,
+  public.real_consumption_items,
+  public.real_consumption_substitutions,
+  public.real_consumption_movement_links
+  to cocinacore_user;

@@ -150,3 +150,10 @@ create policy cooking_session_events_tenant_user_isolation
     tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
     and user_id = nullif(current_setting('app.user_id', true), '')::uuid
   );
+
+-- The legacy application identity remains the runtime principal during M5.
+-- Grant only the operations used by the cooking-session repositories.
+revoke all privileges on table public.cooking_sessions, public.cooking_session_events
+  from public, cocinacore_user;
+grant select, insert, update on table public.cooking_sessions to cocinacore_user;
+grant select, insert on table public.cooking_session_events to cocinacore_user;
