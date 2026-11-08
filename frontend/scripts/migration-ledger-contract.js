@@ -112,6 +112,24 @@ function validateEstablishedLedger(rows, migrations) {
   return new Set(rows.map((row) => row.filename));
 }
 
+function validateChecksummedLedger(rows, migrations) {
+  if (!Array.isArray(rows) || rows.length > migrations.length) {
+    throw new Error('BASELINE_MISMATCH: Established ledger migration prefix is invalid.');
+  }
+  const prefix = migrations.slice(0, rows.length);
+  if (rows.some((row, index) => row.filename !== prefix[index].filename)) {
+    throw new Error(
+      'BASELINE_MISMATCH: Established ledger migration prefix does not match the trusted ordered prefix.'
+    );
+  }
+  for (const [index, row] of rows.entries()) {
+    if (row.checksum !== prefix[index].sha256) {
+      throw new Error(`MIGRATION_CHECKSUM_MISMATCH: ${row.filename}`);
+    }
+  }
+  return new Set(rows.map((row) => row.filename));
+}
+
 function assertM5ExpectedPending(migrations, applied, expected) {
   const expectedM5 = ['018_cooking_sessions.sql', '019_real_consumption_reconciliation.sql'];
   if (
@@ -150,6 +168,7 @@ module.exports = {
   LEGACY_UNVERIFIABLE,
   MIGRATION_FILE,
   classifyLegacyLedger,
+  validateChecksummedLedger,
   validateEstablishedLedger,
   assertM5ExpectedPending,
 };

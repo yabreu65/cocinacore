@@ -4,13 +4,22 @@
 const assert = require('node:assert/strict');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- Keep this test's Node harness in CommonJS.
 const test = require('node:test');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- Load the trusted migration fixture.
+const migrationManifest = require('../../db/migrations/manifest.json');
 const {
   assertPublicSchemaAcl,
   assertReservedRoleOwnership,
+  attestLedger,
   attestBaselineCatalog,
   expectedCatalog,
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- Load the provisioner's CommonJS exports directly.
 } = require('./provision-database');
+const {
+  LEGACY_UNVERIFIABLE,
+  MANIFEST_BACKFILL,
+  MIGRATION_FILE,
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- Load the migration ledger contract directly.
+} = require('./migration-ledger-contract');
 
 const appliedFilename = '014_culinary_profile_field_constraints.sql';
 const addition = {
@@ -94,6 +103,21 @@ function isControlledBaselineMismatch(error) {
   );
 }
 
+function ledgerClient(columns, invariants, rows) {
+  const results = [{ rows: columns }, { rows: [invariants] }, { rows }];
+  return {
+    query: async () => results.shift(),
+  };
+}
+
+function checksummedLedgerRows(count) {
+  return migrationManifest.migrations.slice(0, count).map((migration, index) => ({
+    filename: migration.filename,
+    applied_at: new Date(Date.UTC(2026, 0, index + 1)),
+    checksum: migration.sha256,
+  }));
+}
+
 test('admits an applied 014-declared function for both legacy and target ownership', async () => {
   for (const ownerState of ['legacy', 'target']) {
     const owner = ownerState === 'legacy' ? 'cocinacore' : 'cocinacore_schema_owner';
@@ -104,6 +128,104 @@ test('admits an applied 014-declared function for both legacy and target ownersh
       )
     );
   }
+});
+
+test('attests established checksummed and provenance ledger modes without conflating them', async () => {
+  const sharedColumns = [
+    { attname: 'filename', data_type: 'text', attnotnull: true },
+    {
+      attname: 'applied_at',
+      data_type: 'timestamp with time zone',
+      attnotnull: true,
+      default_expression: 'now()',
+    },
+  ];
+  const commonInvariants = {
+    relrowsecurity: true,
+    primary_keys: 1,
+    public_grants: 0,
+    checksum_source_constraints: 0,
+    checksum_source_definition: null,
+  };
+  const checksummed = await attestLedger(
+    ledgerClient(
+      [...sharedColumns, { attname: 'checksum', data_type: 'text', attnotnull: true }],
+      commonInvariants,
+      checksummedLedgerRows(19)
+    ),
+    migrationManifest,
+    true
+  );
+  assert.equal(checksummed.ledgerMode, 'checksummed');
+  assert.equal(checksummed.appliedMigrations.size, 19);
+
+  const provenanceColumns = [
+    ...sharedColumns,
+    { attname: 'checksum', data_type: 'text', attnotnull: false },
+    { attname: 'checksum_source', data_type: 'text', attnotnull: true },
+  ];
+  const provenanceRows = migrationManifest.migrations.slice(0, 19).map((migration, index) => {
+    const isUnverifiable = index >= 10 && index < 17;
+    return {
+      filename: migration.filename,
+      applied_at: new Date(Date.UTC(2026, 0, index + 1)),
+      checksum: isUnverifiable ? null : migration.sha256,
+      checksum_source: isUnverifiable
+        ? LEGACY_UNVERIFIABLE
+        : index < 10
+          ? MANIFEST_BACKFILL
+          : MIGRATION_FILE,
+    };
+  });
+  const provenance = await attestLedger(
+    ledgerClient(
+      provenanceColumns,
+      {
+        ...commonInvariants,
+        checksum_source_constraints: 1,
+        checksum_source_definition:
+          "CHECK ((((checksum_source = 'legacy_unverifiable'::text) AND (checksum IS NULL)) OR ((checksum_source = ANY (ARRAY['manifest_backfill'::text, 'migration_file'::text])) AND (checksum IS NOT NULL))))",
+      },
+      provenanceRows
+    ),
+    migrationManifest,
+    true
+  );
+  assert.equal(provenance.ledgerMode, 'provenance');
+  assert.equal(provenance.appliedMigrations.size, 19);
+});
+
+test('rejects an altered provenance constraint and refuses legacy shape as established', async () => {
+  const columns = [
+    { attname: 'filename', data_type: 'text', attnotnull: true },
+    {
+      attname: 'applied_at',
+      data_type: 'timestamp with time zone',
+      attnotnull: true,
+      default_expression: 'now()',
+    },
+    { attname: 'checksum', data_type: 'text', attnotnull: false },
+    { attname: 'checksum_source', data_type: 'text', attnotnull: true },
+  ];
+  const invariants = {
+    relrowsecurity: true,
+    primary_keys: 1,
+    public_grants: 0,
+    checksum_source_constraints: 1,
+    checksum_source_definition: 'CHECK (true)',
+  };
+  await assert.rejects(
+    attestLedger(ledgerClient(columns, invariants, []), migrationManifest, true),
+    /BASELINE_MISMATCH: migration ledger security\/primary-key contract is invalid/
+  );
+  await assert.rejects(
+    attestLedger(
+      ledgerClient(columns.slice(0, 2), { ...invariants, checksum_source_constraints: 0 }, []),
+      migrationManifest,
+      true
+    ),
+    /Legacy ledger columns mismatch/
+  );
 });
 
 test('rejects an applied declared function with the wrong owner', async () => {

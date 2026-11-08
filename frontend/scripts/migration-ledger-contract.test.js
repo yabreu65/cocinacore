@@ -8,6 +8,7 @@ const test = require('node:test');
 const manifest = require('../../db/migrations/manifest.json');
 const {
   classifyLegacyLedger,
+  validateChecksummedLedger,
   validateEstablishedLedger,
   assertM5ExpectedPending,
   MANIFEST_BACKFILL,
@@ -37,6 +38,14 @@ function establishedRows(count, adopted017 = false) {
           : MIGRATION_FILE,
     };
   });
+}
+
+function checksummedRows(count) {
+  return manifest.migrations.slice(0, count).map((migration, index) => ({
+    filename: migration.filename,
+    applied_at: new Date(Date.UTC(2024, 0, 1, 0, 0, index)),
+    checksum: migration.sha256,
+  }));
 }
 
 test('classifies only the explicit legacy 001-010 and 001-017 histories', () => {
@@ -71,6 +80,22 @@ test('validates adopted 017 with explicit uncertainty instead of invented checks
     rows.slice(10).every((row) => row.checksum_source === LEGACY_UNVERIFIABLE),
     true
   );
+});
+
+test('validates established three-column checksummed ledger prefixes', () => {
+  assert.equal(validateChecksummedLedger(checksummedRows(19), manifest.migrations).size, 19);
+  const timestampDrift = checksummedRows(19);
+  timestampDrift[10].applied_at = new Date(Date.UTC(2030, 0, 1));
+  assert.equal(validateChecksummedLedger(timestampDrift, manifest.migrations).size, 19);
+
+  const falseChecksum = checksummedRows(19);
+  falseChecksum[18].checksum = '0'.repeat(64);
+  const missing = [...checksummedRows(18).slice(0, 17), checksummedRows(19)[18]];
+  const reordered = checksummedRows(19);
+  [reordered[17], reordered[18]] = [reordered[18], reordered[17]];
+  for (const rows of [falseChecksum, missing, reordered]) {
+    assert.throws(() => validateChecksummedLedger(rows, manifest.migrations));
+  }
 });
 
 test('rejects false historic checksums, fake provenance, reordered rows, and unknown records', () => {

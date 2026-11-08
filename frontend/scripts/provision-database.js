@@ -5,6 +5,10 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { Client } = require('pg');
+const {
+  validateChecksummedLedger,
+  validateEstablishedLedger,
+} = require('./migration-ledger-contract');
 
 try {
   require('dotenv').config({ path: path.resolve(__dirname, '../.env.local'), quiet: true });
@@ -944,21 +948,33 @@ async function ledgerColumns(client) {
 async function attestLedger(client, manifest, established) {
   const columns = await ledgerColumns(client);
   const names = columns.rows.map((row) => row.attname).sort();
-  compareExact(
-    names,
-    established ? ['applied_at', 'checksum', 'filename'] : ['applied_at', 'filename'],
-    'Legacy ledger columns'
-  );
+  const ledgerMode = !established
+    ? 'legacy-two-column'
+    : names.includes('checksum_source')
+      ? 'provenance'
+      : 'checksummed';
+  const expectedColumns = {
+    'legacy-two-column': ['applied_at', 'filename'],
+    checksummed: ['applied_at', 'checksum', 'filename'],
+    provenance: ['applied_at', 'checksum', 'checksum_source', 'filename'],
+  }[ledgerMode];
+  compareExact(names, expectedColumns, 'Legacy ledger columns');
   const filename = columns.rows.find((column) => column.attname === 'filename');
   const appliedAt = columns.rows.find((column) => column.attname === 'applied_at');
   const checksum = columns.rows.find((column) => column.attname === 'checksum');
+  const checksumSource = columns.rows.find((column) => column.attname === 'checksum_source');
   if (
     filename?.data_type !== 'text' ||
     !filename.attnotnull ||
     appliedAt?.data_type !== 'timestamp with time zone' ||
     !appliedAt.attnotnull ||
     appliedAt.default_expression !== 'now()' ||
-    (established && (checksum?.data_type !== 'text' || !checksum.attnotnull))
+    (ledgerMode === 'checksummed' && (checksum?.data_type !== 'text' || !checksum.attnotnull)) ||
+    (ledgerMode === 'provenance' &&
+      (checksum?.data_type !== 'text' ||
+        checksum.attnotnull ||
+        checksumSource?.data_type !== 'text' ||
+        !checksumSource.attnotnull))
   ) {
     throw new Error('BASELINE_MISMATCH: migration ledger column contract is invalid.');
   }
@@ -968,50 +984,68 @@ async function attestLedger(client, manifest, established) {
              where x.conrelid=c.oid and x.contype='p'
                and pg_catalog.pg_get_constraintdef(x.oid)='PRIMARY KEY (filename)') as primary_keys,
            (select count(*)::integer from pg_catalog.aclexplode(c.relacl) a
-             where a.grantee=0) as public_grants
+             where a.grantee=0) as public_grants,
+           (select count(*)::integer from pg_catalog.pg_constraint x
+             where x.conrelid=c.oid
+               and x.conname='schema_migrations_checksum_source_check'
+               and x.contype='c' and x.convalidated) as checksum_source_constraints,
+           (select pg_catalog.pg_get_constraintdef(x.oid) from pg_catalog.pg_constraint x
+             where x.conrelid=c.oid
+               and x.conname='schema_migrations_checksum_source_check'
+               and x.contype='c' and x.convalidated) as checksum_source_definition
       from pg_catalog.pg_class c
      where c.oid='public.schema_migrations'::pg_catalog.regclass
   `);
   if (
     !invariants.rows[0]?.relrowsecurity ||
     invariants.rows[0]?.primary_keys !== 1 ||
-    invariants.rows[0]?.public_grants !== 0
+    invariants.rows[0]?.public_grants !== 0 ||
+    (ledgerMode === 'checksummed' && invariants.rows[0]?.checksum_source_constraints !== 0) ||
+    (ledgerMode === 'provenance' &&
+      (invariants.rows[0]?.checksum_source_constraints !== 1 ||
+        invariants.rows[0]?.checksum_source_definition !==
+          "CHECK ((((checksum_source = 'legacy_unverifiable'::text) AND (checksum IS NULL)) OR ((checksum_source = ANY (ARRAY['manifest_backfill'::text, 'migration_file'::text])) AND (checksum IS NOT NULL))))"))
   ) {
     throw new Error(
       'BASELINE_MISMATCH: migration ledger security/primary-key contract is invalid.'
     );
   }
+  const selectedColumns = {
+    'legacy-two-column': 'filename, applied_at',
+    checksummed: 'filename, applied_at, checksum',
+    provenance: 'filename, applied_at, checksum, checksum_source',
+  }[ledgerMode];
   const rows = await client.query(
-    established
-      ? 'select filename, checksum from public.schema_migrations order by filename'
-      : 'select filename, null::text as checksum from public.schema_migrations order by filename'
+    `select ${selectedColumns} from public.schema_migrations order by ${ledgerMode === 'provenance' ? 'applied_at, filename' : 'filename'}`
   );
-  const expected = established
-    ? manifest.migrations.slice(0, rows.rowCount)
-    : manifest.migrations.filter((entry) => entry.legacyChecksumBackfillAllowed);
-  compareExact(
-    rows.rows.map((row) => row.filename),
-    expected.map((entry) => entry.filename),
-    established ? 'Established ledger migration prefix' : 'Legacy ledger migration set'
-  );
+  let appliedMigrations;
   if (established) {
-    const expectedByName = new Map(expected.map((entry) => [entry.filename, entry.sha256]));
-    for (const row of rows.rows) {
-      if (row.checksum !== expectedByName.get(row.filename)) {
-        throw new Error(`MIGRATION_CHECKSUM_MISMATCH: ${row.filename}`);
-      }
-    }
+    appliedMigrations =
+      ledgerMode === 'provenance'
+        ? validateEstablishedLedger(rows.rows, manifest.migrations)
+        : validateChecksummedLedger(rows.rows, manifest.migrations);
+  } else {
+    const expected = manifest.migrations.filter((entry) => entry.legacyChecksumBackfillAllowed);
+    compareExact(
+      rows.rows.map((row) => row.filename),
+      expected.map((entry) => entry.filename),
+      'Legacy ledger migration set'
+    );
+    appliedMigrations = new Set(rows.rows.map((row) => row.filename));
   }
-  return new Set(rows.rows.map((row) => row.filename));
+  return { appliedMigrations, ledgerMode };
 }
 
-async function attestBaselineCatalog(client, manifest, ownerState, appliedMigrations) {
+async function attestBaselineCatalog(client, manifest, ownerState, appliedMigrations, ledgerMode) {
   const catalog = await getCatalog(client);
   const expected = expectedCatalog(
     manifest,
     appliedMigrations,
     catalog.functions.rows.map((row) => row.identity)
   );
+  if (ownerState === 'target' && ledgerMode === 'provenance') {
+    expected.constraints.push('public.schema_migrations.schema_migrations_checksum_source_check');
+  }
   compareExact(
     catalog.schemas.rows.map((row) => row.identity),
     expected.schemas,
@@ -1494,14 +1528,18 @@ async function main() {
     const roleState = await inspectReservedRoles(client);
     const hasLedger = await ledgerExists(client);
     let appliedMigrations = new Set();
+    let ledgerMode;
     await preflightExtensions(client, manifest, { established: hasLedger });
     if (hasLedger) {
-      appliedMigrations = await attestLedger(client, manifest, roleState === 'established');
+      const ledger = await attestLedger(client, manifest, roleState === 'established');
+      appliedMigrations = ledger.appliedMigrations;
+      ledgerMode = ledger.ledgerMode;
       await attestBaselineCatalog(
         client,
         manifest,
         roleState === 'absent' ? 'legacy' : 'target',
-        appliedMigrations
+        appliedMigrations,
+        ledgerMode
       );
     } else {
       await attestFreshCatalog(client, manifest, roleState === 'absent' ? 'legacy' : 'target');
@@ -1522,6 +1560,7 @@ async function main() {
           for (const object of manifest.baselineObjects.transferable)
             await transferObject(client, object);
           await backfillTrustedLegacyChecksums(client, manifest);
+          ledgerMode = 'checksummed';
         } else {
           const publicSchema = manifest.baselineObjects.transferable.find(
             (object) => object.kind === 'schema' && object.schema === 'public'
@@ -1537,8 +1576,10 @@ async function main() {
       await assertReservedRoleAclState(client);
       await assertReservedRoleOwnership(client, manifest, appliedMigrations);
       if (hasLedger) {
-        appliedMigrations = await attestLedger(client, manifest, true);
-        await attestBaselineCatalog(client, manifest, 'target', appliedMigrations);
+        const ledger = await attestLedger(client, manifest, true);
+        appliedMigrations = ledger.appliedMigrations;
+        ledgerMode = ledger.ledgerMode;
+        await attestBaselineCatalog(client, manifest, 'target', appliedMigrations, ledgerMode);
       } else {
         await attestFreshCatalog(client, manifest, 'target');
       }
@@ -1572,6 +1613,7 @@ if (require.main === module) {
 module.exports = {
   assertPublicSchemaAcl,
   assertReservedRoleOwnership,
+  attestLedger,
   attestBaselineCatalog,
   expectedCatalog,
 };
