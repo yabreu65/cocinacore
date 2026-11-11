@@ -5,9 +5,9 @@ export default function Page() {
   return (
     <>
       <LandingPage />
-      <div className="texture-paper bg-[#FAF6F1] px-4 pb-6 text-center">
-        <Link href="/recipes" className="font-semibold text-[#8C4712] underline">
-          Abrir mi recetario
+      <div className="texture-paper bg-bistro-page px-4 pb-6 text-center">
+        <Link href="/login" className="font-semibold text-bistro-action-primary underline">
+          ¿Ya tenés una cuenta? Iniciá sesión
         </Link>
       </div>
     </>
