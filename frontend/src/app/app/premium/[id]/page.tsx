@@ -12,17 +12,19 @@ export default async function PremiumRecipeDetailPage({ params }: PremiumRecipeD
   const user = await getCurrentUser();
 
   return (
-    <main className="texture-paper min-h-screen bg-[#FAF6F1] px-4 py-6 text-[#241A14] md:px-6">
-      <section className="mx-auto w-full max-w-4xl rounded-3xl border border-[#E8DDD2] bg-white/85 p-5 premium-shadow">
-        <p className="text-xs font-bold tracking-[0.15em] text-[#C56A1A]">COCINACORE • PREMIUM DETAIL</p>
+    <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 text-bistro-text-primary md:px-6">
+      <section className="mx-auto w-full max-w-4xl rounded-3xl border border-bistro-border bg-white/85 p-5 premium-shadow">
+        <p className="text-xs font-bold tracking-[0.15em] text-bistro-action-primary">
+          COCINACORE • PREMIUM DETAIL
+        </p>
         <h1 className="mt-2 text-3xl font-semibold">Receta premium en reconstrucción</h1>
-        <p className="mt-2 text-sm text-[#6B5A50]">
+        <p className="mt-2 text-sm text-bistro-text-secondary">
           El detalle completo del board premium todavía no fue reconectado a PostgreSQL directo.
         </p>
 
-        <div className="mt-5 rounded-2xl border border-[#E8DDD2] bg-white/75 p-4 text-sm text-[#6B5A50]">
+        <div className="mt-5 rounded-2xl border border-bistro-border bg-white/75 p-4 text-sm text-bistro-text-secondary">
           <p>
-            <span className="font-semibold text-[#241A14]">ID solicitado:</span> {id}
+            <span className="font-semibold text-bistro-text-primary">ID solicitado:</span> {id}
           </p>
           <p className="mt-2">
             {user
@@ -32,10 +34,16 @@ export default async function PremiumRecipeDetailPage({ params }: PremiumRecipeD
         </div>
 
         <div className="mt-5 flex flex-wrap gap-3">
-          <Link href="/app/premium" className="rounded-xl bg-[#C56A1A] px-4 py-2 text-sm font-semibold text-white">
+          <Link
+            href="/app/premium"
+            className="rounded-xl bg-bistro-action-primary px-4 py-2 text-sm font-semibold text-white"
+          >
             Volver a Premium
           </Link>
-          <Link href="/app" className="rounded-xl border border-[#E8DDD2] px-4 py-2 text-sm font-semibold text-[#6B5A50]">
+          <Link
+            href="/app"
+            className="rounded-xl border border-bistro-border px-4 py-2 text-sm font-semibold text-bistro-text-secondary"
+          >
             Ir al panel
           </Link>
         </div>
