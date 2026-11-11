@@ -10,9 +10,9 @@ function deltaLabel(delta: number): string {
 }
 
 function deltaTone(delta: number): string {
-  if (delta > 0) return 'text-[#567A3B]';
-  if (delta < 0) return 'text-[#B84D4D]';
-  return 'text-[#6B5A50]';
+  if (delta > 0) return 'text-bistro-action-secondary';
+  if (delta < 0) return 'text-bistro-danger';
+  return 'text-bistro-text-secondary';
 }
 
 export function BeforeAfterComparisonCard({ comparison }: Props) {
@@ -44,17 +44,19 @@ export function BeforeAfterComparisonCard({ comparison }: Props) {
   ];
 
   return (
-    <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
+    <article className="rounded-2xl border border-bistro-border bg-white/85 p-3 sm:p-4 xl:p-5">
       <h3 className="text-lg font-semibold">Antes vs después</h3>
-      <p className="mt-1 text-sm text-[#6B5A50]">Comparación de impacto en la simulación actual.</p>
+      <p className="mt-1 text-sm text-bistro-text-secondary">
+        Comparación de impacto en la simulación actual.
+      </p>
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
         {items.map((item) => (
           <div
             key={item.label}
-            className="rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] px-3 py-2"
+            className="rounded-xl border border-bistro-border bg-bistro-page px-3 py-2"
           >
-            <p className="text-xs text-[#6B5A50] break-words">{item.label}</p>
-            <p className="text-sm font-semibold text-[#241A14]">
+            <p className="text-xs text-bistro-text-secondary break-words">{item.label}</p>
+            <p className="text-sm font-semibold text-bistro-text-primary">
               {item.before} → {item.after}
             </p>
             <p className={`text-xs font-semibold ${deltaTone(item.delta)}`}>
