@@ -2,6 +2,7 @@
 
 import { FormEvent, useRef, useState } from 'react';
 import Link from 'next/link';
+import { Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import type { StructuredRecipeIngredient } from '@/components/recipe-view/types';
 import { safeFetch } from '@/lib/api';
@@ -34,7 +35,7 @@ interface RecipeSearchResult {
   servings: number;
 }
 
-export default function RecipeSearchPage() {
+function RecipeSearchContent() {
   const searchParams = useSearchParams();
   const todayFields = buildTodayRecipeRequestFields(new URLSearchParams(searchParams.toString()));
   const [ingredients, setIngredients] = useState(todayFields?.ingredients.join('\n') ?? '');
@@ -46,7 +47,9 @@ export default function RecipeSearchPage() {
   const [result, setResult] = useState<RecipeSearchResult | null>(null);
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
-  const [importedRecipe, setImportedRecipe] = useState<{ id: string; duplicates: number } | null>(null);
+  const [importedRecipe, setImportedRecipe] = useState<{ id: string; duplicates: number } | null>(
+    null
+  );
   const importLock = useRef(false);
 
   const onSubmit = async (event: FormEvent) => {
@@ -64,13 +67,15 @@ export default function RecipeSearchPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
-        body: JSON.stringify(buildRecipeGenerationRequestPayload({
-          mode,
-          ingredients,
-          recipeName,
-          restrictions,
-          todayFields,
-        })),
+        body: JSON.stringify(
+          buildRecipeGenerationRequestPayload({
+            mode,
+            ingredients,
+            recipeName,
+            restrictions,
+            todayFields,
+          })
+        ),
       });
 
       if (!result.ok) {
@@ -113,13 +118,15 @@ export default function RecipeSearchPage() {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildRecipeImportPayload({
-          title: result.title,
-          instructions: result.recipe,
-          servings: result.servings,
-          structuredIngredients: result.structuredIngredients,
-          recipeHistoryId: result.recipeHistoryId,
-        })),
+        body: JSON.stringify(
+          buildRecipeImportPayload({
+            title: result.title,
+            instructions: result.recipe,
+            servings: result.servings,
+            structuredIngredients: result.structuredIngredients,
+            recipeHistoryId: result.recipeHistoryId,
+          })
+        ),
       });
       if (!response.ok) throw new Error('No se pudo importar la receta al recetario.');
       setImportedRecipe({
@@ -135,59 +142,63 @@ export default function RecipeSearchPage() {
   };
 
   return (
-    <main className="texture-paper min-h-screen bg-[#FAF6F1] px-4 py-6 text-[#241A14] md:px-6">
-      <section className="mx-auto w-full max-w-4xl rounded-3xl border border-[#E8DDD2] bg-white/80 p-5 premium-shadow">
+    <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 text-bistro-text-primary md:px-6">
+      <section className="mx-auto w-full max-w-4xl rounded-3xl border border-bistro-border bg-white/80 p-5 premium-shadow">
         <div className="mb-4 flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-semibold">Buscar recetas</h1>
-            <p className="text-[#6B5A50]">Generá recetas con IA a partir de tus ingredientes.</p>
+            <p className="text-bistro-text-secondary">
+              Generá recetas con IA a partir de tus ingredientes.
+            </p>
           </div>
-          <Link href="/app" className="text-sm font-semibold text-[#A55412]">
+          <Link href="/app" className="text-sm font-semibold text-bistro-action-primary">
             Volver
           </Link>
         </div>
 
         <form onSubmit={onSubmit} className="grid gap-3">
           {todayFields ? (
-            <label className="grid gap-1 text-sm font-semibold text-[#6B5A50]">
+            <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
               Nombre de receta (opcional)
               <input
                 name="recipeName"
                 value={recipeName}
                 onChange={(e) => setRecipeName(e.target.value)}
-                className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 outline-none"
+                className="h-11 rounded-xl border border-bistro-border bg-white px-3 outline-none"
               />
             </label>
           ) : null}
 
-          <label className="grid gap-1 text-sm font-semibold text-[#6B5A50]">
+          <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
             Quiero cocinar con (opcional; enfoca la solicitud, uno por línea)
             <textarea
               value={ingredients}
               onChange={(e) => setIngredients(e.target.value)}
               rows={4}
-              className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-2 outline-none"
+              className="rounded-xl border border-bistro-border bg-white px-3 py-2 outline-none"
             />
             {todayFields ? (
-              <span className="font-normal">Estos ingredientes son sugerencias, no inventario confirmado.</span>
+              <span className="font-normal">
+                Estos ingredientes son sugerencias, no inventario confirmado.
+              </span>
             ) : null}
           </label>
 
-          <label className="grid gap-1 text-sm font-semibold text-[#6B5A50]">
+          <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
             Restricciones (separadas por comas)
             <input
               value={restrictions}
               onChange={(e) => setRestrictions(e.target.value)}
-              className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 outline-none"
+              className="h-11 rounded-xl border border-bistro-border bg-white px-3 outline-none"
             />
           </label>
 
-          <label className="grid gap-1 text-sm font-semibold text-[#6B5A50]">
+          <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
             Modo
             <select
               value={mode}
               onChange={(e) => setMode(e.target.value as 'free' | 'rag')}
-              className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 outline-none"
+              className="h-11 rounded-xl border border-bistro-border bg-white px-3 outline-none"
             >
               <option value="free">Libre</option>
               <option value="rag">Basado en biblioteca (RAG)</option>
@@ -197,20 +208,20 @@ export default function RecipeSearchPage() {
           <button
             type="submit"
             disabled={loading}
-            className="h-11 rounded-xl bg-[#C56A1A] px-4 font-semibold text-white disabled:opacity-60"
+            className="h-11 rounded-xl bg-bistro-action-primary px-4 font-semibold text-white disabled:opacity-60"
           >
             {loading ? 'Generando...' : 'Generar receta'}
           </button>
         </form>
 
         {error ? (
-          <p className="mt-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <p className="mt-4 rounded-xl border border-bistro-danger/30 bg-bistro-danger/10 px-3 py-2 text-sm text-bistro-danger">
             {error}
           </p>
         ) : null}
 
         {result ? (
-          <div className="mt-6 rounded-xl border border-[#E8DDD2] bg-[#faf7f3] p-4">
+          <div className="mt-6 rounded-xl border border-bistro-border bg-bistro-page p-4">
             <h2 className="font-semibold">{result.title}</h2>
             <pre className="mt-2 whitespace-pre-wrap text-sm">{result.recipe}</pre>
 
@@ -221,22 +232,30 @@ export default function RecipeSearchPage() {
                     type="button"
                     onClick={onImport}
                     disabled={importing}
-                    className="h-11 w-fit rounded-xl bg-[#C56A1A] px-4 font-semibold text-white disabled:opacity-60"
+                    className="h-11 w-fit rounded-xl bg-bistro-action-primary px-4 font-semibold text-white disabled:opacity-60"
                   >
                     {importing ? 'Importando...' : 'Importar al recetario'}
                   </button>
                 ) : (
-                  <p role="status" className="text-sm text-green-800">
+                  <p role="status" className="text-sm text-bistro-success">
                     Receta importada.{' '}
-                    <Link href={`/recipes/${importedRecipe.id}`} className="font-semibold underline">
+                    <Link
+                      href={`/recipes/${importedRecipe.id}`}
+                      className="font-semibold underline"
+                    >
                       Ver en el recetario
                     </Link>
                   </p>
                 )}
-                {importError ? <p role="alert" className="text-sm text-red-700">{importError}</p> : null}
+                {importError ? (
+                  <p role="alert" className="text-sm text-bistro-danger">
+                    {importError}
+                  </p>
+                ) : null}
                 {importedRecipe && importedRecipe.duplicates > 0 ? (
-                  <p role="status" className="text-sm text-[#6B5A50]">
-                    Hay recetas con títulos similares en tu recetario; la receta igualmente fue importada.
+                  <p role="status" className="text-sm text-bistro-text-secondary">
+                    Hay recetas con títulos similares en tu recetario; la receta igualmente fue
+                    importada.
                   </p>
                 ) : null}
               </div>
@@ -256,7 +275,7 @@ export default function RecipeSearchPage() {
                         source.pageNumber ?? null,
                         source.chunkId ?? null,
                       ])}
-                      className="rounded-lg border border-[#E8DDD2] bg-white px-3 py-2 text-sm"
+                      className="rounded-lg border border-bistro-border bg-white px-3 py-2 text-sm"
                     >
                       <p className="font-medium">{source.label}</p>
                       {source.title ? <p>{source.title}</p> : null}
@@ -266,7 +285,7 @@ export default function RecipeSearchPage() {
                 </ul>
               </section>
             ) : result.mode === 'rag' && (!result.ragContextUsed || result.sources.length === 0) ? (
-              <p className="mt-4 text-sm text-[#6B5A50]">
+              <p className="mt-4 text-sm text-bistro-text-secondary">
                 No se encontró contexto documental relevante para esta receta.
               </p>
             ) : null}
@@ -274,5 +293,24 @@ export default function RecipeSearchPage() {
         ) : null}
       </section>
     </main>
+  );
+}
+
+// The search-parameter consumer needs its own Suspense boundary for
+// Next.js production prerendering and client navigation.
+export default function RecipeSearchPage() {
+  return (
+    <Suspense
+      fallback={
+        <main
+          className="min-h-screen bg-bistro-page p-6 text-bistro-text-secondary"
+          aria-busy="true"
+        >
+          Cargando asistente de recetas…
+        </main>
+      }
+    >
+      <RecipeSearchContent />
+    </Suspense>
   );
 }
