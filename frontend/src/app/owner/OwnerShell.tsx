@@ -46,14 +46,14 @@ export default function OwnerShell({ children }: OwnerShellProps) {
   }, [pathname]);
 
   return (
-    <main className="texture-paper min-h-screen bg-[#FAF6F1] text-[#241A14]">
+    <main className="texture-paper min-h-screen bg-bistro-page text-bistro-text-primary">
       <div className="mx-auto flex w-full max-w-[1560px] gap-4 p-3 md:p-6">
-        <aside className="bistro-focus-dark hidden w-[280px] shrink-0 rounded-3xl border border-white/10 bg-[#16110D] p-4 text-[#F4EBDD] lg:block">
+        <aside className="bistro-focus-dark hidden w-[280px] shrink-0 rounded-3xl border border-white/10 bg-bistro-inverse p-4 text-bistro-cream lg:block">
           <div className="mb-5">
             <p className="flex items-center gap-2 text-xl font-bold">
               <Shield size={18} /> Owner Console
             </p>
-            <p className="mt-1 text-xs text-[#D9CDBF]">{userLabel}</p>
+            <p className="mt-1 text-xs text-bistro-cream">{userLabel}</p>
           </div>
           <nav className="space-y-1">
             {navItems.map((item) => {
@@ -63,7 +63,9 @@ export default function OwnerShell({ children }: OwnerShellProps) {
                   key={item.href}
                   href={item.href}
                   className={`group flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold transition ${
-                    active ? 'bg-[#C56A1A] text-white' : 'text-[#EADCCB] hover:bg-white/10'
+                    active
+                      ? 'bg-bistro-action-primary text-white'
+                      : 'text-bistro-cream hover:bg-white/10 hover:text-white'
                   }`}
                 >
                   {item.icon}
@@ -79,10 +81,10 @@ export default function OwnerShell({ children }: OwnerShellProps) {
         </aside>
 
         <section className="w-full">
-          <header className="mb-4 rounded-3xl border border-[#E8DDD2] bg-white/85 px-4 py-4 premium-shadow md:px-5">
+          <header className="mb-4 rounded-3xl border border-bistro-border bg-white/85 px-4 py-4 premium-shadow md:px-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#6B5A50]">
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-bistro-text-secondary">
                   Platform Owner
                 </p>
                 <h1 className="text-2xl font-semibold">{currentTitle}</h1>
@@ -90,7 +92,7 @@ export default function OwnerShell({ children }: OwnerShellProps) {
               <div className="flex gap-2">
                 <Link
                   href="/app"
-                  className="rounded-xl border border-[#E8DDD2] px-3 py-2 text-sm font-semibold text-[#6B5A50] hover:border-[#C56A1A]/40"
+                  className="rounded-xl border border-bistro-border px-3 py-2 text-sm font-semibold text-bistro-text-secondary hover:border-bistro-action-primary/40"
                 >
                   Ir a /app
                 </Link>
@@ -105,8 +107,8 @@ export default function OwnerShell({ children }: OwnerShellProps) {
                     href={item.href}
                     className={`whitespace-nowrap rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
                       active
-                        ? 'border-[#C56A1A]/35 bg-[#C56A1A]/12 text-[#A55412]'
-                        : 'border-[#E8DDD2] bg-white text-[#6B5A50] hover:border-[#C56A1A]/30'
+                        ? 'border-bistro-action-primary/35 bg-bistro-action-primary/12 text-bistro-action-primary'
+                        : 'border-bistro-border bg-white text-bistro-text-secondary hover:border-bistro-action-primary/30'
                     }`}
                   >
                     {item.label}

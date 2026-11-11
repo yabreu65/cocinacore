@@ -18,14 +18,14 @@ export const dynamic = 'force-dynamic';
 
 function metricCard(label: string, value: number, icon: React.ReactNode) {
   return (
-    <article className="rounded-2xl border border-[#E8DDD2] bg-white/75 p-4 premium-shadow">
-      <p className="flex items-center gap-2 text-sm text-[#6B5A50]">
-        <span className="inline-flex rounded-lg border border-[#E8DDD2] bg-[#FAF6F1] p-1.5 text-[#A55412]">
+    <article className="rounded-2xl border border-bistro-border bg-white/75 p-4 premium-shadow">
+      <p className="flex items-center gap-2 text-sm text-bistro-text-secondary">
+        <span className="inline-flex rounded-lg border border-bistro-border bg-bistro-page p-1.5 text-bistro-action-primary">
           {icon}
         </span>
         {label}
       </p>
-      <p className="mt-2 text-3xl font-semibold text-[#241A14]">{value}</p>
+      <p className="mt-2 text-3xl font-semibold text-bistro-text-primary">{value}</p>
     </article>
   );
 }
@@ -44,12 +44,14 @@ export default async function OwnerOverviewPage() {
 
   return (
     <section className="space-y-4">
-      <article className="rounded-3xl border border-[#E8DDD2] bg-white/90 p-5 premium-shadow">
-        <p className="inline-flex items-center gap-2 rounded-full border border-[#6D4AFF]/25 bg-[#6D4AFF]/10 px-3 py-1 text-xs font-semibold text-[#5A3EE6]">
+      <article className="rounded-3xl border border-bistro-border bg-white/90 p-5 premium-shadow">
+        <p className="inline-flex items-center gap-2 rounded-full border border-bistro-action-secondary/25 bg-bistro-action-secondary/10 px-3 py-1 text-xs font-semibold text-bistro-action-secondary">
           <Sparkles size={14} /> Control global de plataforma
         </p>
-        <h2 className="mt-3 text-2xl font-semibold text-[#241A14]">Owner Console Overview</h2>
-        <p className="mt-1 text-sm text-[#6B5A50]">
+        <h2 className="mt-3 text-2xl font-semibold text-bistro-text-primary">
+          Owner Console Overview
+        </h2>
+        <p className="mt-1 text-sm text-bistro-text-secondary">
           Resumen mínimo ya desacoplado del backend anterior para continuar la migración.
         </p>
       </article>
@@ -64,9 +66,9 @@ export default async function OwnerOverviewPage() {
         {metricCard('Owners registrados', metrics.owners, <Activity size={14} />)}
       </div>
 
-      <article className="rounded-2xl border border-[#E8DDD2] bg-white/80 p-4 premium-shadow">
+      <article className="rounded-2xl border border-bistro-border bg-white/80 p-4 premium-shadow">
         <h2 className="text-lg font-semibold">Secciones rápidas</h2>
-        <p className="mt-1 text-sm text-[#6B5A50]">
+        <p className="mt-1 text-sm text-bistro-text-secondary">
           Varias acciones siguen en reconstrucción, pero las vistas ya compilan sobre PostgreSQL
           directo.
         </p>
@@ -106,10 +108,10 @@ export default async function OwnerOverviewPage() {
             <Link
               key={section.href}
               href={section.href}
-              className="rounded-xl border border-[#E8DDD2] bg-white/70 p-3 transition hover:border-[#C56A1A]/35"
+              className="rounded-xl border border-bistro-border bg-white/70 p-3 transition hover:border-bistro-action-primary/35"
             >
-              <p className="font-semibold text-[#241A14]">{section.title}</p>
-              <p className="mt-1 text-sm text-[#6B5A50]">{section.description}</p>
+              <p className="font-semibold text-bistro-text-primary">{section.title}</p>
+              <p className="mt-1 text-sm text-bistro-text-secondary">{section.description}</p>
             </Link>
           ))}
         </div>
