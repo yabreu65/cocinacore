@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { executeCookingSessionRequest, stableIngredientRows } from './CookingSessionPanel';
+import {
+  cookingSessionStatusLabel,
+  executeCookingSessionRequest,
+  hasDuplicateReconciliationIngredients,
+  stableIngredientRows,
+} from './CookingSessionPanel';
 
 describe('executeCookingSessionRequest', () => {
   it('clears the working state callback when the network operation rejects', async () => {
@@ -59,5 +64,31 @@ describe('stableIngredientRows', () => {
     ]);
 
     expect(new Set(first.map((row) => row.key))).toEqual(new Set(reordered.map((row) => row.key)));
+  });
+});
+
+describe('UX5: friendly cooking session statuses', () => {
+  it('exposes understandable status names instead of backend state strings', () => {
+    expect(cookingSessionStatusLabel('active')).toBe('En preparación');
+    expect(cookingSessionStatusLabel('paused')).toBe('Pausada');
+    expect(cookingSessionStatusLabel('completed')).toBe('Terminada');
+    expect(cookingSessionStatusLabel('cancelled')).toBe('Cancelada');
+  });
+});
+
+describe('reconciliation backend compatibility', () => {
+  it('blocks duplicate normalized names but keeps their UI row identities distinct', () => {
+    const duplicate = [
+      { name: 'Arroz', quantity: '100', unit: 'g' },
+      { name: ' ARROZ ', quantity: '200', unit: 'g' },
+    ];
+    expect(stableIngredientRows(duplicate)).toHaveLength(2);
+    expect(hasDuplicateReconciliationIngredients(duplicate)).toBe(true);
+    expect(
+      hasDuplicateReconciliationIngredients([
+        { name: 'Arroz', quantity: '100', unit: 'g' },
+        { name: 'Tomate', quantity: '200', unit: 'g' },
+      ])
+    ).toBe(false);
   });
 });
