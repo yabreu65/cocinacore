@@ -88,7 +88,7 @@ export default function CookingTeacherPanel({ sessionId }: Props) {
     return (
       <button
         type="button"
-        className="rounded-xl border border-[#D8E5D4] bg-white px-3 py-2 text-sm font-semibold"
+        className="rounded-xl border border-bistro-border bg-white px-3 py-2 text-sm font-semibold"
         onClick={() => setHidden(false)}
       >
         Mostrar profesor
@@ -98,7 +98,7 @@ export default function CookingTeacherPanel({ sessionId }: Props) {
 
   return (
     <section
-      className="grid gap-3 rounded-xl border border-[#D8E5D4] bg-white p-3"
+      className="grid gap-3 rounded-xl border border-bistro-border bg-white p-3"
       aria-labelledby={headingId}
     >
       <div className="flex items-start justify-between gap-3">
@@ -106,7 +106,7 @@ export default function CookingTeacherPanel({ sessionId }: Props) {
           <h3 id={headingId} className="font-semibold">
             Profesor de cocina
           </h3>
-          <p className="text-sm text-slate-700">
+          <p className="text-sm text-bistro-text-secondary">
             Explicaciones sobre el paso actual. No modifica tu sesión, inventario ni receta.
           </p>
         </div>
@@ -124,7 +124,7 @@ export default function CookingTeacherPanel({ sessionId }: Props) {
           <button
             key={suggestion}
             type="button"
-            className="rounded-full border border-[#D8E5D4] px-3 py-1 text-left text-xs"
+            className="rounded-full border border-bistro-border px-3 py-1 text-left text-xs"
             disabled={loading}
             onClick={() => void ask(suggestion)}
           >
@@ -144,7 +144,7 @@ export default function CookingTeacherPanel({ sessionId }: Props) {
         </label>
         <input
           id={questionId}
-          className="rounded-xl border border-[#D8E5D4] px-3 py-2 text-sm"
+          className="rounded-xl border border-bistro-border px-3 py-2 text-sm"
           value={question}
           maxLength={1000}
           onChange={(event) => setQuestion(event.target.value)}
@@ -154,7 +154,7 @@ export default function CookingTeacherPanel({ sessionId }: Props) {
         <button
           type="submit"
           disabled={loading || !question.trim()}
-          className="rounded-xl bg-[#4F6F52] px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+          className="rounded-xl bg-bistro-action-secondary px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
         >
           {loading ? 'Consultando…' : 'Preguntar'}
         </button>
@@ -162,13 +162,16 @@ export default function CookingTeacherPanel({ sessionId }: Props) {
       {loading && <p role="status">Preparando una explicación segura…</p>}
       {error && <p role="alert">{error}</p>}
       {response && (
-        <div className="grid gap-2 rounded-xl bg-[#F7FAF5] p-3" aria-live="polite">
-          <p className="text-xs font-semibold uppercase tracking-wide text-[#355238]">
+        <div className="grid gap-2 rounded-xl bg-bistro-surface-warm p-3" aria-live="polite">
+          <p className="text-xs font-semibold uppercase tracking-wide text-bistro-action-secondary">
             {evidenceCopy[response.evidence]}
           </p>
           <p className="text-sm">{response.answer}</p>
           {response.citations.length > 0 && (
-            <ul className="text-xs text-slate-700" aria-label="Fuentes de la explicación">
+            <ul
+              className="text-xs text-bistro-text-secondary"
+              aria-label="Fuentes de la explicación"
+            >
               {response.citations.map((citation, index) => (
                 <li key={`${citation.title}:${citation.page ?? 'unknown'}:${index}`}>
                   {citation.title}
@@ -178,7 +181,7 @@ export default function CookingTeacherPanel({ sessionId }: Props) {
             </ul>
           )}
           {response.limitations.length > 0 && (
-            <ul className="list-disc pl-5 text-xs text-amber-900" aria-label="Limitaciones">
+            <ul className="list-disc pl-5 text-xs text-bistro-warning" aria-label="Limitaciones">
               {response.limitations.map((limitation) => (
                 <li key={limitation}>{limitation}</li>
               ))}

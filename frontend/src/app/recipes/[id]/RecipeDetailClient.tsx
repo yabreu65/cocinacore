@@ -73,13 +73,13 @@ export default function RecipeDetailClient({ id }: { id: string }) {
   };
   if (loading)
     return (
-      <main className="texture-paper min-h-screen bg-[#FAF6F1] p-6" role="status">
+      <main className="texture-paper min-h-screen bg-bistro-page p-6" role="status">
         Cargando receta…
       </main>
     );
   if (error && !recipe)
     return (
-      <main className="texture-paper min-h-screen bg-[#FAF6F1] p-6">
+      <main className="texture-paper min-h-screen bg-bistro-page p-6">
         <p role="alert">{error}</p>
         <button onClick={() => void load()} className="underline">
           Reintentar
@@ -91,7 +91,7 @@ export default function RecipeDetailClient({ id }: { id: string }) {
     );
   if (!recipe)
     return (
-      <main className="texture-paper min-h-screen bg-[#FAF6F1] p-6">
+      <main className="texture-paper min-h-screen bg-bistro-page p-6">
         Receta no encontrada. <Link href="/recipes">Volver al recetario</Link>
       </main>
     );
@@ -103,18 +103,23 @@ export default function RecipeDetailClient({ id }: { id: string }) {
     Number(servings) || baseServings
   );
   return (
-    <main className="texture-paper min-h-screen bg-[#FAF6F1] px-4 py-6 text-[#241A14] md:px-6">
-      <article className="mx-auto max-w-4xl rounded-3xl border border-[#E8DDD2] bg-white/85 p-5 premium-shadow">
-        <Link href="/recipes" className="text-sm font-semibold text-[#8C4712] underline">
+    <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 text-bistro-text-primary md:px-6">
+      <article className="mx-auto max-w-4xl rounded-3xl border border-bistro-border bg-white/85 p-5 premium-shadow">
+        <Link
+          href="/recipes"
+          className="text-sm font-semibold text-bistro-action-primary underline"
+        >
           Volver al recetario
         </Link>
         <div className="mt-4 flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="text-3xl font-semibold">{version.title}</h1>
-            {recipe.category && <p className="mt-1 text-[#6B5A50]">{recipe.category}</p>}
+            {recipe.category && (
+              <p className="mt-1 text-bistro-text-secondary">{recipe.category}</p>
+            )}
             <div className="mt-2 flex flex-wrap gap-1">
               {recipe.tags.map((tag) => (
-                <span key={tag} className="rounded-full bg-[#F4E8DD] px-2 py-1 text-xs">
+                <span key={tag} className="rounded-full bg-bistro-surface-warm px-2 py-1 text-xs">
                   {tag}
                 </span>
               ))}
@@ -137,7 +142,7 @@ export default function RecipeDetailClient({ id }: { id: string }) {
           </div>
         </div>
         {error && (
-          <p role="alert" className="mt-3 rounded-xl bg-red-50 p-3 text-red-800">
+          <p role="alert" className="mt-3 rounded-xl bg-bistro-danger/10 p-3 text-bistro-danger">
             {error}
           </p>
         )}
@@ -166,7 +171,7 @@ export default function RecipeDetailClient({ id }: { id: string }) {
             />
           </p>
           {scaled.partial && (
-            <p className="mt-2 text-sm text-[#6B5A50]">
+            <p className="mt-2 text-sm text-bistro-text-secondary">
               Algunas cantidades no se ajustaron porque no son numéricas o usan una unidad no
               reconocida.
             </p>
@@ -194,7 +199,7 @@ export default function RecipeDetailClient({ id }: { id: string }) {
               {versions.map((item) => (
                 <li
                   key={item.id}
-                  className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#E8DDD2] p-3"
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-bistro-border p-3"
                 >
                   <span>
                     Versión {item.version_number} · {item.title}

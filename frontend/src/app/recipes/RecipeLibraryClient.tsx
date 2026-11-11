@@ -29,7 +29,8 @@ const blank: Draft = {
   instructions: '',
   ingredients: [{ name: '', quantity: '', unit: '' }],
 };
-const inputClass = 'w-full rounded-xl border border-[#E8DDD2] bg-white px-3 py-2 text-[#3B2F26]';
+const inputClass =
+  'w-full rounded-xl border border-bistro-border bg-white px-3 py-2 text-bistro-text-primary';
 
 export function RecipeEditor({
   initial = blank,
@@ -151,7 +152,7 @@ export function RecipeEditor({
       <div className="flex gap-2">
         <button
           disabled={saving}
-          className="rounded-xl bg-[#C56A1A] px-4 py-2 font-semibold text-white"
+          className="rounded-xl bg-bistro-action-primary px-4 py-2 font-semibold text-white"
         >
           Guardar
         </button>
@@ -255,16 +256,18 @@ export default function RecipeLibraryClient() {
     }
   };
   return (
-    <main className="texture-paper min-h-screen bg-[#FAF6F1] px-4 py-6 text-[#241A14] md:px-6">
-      <section className="mx-auto max-w-6xl rounded-3xl border border-[#E8DDD2] bg-white/80 p-5 premium-shadow">
+    <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 text-bistro-text-primary md:px-6">
+      <section className="mx-auto max-w-6xl rounded-3xl border border-bistro-border bg-white/80 p-5 premium-shadow">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-3xl font-semibold">Mi recetario</h1>
-            <p className="mt-1 text-[#6B5A50]">Tus recetas, organizadas en un solo lugar.</p>
+            <p className="mt-1 text-bistro-text-secondary">
+              Tus recetas, organizadas en un solo lugar.
+            </p>
           </div>
           <button
             onClick={() => setCreating(!creating)}
-            className="rounded-full bg-[#C56A1A] px-5 py-2.5 font-bold text-white"
+            className="rounded-full bg-bistro-action-primary px-5 py-2.5 font-bold text-white"
           >
             Crear receta
           </button>
@@ -272,7 +275,7 @@ export default function RecipeLibraryClient() {
         {creating && (
           <section
             aria-label="Crear receta"
-            className="mt-5 rounded-2xl border border-[#E8DDD2] bg-white p-4"
+            className="mt-5 rounded-2xl border border-bistro-border bg-white p-4"
           >
             <RecipeEditor
               onSave={(draft) => void create(draft)}
@@ -282,7 +285,10 @@ export default function RecipeLibraryClient() {
           </section>
         )}
         {duplicates.length > 0 && (
-          <p role="alert" className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-3">
+          <p
+            role="alert"
+            className="mt-4 rounded-xl border border-bistro-warning/30 bg-bistro-warning/10 p-3"
+          >
             Hay recetas con títulos parecidos:{' '}
             {duplicates.map((duplicate) => duplicate.title).join(', ')}
           </p>
@@ -339,7 +345,7 @@ export default function RecipeLibraryClient() {
           </p>
         )}
         {error && (
-          <div role="alert" className="mt-5 rounded-xl bg-red-50 p-3 text-red-800">
+          <div role="alert" className="mt-5 rounded-xl bg-bistro-danger/10 p-3 text-bistro-danger">
             {error}{' '}
             <button onClick={() => void load()} className="ml-2 underline">
               Reintentar
@@ -351,17 +357,17 @@ export default function RecipeLibraryClient() {
         )}
         <ul className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {visible.map((recipe) => (
-            <li key={recipe.id} className="rounded-2xl border border-[#E8DDD2] bg-white p-4">
+            <li key={recipe.id} className="rounded-2xl border border-bistro-border bg-white p-4">
               <Link
                 href={`/recipes/${encodeURIComponent(recipe.id)}`}
-                className="text-lg font-semibold text-[#6B3510] underline-offset-2 hover:underline"
+                className="text-lg font-semibold text-bistro-action-primary underline-offset-2 hover:underline"
               >
                 {recipe.current_version.title}
               </Link>
               {!recipe.archived_at && (
                 <Link
                   href={`/app/cooking-intent?source=recipe&recipeId=${encodeURIComponent(recipe.id)}`}
-                  className="mt-2 block text-sm font-semibold text-[#8C4712] underline underline-offset-2"
+                  className="mt-2 block text-sm font-semibold text-bistro-action-primary underline underline-offset-2"
                 >
                   Revisar preparación
                 </Link>
@@ -373,9 +379,11 @@ export default function RecipeLibraryClient() {
                 <CookingSessionPanel recipeId={recipe.id} versionId={recipe.current_version.id} />
               )}
               {recipe.archived_at && (
-                <span className="ml-2 rounded-full bg-[#F4E8DD] px-2 py-1 text-xs">Archivada</span>
+                <span className="ml-2 rounded-full bg-bistro-surface-warm px-2 py-1 text-xs">
+                  Archivada
+                </span>
               )}
-              <p className="mt-2 text-sm text-[#6B5A50]">
+              <p className="mt-2 text-sm text-bistro-text-secondary">
                 {recipe.current_version.servings ?? '—'} porciones
               </p>
               <p className="mt-1 text-sm">
@@ -383,12 +391,12 @@ export default function RecipeLibraryClient() {
               </p>
               <div className="mt-3 flex flex-wrap gap-1">
                 {recipe.category && (
-                  <span className="rounded-full bg-[#F4E8DD] px-2 py-1 text-xs">
+                  <span className="rounded-full bg-bistro-surface-warm px-2 py-1 text-xs">
                     {recipe.category}
                   </span>
                 )}
                 {recipe.tags.map((v) => (
-                  <span key={v} className="rounded-full bg-[#F4E8DD] px-2 py-1 text-xs">
+                  <span key={v} className="rounded-full bg-bistro-surface-warm px-2 py-1 text-xs">
                     {v}
                   </span>
                 ))}
