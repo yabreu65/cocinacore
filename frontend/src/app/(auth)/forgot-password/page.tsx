@@ -11,11 +11,12 @@ export default function ForgotPasswordPage() {
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    const form = event.currentTarget;
     setLoading(true);
     setErrorMessage(null);
     setSuccessMessage(null);
 
-    const formData = new FormData(event.currentTarget);
+    const formData = new FormData(form);
     const parsed = AuthEmailSchema.safeParse({ email: formData.get('email') });
     if (!parsed.success) {
       setErrorMessage(parsed.error.issues[0]?.message ?? 'Ingresá un correo válido.');
@@ -30,16 +31,19 @@ export default function ForgotPasswordPage() {
         body: JSON.stringify(parsed.data),
       });
 
-      const body = (await response.json().catch(() => null)) as { error?: string; message?: string } | null;
+      const body = (await response.json().catch(() => null)) as {
+        error?: string;
+        message?: string;
+      } | null;
       if (!response.ok) {
         setErrorMessage(body?.error ?? 'No pudimos procesar la solicitud.');
         return;
       }
 
+      form.reset();
       setSuccessMessage(
         body?.message ?? 'Si el correo existe en CocinaCore, te enviaremos instrucciones.'
       );
-      event.currentTarget.reset();
     } catch {
       setErrorMessage('No pudimos conectar con autenticación. Intentá nuevamente.');
     } finally {
@@ -48,30 +52,34 @@ export default function ForgotPasswordPage() {
   };
 
   return (
-    <main className="texture-paper flex min-h-screen items-center justify-center bg-[#FAF6F1] px-4 py-8">
-      <section className="w-full max-w-md rounded-3xl border border-[#E8DDD2] bg-white/75 p-6 shadow-[0_20px_36px_rgba(36,26,20,0.12)] backdrop-blur-md md:p-8">
-        <p className="text-xs font-bold tracking-[0.15em] text-[#C56A1A]">COCINACORE</p>
-        <h1 className="mt-3 text-3xl font-semibold text-[#241A14]">Recuperar contraseña</h1>
-        <p className="mt-2 text-sm text-[#6B5A50]">
+    <main className="texture-paper flex min-h-screen items-center justify-center bg-bistro-page px-4 py-8">
+      <section className="w-full max-w-md rounded-3xl border border-bistro-border bg-white/75 p-6 shadow-[0_20px_36px_rgba(36,26,20,0.12)] backdrop-blur-md md:p-8">
+        <p className="text-xs font-bold tracking-[0.15em] text-bistro-action-primary">COCINACORE</p>
+        <h1 className="mt-3 text-3xl font-semibold text-bistro-text-primary">
+          Recuperar contraseña
+        </h1>
+        <p className="mt-2 text-sm text-bistro-text-secondary">
           Ingresá tu correo y te enviaremos un enlace seguro para crear una nueva contraseña.
         </p>
 
         <form onSubmit={onSubmit} className="mt-6 grid gap-4" noValidate>
-          <label className="grid gap-2 text-sm font-semibold text-[#3A2D24]">
+          <label className="grid gap-2 text-sm font-semibold text-bistro-text-primary">
             Correo electrónico
             <input
               type="email"
               name="email"
               required
-              className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 text-[#241A14] outline-none transition focus:border-[#C56A1A]"
+              className="h-11 rounded-xl border border-bistro-border bg-white px-3 text-bistro-text-primary outline-none transition focus:border-bistro-action-primary"
             />
           </label>
 
           {errorMessage ? (
-            <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{errorMessage}</p>
+            <p className="rounded-xl bg-bistro-danger/10 px-3 py-2 text-sm text-bistro-danger">
+              {errorMessage}
+            </p>
           ) : null}
           {successMessage ? (
-            <p className="rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+            <p className="rounded-xl bg-bistro-success/10 px-3 py-2 text-sm text-bistro-success">
               {successMessage}
             </p>
           ) : null}
@@ -79,14 +87,17 @@ export default function ForgotPasswordPage() {
           <button
             type="submit"
             disabled={loading}
-            className="h-11 rounded-xl bg-[#C56A1A] font-semibold text-white transition hover:bg-[#A55412] disabled:opacity-70"
+            className="h-11 rounded-xl bg-bistro-action-primary font-semibold text-white transition hover:bg-bistro-action-primary disabled:opacity-70"
           >
             {loading ? 'Enviando...' : 'Solicitar recuperación'}
           </button>
         </form>
 
-        <p className="mt-6 text-center text-sm text-[#6B5A50]">
-          <Link href="/login" className="font-semibold text-[#A55412] hover:text-[#C56A1A]">
+        <p className="mt-6 text-center text-sm text-bistro-text-secondary">
+          <Link
+            href="/login"
+            className="font-semibold text-bistro-action-primary hover:text-bistro-action-primary"
+          >
             Volver al login
           </Link>
         </p>
