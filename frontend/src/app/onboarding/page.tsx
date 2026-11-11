@@ -1,10 +1,12 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { AnimatePresence, motion } from 'framer-motion';
 import { safeFetch } from '@/lib/api';
 import { humanCopy } from '@/lib/copy';
+import { canAdvanceOnboardingStep } from './onboarding-step';
 import {
   EMPTY_CULINARY_SELECTIONS,
   termsForDimension,
@@ -129,7 +131,7 @@ export default function OnboardingPage() {
     return selections.goalTermIds;
   }, [level, selections, step]);
 
-  const canContinue = isFinal || selectedForStep.length > 0;
+  const canContinue = isFinal || canAdvanceOnboardingStep(step, selectedForStep.length);
   const progress =
     steps.length > 0 ? ((Math.min(currentStep, steps.length) + 1) / (steps.length + 1)) * 100 : 0;
 
@@ -155,7 +157,10 @@ export default function OnboardingPage() {
   };
 
   const termLabel = (termId: string): string => {
-    return profileData?.taxonomy.terms.find((term: CulinaryProfileTerm) => term.id === termId)?.label ?? termId;
+    return (
+      profileData?.taxonomy.terms.find((term: CulinaryProfileTerm) => term.id === termId)?.label ??
+      termId
+    );
   };
 
   const finishOnboarding = async () => {
@@ -193,8 +198,8 @@ export default function OnboardingPage() {
 
   if (loading) {
     return (
-      <main className="texture-paper min-h-screen bg-[#FAF6F1] px-4 py-6 text-[#241A14]">
-        <div className="mx-auto max-w-3xl rounded-3xl border border-[#E8DDD2] bg-white/70 p-6">
+      <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 text-bistro-text-primary">
+        <div className="mx-auto max-w-3xl rounded-3xl border border-bistro-border bg-white/70 p-6">
           Cargando tu perfil culinario...
         </div>
       </main>
@@ -203,8 +208,8 @@ export default function OnboardingPage() {
 
   if (loadError || !profileData) {
     return (
-      <main className="texture-paper min-h-screen bg-[#FAF6F1] px-4 py-6 text-[#241A14]">
-        <div className="mx-auto max-w-3xl rounded-3xl border border-red-200 bg-red-50 p-6 text-red-700">
+      <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 text-bistro-text-primary">
+        <div className="mx-auto max-w-3xl rounded-3xl border border-bistro-danger/30 bg-bistro-danger/10 p-6 text-bistro-danger">
           {loadError ?? 'No pudimos cargar tu perfil culinario.'}
         </div>
       </main>
@@ -212,28 +217,30 @@ export default function OnboardingPage() {
   }
 
   return (
-    <main className="texture-paper min-h-screen bg-[#FAF6F1] px-4 py-6 md:px-6 md:py-8">
-      <div className="mx-auto grid w-full max-w-[1220px] overflow-hidden rounded-[2rem] border border-[#E8DDD2] bg-white/55 premium-shadow lg:grid-cols-[1.04fr_0.96fr]">
-        <section className="relative hidden overflow-hidden border-r border-[#E8DDD2] p-10 lg:block">
-          <div className="pointer-events-none absolute -left-10 top-8 h-52 w-52 rounded-full bg-[#C56A1A]/10 blur-3xl" />
-          <div className="pointer-events-none absolute right-6 top-1/3 h-52 w-52 rounded-full bg-[#6D4AFF]/10 blur-3xl" />
-          <p className="text-xs font-bold tracking-[0.15em] text-[#C56A1A]">COCINACORE • ONBOARDING</p>
-          <h1 className="mt-4 text-5xl font-semibold leading-[1.08] text-[#241A14]">
+    <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 md:px-6 md:py-8">
+      <div className="mx-auto grid w-full max-w-[1220px] overflow-hidden rounded-[2rem] border border-bistro-border bg-white/55 premium-shadow lg:grid-cols-[1.04fr_0.96fr]">
+        <section className="relative hidden overflow-hidden border-r border-bistro-border p-10 lg:block">
+          <div className="pointer-events-none absolute -left-10 top-8 h-52 w-52 rounded-full bg-bistro-action-primary/10 blur-3xl" />
+          <div className="pointer-events-none absolute right-6 top-1/3 h-52 w-52 rounded-full bg-bistro-action-secondary/10 blur-3xl" />
+          <p className="text-xs font-bold tracking-[0.15em] text-bistro-action-primary">
+            COCINACORE • ONBOARDING
+          </p>
+          <h1 className="mt-4 text-5xl font-semibold leading-[1.08] text-bistro-text-primary">
             CocinaCore aprende cómo cocinas para decidir mejor contigo.
           </h1>
-          <p className="mt-4 max-w-lg text-lg text-[#6B5A50]">
+          <p className="mt-4 max-w-lg text-lg text-bistro-text-secondary">
             Lo que elijas se guarda en tu perfil real y se reutiliza en recetas y planificación.
           </p>
 
-          <div className="dark-panel-shadow mt-8 rounded-3xl border border-white/10 bg-[#16110D] p-5 text-[#F5ECE2]">
-            <p className="text-sm text-[#D6C3B2]">Vista previa personalizada</p>
+          <div className="dark-panel-shadow mt-8 rounded-3xl border border-white/10 bg-bistro-inverse p-5 text-bistro-cream">
+            <p className="text-sm text-bistro-champagne">Vista previa personalizada</p>
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
               <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-                <p className="text-xs text-[#D6C3B2]">{humanCopy.suggestedRecipesForYou}</p>
+                <p className="text-xs text-bistro-champagne">{humanCopy.suggestedRecipesForYou}</p>
                 <p className="text-sm font-semibold">Ideas según inventario + perfil</p>
               </div>
               <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-                <p className="text-xs text-[#D6C3B2]">Contexto persistido</p>
+                <p className="text-xs text-bistro-champagne">Contexto persistido</p>
                 <p className="text-sm font-semibold">Gustos · restricciones · objetivos</p>
               </div>
             </div>
@@ -241,17 +248,31 @@ export default function OnboardingPage() {
         </section>
 
         <section className="p-5 md:p-8 lg:p-10">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 text-sm">
+            <Link
+              href="/app"
+              className="font-semibold text-bistro-text-secondary underline underline-offset-4 hover:text-bistro-action-primary"
+            >
+              Volver a Inicio
+            </Link>
+            <Link
+              href="/recipes/search"
+              className="font-semibold text-bistro-action-primary underline underline-offset-4"
+            >
+              Prefiero cocinar ahora
+            </Link>
+          </div>
           <div className="rounded-3xl border border-white/70 bg-white/70 p-6 shadow-[0_20px_36px_rgba(36,26,20,0.12)] backdrop-blur-md md:p-8">
             <div className="mb-6">
               <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#8D786A]">
+                <p className="text-xs font-semibold uppercase tracking-[0.1em] text-bistro-text-secondary">
                   Paso {Math.min(currentStep + 1, steps.length + 1)} de {steps.length + 1}
                 </p>
-                <p className="text-xs text-[#8D786A]">{Math.round(progress)}%</p>
+                <p className="text-xs text-bistro-text-secondary">{Math.round(progress)}%</p>
               </div>
-              <div className="mt-2 h-2 rounded-full bg-[#EEE3D9]">
+              <div className="mt-2 h-2 rounded-full bg-bistro-surface-warm">
                 <motion.div
-                  className="h-full rounded-full bg-[#C56A1A]"
+                  className="h-full rounded-full bg-bistro-action-primary"
                   animate={{ width: `${progress}%` }}
                   transition={{ duration: 0.25 }}
                 />
@@ -267,13 +288,23 @@ export default function OnboardingPage() {
                   exit={{ opacity: 0, y: -12 }}
                   transition={{ duration: 0.2 }}
                 >
-                  <h2 className="text-3xl font-semibold text-[#241A14]">{step.title}</h2>
-                  <p className="mt-2 text-[#6B5A50]">{step.subtitle}</p>
+                  <h2 className="text-3xl font-semibold text-bistro-text-primary">{step.title}</h2>
+                  <p className="mt-2 text-bistro-text-secondary">{step.subtitle}</p>
 
+                  {step.options.length === 0 ? (
+                    <p
+                      role="status"
+                      className="mt-6 rounded-xl border border-bistro-border bg-white/80 p-4 text-bistro-text-secondary"
+                    >
+                      No hay opciones disponibles para este paso. Puedes continuar sin seleccionar
+                      ninguna.
+                    </p>
+                  ) : null}
                   <div className="mt-6 grid gap-3 sm:grid-cols-2">
                     {step.options.map((option) => {
                       const active = selectedForStep.includes(option.id);
-                      const disabled = !active && selectedForStep.length >= step.max;
+                      const disabled =
+                        !step.single && !active && selectedForStep.length >= step.max;
                       return (
                         <button
                           type="button"
@@ -282,8 +313,8 @@ export default function OnboardingPage() {
                           onClick={() => selectOption(option.id)}
                           className={`rounded-2xl border px-4 py-3 text-left transition ${
                             active
-                              ? 'border-[#C56A1A] bg-[#C56A1A]/10 text-[#7F4314]'
-                              : 'border-[#E8DDD2] bg-white/80 text-[#3B2F26] hover:border-[#C56A1A]/50 disabled:opacity-40'
+                              ? 'border-bistro-action-primary bg-bistro-action-primary/10 text-bistro-action-primary'
+                              : 'border-bistro-border bg-white/80 text-bistro-text-primary hover:border-bistro-action-primary/50 disabled:opacity-40'
                           }`}
                           aria-pressed={active}
                         >
@@ -301,19 +332,23 @@ export default function OnboardingPage() {
                   exit={{ opacity: 0, y: -12 }}
                   transition={{ duration: 0.2 }}
                 >
-                  <h2 className="text-3xl font-semibold text-[#241A14]">Tu perfil culinario está listo</h2>
-                  <p className="mt-2 text-[#6B5A50]">
+                  <h2 className="text-3xl font-semibold text-bistro-text-primary">
+                    Tu perfil culinario está listo
+                  </h2>
+                  <p className="mt-2 text-bistro-text-secondary">
                     Lo guardaremos como contexto persistente para recetas y planificación.
                   </p>
 
-                  <div className="mt-6 rounded-2xl border border-[#E8DDD2] bg-white/80 p-4 text-sm text-[#6B5A50]">
-                    <p className="font-semibold text-[#241A14]">Resumen</p>
+                  <div className="mt-6 rounded-2xl border border-bistro-border bg-white/80 p-4 text-sm text-bistro-text-secondary">
+                    <p className="font-semibold text-bistro-text-primary">Resumen</p>
                     <p className="mt-2">Nivel: {level || 'No definido'}</p>
                     <p>
-                      Cocinas: {selections.favoriteCuisineTermIds.map(termLabel).join(', ') || 'No definido'}
+                      Cocinas:{' '}
+                      {selections.favoriteCuisineTermIds.map(termLabel).join(', ') || 'No definido'}
                     </p>
                     <p>
-                      Restricciones: {selections.dietaryAvoidTermIds.map(termLabel).join(', ') || 'No definido'}
+                      Restricciones:{' '}
+                      {selections.dietaryAvoidTermIds.map(termLabel).join(', ') || 'No definido'}
                     </p>
                     <p>
                       Objetivos: {selections.goalTermIds.map(termLabel).join(', ') || 'No definido'}
@@ -321,7 +356,7 @@ export default function OnboardingPage() {
                   </div>
 
                   {message ? (
-                    <p className="mt-4 rounded-xl border border-[#E8DDD2] bg-white/80 px-3 py-2 text-sm text-[#6B5A50]">
+                    <p className="mt-4 rounded-xl border border-bistro-border bg-white/80 px-3 py-2 text-sm text-bistro-text-secondary">
                       {message}
                     </p>
                   ) : null}
@@ -334,7 +369,7 @@ export default function OnboardingPage() {
                 type="button"
                 onClick={() => setCurrentStep((current) => Math.max(current - 1, 0))}
                 disabled={currentStep === 0 || finishing}
-                className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-5 font-semibold text-[#6B5A50] transition hover:border-[#C56A1A] disabled:cursor-not-allowed disabled:opacity-50"
+                className="h-11 rounded-xl border border-bistro-border bg-white px-5 font-semibold text-bistro-text-secondary transition hover:border-bistro-action-primary disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Volver
               </button>
@@ -344,7 +379,7 @@ export default function OnboardingPage() {
                   type="button"
                   disabled={!canContinue}
                   onClick={() => setCurrentStep((current) => Math.min(current + 1, steps.length))}
-                  className="h-11 rounded-xl bg-[#C56A1A] px-5 font-semibold text-white transition hover:bg-[#A55412] disabled:opacity-50"
+                  className="h-11 rounded-xl bg-bistro-action-primary px-5 font-semibold text-white transition hover:bg-bistro-action-primary disabled:opacity-50"
                 >
                   Continuar
                 </button>
@@ -353,7 +388,7 @@ export default function OnboardingPage() {
                   type="button"
                   onClick={() => void finishOnboarding()}
                   disabled={finishing}
-                  className="h-11 rounded-xl bg-[#C56A1A] px-5 font-semibold text-white transition hover:bg-[#A55412] disabled:opacity-50"
+                  className="h-11 rounded-xl bg-bistro-action-primary px-5 font-semibold text-white transition hover:bg-bistro-action-primary disabled:opacity-50"
                 >
                   {finishing ? 'Guardando...' : 'Guardar e ir al panel'}
                 </button>
