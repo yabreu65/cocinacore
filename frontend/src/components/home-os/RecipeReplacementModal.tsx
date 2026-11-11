@@ -50,6 +50,37 @@ export function RecipeReplacementModal(props: Props) {
         event.preventDefault();
         props.onClose();
       }}
+      onKeyDown={(event) => {
+        if (event.key !== 'Tab') return;
+        const dialog = dialogRef.current;
+        if (!dialog) return;
+        const controls = Array.from(
+          dialog.querySelectorAll<HTMLElement>(
+            'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
+          )
+        ).filter((element) => element.getClientRects().length > 0);
+        if (controls.length === 0) {
+          event.preventDefault();
+          dialog.focus();
+          return;
+        }
+        const first = controls[0];
+        const last = controls[controls.length - 1];
+        if (
+          event.shiftKey &&
+          (document.activeElement === first || document.activeElement === dialog)
+        ) {
+          event.preventDefault();
+          last.focus();
+        } else if (
+          !event.shiftKey &&
+          (document.activeElement === last || document.activeElement === dialog)
+        ) {
+          event.preventDefault();
+          first.focus();
+        }
+      }}
+      tabIndex={-1}
       className="fixed inset-0 z-[90] m-auto h-[calc(100dvh-1.5rem)] w-[calc(100vw-1.5rem)] max-w-3xl overflow-hidden border-0 bg-transparent p-0 text-bistro-text-primary backdrop:bg-bistro-inverse/35 sm:h-[calc(100dvh-3rem)]"
     >
       <div className="mx-auto flex h-full w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-bistro-border bg-bistro-page">
