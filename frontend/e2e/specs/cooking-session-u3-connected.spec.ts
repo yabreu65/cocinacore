@@ -21,6 +21,10 @@ type Fixture = {
   updatedAt: string;
   foreignSessionId: string;
   foreignTenantId: string;
+  foreignUserId: string;
+  foreignRecipeId: string;
+  foreignVersionId: string;
+  foreignPlanId: string;
 };
 
 type SessionResponse = {
@@ -114,14 +118,15 @@ async function seedFixture(page: Page): Promise<Fixture> {
   const foreignSessionId = randomUUID();
   const calendarPayload = buildCalendarPayload(recipeId, versionId);
 
-  await pool.query('begin');
+  const client = await pool.connect();
   try {
-    await pool.query(
+    await client.query('begin');
+    await client.query(
       `insert into public.user_recipes (id, tenant_id, user_id, category, tags)
        values ($1, $2, $3, 'e2e', $4)`,
       [recipeId, identity.tenantId, identity.userId, [`m5-u3-${runId}`]]
     );
-    await pool.query(
+    await client.query(
       `insert into public.user_recipe_versions
        (id, recipe_id, tenant_id, user_id, version_number, title, instructions, servings, ingredients)
        values ($1, $2, $3, $4, 1, $5, 'Mix the ingredients.', 2, $6::jsonb)`,
@@ -134,7 +139,7 @@ async function seedFixture(page: Page): Promise<Fixture> {
         JSON.stringify([{ name: 'Rice', quantity: '1', unit: 'cup' }]),
       ]
     );
-    const plan = await pool.query<{ updated_at: string }>(
+    const plan = await client.query<{ updated_at: string }>(
       `insert into public.user_meal_plans
        (id, tenant_id, user_id, people_count, period, mode, base_cuisine, calendar_payload)
        values ($1, $2, $3, 2, 'week', 'menu_to_shopping', 'e2e', $4::jsonb)
@@ -142,26 +147,26 @@ async function seedFixture(page: Page): Promise<Fixture> {
       [planId, identity.tenantId, identity.userId, JSON.stringify(calendarPayload)]
     );
 
-    await pool.query(`insert into public.tenants (id, tenant_type, name) values ($1, 'home', $2)`, [
-      foreignTenantId,
-      `U3 foreign ${runId}`,
-    ]);
-    await pool.query(
+    await client.query(
+      `insert into public.tenants (id, tenant_type, name) values ($1, 'home', $2)`,
+      [foreignTenantId, `U3 foreign ${runId}`]
+    );
+    await client.query(
       `insert into public.users
        (id, email, password_hash, email_confirmed, full_name, tenant_id, role, terms_accepted_at, terms_version, onboarding_completed)
        values ($1, $2, 'fixture', true, 'U3 foreign', $3, 'owner', now(), 'v1', true)`,
       [foreignUserId, `u3-foreign-${runId}@cocinacore.local`, foreignTenantId]
     );
-    await pool.query(
+    await client.query(
       `insert into public.tenant_memberships (tenant_id, user_id, role) values ($1, $2, 'owner')`,
       [foreignTenantId, foreignUserId]
     );
-    await pool.query(
+    await client.query(
       `insert into public.user_recipes (id, tenant_id, user_id, category)
        values ($1, $2, $3, 'e2e')`,
       [foreignRecipeId, foreignTenantId, foreignUserId]
     );
-    await pool.query(
+    await client.query(
       `insert into public.user_recipe_versions
        (id, recipe_id, tenant_id, user_id, version_number, title, instructions, servings, ingredients)
        values ($1, $2, $3, $4, 1, 'Foreign fixture', 'Foreign instructions.', 2, $5::jsonb)`,
@@ -174,14 +179,14 @@ async function seedFixture(page: Page): Promise<Fixture> {
       ]
     );
     const foreignCalendar = buildCalendarPayload(foreignRecipeId, foreignVersionId);
-    const foreignPlan = await pool.query<{ updated_at: string }>(
+    const foreignPlan = await client.query<{ updated_at: string }>(
       `insert into public.user_meal_plans
        (id, tenant_id, user_id, people_count, period, mode, base_cuisine, calendar_payload)
        values ($1, $2, $3, 2, 'week', 'menu_to_shopping', 'e2e', $4::jsonb)
        returning updated_at`,
       [foreignPlanId, foreignTenantId, foreignUserId, JSON.stringify(foreignCalendar)]
     );
-    await pool.query(
+    await client.query(
       `insert into public.cooking_sessions
        (id, tenant_id, user_id, meal_plan_id, day_index, meal_type, recipe_id, recipe_version_id,
         status, current_step, total_steps, instruction_snapshot, source_updated_at, source_calendar_payload_hash)
@@ -204,7 +209,7 @@ async function seedFixture(page: Page): Promise<Fixture> {
         payloadHash(foreignCalendar),
       ]
     );
-    await pool.query('commit');
+    await client.query('commit');
     return {
       tenantId: identity.tenantId,
       userId: identity.userId,
@@ -215,10 +220,20 @@ async function seedFixture(page: Page): Promise<Fixture> {
       updatedAt: plan.rows[0].updated_at,
       foreignSessionId,
       foreignTenantId,
+      foreignUserId,
+      foreignRecipeId,
+      foreignVersionId,
+      foreignPlanId,
     };
   } catch (error) {
-    await pool.query('rollback');
+    try {
+      await client.query('rollback');
+    } catch (rollbackError) {
+      throw new AggregateError([error, rollbackError], 'U3 fixture rollback failed.');
+    }
     throw error;
+  } finally {
+    client.release();
   }
 }
 
@@ -237,34 +252,61 @@ test.describe('M5 U3 cooking sessions', () => {
   test.describe.configure({ mode: 'serial' });
 
   test.afterAll(async () => {
-    if (fixture) {
-      await pool.query('delete from public.cooking_session_events where tenant_id = $1', [
-        fixture.tenantId,
-      ]);
-      await pool.query('delete from public.cooking_sessions where tenant_id = $1', [
-        fixture.tenantId,
-      ]);
-      await pool.query('delete from public.user_meal_plans where id = $1', [fixture.planId]);
-      await pool.query('delete from public.user_recipe_versions where id = $1', [
-        fixture.versionId,
-      ]);
-      await pool.query('delete from public.user_recipes where id = $1', [fixture.recipeId]);
-      await pool.query('delete from public.cooking_session_events where tenant_id = $1', [
-        fixture.foreignTenantId,
-      ]);
-      await pool.query('delete from public.cooking_sessions where tenant_id = $1', [
-        fixture.foreignTenantId,
-      ]);
-      await pool.query('delete from public.tenants where id = $1', [fixture.foreignTenantId]);
-      await pool.query('delete from public.cooking_session_events where tenant_id = $1', [
-        fixture.tenantId,
-      ]);
-      await pool.query('delete from public.cooking_sessions where tenant_id = $1', [
-        fixture.tenantId,
-      ]);
-      await pool.query('delete from public.tenants where id = $1', [fixture.tenantId]);
+    try {
+      if (fixture) {
+        // Delete only sessions generated for this fixture's plan and user.
+        const scopedSession = `select id from public.cooking_sessions
+          where tenant_id = $1 and user_id = $2 and meal_plan_id = $3`;
+        await pool.query(
+          `delete from public.cooking_session_events where session_id in (${scopedSession})`,
+          [fixture.tenantId, fixture.userId, fixture.planId]
+        );
+        await pool.query(
+          `delete from public.cooking_sessions
+           where tenant_id = $1 and user_id = $2 and meal_plan_id = $3`,
+          [fixture.tenantId, fixture.userId, fixture.planId]
+        );
+        await pool.query(
+          `delete from public.user_meal_plans where id = $1 and tenant_id = $2 and user_id = $3`,
+          [fixture.planId, fixture.tenantId, fixture.userId]
+        );
+        await pool.query('delete from public.user_recipe_versions where id = $1', [
+          fixture.versionId,
+        ]);
+        await pool.query('delete from public.user_recipes where id = $1', [fixture.recipeId]);
+
+        // Foreign fixtures are explicitly owned by this test. Never delete the real tenant.
+        await pool.query('delete from public.cooking_session_events where session_id = $1', [
+          fixture.foreignSessionId,
+        ]);
+        await pool.query('delete from public.cooking_sessions where id = $1 and tenant_id = $2', [
+          fixture.foreignSessionId,
+          fixture.foreignTenantId,
+        ]);
+        await pool.query('delete from public.user_meal_plans where id = $1 and tenant_id = $2', [
+          fixture.foreignPlanId,
+          fixture.foreignTenantId,
+        ]);
+        await pool.query('delete from public.user_recipe_versions where id = $1', [
+          fixture.foreignVersionId,
+        ]);
+        await pool.query('delete from public.user_recipes where id = $1 and tenant_id = $2', [
+          fixture.foreignRecipeId,
+          fixture.foreignTenantId,
+        ]);
+        await pool.query(
+          'delete from public.tenant_memberships where tenant_id = $1 and user_id = $2',
+          [fixture.foreignTenantId, fixture.foreignUserId]
+        );
+        await pool.query('delete from public.users where id = $1 and tenant_id = $2', [
+          fixture.foreignUserId,
+          fixture.foreignTenantId,
+        ]);
+        await pool.query('delete from public.tenants where id = $1', [fixture.foreignTenantId]);
+      }
+    } finally {
+      await pool.end();
     }
-    await pool.end();
   });
 
   test('runs the guided flow, reloads from PostgreSQL, and never mutates business data', async ({
@@ -275,9 +317,9 @@ test.describe('M5 U3 cooking sessions', () => {
     const card = page.locator('li').filter({ hasText: title }).first();
     await expect(card).toBeVisible();
     await card.getByRole('button', { name: 'Preparar esta receta' }).click();
-    await expect(card.getByLabel('Slot asociado')).toBeVisible();
+    await expect(card.getByLabel('Comida asociada del menú')).toBeVisible();
     await card.getByRole('button', { name: 'Iniciar preparación' }).click();
-    await expect(card.getByRole('status')).toContainText('Paso 1 de 1 · active');
+    await expect(card.getByRole('status')).toContainText('Paso 1 de 1 · En preparación');
     await expect(
       card.getByRole('list', { name: 'Ingredientes previstos' }).getByRole('listitem')
     ).toContainText('1 cup Rice');
@@ -286,14 +328,14 @@ test.describe('M5 U3 cooking sessions', () => {
     await expect(card.getByRole('button', { name: 'Siguiente' })).toHaveCount(0);
 
     await card.getByRole('button', { name: 'Pausar' }).click();
-    await expect(card.getByRole('status')).toContainText('paused');
+    await expect(card.getByRole('status')).toContainText('Pausada');
     await page.reload();
     const reloadedCard = page.locator('li').filter({ hasText: title }).first();
     await reloadedCard.getByRole('button', { name: 'Preparar esta receta' }).click();
-    await expect(reloadedCard.getByRole('status')).toContainText('Paso 1 de 1 · paused');
+    await expect(reloadedCard.getByRole('status')).toContainText('Paso 1 de 1 · Pausada');
     await reloadedCard.getByRole('button', { name: 'Reanudar' }).click();
     await reloadedCard.getByRole('button', { name: 'Finalizar' }).click();
-    await expect(reloadedCard.getByRole('status')).toContainText('completed');
+    await expect(reloadedCard.getByRole('status')).toContainText('Terminada');
 
     const sessionId = await findSessionId();
     const persisted = await pool.query<{ status: string; current_step: number }>(

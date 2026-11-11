@@ -196,7 +196,7 @@ export async function injectAuth(
 
   if (!response.ok()) {
     throw new Error(
-      `E2E login failed for ${TEST_EMAIL} (${userId}). Seed an application user with npm run db:bootstrap or set E2E_USER_EMAIL/E2E_USER_PASSWORD.`
+      `E2E login failed for ${TEST_EMAIL} (${userId}): HTTP ${response.status()}${response.headers()['retry-after'] ? `; retry-after=${response.headers()['retry-after']}s` : ''}. Seed an application user with npm run db:bootstrap or set E2E_USER_EMAIL/E2E_USER_PASSWORD.`
     );
   }
 

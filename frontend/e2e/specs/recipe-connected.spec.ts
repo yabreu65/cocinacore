@@ -147,28 +147,28 @@ test.describe('Connected recipe search', () => {
     await expect(page.getByRole('heading', { name: 'Historial de recetas' })).toBeVisible();
     const historyEntry = page.getByRole('listitem').filter({ hasText: GENERATED_TITLE }).first();
     await expect(historyEntry).toBeVisible();
-    await expect(historyEntry.getByRole('button', { name: 'Guardar' })).toHaveAttribute(
-      'aria-pressed',
-      'false'
-    );
+    await expect(
+      historyEntry.getByRole('button', { name: 'Marcar para consultar' })
+    ).toHaveAttribute('aria-pressed', 'false');
     await historyEntry.getByRole('button', { name: 'Ver detalle' }).click();
     await expect(historyEntry).toContainText('Cociná el arroz y reservá.');
 
-    await historyEntry.getByRole('button', { name: 'Guardar' }).click();
-    await expect
-      .poll(async () => (await latestRecipeHistory(seed!.identity))?.is_saved)
-      .toBe(true);
+    await historyEntry.getByRole('button', { name: 'Marcar para consultar' }).click();
+    await expect.poll(async () => (await latestRecipeHistory(seed!.identity))?.is_saved).toBe(true);
 
     await page.reload();
-    const reloadedHistoryEntry = page.getByRole('listitem').filter({ hasText: GENERATED_TITLE }).first();
+    const reloadedHistoryEntry = page
+      .getByRole('listitem')
+      .filter({ hasText: GENERATED_TITLE })
+      .first();
     await expect(reloadedHistoryEntry).toBeVisible();
     await expect(
-      reloadedHistoryEntry.getByRole('button', { name: 'Quitar de guardadas' })
+      reloadedHistoryEntry.getByRole('button', { name: 'Quitar marca' })
     ).toHaveAttribute('aria-pressed', 'true');
 
     await page.getByLabel('Mostrar recetas').selectOption('saved');
     await expect(reloadedHistoryEntry).toBeVisible();
-    await reloadedHistoryEntry.getByRole('button', { name: 'Quitar de guardadas' }).click();
+    await reloadedHistoryEntry.getByRole('button', { name: 'Quitar marca' }).click();
     await expect
       .poll(async () => (await latestRecipeHistory(seed!.identity))?.is_saved)
       .toBe(false);
@@ -176,15 +176,16 @@ test.describe('Connected recipe search', () => {
     await page.reload();
     await expect(page.getByLabel('Mostrar recetas')).toHaveValue('saved');
     await expect(page.getByRole('listitem').filter({ hasText: GENERATED_TITLE })).toHaveCount(0);
-    await expect(page.getByText('Aún no tienes recetas guardadas.', { exact: true })).toBeVisible();
+    await expect(
+      page.getByText('Aún no hay ideas marcadas para consultar.', { exact: true })
+    ).toBeVisible();
 
     await page.getByLabel('Mostrar recetas').selectOption('all');
     const allHistoryEntry = page.getByRole('listitem').filter({ hasText: GENERATED_TITLE }).first();
     await expect(allHistoryEntry).toBeVisible();
-    await expect(allHistoryEntry.getByRole('button', { name: 'Guardar' })).toHaveAttribute(
-      'aria-pressed',
-      'false'
-    );
+    await expect(
+      allHistoryEntry.getByRole('button', { name: 'Marcar para consultar' })
+    ).toHaveAttribute('aria-pressed', 'false');
   });
 
   test('uses persisted context in authenticated free mode without citations', async ({ page }) => {

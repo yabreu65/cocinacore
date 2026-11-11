@@ -178,8 +178,13 @@ async function seedFixture(page: Page): Promise<Fixture> {
     await client.query(
       `insert into public.recipe_inventory_items
        (id, tenant_id, user_id, ingredient_name, quantity, unit, normalized_name, expiration_date)
-       values ($1, $2, $3, 'Rice', '1', 'kg', 'rice', '2026-11-10T00:00:00.000Z')`,
-      [inventoryId, identity.tenantId, identity.userId]
+       values ($1, $2, $3, 'Rice', '1', 'kg', 'rice', $4)`,
+      [
+        inventoryId,
+        identity.tenantId,
+        identity.userId,
+        new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      ]
     );
     await client.query('commit');
     seed.calendarPayload = calendarPayload;
