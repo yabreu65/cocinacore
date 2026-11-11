@@ -22,7 +22,7 @@ export default function Loading() {
           height: '2.75rem',
           borderRadius: '9999px',
           border: '3px solid var(--border)',
-          borderTopColor: 'var(--cta)',
+          borderTopColor: 'var(--color-action-primary)',
           animation: 'spin 0.8s linear infinite',
         }}
       />
@@ -36,7 +36,7 @@ export default function Loading() {
               width: '0.45rem',
               height: '0.45rem',
               borderRadius: '9999px',
-              background: 'var(--cta)',
+              background: 'var(--color-action-primary)',
               opacity: 0.35,
               animation: `pulseDot 1.4s ease-in-out ${i * 0.2}s infinite`,
             }}

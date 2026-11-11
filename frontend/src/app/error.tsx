@@ -26,7 +26,7 @@ export default function GlobalError({ error, reset }: ErrorProps) {
         justifyContent: 'center',
         padding: '2rem',
         background: 'var(--bg-dark)',
-        color: 'var(--bg-main)',
+        color: 'var(--color-brand-cream)',
       }}
     >
       <div
@@ -46,7 +46,7 @@ export default function GlobalError({ error, reset }: ErrorProps) {
             width: '3.5rem',
             height: '3.5rem',
             borderRadius: '9999px',
-            background: 'rgba(197, 106, 26, 0.15)',
+            background: 'color-mix(in srgb, var(--color-brand-champagne) 15%, transparent)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -59,7 +59,7 @@ export default function GlobalError({ error, reset }: ErrorProps) {
             height="28"
             viewBox="0 0 24 24"
             fill="none"
-            stroke="var(--cta)"
+            stroke="var(--color-action-primary)"
             strokeWidth="2"
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -72,11 +72,11 @@ export default function GlobalError({ error, reset }: ErrorProps) {
 
         <h1
           style={{
-            fontFamily: 'var(--font-playfair), serif',
+            fontFamily: 'var(--font-heading)',
             fontSize: '1.5rem',
             fontWeight: 600,
             marginBottom: '0.5rem',
-            color: 'var(--bg-main)',
+            color: 'var(--color-brand-cream)',
           }}
         >
           Algo salió mal
@@ -85,7 +85,7 @@ export default function GlobalError({ error, reset }: ErrorProps) {
         <p
           style={{
             fontSize: '0.925rem',
-            color: 'var(--text-muted)',
+            color: 'var(--color-brand-champagne)',
             lineHeight: 1.6,
             marginBottom: '0.75rem',
           }}
@@ -99,7 +99,7 @@ export default function GlobalError({ error, reset }: ErrorProps) {
           <p
             style={{
               fontSize: '0.75rem',
-              color: 'var(--text-muted)',
+              color: 'var(--color-brand-champagne)',
               fontFamily: 'monospace',
               marginBottom: '1.25rem',
               opacity: 0.6,
@@ -123,7 +123,7 @@ export default function GlobalError({ error, reset }: ErrorProps) {
               padding: '0.625rem 1.5rem',
               borderRadius: '0.5rem',
               border: 'none',
-              background: 'var(--cta)',
+              background: 'var(--color-action-primary)',
               color: '#fff',
               fontWeight: 500,
               fontSize: '0.9rem',
@@ -131,10 +131,12 @@ export default function GlobalError({ error, reset }: ErrorProps) {
               transition: 'background 0.2s',
             }}
             onMouseOver={(e) => {
-              (e.currentTarget as HTMLButtonElement).style.background = 'var(--cta-hover)';
+              (e.currentTarget as HTMLButtonElement).style.background =
+                'var(--color-action-primary-hover)';
             }}
             onMouseOut={(e) => {
-              (e.currentTarget as HTMLButtonElement).style.background = 'var(--cta)';
+              (e.currentTarget as HTMLButtonElement).style.background =
+                'var(--color-action-primary)';
             }}
           >
             Reintentar
@@ -147,7 +149,7 @@ export default function GlobalError({ error, reset }: ErrorProps) {
               borderRadius: '0.5rem',
               border: '1px solid var(--border)',
               background: 'transparent',
-              color: 'var(--text-muted)',
+              color: 'var(--color-brand-champagne)',
               fontWeight: 500,
               fontSize: '0.9rem',
               textDecoration: 'none',

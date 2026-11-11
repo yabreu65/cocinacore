@@ -10,8 +10,8 @@ export default function NotFound() {
         alignItems: 'center',
         justifyContent: 'center',
         padding: '2rem',
-        background: 'var(--bg-main)',
-        color: 'var(--text-main)',
+        background: 'var(--color-bg-page)',
+        color: 'var(--color-text-primary)',
       }}
     >
       <div
@@ -28,9 +28,9 @@ export default function NotFound() {
         <div
           style={{
             fontSize: '3.5rem',
-            fontFamily: 'var(--font-playfair), serif',
+            fontFamily: 'var(--font-heading)',
             fontWeight: 700,
-            color: 'var(--cta)',
+            color: 'var(--color-action-primary)',
             lineHeight: 1,
             marginBottom: '0.75rem',
           }}
@@ -41,7 +41,7 @@ export default function NotFound() {
 
         <h1
           style={{
-            fontFamily: 'var(--font-playfair), serif',
+            fontFamily: 'var(--font-heading)',
             fontSize: '1.5rem',
             fontWeight: 600,
             marginBottom: '0.5rem',
@@ -53,7 +53,7 @@ export default function NotFound() {
         <p
           style={{
             fontSize: '0.925rem',
-            color: 'var(--text-muted)',
+            color: 'var(--color-text-secondary)',
             lineHeight: 1.6,
             marginBottom: '1.75rem',
           }}
@@ -70,7 +70,7 @@ export default function NotFound() {
             padding: '0.625rem 1.5rem',
             borderRadius: '0.5rem',
             border: 'none',
-            background: 'var(--cta)',
+            background: 'var(--color-action-primary)',
             color: '#fff',
             fontWeight: 500,
             fontSize: '0.9rem',
