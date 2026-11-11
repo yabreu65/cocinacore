@@ -48,7 +48,7 @@ export default function OwnerShell({ children }: OwnerShellProps) {
   return (
     <main className="texture-paper min-h-screen bg-[#FAF6F1] text-[#241A14]">
       <div className="mx-auto flex w-full max-w-[1560px] gap-4 p-3 md:p-6">
-        <aside className="hidden w-[280px] shrink-0 rounded-3xl border border-white/10 bg-[#16110D] p-4 text-[#F4EBDD] lg:block">
+        <aside className="bistro-focus-dark hidden w-[280px] shrink-0 rounded-3xl border border-white/10 bg-[#16110D] p-4 text-[#F4EBDD] lg:block">
           <div className="mb-5">
             <p className="flex items-center gap-2 text-xl font-bold">
               <Shield size={18} /> Owner Console
