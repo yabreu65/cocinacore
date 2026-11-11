@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const getCurrentUser = vi.fn();
 const listInventory = vi.fn();
 const listRecipes = vi.fn();
+const listSavedRecipes = vi.fn();
 const findProfile = vi.fn();
 const findTenant = vi.fn();
 
@@ -12,6 +13,7 @@ vi.mock('@/lib/db/repositories/inventoryRepository', () => ({
 }));
 vi.mock('@/lib/db/repositories/recipeRepository', () => ({
   listRecipeHistoryByTenant: listRecipes,
+  listPersistentRecipes: listSavedRecipes,
 }));
 vi.mock('@/lib/db/repositories/culinaryProfileRepository', () => ({
   findCulinaryProfileByUserId: findProfile,
@@ -25,6 +27,7 @@ describe('GET /api/dashboard', () => {
     getCurrentUser.mockReset().mockResolvedValue({
       id: 'user-1',
       fullName: 'Example',
+      onboardingCompleted: false,
       tenant: { tenantId: 'tenant-1' },
     });
     listInventory.mockReset().mockResolvedValue(
@@ -35,6 +38,7 @@ describe('GET /api/dashboard', () => {
       }))
     );
     listRecipes.mockReset().mockResolvedValue([]);
+    listSavedRecipes.mockReset().mockResolvedValue([]);
     findProfile.mockReset().mockResolvedValue(null);
     findTenant.mockReset().mockResolvedValue(null);
   });
@@ -58,6 +62,7 @@ describe('GET /api/dashboard', () => {
     expect(body).toEqual({
       userId: 'user-1',
       fullName: 'Example',
+      onboardingCompleted: false,
       tenantId: 'tenant-1',
       tenantType: 'home',
       trialEndsAt: null,
@@ -67,6 +72,7 @@ describe('GET /api/dashboard', () => {
         quantity: `${index}`,
       })),
       recentRecipes: [],
+      hasSavedRecipes: false,
       pdfCount: 0,
       latestPdfs: [],
       tenantBooks: [],
@@ -78,11 +84,34 @@ describe('GET /api/dashboard', () => {
       { userId: 'user-1' },
       { tenantId: 'tenant-1', userId: 'user-1' }
     );
+    expect(listSavedRecipes).toHaveBeenCalledWith(
+      { tenantId: 'tenant-1', userId: 'user-1' },
+      { limit: 1 }
+    );
     expect(findProfile).toHaveBeenCalledWith('user-1', 'tenant-1');
     expect(findTenant).toHaveBeenCalledWith('tenant-1', undefined, undefined, {
       tenantId: 'tenant-1',
       userId: 'user-1',
     });
+  });
+
+  it('marks first recipe complete only after a recipe is actually saved', async () => {
+    listRecipes.mockResolvedValue([
+      {
+        id: 'generated-1',
+        recipe_title: 'Solo sugerencia',
+        created_at: '2026-11-11T00:00:00Z',
+        user_feedback: 'accepted',
+      },
+    ]);
+    const generatedOnly = await GET();
+    const generatedBody = (await generatedOnly.json()) as { hasSavedRecipes: boolean };
+    expect(generatedBody.hasSavedRecipes).toBe(false);
+
+    listSavedRecipes.mockResolvedValue([{ id: 'persisted-1' }]);
+    const afterSaving = await GET();
+    const savedBody = (await afterSaving.json()) as { hasSavedRecipes: boolean };
+    expect(savedBody.hasSavedRecipes).toBe(true);
   });
 
   it('rejects requests without a session before reads', async () => {
@@ -105,6 +134,7 @@ describe('GET /api/dashboard', () => {
     });
     expect(listInventory).not.toHaveBeenCalled();
     expect(listRecipes).not.toHaveBeenCalled();
+    expect(listSavedRecipes).not.toHaveBeenCalled();
     expect(findProfile).not.toHaveBeenCalled();
     expect(findTenant).not.toHaveBeenCalled();
   });

@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth/server';
 import { listInventoryItemsByTenant } from '@/lib/db/repositories/inventoryRepository';
-import { listRecipeHistoryByTenant } from '@/lib/db/repositories/recipeRepository';
+import {
+  listPersistentRecipes,
+  listRecipeHistoryByTenant,
+} from '@/lib/db/repositories/recipeRepository';
 import { findCulinaryProfileByUserId } from '@/lib/db/repositories/culinaryProfileRepository';
 import { findTenantById } from '@/lib/db/repositories/tenantRepository';
 
@@ -50,16 +53,24 @@ export async function GET() {
       )
     : [];
 
+  // A generated suggestion is not a saved recipe. The first-recipe milestone
+  // must rely on the persistent, tenant-scoped recetario instead of AI history.
+  const hasSavedRecipes = tenantId
+    ? (await listPersistentRecipes({ tenantId, userId: user.id }, { limit: 1 })).length > 0
+    : false;
+
   const profile = tenantId ? await findCulinaryProfileByUserId(user.id, tenantId) : null;
 
   return NextResponse.json({
     userId: user.id,
     fullName: user.fullName ?? '',
+    onboardingCompleted: user.onboardingCompleted,
     tenantId,
     tenantType: tenant?.tenant_type ?? 'home',
     trialEndsAt: tenant?.trial_ends_at ?? null,
     inventory,
     recentRecipes,
+    hasSavedRecipes,
     pdfCount: 0,
     latestPdfs: [],
     tenantBooks: [],
