@@ -1,6 +1,8 @@
 import type { Metadata } from 'next';
 import localFont from 'next/font/local';
 import { AuthProvider } from '@/context/AuthContext';
+import { Suspense } from 'react';
+import HouseholdShell from './components/HouseholdShell';
 import './globals.css';
 
 const manrope = localFont({
@@ -20,9 +22,9 @@ const fraunces = localFont({
 });
 
 export const metadata: Metadata = {
-  title: 'CocinaCore | Recetario familiar inteligente',
+  title: 'CocinaCore | Tu cocina más organizada',
   description:
-    'SaaS premium para recetas personalizadas, biblioteca PDF e inventario culinario familiar.',
+    'Organizá recetas, ingredientes, menús y listas de compras con ayuda inteligente para cocinar en casa.',
 };
 
 export default function RootLayout({
@@ -33,7 +35,11 @@ export default function RootLayout({
   return (
     <html lang="es" className={`${manrope.variable} ${fraunces.variable}`}>
       <body>
-        <AuthProvider>{children}</AuthProvider>
+        <AuthProvider>
+          <Suspense fallback={children}>
+            <HouseholdShell>{children}</HouseholdShell>
+          </Suspense>
+        </AuthProvider>
       </body>
     </html>
   );
