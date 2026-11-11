@@ -191,24 +191,28 @@ export default function ShoppingListPage() {
       return (
         <article
           key={item.id}
-          className="grid gap-3 rounded-xl border border-[#E8DDD2] bg-white p-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,24rem)] sm:items-center"
+          className="grid gap-3 rounded-xl border border-bistro-border bg-white p-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,24rem)] sm:items-center"
         >
           <div className="min-w-0">
-            <h3 className="break-words font-semibold text-[#241A14]">{item.ingredient_name}</h3>
+            <h3 className="break-words font-semibold text-bistro-text-primary">
+              {item.ingredient_name}
+            </h3>
             {item.quantity ? (
-              <p className="mt-1 text-sm text-[#6B5A50]">Cantidad: {item.quantity}</p>
+              <p className="mt-1 text-sm text-bistro-text-secondary">Cantidad: {item.quantity}</p>
             ) : null}
-            <p className="mt-1 text-sm text-[#6B5A50]">
+            <p className="mt-1 text-sm text-bistro-text-secondary">
               Estado: {item.status === 'pending' ? 'Pendiente' : 'Comprado'}
             </p>
-            <p className="mt-1 text-xs text-[#6B5A50]">{provenanceLabel(item.source)}</p>
+            <p className="mt-1 text-xs text-bistro-text-secondary">
+              {provenanceLabel(item.source)}
+            </p>
           </div>
           <div className="flex min-w-0 flex-wrap gap-2 sm:max-w-96 sm:justify-end">
             <button
               type="button"
               disabled={busy}
               onClick={() => void onToggleStatus(item)}
-              className="min-h-11 min-w-0 max-w-full rounded-xl border border-[#E8DDD2] px-3 text-left text-sm font-semibold text-[#A55412] whitespace-normal break-words hover:bg-[#FAF6F1] disabled:cursor-wait disabled:opacity-60"
+              className="min-h-11 min-w-0 max-w-full rounded-xl border border-bistro-border px-3 text-left text-sm font-semibold text-bistro-action-primary whitespace-normal break-words hover:bg-bistro-page disabled:cursor-wait disabled:opacity-60"
             >
               {nextStatusLabel}
             </button>
@@ -221,7 +225,7 @@ export default function ShoppingListPage() {
               type="button"
               disabled={busy}
               onClick={() => void onDelete(item)}
-              className="min-h-11 min-w-0 max-w-full rounded-xl border border-red-200 px-3 text-left text-sm font-semibold text-red-700 whitespace-normal break-words hover:bg-red-50 disabled:cursor-wait disabled:opacity-60"
+              className="min-h-11 min-w-0 max-w-full rounded-xl border border-bistro-danger/30 px-3 text-left text-sm font-semibold text-bistro-danger whitespace-normal break-words hover:bg-bistro-danger/10 disabled:cursor-wait disabled:opacity-60"
             >
               Eliminar {item.ingredient_name}
             </button>
@@ -231,32 +235,32 @@ export default function ShoppingListPage() {
     });
 
   return (
-    <main className="texture-paper min-h-screen bg-[#FAF6F1] px-4 py-6 text-[#241A14] md:px-6">
-      <section className="mx-auto w-full max-w-4xl rounded-3xl border border-[#E8DDD2] bg-white/80 p-5 premium-shadow sm:p-6">
+    <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 text-bistro-text-primary md:px-6">
+      <section className="mx-auto w-full max-w-4xl rounded-3xl border border-bistro-border bg-white/80 p-5 premium-shadow sm:p-6">
         <header className="mb-6 flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="text-3xl font-semibold">Lista de compras</h1>
-            <p className="mt-1 text-[#6B5A50]">
+            <p className="mt-1 text-bistro-text-secondary">
               Organizá lo que necesitás para tus próximas comidas.
             </p>
           </div>
           <Link
             href="/app"
-            className="min-h-11 rounded-xl px-3 py-2 text-sm font-semibold text-[#A55412] hover:bg-[#FAF6F1]"
+            className="min-h-11 rounded-xl px-3 py-2 text-sm font-semibold text-bistro-action-primary hover:bg-bistro-page"
           >
             Volver
           </Link>
         </header>
 
         {isLoading ? (
-          <p role="status" className="mb-4 text-sm text-[#6B5A50]">
+          <p role="status" className="mb-4 text-sm text-bistro-text-secondary">
             Cargando lista de compras...
           </p>
         ) : null}
         {loadError ? (
           <p
             role="alert"
-            className="mb-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+            className="mb-4 rounded-xl border border-bistro-danger/30 bg-bistro-danger/10 px-3 py-2 text-sm text-bistro-danger"
           >
             {loadError}
           </p>
@@ -265,48 +269,65 @@ export default function ShoppingListPage() {
           <p
             role="alert"
             aria-live="assertive"
-            className="mb-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+            className="mb-4 rounded-xl border border-bistro-danger/30 bg-bistro-danger/10 px-3 py-2 text-sm text-bistro-danger"
           >
             {mutationError}
           </p>
         ) : null}
 
         {!isLoading && !loadError && items.length === 0 ? (
-          <div className="mb-6 rounded-2xl border border-[#E8DDD2] bg-[#FAF6F1] p-4 text-sm text-[#6B5A50]">
-            <p className="font-semibold text-[#241A14]">Tu lista está vacía.</p>
-            <p className="mt-1">Agregá artículos manualmente o desde el planificador.</p>
+          <div className="mb-6 rounded-2xl border border-bistro-border bg-bistro-page p-4 text-sm text-bistro-text-secondary">
+            <p className="font-semibold text-bistro-text-primary">Tu lista está vacía.</p>
+            <p className="mt-1">Agregá productos aquí o desde un menú que hayas planificado.</p>
+            <Link
+              href="/meal-planner"
+              className="mt-3 inline-flex min-h-11 items-center font-semibold text-bistro-action-primary underline underline-offset-4"
+            >
+              Planificar mis comidas
+            </Link>
           </div>
         ) : null}
 
         <form
           onSubmit={(event) => void onCreate(event)}
-          className="mb-7 grid gap-3 rounded-2xl border border-[#E8DDD2] bg-white p-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end"
+          className="mb-7 grid gap-3 rounded-2xl border border-bistro-border bg-white p-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end"
         >
-          <label className="grid gap-1 text-sm font-semibold text-[#6B5A50]">
+          <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
             Ingrediente
             <input
               required
               value={ingredientName}
               onChange={(event) => setIngredientName(event.target.value)}
-              className="h-11 min-w-0 rounded-xl border border-[#E8DDD2] bg-white px-3 text-[#241A14] outline-none focus:border-[#A55412]"
+              className="h-11 min-w-0 rounded-xl border border-bistro-border bg-white px-3 text-bistro-text-primary outline-none focus:border-bistro-action-primary"
             />
           </label>
-          <label className="grid gap-1 text-sm font-semibold text-[#6B5A50]">
+          <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
             Cantidad (opcional)
             <input
               value={quantity}
               onChange={(event) => setQuantity(event.target.value)}
-              className="h-11 min-w-0 rounded-xl border border-[#E8DDD2] bg-white px-3 text-[#241A14] outline-none focus:border-[#A55412]"
+              className="h-11 min-w-0 rounded-xl border border-bistro-border bg-white px-3 text-bistro-text-primary outline-none focus:border-bistro-action-primary"
             />
           </label>
           <button
             type="submit"
             disabled={isCreating}
-            className="h-11 rounded-xl bg-[#A55412] px-4 font-semibold text-white hover:bg-[#8E460E] disabled:cursor-wait disabled:opacity-60"
+            className="h-11 rounded-xl bg-bistro-action-primary px-4 font-semibold text-white hover:bg-bistro-action-primary-hover disabled:cursor-wait disabled:opacity-60"
           >
             {isCreating ? 'Agregando...' : 'Agregar'}
           </button>
         </form>
+
+        <p className="mb-5 text-sm text-bistro-text-secondary">
+          Cuando compres un producto, marcalo como comprado y después elegí «Agregar al inventario»
+          para registrar lo que ya tenés en casa.{' '}
+          <Link
+            href="/recipes/inventory"
+            className="font-semibold text-bistro-action-primary underline underline-offset-4"
+          >
+            Ver mi inventario
+          </Link>
+        </p>
 
         <div className="grid gap-6">
           <section aria-labelledby="pending-heading" className="grid gap-3">
@@ -316,7 +337,7 @@ export default function ShoppingListPage() {
             {pendingItems.length > 0 ? (
               <div className="grid gap-3">{renderItems(pendingItems)}</div>
             ) : (
-              <p className="rounded-xl border border-[#E8DDD2] bg-white/70 p-4 text-sm text-[#6B5A50]">
+              <p className="rounded-xl border border-bistro-border bg-white/70 p-4 text-sm text-bistro-text-secondary">
                 No tenés compras pendientes.
               </p>
             )}
@@ -329,7 +350,7 @@ export default function ShoppingListPage() {
             {purchasedItems.length > 0 ? (
               <div className="grid gap-3">{renderItems(purchasedItems)}</div>
             ) : (
-              <p className="rounded-xl border border-[#E8DDD2] bg-white/70 p-4 text-sm text-[#6B5A50]">
+              <p className="rounded-xl border border-bistro-border bg-white/70 p-4 text-sm text-bistro-text-secondary">
                 No hay compras marcadas como realizadas.
               </p>
             )}
