@@ -5,10 +5,10 @@
 /* Temporary compatibility aliases; remove only after every legacy consumer migrates. */
 @layer base {
   :root {
-    --color-legacy-cta: #c56a1a;
-    --color-legacy-cta-hover: #a55412;
-    --color-legacy-accent-green: #567a3b;
-    --color-legacy-text-main: #241a14;
+    --color-legacy-cta: var(--color-action-primary);
+    --color-legacy-cta-hover: var(--color-action-primary-hover);
+    --color-legacy-accent-green: var(--color-action-secondary);
+    --color-legacy-text-main: var(--color-text-primary);
 
     --bg-main: var(--color-bg-page);
     --bg-dark: var(--color-brand-ink);
@@ -45,9 +45,11 @@ body {
   line-height: var(--leading-body);
 }
 
-a {
-  color: inherit;
-  text-decoration: none;
+@layer base {
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
 }
 
 :where(a, button, input, textarea, select, [tabindex]:not([tabindex='-1'])):focus-visible {

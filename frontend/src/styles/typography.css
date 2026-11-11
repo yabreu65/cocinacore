@@ -32,7 +32,7 @@
 }
 
 @layer base {
-  :where(h1, h2, .type-display, .type-heading) {
+  :where(h1, h2, h3, .type-display, .type-heading) {
     font-family: var(--font-heading);
     line-height: var(--leading-heading);
     letter-spacing: var(--tracking-tight);

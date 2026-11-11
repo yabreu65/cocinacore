@@ -1,5 +1,8 @@
 @theme inline {
   --color-bistro-page: var(--color-bg-page);
+  --color-bistro-cream: var(--color-brand-cream);
+  --color-bistro-champagne: var(--color-brand-champagne);
+  --color-bistro-inverse: var(--color-bg-inverse);
   --color-bistro-surface: var(--color-bg-surface);
   --color-bistro-surface-warm: var(--color-bg-surface-warm);
   --color-bistro-text-primary: var(--color-text-primary);
