@@ -183,6 +183,36 @@ export async function injectAuth(
     cachedAuthCookiesFromSignup = null;
   }
 
+  // Global setup already proved the synthetic user's real signup and login.
+  // Reuse that issued session across workers/retries only on disposable E2E targets.
+  const bootstrapCookie = process.env.COCINACORE_E2E_BOOTSTRAP_SESSION_COOKIE;
+  if (bootstrapCookie && process.env.COCINACORE_E2E_DISPOSABLE === 'true' && !allowSignup) {
+    const separator = bootstrapCookie.indexOf('=');
+    const name = bootstrapCookie.slice(0, separator);
+    const value = bootstrapCookie.slice(separator + 1);
+    const port = process.env.E2E_APP_PORT ?? '4320';
+    if (
+      separator < 1 ||
+      !/^[a-zA-Z0-9_-]+$/.test(name) ||
+      !value ||
+      !/^\d{1,5}$/.test(port) ||
+      Number(port) < 1 ||
+      Number(port) > 65535
+    ) {
+      throw new Error('Invalid isolated E2E bootstrap session configuration.');
+    }
+    await page.context().addCookies([
+      {
+        name,
+        value,
+        url: `http://127.0.0.1:${port}`,
+        httpOnly: true,
+        secure: false,
+      },
+    ]);
+    return;
+  }
+
   let response = await login(page);
   let authenticatedBySignup = false;
 

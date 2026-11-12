@@ -8,7 +8,7 @@ test.describe('Dashboard and Inventory', () => {
     await page.goto('/dashboard');
 
     await expect(page).toHaveURL('/app');
-    await expect(page.locator('header').getByRole('link', { name: 'CocinaCore' })).toBeVisible();
+    await expect(page.locator('aside').getByRole('link', { name: 'CocinaCore' })).toBeVisible();
     await expect(page.locator('body')).not.toContainText('Restaurante Central');
     await expect(page.locator('body')).not.toContainText(
       'Configuración del Sistema de Diseño Visual'
