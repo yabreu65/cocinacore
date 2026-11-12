@@ -1,5 +1,17 @@
 # Dedicated stack; always use an explicit project name and private env files.
 services:
+  app:
+    image: ${CC_APP_IMAGE:?immutable application image required}
+    restart: unless-stopped
+    env_file: ${CC_APP_ENV:?private application env file required}
+    networks: [data]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      storage: {condition: service_healthy}
+    logging: &bounded_logs
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}
   postgres:
     image: pgvector/pgvector:pg16@sha256:0dd3149a06e4579a0d70d8fef9945636cd514005e7237deb27f9b67886f8dc4f
     restart: unless-stopped
@@ -12,9 +24,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 12
-    logging: &bounded_logs
-      driver: json-file
-      options: {max-size: 10m, max-file: '3'}
+    logging: *bounded_logs
   redis:
     image: redis:7-alpine@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
     restart: unless-stopped
@@ -28,6 +38,39 @@ services:
       interval: 5s
       timeout: 5s
       retries: 12
+    logging: *bounded_logs
+  storage:
+    image: rustfs/rustfs:1.0.5@sha256:b81d16a90ee25bd9511280127ca1471788c6e874cf0f0da759645f46b2dc1d74
+    restart: unless-stopped
+    env_file: ${CC_STORAGE_ENV:?private storage env file required}
+    environment:
+      RUSTFS_ADDRESS: ':9000'
+      RUSTFS_CONSOLE_ENABLE: 'false'
+      RUSTFS_SFTP_ENABLE: 'false'
+      RUSTFS_FTP_ENABLE: 'false'
+      RUSTFS_WEBDAV_ENABLE: 'false'
+    command: [/data]
+    volumes:
+      - storage_data:/data
+    networks: [data]
+    healthcheck:
+      test: [CMD-SHELL, 'curl -fsS --max-time 3 http://127.0.0.1:9000/health >/dev/null']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    logging: *bounded_logs
+  storage-init:
+    image: rustfs/rc:v0.1.37@sha256:7e93fd410a8fe51514f89373e093392c92095b98dc6140335fcfe956810c4c80
+    profiles: [operations]
+    restart: 'no'
+    env_file: ${CC_STORAGE_INIT_ENV:?private storage initializer env file required}
+    entrypoint: [/bin/sh, /app/init-storage.sh]
+    volumes:
+      - ./scripts/standalone-init-storage.sh:/app/init-storage.sh:ro
+      - ./scripts/standalone-storage-policy.json:/app/storage-policy.json:ro
+    networks: [data]
+    depends_on:
+      storage: {condition: service_healthy}
     logging: *bounded_logs
   operations:
     image: ${CC_OPERATIONS_IMAGE:?immutable operations image required}
@@ -43,6 +86,7 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  storage_data:
 networks:
   data:
     internal: true

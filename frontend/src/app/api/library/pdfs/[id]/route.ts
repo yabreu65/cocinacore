@@ -6,7 +6,7 @@ import {
   deleteTenantPdfById,
   findTenantPdfById,
 } from '@/lib/db/repositories/pdfRepository';
-import { getStorageAdapter } from '@/lib/storage';
+import { getStorageAdapter, getStorageDriver } from '@/lib/storage';
 
 export const runtime = 'nodejs';
 
@@ -33,6 +33,15 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
 
     if (!canDelete) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+
+    // The S3 identity is deliberately global-only. Never delete metadata or
+    // attempt an object operation until a tenant-scoped S3 lane is available.
+    if (getStorageDriver() === 's3') {
+      return NextResponse.json(
+        { error: 'Private PDF deletion is unavailable with S3 storage.' },
+        { status: 503 }
+      );
     }
 
     await deleteTenantPdfById(tenant.tenantId, pdfId, scope);
