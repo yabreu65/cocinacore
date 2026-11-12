@@ -75,6 +75,9 @@ jobs:
       - name: Validate Docker application route context
         run: sh ../scripts/tests/test-dockerignore-route-contract.sh
 
+      - name: Validate standalone Docker image and secret exclusions
+        run: sh ../scripts/tests/test-standalone-image-contract.sh --context
+
       - name: Validate GitHub Actions expressions with pinned actionlint
         run: bash ../scripts/ci/run-actionlint.sh
 
