@@ -60,6 +60,72 @@ describe('POST /api/inventory', () => {
     updateInventoryItemMock.mockReset();
   });
 
+  it.each([
+    { quantity: '1', unit: '500 gramos' },
+    { quantity: '-1', unit: 'kg' },
+    { quantity: '500 g', unit: 'g' },
+    { quantity: '500' },
+    { quantity: '0.00001', unit: 'g' },
+    { lowStockThreshold: '1' },
+    { lowStockThreshold: '-1', unit: 'g' },
+    { estimatedUnitPrice: '-1' },
+    { quantity: '1', unit: 'constructor' },
+    { category: 'categoría inventada' },
+    { expirationDate: '2026-02-30' },
+    { expirationDate: 'not-a-date' },
+    { expirationDate: '2026-13-01' },
+    { expirationDate: '2026-11-12T00:00:00.000Z' },
+  ])('rejects invalid inventory fields for create and update %j', async (fields) => {
+    for (const id of [undefined, 'item-1']) {
+      const response = await POST(
+        new NextRequest('http://localhost/api/inventory', {
+          method: 'POST',
+          body: JSON.stringify({ id, ingredientName: 'Harina', ...fields }),
+        })
+      );
+      expect(response.status).toBe(400);
+    }
+    expect(createInventoryItemMock).not.toHaveBeenCalled();
+    expect(updateInventoryItemMock).not.toHaveBeenCalled();
+  });
+
+  it('normalizes quantities and units for create and update', async () => {
+    createInventoryItemMock.mockResolvedValue({ id: 'new' });
+    updateInventoryItemMock.mockResolvedValue({ id: 'item-1' });
+    const payload = {
+      ingredientName: 'Harina',
+      quantity: '0,5',
+      unit: 'kilogramos',
+      lowStockThreshold: '0,25',
+      expirationDate: '2028-02-29',
+    };
+    const expected = {
+      quantity: '0.5',
+      unit: 'kg',
+      lowStockThreshold: 0.25,
+      expirationDate: '2028-02-29',
+    };
+    for (const id of [undefined, 'item-1']) {
+      const response = await POST(
+        new NextRequest('http://localhost/api/inventory', {
+          method: 'POST',
+          body: JSON.stringify({ id, ...payload }),
+        })
+      );
+      expect(response.status).toBe(id ? 200 : 201);
+    }
+    expect(createInventoryItemMock).toHaveBeenCalledWith(expect.objectContaining(expected));
+    expect(updateInventoryItemMock).toHaveBeenCalledWith(
+      'item-1',
+      'tenant-1',
+      expect.objectContaining(expected),
+      {
+        tenantId: 'tenant-1',
+        userId: 'user-1',
+      }
+    );
+  });
+
   it('rejects a non-string ingredient name without persisting', async () => {
     const request = new NextRequest('http://localhost/api/inventory', {
       method: 'POST',
@@ -116,6 +182,31 @@ describe('authenticated inventory scope', () => {
     listInventoryItemsByTenantMock.mockResolvedValue([]);
     createInventoryItemMock.mockResolvedValue({ id: 'new' });
     updateInventoryItemMock.mockResolvedValue({ id: 'item-1' });
+  });
+  it('returns 401 on unauthenticated writes without repository calls', async () => {
+    requireUserMock.mockRejectedValue(new Error('Unauthorized'));
+    const create = new NextRequest('http://localhost/api/inventory', {
+      method: 'POST',
+      body: JSON.stringify({ ingredientName: 'Harina' }),
+    });
+    const remove = new NextRequest('http://localhost/api/inventory?id=item-1', {
+      method: 'DELETE',
+    });
+    expect((await POST(create)).status).toBe(401);
+    expect((await DELETE(remove)).status).toBe(401);
+    expect(createInventoryItemMock).not.toHaveBeenCalled();
+    expect(updateInventoryItemMock).not.toHaveBeenCalled();
+    expect(deleteInventoryItemMock).not.toHaveBeenCalled();
+  });
+  it('preserves non-authentication failures on writes', async () => {
+    const error = new Error('database unavailable');
+    requireUserMock.mockRejectedValue(error);
+    await expect(
+      POST(new NextRequest('http://localhost/api/inventory', { method: 'POST' }))
+    ).rejects.toBe(error);
+    await expect(
+      DELETE(new NextRequest('http://localhost/api/inventory?id=item-1', { method: 'DELETE' }))
+    ).rejects.toBe(error);
   });
   it('GET uses actor and tenant from the same user', async () => {
     expect((await GET()).status).toBe(200);

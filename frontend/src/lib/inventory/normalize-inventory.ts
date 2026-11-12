@@ -19,14 +19,14 @@ export function normalizeInventoryName(value: string): string {
 
 export function detectInventoryCategory(ingredientName: string): InventoryCategory {
   const text = normalizeInventoryName(ingredientName);
-  if (/(pollo|carne|res|cerdo|pescado|atun|huevo|jamon)/.test(text)) return 'Proteínas';
+  if (/(pollo|carne|\bres\b|cerdo|pescado|atun|huevo|jamon)/.test(text)) return 'Proteínas';
   if (/(tomate|cebolla|pimenton|zanahoria|lechuga|ajo|brocoli|pepino)/.test(text))
     return 'Verduras';
   if (/(manzana|banana|platano|fresa|frutilla|uva|naranja|limon)/.test(text)) return 'Frutas';
   if (/(leche|queso|mantequilla|yogur|yogurt|crema)/.test(text)) return 'Lácteos';
   if (/(arroz|avena|quinoa|maiz|pasta|harina|trigo|lenteja|garbanzo|frijol)/.test(text))
     return 'Granos';
-  if (/(sal|pimienta|comino|oregano|oregano|cilantro|perejil|canela|romero|tomillo)/.test(text))
+  if (/(\bsal\b|pimienta|comino|oregano|oregano|cilantro|perejil|canela|romero|tomillo)/.test(text))
     return 'Especias';
   if (/(aceite|vinagre|azucar|azúcar|salsa|caldo|conserva)/.test(text)) return 'Despensa';
   return 'Otros';
@@ -57,13 +57,27 @@ export function getStockBadge(
   return 'suficiente';
 }
 
+// A date-only value (including its persisted UTC-midnight form) denotes a
+// calendar day, not an instant to shift into the browser's local time zone.
+function expirationCalendarDay(value: string): number | null {
+  const calendar = value.match(/^(\d{4}-\d{2}-\d{2})(?:T00:00:00(?:\.0+)?Z)?$/);
+  if (calendar) {
+    const parsed = new Date(`${calendar[1]}T00:00:00.000Z`);
+    if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== calendar[1])
+      return null;
+    return parsed.getTime();
+  }
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return null;
+  return Date.UTC(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+}
+
 export function isExpiringSoon(expirationDate: string | null, days = 5): boolean {
   if (!expirationDate) return false;
   const today = new Date();
-  const end = new Date(expirationDate);
-  if (Number.isNaN(end.getTime())) return false;
-  today.setHours(0, 0, 0, 0);
-  end.setHours(0, 0, 0, 0);
-  const diffDays = Math.ceil((end.getTime() - today.getTime()) / 86400000);
+  const todayDay = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+  const endDay = expirationCalendarDay(expirationDate);
+  if (endDay === null) return false;
+  const diffDays = (endDay - todayDay) / 86400000;
   return diffDays >= 0 && diffDays <= days;
 }

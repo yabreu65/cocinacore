@@ -4,12 +4,16 @@ import { FormEvent, useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
   detectInventoryCategory,
-  getStockBadge,
   isExpiringSoon,
   normalizeInventoryName,
 } from '@/lib/inventory/normalize-inventory';
 import { safeFetch } from '@/lib/api';
-import { formatQuantity, parseQuantity } from '@/lib/inventory/quantity-normalization';
+import {
+  INVENTORY_CATEGORIES,
+  INVENTORY_UNITS,
+  inventoryStockState,
+  validateInventoryFields,
+} from '@/lib/inventory/inventory-input';
 
 type InventoryItem = {
   id: string;
@@ -18,9 +22,9 @@ type InventoryItem = {
   unit: string | null;
   category: string | null;
   expiration_date: string | null;
-  estimated_unit_price: number | null;
+  estimated_unit_price: number | string | null;
   purchase_location: string | null;
-  low_stock_threshold: number | null;
+  low_stock_threshold: number | string | null;
 };
 
 export default function RecipeInventoryPage() {
@@ -61,6 +65,16 @@ export default function RecipeInventoryPage() {
     event.preventDefault();
     const value = name.trim();
     if (!value) return;
+    const validated = validateInventoryFields({
+      quantity,
+      unit,
+      estimatedUnitPrice,
+      lowStockThreshold,
+    });
+    if (!validated.ok) {
+      setError(validated.error);
+      return;
+    }
     setWorking(true);
     setError(null);
     try {
@@ -70,8 +84,8 @@ export default function RecipeInventoryPage() {
         credentials: 'same-origin',
         body: JSON.stringify({
           ingredientName: value,
-          quantity,
-          unit,
+          quantity: validated.quantity ?? '',
+          unit: validated.unit ?? '',
           category: category.trim() || detectInventoryCategory(value),
           expirationDate,
           estimatedUnitPrice,
@@ -134,58 +148,100 @@ export default function RecipeInventoryPage() {
         </div>
 
         <form onSubmit={onSubmit} className="grid gap-2 md:grid-cols-[1fr_160px_140px_auto]">
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Ingrediente"
-            className="h-11 rounded-xl border border-bistro-border bg-white px-3 outline-none"
-          />
-          <input
-            value={quantity}
-            onChange={(e) => setQuantity(e.target.value)}
-            placeholder="Cantidad"
-            className="h-11 rounded-xl border border-bistro-border bg-white px-3 outline-none"
-          />
-          <input
-            value={unit}
-            onChange={(e) => setUnit(e.target.value)}
-            placeholder="Unidad"
-            className="h-11 rounded-xl border border-bistro-border bg-white px-3 outline-none"
-          />
-          <input
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-            placeholder="Categoría"
-            className="h-11 rounded-xl border border-bistro-border bg-white px-3 outline-none md:col-span-2"
-          />
-          <input
-            type="date"
-            value={expirationDate}
-            onChange={(e) => setExpirationDate(e.target.value)}
-            className="h-11 rounded-xl border border-bistro-border bg-white px-3 outline-none"
-          />
-          <input
-            type="number"
-            step="0.01"
-            value={estimatedUnitPrice}
-            onChange={(e) => setEstimatedUnitPrice(e.target.value)}
-            placeholder="Precio estimado"
-            className="h-11 rounded-xl border border-bistro-border bg-white px-3 outline-none"
-          />
-          <input
-            value={purchaseLocation}
-            onChange={(e) => setPurchaseLocation(e.target.value)}
-            placeholder="Lugar de compra"
-            className="h-11 rounded-xl border border-bistro-border bg-white px-3 outline-none"
-          />
-          <input
-            type="number"
-            step="0.01"
-            value={lowStockThreshold}
-            onChange={(e) => setLowStockThreshold(e.target.value)}
-            placeholder="Stock mínimo"
-            className="h-11 rounded-xl border border-bistro-border bg-white px-3 outline-none"
-          />
+          <label className="grid gap-1 text-sm font-semibold">
+            Ingrediente
+            <input
+              required
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Ej. Harina"
+              className="h-11 min-w-0 rounded-xl border border-bistro-border bg-white px-3 outline-none"
+            />
+          </label>
+          <label className="grid gap-1 text-sm font-semibold">
+            Cantidad
+            <input
+              inputMode="decimal"
+              value={quantity}
+              onChange={(e) => setQuantity(e.target.value)}
+              placeholder="Ej. 500"
+              className="h-11 min-w-0 rounded-xl border border-bistro-border bg-white px-3 outline-none"
+            />
+          </label>
+          <label className="grid gap-1 text-sm font-semibold">
+            Unidad
+            <select
+              value={unit}
+              onChange={(e) => setUnit(e.target.value)}
+              className="h-11 min-w-0 rounded-xl border border-bistro-border bg-white px-3 outline-none"
+            >
+              <option value="">Seleccionar</option>
+              {INVENTORY_UNITS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="grid gap-1 text-sm font-semibold md:col-span-2">
+            Categoría
+            <select
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              className="h-11 min-w-0 rounded-xl border border-bistro-border bg-white px-3 outline-none"
+            >
+              <option value="">
+                Automática{name.trim() ? ` (${detectInventoryCategory(name)})` : ''}
+              </option>
+              {INVENTORY_CATEGORIES.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="grid gap-1 text-sm font-semibold">
+            Fecha de vencimiento
+            <input
+              type="date"
+              value={expirationDate}
+              onChange={(e) => setExpirationDate(e.target.value)}
+              className="h-11 rounded-xl border border-bistro-border bg-white px-3 outline-none"
+            />
+          </label>
+          <label className="grid gap-1 text-sm font-semibold">
+            Precio estimado
+            <input
+              type="number"
+              min="0"
+              step="0.0001"
+              value={estimatedUnitPrice}
+              onChange={(e) => setEstimatedUnitPrice(e.target.value)}
+              placeholder="Precio estimado"
+              className="h-11 rounded-xl border border-bistro-border bg-white px-3 outline-none"
+            />
+          </label>
+          <label className="grid gap-1 text-sm font-semibold">
+            Lugar de compra
+            <input
+              value={purchaseLocation}
+              onChange={(e) => setPurchaseLocation(e.target.value)}
+              placeholder="Lugar de compra"
+              className="h-11 rounded-xl border border-bistro-border bg-white px-3 outline-none"
+            />
+          </label>
+          <label className="grid gap-1 text-sm font-semibold">
+            {unit ? `Stock mínimo (${unit})` : 'Stock mínimo'}
+            <input
+              type="number"
+              min="0"
+              step="0.0001"
+              value={lowStockThreshold}
+              onChange={(e) => setLowStockThreshold(e.target.value)}
+              placeholder={unit ? `Stock mínimo (${unit})` : 'Stock mínimo'}
+              className="h-11 rounded-xl border border-bistro-border bg-white px-3 outline-none"
+            />
+          </label>
           <button
             type="submit"
             disabled={working}
@@ -196,7 +252,10 @@ export default function RecipeInventoryPage() {
         </form>
 
         {error ? (
-          <p className="mt-3 rounded-xl border border-bistro-danger/30 bg-bistro-danger/10 px-3 py-2 text-sm text-bistro-danger">
+          <p
+            role="alert"
+            className="mt-3 rounded-xl border border-bistro-danger/30 bg-bistro-danger/10 px-3 py-2 text-sm text-bistro-danger"
+          >
             {error}
           </p>
         ) : null}
@@ -204,13 +263,10 @@ export default function RecipeInventoryPage() {
 
         <ul className="mt-4 grid gap-2">
           {rows.map((item) => {
-            const parsed = parseQuantity(
-              [item.quantity ?? '', item.unit ?? ''].filter(Boolean).join(' ').trim()
-            );
+            const stock = inventoryStockState(item.quantity, item.unit, item.low_stock_threshold);
+            const parsed = validateInventoryFields({ quantity: item.quantity, unit: item.unit });
             const normalizedLabel =
-              parsed.structured && parsed.value !== null
-                ? formatQuantity(parsed.value, parsed.unit)
-                : null;
+              parsed.ok && parsed.quantity !== null ? `${parsed.quantity} ${parsed.unit}` : null;
 
             return (
               <li
@@ -236,15 +292,15 @@ export default function RecipeInventoryPage() {
                 <div className="mt-1 flex flex-wrap gap-1">
                   <span
                     className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
-                      getStockBadge(item.quantity, item.low_stock_threshold ?? null) ===
-                      'bajo stock'
+                      stock === 'agotado' ||
+                      stock === 'bajo stock' ||
+                      stock === 'revisar cantidad' ||
+                      stock === 'sin cantidad'
                         ? 'border-bistro-warning/30 bg-bistro-warning/10 text-bistro-warning'
                         : 'border-bistro-success/30 bg-bistro-success/10 text-bistro-success'
                     }`}
                   >
-                    {getStockBadge(item.quantity, item.low_stock_threshold ?? null) === 'bajo stock'
-                      ? 'bajo stock'
-                      : 'suficiente'}
+                    {stock}
                   </span>
                   {isExpiringSoon(item.expiration_date ?? null) ? (
                     <span className="rounded-full border border-bistro-danger/30 bg-bistro-danger/10 px-2 py-0.5 text-[10px] font-semibold text-bistro-danger">
@@ -256,9 +312,9 @@ export default function RecipeInventoryPage() {
                       sin unidad
                     </span>
                   ) : null}
-                  {!parsed.structured ? (
+                  {!parsed.ok ? (
                     <span className="rounded-full border border-bistro-border/30 bg-bistro-surface-warm/10 px-2 py-0.5 text-[10px] font-semibold text-bistro-text-secondary">
-                      cantidad no estructurada
+                      revisar datos originales
                     </span>
                   ) : null}
                 </div>

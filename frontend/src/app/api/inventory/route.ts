@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/auth/server';
 import {
+  INVENTORY_CATEGORIES,
+  isValidInventoryExpirationDate,
+  validateInventoryFields,
+} from '@/lib/inventory/inventory-input';
+import {
   listInventoryItemsScoped,
   createInventoryItem,
   updateInventoryItem,
@@ -62,7 +67,15 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
-  const authUser = await requireUser();
+  let authUser: Awaited<ReturnType<typeof requireUser>>;
+  try {
+    authUser = await requireUser();
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Unauthorized') {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    throw error;
+  }
   if (!authUser.tenant) throw new Error('Tenant context required');
   const tenant = authUser.tenant;
   const scope = { tenantId: tenant.tenantId, userId: authUser.id };
@@ -86,18 +99,26 @@ export async function POST(request: NextRequest) {
   } = body;
 
   const name = ingredientName?.trim();
-  const parsedEstimatedUnitPrice = estimatedUnitPrice?.trim() ? Number(estimatedUnitPrice) : null;
-  const parsedLowStockThreshold = lowStockThreshold?.trim() ? Number(lowStockThreshold) : null;
-
-  if (
-    (parsedEstimatedUnitPrice !== null && !Number.isFinite(parsedEstimatedUnitPrice)) ||
-    (parsedLowStockThreshold !== null && !Number.isFinite(parsedLowStockThreshold))
-  ) {
-    return NextResponse.json({ error: 'Invalid body' }, { status: 400 });
-  }
+  const validated = validateInventoryFields({
+    quantity,
+    unit,
+    estimatedUnitPrice,
+    lowStockThreshold,
+  });
+  if (!validated.ok) return NextResponse.json({ error: validated.error }, { status: 400 });
 
   if (!name) {
     return NextResponse.json({ error: 'Ingredient name is required' }, { status: 400 });
+  }
+  if (!isValidInventoryExpirationDate(expirationDate)) {
+    return NextResponse.json(
+      { error: 'Introduce una fecha de vencimiento válida.' },
+      { status: 400 }
+    );
+  }
+  const selectedCategory = category?.trim();
+  if (selectedCategory && !INVENTORY_CATEGORIES.some((option) => option === selectedCategory)) {
+    return NextResponse.json({ error: 'Selecciona una categoría válida.' }, { status: 400 });
   }
 
   if (id) {
@@ -106,13 +127,13 @@ export async function POST(request: NextRequest) {
       tenant.tenantId,
       {
         ingredientName: name,
-        quantity: quantity?.trim() || null,
-        unit: unit?.trim() || null,
-        category: category?.trim() || detectInventoryCategory(name),
+        quantity: validated.quantity,
+        unit: validated.unit,
+        category: selectedCategory || detectInventoryCategory(name),
         expirationDate: expirationDate || null,
-        estimatedUnitPrice: parsedEstimatedUnitPrice,
+        estimatedUnitPrice: validated.estimatedUnitPrice,
         purchaseLocation: purchaseLocation?.trim() || null,
-        lowStockThreshold: parsedLowStockThreshold,
+        lowStockThreshold: validated.lowStockThreshold,
         normalizedName: normalizeInventoryName(name),
         notes: notes?.trim() || null,
       },
@@ -125,13 +146,13 @@ export async function POST(request: NextRequest) {
     tenantId: tenant.tenantId,
     userId: authUser.id,
     ingredientName: name,
-    quantity: quantity?.trim() || null,
-    unit: unit?.trim() || null,
-    category: category?.trim() || detectInventoryCategory(name),
+    quantity: validated.quantity,
+    unit: validated.unit,
+    category: selectedCategory || detectInventoryCategory(name),
     expirationDate: expirationDate || null,
-    estimatedUnitPrice: parsedEstimatedUnitPrice,
+    estimatedUnitPrice: validated.estimatedUnitPrice,
     purchaseLocation: purchaseLocation?.trim() || null,
-    lowStockThreshold: parsedLowStockThreshold,
+    lowStockThreshold: validated.lowStockThreshold,
     normalizedName: normalizeInventoryName(name),
     notes: notes?.trim() || null,
   });
@@ -140,7 +161,15 @@ export async function POST(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
-  const user = await requireUser();
+  let user: Awaited<ReturnType<typeof requireUser>>;
+  try {
+    user = await requireUser();
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Unauthorized') {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    throw error;
+  }
   if (!user.tenant) throw new Error('Tenant context required');
   const tenant = user.tenant;
   const id = request.nextUrl.searchParams.get('id');
