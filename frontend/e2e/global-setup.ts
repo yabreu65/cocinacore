@@ -107,9 +107,14 @@ export default async function globalSetup(): Promise<void> {
     );
 
     const login = await postJson(`${baseUrl}/api/auth/login`, { email, password });
-    if (!login.ok || !login.headers.get('set-cookie')) {
+    const loginSessionCookie = login.headers.get('set-cookie')?.split(';', 1)[0];
+    if (!login.ok || !loginSessionCookie) {
       throw new Error(`HTTP login validation failed (${login.status}).`);
     }
+    // Playwright passes global-setup environment changes to test workers. Reuse the
+    // real, validated login session instead of exhausting the login rate limit
+    // when a failed E2E assertion restarts its worker for a retry.
+    process.env.COCINACORE_E2E_BOOTSTRAP_SESSION_COOKIE = loginSessionCookie;
   } finally {
     await Promise.all([runtimePool.end(), fixturePool.end()]);
   }

@@ -35,24 +35,24 @@ function mealKey(day: string, mealType: MealType): string {
 
 export function EditableMealTimeline(props: Props) {
   return (
-    <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
-      <h3 className="text-lg font-semibold text-[#241A14]">Timeline editable del menú</h3>
-      <p className="mt-1 text-sm text-[#6B5A50]">
+    <article className="rounded-2xl border border-bistro-border bg-white/85 p-3 sm:p-4 xl:p-5">
+      <h3 className="text-lg font-semibold text-bistro-text-primary">Timeline editable del menú</h3>
+      <p className="mt-1 text-sm text-bistro-text-secondary">
         Mové recetas entre días/comidas y recalculá la simulación en tiempo real.
       </p>
 
       <div className="mt-3 grid gap-3 lg:grid-cols-2">
         {props.days.map((day, dayIndex) => (
-          <section key={day.day} className="rounded-xl border border-[#E8DDD2] bg-white/80 p-3">
+          <section key={day.day} className="rounded-xl border border-bistro-border bg-white/80 p-3">
             <div className="mb-2 flex items-center justify-between">
-              <p className="text-sm font-semibold text-[#241A14]">{day.day}</p>
+              <p className="text-sm font-semibold text-bistro-text-primary">{day.day}</p>
               <button
                 type="button"
                 onClick={() => props.onSimulateDay(dayIndex)}
                 className={`rounded-lg border px-2 py-1 text-xs font-semibold ${
                   props.selectedDayIndex === dayIndex
-                    ? 'border-[#16110D] bg-[#16110D] text-[#F5ECE2]'
-                    : 'border-[#E8DDD2] bg-white text-[#6B5A50]'
+                    ? 'border-bistro-border bg-bistro-inverse text-bistro-cream'
+                    : 'border-bistro-border bg-white text-bistro-text-secondary'
                 }`}
               >
                 Simular día
@@ -71,19 +71,21 @@ export function EditableMealTimeline(props: Props) {
                 return (
                   <div
                     key={`${day.day}-${mealType}`}
-                    className="rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] p-2"
+                    className="rounded-xl border border-bistro-border bg-bistro-page p-2"
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div>
-                        <p className="text-xs font-semibold text-[#6B5A50]">{mealType}</p>
-                        <p className="text-sm font-semibold text-[#241A14] line-clamp-1">
+                        <p className="text-xs font-semibold text-bistro-text-secondary">
+                          {mealType}
+                        </p>
+                        <p className="text-sm font-semibold text-bistro-text-primary line-clamp-1">
                           {card.name}
                         </p>
                       </div>
                       <button
                         type="button"
                         onClick={() => props.onToggleLock(day.day, mealType)}
-                        className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1 text-xs text-[#6B5A50]"
+                        className="rounded-lg border border-bistro-border bg-white px-2 py-1 text-xs text-bistro-text-secondary"
                       >
                         {locked ? (
                           <Lock size={12} className="inline" />
@@ -98,7 +100,7 @@ export function EditableMealTimeline(props: Props) {
                         type="button"
                         disabled={locked || cannotMoveDayUp}
                         onClick={() => props.onMoveDay(dayIndex, mealType, -1)}
-                        className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1 disabled:opacity-40"
+                        className="rounded-lg border border-bistro-border bg-white px-2 py-1 disabled:opacity-40"
                       >
                         <ArrowUp size={12} className="mr-1 inline" /> Día -
                       </button>
@@ -106,7 +108,7 @@ export function EditableMealTimeline(props: Props) {
                         type="button"
                         disabled={locked || cannotMoveDayDown}
                         onClick={() => props.onMoveDay(dayIndex, mealType, 1)}
-                        className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1 disabled:opacity-40"
+                        className="rounded-lg border border-bistro-border bg-white px-2 py-1 disabled:opacity-40"
                       >
                         <ArrowDown size={12} className="mr-1 inline" /> Día +
                       </button>
@@ -114,7 +116,7 @@ export function EditableMealTimeline(props: Props) {
                         type="button"
                         disabled={locked || cannotMoveMealUp}
                         onClick={() => props.onMoveMealSlot(dayIndex, mealType, -1)}
-                        className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1 disabled:opacity-40"
+                        className="rounded-lg border border-bistro-border bg-white px-2 py-1 disabled:opacity-40"
                       >
                         <GripVertical size={12} className="mr-1 inline" /> Comida -
                       </button>
@@ -122,7 +124,7 @@ export function EditableMealTimeline(props: Props) {
                         type="button"
                         disabled={locked || cannotMoveMealDown}
                         onClick={() => props.onMoveMealSlot(dayIndex, mealType, 1)}
-                        className="rounded-lg border border-[#E8DDD2] bg-white px-2 py-1 disabled:opacity-40"
+                        className="rounded-lg border border-bistro-border bg-white px-2 py-1 disabled:opacity-40"
                       >
                         <GripVertical size={12} className="mr-1 inline" /> Comida +
                       </button>

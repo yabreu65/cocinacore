@@ -1,3 +1,6 @@
+'use client';
+
+import { useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 import { RecipeAlternativeCard } from './RecipeAlternativeCard';
 
@@ -19,22 +22,83 @@ type Props = {
 };
 
 export function RecipeReplacementModal(props: Props) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!props.open) return;
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const previouslyFocused = document.activeElement;
+    if (!dialog.open) dialog.showModal();
+    closeButtonRef.current?.focus();
+    return () => {
+      if (dialog.open) dialog.close();
+      if (previouslyFocused instanceof HTMLElement && previouslyFocused.isConnected) {
+        previouslyFocused.focus();
+      }
+    };
+  }, [props.open]);
+
   if (!props.open) return null;
 
   return (
-    <div className="fixed inset-0 z-[90] bg-[#16110D]/35 p-3 sm:p-6">
-      <div className="mx-auto flex h-full w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-[#E8DDD2] bg-[#FAF6F1]">
-        <div className="flex items-center justify-between border-b border-[#E8DDD2] px-4 py-3">
+    <dialog
+      ref={dialogRef}
+      aria-label="Cambiar receta del menú"
+      onCancel={(event) => {
+        event.preventDefault();
+        props.onClose();
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== 'Tab') return;
+        const dialog = dialogRef.current;
+        if (!dialog) return;
+        const controls = Array.from(
+          dialog.querySelectorAll<HTMLElement>(
+            'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
+          )
+        ).filter((element) => element.getClientRects().length > 0);
+        if (controls.length === 0) {
+          event.preventDefault();
+          dialog.focus();
+          return;
+        }
+        const first = controls[0];
+        const last = controls[controls.length - 1];
+        if (
+          event.shiftKey &&
+          (document.activeElement === first || document.activeElement === dialog)
+        ) {
+          event.preventDefault();
+          last.focus();
+        } else if (
+          !event.shiftKey &&
+          (document.activeElement === last || document.activeElement === dialog)
+        ) {
+          event.preventDefault();
+          first.focus();
+        }
+      }}
+      tabIndex={-1}
+      className="fixed inset-0 z-[90] m-auto h-[calc(100dvh-1.5rem)] w-[calc(100vw-1.5rem)] max-w-3xl overflow-hidden border-0 bg-transparent p-0 text-bistro-text-primary backdrop:bg-bistro-inverse/35 sm:h-[calc(100dvh-3rem)]"
+    >
+      <div className="mx-auto flex h-full w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-bistro-border bg-bistro-page">
+        <div className="flex items-center justify-between border-b border-bistro-border px-4 py-3">
           <div>
-            <p className="text-sm font-semibold text-[#241A14]">Cambiar receta inteligentemente</p>
-            <p className="text-xs text-[#6B5A50]">
+            <p className="text-sm font-semibold text-bistro-text-primary">
+              Cambiar receta inteligentemente
+            </p>
+            <p className="text-xs text-bistro-text-secondary">
               {props.day} · {props.mealType}
             </p>
           </div>
           <button
             type="button"
+            aria-label="Cerrar cambio de receta"
+            ref={closeButtonRef}
             onClick={props.onClose}
-            className="rounded-lg border border-[#E8DDD2] bg-white p-2 text-[#6B5A50] hover:border-[#C56A1A]/40"
+            className="rounded-lg border border-bistro-border bg-white p-2 text-bistro-text-secondary hover:border-bistro-action-primary/40"
           >
             <X size={14} />
           </button>
@@ -54,16 +118,16 @@ export function RecipeReplacementModal(props: Props) {
           </div>
         </div>
 
-        <div className="border-t border-[#E8DDD2] px-4 py-3">
+        <div className="border-t border-bistro-border px-4 py-3">
           <button
             type="button"
             onClick={props.onRegenerateMeal}
-            className="rounded-lg bg-[#C56A1A] px-3 py-2 text-sm font-semibold text-white hover:bg-[#A55412]"
+            className="rounded-lg bg-bistro-action-primary px-3 py-2 text-sm font-semibold text-white hover:bg-bistro-action-primary"
           >
             Regenerar comida
           </button>
         </div>
       </div>
-    </div>
+    </dialog>
   );
 }

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import { safeFetch } from '@/lib/api';
 import { normalizeInventoryName } from '@/lib/inventory/normalize-inventory';
 import type { MealPlanPublicResponse } from '@/lib/meal-planner/rehydration';
@@ -30,6 +31,19 @@ type Session = {
   };
   version: number;
 };
+export function cookingSessionStatusLabel(status: Session['status']): string {
+  switch (status) {
+    case 'active':
+      return 'En preparación';
+    case 'paused':
+      return 'Pausada';
+    case 'completed':
+      return 'Terminada';
+    case 'cancelled':
+      return 'Cancelada';
+  }
+}
+
 type SessionIngredient = Session['instructionSnapshot']['ingredients'][number];
 type Slot = { dayIndex: number; mealType: StructuredMealType; title: string };
 type ReconciliationOutcome = 'used' | 'omitted' | 'unknown' | 'substituted';
@@ -78,6 +92,25 @@ const storageKey = (recipeId: string, versionId: string) =>
 const startIdempotencyKey = (recipeId: string, versionId: string) =>
   `${storageKey(recipeId, versionId)}:start`;
 const reconciliationIdempotencyKey = (sessionId: string) => `cooking-reconciliation:${sessionId}`;
+
+const spanishMealName: Record<StructuredMealType, string> = {
+  breakfast: 'Desayuno',
+  lunch: 'Almuerzo',
+  dinner: 'Cena',
+};
+
+/** The existing backend contract rejects any repeated normalized ingredient name. */
+export function hasDuplicateReconciliationIngredients(
+  ingredients: readonly SessionIngredient[]
+): boolean {
+  const seen = new Set<string>();
+  for (const ingredient of ingredients) {
+    const name = normalizeInventoryName(ingredient.name).trim();
+    if (!name || seen.has(name)) return true;
+    seen.add(name);
+  }
+  return false;
+}
 
 function initialReconciliationItems(session: Session): ReconciliationItem[] {
   return stableIngredientRows(session.instructionSnapshot.ingredients).map((ingredient) => ({
@@ -133,6 +166,9 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
     () => (session ? stableIngredientRows(session.instructionSnapshot.ingredients) : []),
     [session]
   );
+  const reconciliationBlockedByDuplicates = session
+    ? hasDuplicateReconciliationIngredients(session.instructionSnapshot.ingredients)
+    : false;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -333,6 +369,12 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
 
   const submitReconciliation = async () => {
     if (!session || session.status !== 'completed') return;
+    if (reconciliationBlockedByDuplicates) {
+      setReconciliationMessage(
+        'El consumo real no se puede registrar porque la receta contiene ingredientes repetidos. El inventario no se modificó.'
+      );
+      return;
+    }
     const idempotencyKey =
       window.sessionStorage.getItem(reconciliationIdempotencyKey(session.id)) ??
       crypto.randomUUID();
@@ -387,23 +429,45 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
-        className="rounded-xl border border-[#4F6F52] px-3 py-2 text-sm font-semibold text-[#355238]"
+        className="rounded-xl border border-bistro-action-secondary px-3 py-2 text-sm font-semibold text-bistro-action-secondary"
         aria-expanded={open}
       >
         {open ? 'Cerrar preparación' : 'Preparar esta receta'}
       </button>
       {open && (
-        <div className="mt-3 grid gap-3 rounded-2xl bg-[#F2F7F0] p-3">
+        <div className="mt-3 grid gap-3 rounded-2xl bg-bistro-surface-warm p-3">
           {loading && <p role="status">Recuperando preparación…</p>}
           {!loading && !session && slots.length === 0 && (
-            <p>No hay un slot confirmado asociado a esta receta.</p>
+            <div className="rounded-xl border border-bistro-border bg-white p-4 text-sm text-bistro-text-secondary">
+              <p className="font-semibold text-bistro-text-primary">
+                Esta receta todavía no está vinculada a una comida del menú.
+              </p>
+              <p className="mt-2">
+                Para usar el seguimiento de preparación, primero asociá esta receta a un menú. Si
+                solo querés cocinarla ahora, podés consultar sus ingredientes y pasos.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-3">
+                <Link
+                  href="/meal-planner"
+                  className="inline-flex min-h-11 items-center rounded-xl bg-bistro-action-secondary px-4 py-2 font-semibold text-white"
+                >
+                  Ir al planificador
+                </Link>
+                <Link
+                  href={`/recipes/${encodeURIComponent(recipeId)}`}
+                  className="inline-flex min-h-11 items-center rounded-xl border border-bistro-border px-4 py-2 font-semibold text-bistro-action-primary"
+                >
+                  Ver receta y pasos
+                </Link>
+              </div>
+            </div>
           )}
           {!loading && !session && slots.length > 0 && (
             <>
               <label className="grid gap-1 text-sm font-semibold">
-                Slot asociado
+                Comida asociada del menú
                 <select
-                  className="rounded-xl border border-[#D8E5D4] bg-white px-3 py-2"
+                  className="rounded-xl border border-bistro-border bg-white px-3 py-2"
                   value={selectedSlot}
                   onChange={(event) => setSelectedSlot(event.target.value)}
                 >
@@ -412,7 +476,7 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
                       key={`${slot.dayIndex}:${slot.mealType}`}
                       value={`${slot.dayIndex}:${slot.mealType}`}
                     >
-                      Día {slot.dayIndex} · {slot.mealType} · {slot.title}
+                      Día {slot.dayIndex} · {spanishMealName[slot.mealType]} · {slot.title}
                     </option>
                   ))}
                 </select>
@@ -421,7 +485,7 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
                 type="button"
                 disabled={working || !selectedSlot}
                 onClick={() => void start()}
-                className="rounded-xl bg-[#4F6F52] px-3 py-2 font-semibold text-white disabled:opacity-50"
+                className="rounded-xl bg-bistro-action-secondary px-3 py-2 font-semibold text-white disabled:opacity-50"
               >
                 {working ? 'Iniciando…' : 'Iniciar preparación'}
               </button>
@@ -430,7 +494,8 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
           {!loading && session && (
             <>
               <p role="status" className="font-semibold">
-                Paso {session.currentStep} de {session.totalSteps} · {session.status}
+                Paso {session.currentStep} de {session.totalSteps} ·{' '}
+                {cookingSessionStatusLabel(session.status)}
               </p>
               <p className="text-sm">
                 Porciones previstas: {session.instructionSnapshot.servings ?? '—'}
@@ -499,7 +564,7 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
                     type="button"
                     disabled={working}
                     onClick={() => void transition('complete')}
-                    className="rounded-xl bg-[#4F6F52] px-3 py-2 text-sm font-semibold text-white"
+                    className="rounded-xl bg-bistro-action-secondary px-3 py-2 text-sm font-semibold text-white"
                   >
                     Finalizar
                   </button>
@@ -509,7 +574,7 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
                     type="button"
                     disabled={working}
                     onClick={() => void transition('cancel')}
-                    className="rounded-xl border border-red-300 px-3 py-2 text-sm text-red-800"
+                    className="rounded-xl border border-bistro-danger/30 px-3 py-2 text-sm text-bistro-danger"
                   >
                     Cancelar
                   </button>
@@ -518,145 +583,158 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
               {session.status === 'completed' && (
                 <fieldset className="grid gap-3 rounded-xl bg-white p-3">
                   <legend className="px-1 font-semibold">Reconciliar uso real</legend>
-                  <p className="text-sm text-slate-700">
+                  <p className="text-sm text-bistro-text-secondary">
                     Confirmá qué ocurrió con cada ingrediente. Esta operación no registra consumo
                     hasta que la envíes y no puede deshacer un movimiento confirmado.
                   </p>
-                  <div className="grid gap-3">
-                    {reconciliationItems.map((item, index) => {
-                      const matchingInventory = inventoryOptions.filter((option) => {
-                        const name = item.effectiveIngredient ?? item.originalIngredient;
-                        return option.normalizedName === normalizeInventoryName(name);
-                      });
-                      return (
-                        <div
-                          key={item.key}
-                          className="grid gap-2 rounded-xl border border-[#D8E5D4] p-3"
-                        >
-                          <p className="font-medium">{item.originalIngredient}</p>
-                          <label className="grid gap-1 text-sm">
-                            Resultado
-                            <select
-                              className="rounded-xl border border-[#D8E5D4] px-3 py-2"
-                              value={item.outcome}
-                              onChange={(event) =>
-                                setReconciliationOutcome(
-                                  index,
-                                  event.target.value as ReconciliationOutcome
-                                )
-                              }
-                            >
-                              <option value="used">Usado</option>
-                              <option value="omitted">Omitido</option>
-                              <option value="substituted">Sustituido</option>
-                              <option value="unknown">Desconocido</option>
-                            </select>
-                          </label>
-                          {(item.outcome === 'used' || item.outcome === 'substituted') && (
-                            <>
+                  {reconciliationBlockedByDuplicates ? (
+                    <p
+                      role="alert"
+                      className="rounded-xl border border-bistro-warning/30 bg-bistro-warning/10 p-3 text-sm text-bistro-text-primary"
+                    >
+                      Esta receta tiene ingredientes repetidos. El registro del consumo real todavía
+                      no admite duplicados, así que no descontaremos ingredientes del inventario.
+                      Revisá los ingredientes en Mi recetario para futuras preparaciones.
+                    </p>
+                  ) : (
+                    <div className="grid gap-3">
+                      {reconciliationItems.map((item, index) => {
+                        const matchingInventory = inventoryOptions.filter((option) => {
+                          const name = item.effectiveIngredient ?? item.originalIngredient;
+                          return option.normalizedName === normalizeInventoryName(name);
+                        });
+                        return (
+                          <div
+                            key={item.key}
+                            className="grid gap-2 rounded-xl border border-bistro-border p-3"
+                          >
+                            <p className="font-medium">{item.originalIngredient}</p>
+                            <label className="grid gap-1 text-sm">
+                              Resultado
+                              <select
+                                className="rounded-xl border border-bistro-border px-3 py-2"
+                                value={item.outcome}
+                                onChange={(event) =>
+                                  setReconciliationOutcome(
+                                    index,
+                                    event.target.value as ReconciliationOutcome
+                                  )
+                                }
+                              >
+                                <option value="used">Usado</option>
+                                <option value="omitted">Omitido</option>
+                                <option value="substituted">Sustituido</option>
+                                <option value="unknown">Desconocido</option>
+                              </select>
+                            </label>
+                            {(item.outcome === 'used' || item.outcome === 'substituted') && (
+                              <>
+                                <label className="grid gap-1 text-sm">
+                                  Ingrediente efectivo
+                                  <input
+                                    className="rounded-xl border border-bistro-border px-3 py-2"
+                                    value={item.effectiveIngredient ?? ''}
+                                    onChange={(event) =>
+                                      updateReconciliationItem(index, {
+                                        effectiveIngredient: event.target.value,
+                                      })
+                                    }
+                                  />
+                                </label>
+                                <div className="grid gap-2 sm:grid-cols-2">
+                                  <label className="grid gap-1 text-sm">
+                                    Cantidad efectiva
+                                    <input
+                                      type="number"
+                                      min="0.0001"
+                                      step="any"
+                                      className="rounded-xl border border-bistro-border px-3 py-2"
+                                      value={item.quantity ?? ''}
+                                      onChange={(event) =>
+                                        updateReconciliationItem(index, {
+                                          quantity: event.target.value
+                                            ? Number(event.target.value)
+                                            : null,
+                                        })
+                                      }
+                                    />
+                                  </label>
+                                  <label className="grid gap-1 text-sm">
+                                    Unidad
+                                    <input
+                                      className="rounded-xl border border-bistro-border px-3 py-2"
+                                      value={item.unit ?? ''}
+                                      onChange={(event) =>
+                                        updateReconciliationItem(index, {
+                                          unit: event.target.value || null,
+                                        })
+                                      }
+                                    />
+                                  </label>
+                                </div>
+                                <label className="grid gap-1 text-sm">
+                                  Lote de inventario
+                                  <select
+                                    className="rounded-xl border border-bistro-border px-3 py-2"
+                                    value={item.inventoryItemId ?? ''}
+                                    onChange={(event) =>
+                                      updateReconciliationItem(index, {
+                                        inventoryItemId: event.target.value || null,
+                                        ...(item.outcome === 'substituted'
+                                          ? {
+                                              substituteInventoryItemId: event.target.value || null,
+                                            }
+                                          : {}),
+                                      })
+                                    }
+                                  >
+                                    <option value="">Seleccioná un lote</option>
+                                    {(matchingInventory.length > 0
+                                      ? matchingInventory
+                                      : inventoryOptions
+                                    ).map((option) => (
+                                      <option key={option.id} value={option.id}>
+                                        {option.ingredientName} · {option.quantity ?? '—'}{' '}
+                                        {option.unit ?? ''}
+                                        {option.expirationDate
+                                          ? ` · vence ${option.expirationDate}`
+                                          : ''}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                              </>
+                            )}
+                            {item.outcome === 'substituted' && (
                               <label className="grid gap-1 text-sm">
-                                Ingrediente efectivo
+                                Sustituto real
                                 <input
-                                  className="rounded-xl border border-[#D8E5D4] px-3 py-2"
-                                  value={item.effectiveIngredient ?? ''}
+                                  className="rounded-xl border border-bistro-border px-3 py-2"
+                                  value={item.substituteIngredient ?? ''}
                                   onChange={(event) =>
                                     updateReconciliationItem(index, {
+                                      substituteIngredient: event.target.value,
                                       effectiveIngredient: event.target.value,
                                     })
                                   }
                                 />
                               </label>
-                              <div className="grid gap-2 sm:grid-cols-2">
-                                <label className="grid gap-1 text-sm">
-                                  Cantidad efectiva
-                                  <input
-                                    type="number"
-                                    min="0.0001"
-                                    step="any"
-                                    className="rounded-xl border border-[#D8E5D4] px-3 py-2"
-                                    value={item.quantity ?? ''}
-                                    onChange={(event) =>
-                                      updateReconciliationItem(index, {
-                                        quantity: event.target.value
-                                          ? Number(event.target.value)
-                                          : null,
-                                      })
-                                    }
-                                  />
-                                </label>
-                                <label className="grid gap-1 text-sm">
-                                  Unidad
-                                  <input
-                                    className="rounded-xl border border-[#D8E5D4] px-3 py-2"
-                                    value={item.unit ?? ''}
-                                    onChange={(event) =>
-                                      updateReconciliationItem(index, {
-                                        unit: event.target.value || null,
-                                      })
-                                    }
-                                  />
-                                </label>
-                              </div>
-                              <label className="grid gap-1 text-sm">
-                                Lote de inventario
-                                <select
-                                  className="rounded-xl border border-[#D8E5D4] px-3 py-2"
-                                  value={item.inventoryItemId ?? ''}
-                                  onChange={(event) =>
-                                    updateReconciliationItem(index, {
-                                      inventoryItemId: event.target.value || null,
-                                      ...(item.outcome === 'substituted'
-                                        ? { substituteInventoryItemId: event.target.value || null }
-                                        : {}),
-                                    })
-                                  }
-                                >
-                                  <option value="">Seleccioná un lote</option>
-                                  {(matchingInventory.length > 0
-                                    ? matchingInventory
-                                    : inventoryOptions
-                                  ).map((option) => (
-                                    <option key={option.id} value={option.id}>
-                                      {option.ingredientName} · {option.quantity ?? '—'}{' '}
-                                      {option.unit ?? ''}
-                                      {option.expirationDate
-                                        ? ` · vence ${option.expirationDate}`
-                                        : ''}
-                                    </option>
-                                  ))}
-                                </select>
-                              </label>
-                            </>
-                          )}
-                          {item.outcome === 'substituted' && (
-                            <label className="grid gap-1 text-sm">
-                              Sustituto real
-                              <input
-                                className="rounded-xl border border-[#D8E5D4] px-3 py-2"
-                                value={item.substituteIngredient ?? ''}
-                                onChange={(event) =>
-                                  updateReconciliationItem(index, {
-                                    substituteIngredient: event.target.value,
-                                    effectiveIngredient: event.target.value,
-                                  })
-                                }
-                              />
-                            </label>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                   <button
                     type="button"
-                    disabled={reconciliationWorking}
+                    disabled={reconciliationWorking || reconciliationBlockedByDuplicates}
                     onClick={() => void submitReconciliation()}
-                    className="rounded-xl bg-[#4F6F52] px-3 py-2 font-semibold text-white disabled:opacity-50"
+                    className="rounded-xl bg-bistro-action-secondary px-3 py-2 font-semibold text-white disabled:opacity-50"
                   >
                     {reconciliationWorking ? 'Registrando…' : 'Confirmar uso real'}
                   </button>
                   {reconciliationMessage && (
-                    <p role="status" className="text-sm text-slate-700">
+                    <p role="status" className="text-sm text-bistro-text-secondary">
                       {reconciliationMessage}
                     </p>
                   )}
@@ -665,7 +743,7 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
             </>
           )}
           {message && (
-            <p role="alert" className="text-sm text-red-800">
+            <p role="alert" className="text-sm text-bistro-danger">
               {message}
             </p>
           )}

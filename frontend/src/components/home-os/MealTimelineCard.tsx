@@ -17,24 +17,24 @@ const MEAL_EMOJI: Record<string, string> = {
 
 export function MealTimelineCard(props: Props) {
   return (
-    <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
-      <h3 className="text-lg font-semibold text-[#241A14]">Timeline culinario visual</h3>
-      <p className="mt-1 text-sm text-[#6B5A50]">
+    <article className="rounded-2xl border border-bistro-border bg-white/85 p-3 sm:p-4 xl:p-5">
+      <h3 className="text-lg font-semibold text-bistro-text-primary">Timeline culinario visual</h3>
+      <p className="mt-1 text-sm text-bistro-text-secondary">
         Cómo fluye tu menú durante el período seleccionado.
       </p>
 
       <div className="mt-3 grid gap-3 lg:grid-cols-2">
         {props.timeline.map((day, dayIndex) => (
-          <section key={day.day} className="rounded-xl border border-[#E8DDD2] bg-white/80 p-3">
+          <section key={day.day} className="rounded-xl border border-bistro-border bg-white/80 p-3">
             <div className="flex items-center justify-between gap-2">
-              <p className="text-sm font-semibold text-[#241A14]">{day.day}</p>
+              <p className="text-sm font-semibold text-bistro-text-primary">{day.day}</p>
               <button
                 type="button"
                 onClick={() => props.onSimulateDay(dayIndex)}
                 className={`rounded-lg border px-2 py-1 text-xs font-semibold ${
                   props.selectedDayIndex === dayIndex
-                    ? 'border-[#16110D] bg-[#16110D] text-[#F5ECE2]'
-                    : 'border-[#E8DDD2] bg-white text-[#6B5A50]'
+                    ? 'border-bistro-border bg-bistro-inverse text-bistro-cream'
+                    : 'border-bistro-border bg-white text-bistro-text-secondary'
                 }`}
               >
                 Simular día
@@ -44,9 +44,9 @@ export function MealTimelineCard(props: Props) {
               {day.meals.map((meal) => (
                 <li
                   key={`${day.day}-${meal.label}`}
-                  className="rounded-lg border border-[#E8DDD2] bg-[#FAF6F1] px-2.5 py-1.5 text-sm text-[#6B5A50]"
+                  className="rounded-lg border border-bistro-border bg-bistro-page px-2.5 py-1.5 text-sm text-bistro-text-secondary"
                 >
-                  <span className="font-semibold text-[#241A14]">
+                  <span className="font-semibold text-bistro-text-primary">
                     {MEAL_EMOJI[meal.label] ?? '🍽️'} {meal.label}
                   </span>
                   <p className="line-clamp-1">{meal.title}</p>

@@ -25,7 +25,7 @@ export function ShoppingTransferControls({
 }: ShoppingTransferControlsProps): ReactNode {
   if (item.transfer_inventory_item_id || item.transferred_at) {
     return (
-      <p role="status" className="text-sm font-semibold text-emerald-700">
+      <p role="status" className="text-sm font-semibold text-bistro-success">
         Agregado al inventario
       </p>
     );
@@ -37,7 +37,7 @@ export function ShoppingTransferControls({
       type="button"
       disabled={busy}
       onClick={onTransfer}
-      className="min-h-11 min-w-0 max-w-full rounded-xl border border-emerald-200 px-3 text-left text-sm font-semibold text-emerald-800 whitespace-normal break-words hover:bg-emerald-50 disabled:cursor-wait disabled:opacity-60"
+      className="min-h-11 min-w-0 max-w-full rounded-xl border border-bistro-success/30 px-3 text-left text-sm font-semibold text-bistro-success whitespace-normal break-words hover:bg-bistro-success/10 disabled:cursor-wait disabled:opacity-60"
     >
       {busy ? 'Agregando al inventario...' : 'Agregar al inventario'}
     </button>

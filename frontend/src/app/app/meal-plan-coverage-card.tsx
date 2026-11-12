@@ -76,14 +76,17 @@ export function MealPlanCoveragePanel({
   return (
     <section
       aria-labelledby="meal-plan-coverage-title"
-      className="mt-6 rounded-2xl border border-[#E8DDD2] bg-white/90 p-4 shadow-sm sm:p-6"
+      className="mt-6 rounded-2xl border border-bistro-border bg-white/90 p-4 shadow-sm sm:p-6"
     >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 id="meal-plan-coverage-title" className="text-lg font-semibold text-[#241A14]">
+          <h2
+            id="meal-plan-coverage-title"
+            className="text-lg font-semibold text-bistro-text-primary"
+          >
             Cobertura de ingredientes
           </h2>
-          <p className="mt-1 text-sm text-[#6B5A50]">
+          <p className="mt-1 text-sm text-bistro-text-secondary">
             Proyección basada en inventario cuantificado, agenda confirmada y comidas pendientes.
           </p>
         </div>
@@ -97,8 +100,8 @@ export function MealPlanCoveragePanel({
               onClick={() => onHorizonChange(days as 7 | 14)}
               className={`min-h-11 rounded-xl border px-4 py-2 text-sm font-semibold ${
                 horizonDays === days
-                  ? 'border-[#A55412] bg-[#A55412] text-white'
-                  : 'border-[#C8B9AC] bg-white text-[#6B5A50]'
+                  ? 'border-bistro-action-primary bg-bistro-action-primary text-white'
+                  : 'border-bistro-border bg-white text-bistro-text-secondary'
               }`}
             >
               {days} días
@@ -108,22 +111,31 @@ export function MealPlanCoveragePanel({
       </div>
 
       {loading ? (
-        <p role="status" className="mt-4 text-sm text-[#6B5A50]">
+        <p role="status" className="mt-4 text-sm text-bistro-text-secondary">
           Calculando cobertura…
         </p>
       ) : null}
       {error ? (
-        <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-800">
+        <p
+          role="alert"
+          className="mt-4 rounded-xl bg-bistro-danger/10 p-3 text-sm text-bistro-danger"
+        >
           {error}
         </p>
       ) : null}
       {scheduleError ? (
-        <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-800">
+        <p
+          role="alert"
+          className="mt-4 rounded-xl bg-bistro-danger/10 p-3 text-sm text-bistro-danger"
+        >
           {scheduleError}
         </p>
       ) : null}
       {scheduleMessage ? (
-        <p role="status" className="mt-4 rounded-xl bg-green-50 p-3 text-sm text-green-900">
+        <p
+          role="status"
+          className="mt-4 rounded-xl bg-bistro-success/10 p-3 text-sm text-bistro-success"
+        >
           {scheduleMessage}
         </p>
       ) : null}
@@ -131,7 +143,7 @@ export function MealPlanCoveragePanel({
       {!loading && forecast?.status === 'unknown' ? (
         <div
           role="status"
-          className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950"
+          className="mt-4 rounded-xl border border-bistro-warning/30 bg-bistro-warning/10 p-4 text-sm text-bistro-warning"
         >
           {needsSchedule || needsPortionConfirmation ? (
             <>
@@ -159,7 +171,7 @@ export function MealPlanCoveragePanel({
                       required
                       value={startDate}
                       onChange={(event) => onStartDateChange(event.target.value)}
-                      className="min-h-11 rounded-xl border border-[#C8B9AC] bg-white px-3 py-2"
+                      className="min-h-11 rounded-xl border border-bistro-border bg-white px-3 py-2"
                     />
                     <span className="text-xs">Zona horaria: {timeZone}</span>
                   </div>
@@ -169,20 +181,18 @@ export function MealPlanCoveragePanel({
                       type="checkbox"
                       required
                       checked={portionBasisConfirmed}
-                      onChange={(event) =>
-                        onPortionBasisConfirmationChange(event.target.checked)
-                      }
-                      className="mt-1 size-4 rounded border-[#C8B9AC]"
+                      onChange={(event) => onPortionBasisConfirmationChange(event.target.checked)}
+                      className="mt-1 size-4 rounded border-bistro-border"
                     />
                     <span>
-                      Confirmo que revisé las cantidades del menú y corresponden a {peopleCount ?? 'las'}{' '}
-                      porciones.
+                      Confirmo que revisé las cantidades del menú y corresponden a{' '}
+                      {peopleCount ?? 'las'} porciones.
                     </span>
                   </label>
                   <button
                     type="submit"
                     disabled={!startDate || !portionBasisConfirmed || isScheduling}
-                    className="min-h-11 rounded-xl bg-[#A55412] px-4 py-2 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    className="min-h-11 rounded-xl bg-bistro-action-primary px-4 py-2 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {isScheduling ? 'Guardando…' : 'Confirmar agenda y porciones'}
                   </button>
@@ -194,7 +204,7 @@ export function MealPlanCoveragePanel({
               <p>Cobertura desconocida: todavía no hay un menú guardado para proyectar.</p>
               <Link
                 href="/meal-planner"
-                className="mt-3 inline-block font-semibold text-[#8A430D] underline"
+                className="mt-3 inline-block font-semibold text-bistro-action-primary underline"
               >
                 Abrir el planificador
               </Link>
@@ -215,16 +225,19 @@ export function MealPlanCoveragePanel({
 
       {!loading && forecast?.status === 'ready' ? (
         <div className="mt-4" aria-live="polite">
-          <p className="text-sm text-[#6B5A50]">
+          <p className="text-sm text-bistro-text-secondary">
             Del {forecast.fromDate} al {forecast.throughDate} · {forecast.timeZone}
             {peopleCount ? ` · ${peopleCount} porciones` : ''}
           </p>
-          <p className="mt-1 text-xs text-[#6B5A50]">
+          <p className="mt-1 text-xs text-bistro-text-secondary">
             {forecast.scheduledMealCount} comidas programadas; {forecast.consumedMealCount}{' '}
             consumidas y excluidas del consumo futuro.
           </p>
           {forecast.items.length === 0 ? (
-            <p role="status" className="mt-3 rounded-xl bg-[#F8F4EF] p-3 text-sm text-[#6B5A50]">
+            <p
+              role="status"
+              className="mt-3 rounded-xl bg-bistro-surface-warm p-3 text-sm text-bistro-text-secondary"
+            >
               No hay requerimientos pendientes cuantificables en este horizonte.
             </p>
           ) : (
@@ -233,15 +246,17 @@ export function MealPlanCoveragePanel({
                 <li
                   key={item.normalizedName}
                   role="listitem"
-                  className="rounded-xl border border-[#E8DDD2] bg-white p-3"
+                  className="rounded-xl border border-bistro-border bg-white p-3"
                 >
                   <div className="flex flex-wrap items-start justify-between gap-2">
-                    <h3 className="font-semibold text-[#241A14]">{item.ingredientName}</h3>
-                    <span className="rounded-full bg-[#F8F4EF] px-2 py-1 text-xs font-semibold text-[#6B5A50]">
+                    <h3 className="font-semibold text-bistro-text-primary">
+                      {item.ingredientName}
+                    </h3>
+                    <span className="rounded-full bg-bistro-surface-warm px-2 py-1 text-xs font-semibold text-bistro-text-secondary">
                       {STATUS_LABELS[item.status]}
                     </span>
                   </div>
-                  <dl className="mt-2 grid gap-1 text-sm text-[#6B5A50]">
+                  <dl className="mt-2 grid gap-1 text-sm text-bistro-text-secondary">
                     <div>
                       <dt className="inline font-semibold">Requiere: </dt>
                       <dd className="inline">

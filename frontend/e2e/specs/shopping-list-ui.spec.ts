@@ -43,9 +43,8 @@ async function setupShoppingApi(
     const request = route.request();
     const url = new URL(request.url());
     const method = request.method();
-    const body: unknown = method === 'POST' || method === 'PATCH'
-      ? (request.postDataJSON() as unknown)
-      : undefined;
+    const body: unknown =
+      method === 'POST' || method === 'PATCH' ? (request.postDataJSON() as unknown) : undefined;
     requests.push({ method, body, pathname: url.pathname });
 
     if (method === 'GET' && url.pathname === '/api/shopping-list') {
@@ -88,7 +87,7 @@ async function setupShoppingApi(
         return;
       }
       const updated = { ...item, status };
-      items = items.map((candidate) => candidate.id === itemId ? updated : candidate);
+      items = items.map((candidate) => (candidate.id === itemId ? updated : candidate));
       await route.fulfill({ json: { item: updated } });
       return;
     }
@@ -109,7 +108,9 @@ async function setupShoppingApi(
 
   return {
     requests,
-    fail: (method: 'POST' | 'PATCH' | 'DELETE') => { failNext = method; },
+    fail: (method: 'POST' | 'PATCH' | 'DELETE') => {
+      failNext = method;
+    },
   };
 }
 
@@ -124,7 +125,9 @@ async function openShoppingList(
 }
 
 test.describe('Shopping List UI', () => {
-  test('loads sections, counts, quantities, status, and private provenance labels', async ({ page }) => {
+  test('loads sections, counts, quantities, status, and private provenance labels', async ({
+    page,
+  }) => {
     await openShoppingList(page, [manualItem, plannerItem]);
 
     await expect(page.getByRole('heading', { name: 'Lista de compras' })).toBeVisible();
@@ -157,12 +160,16 @@ test.describe('Shopping List UI', () => {
     await openShoppingList(page);
 
     await expect(page.getByText(/tu lista está vacía/i)).toBeVisible();
-    await expect(page.getByText('Agregá artículos manualmente o desde el planificador.')).toBeVisible();
+    await expect(
+      page.getByText('Agregá productos aquí o desde un menú que hayas planificado.')
+    ).toBeVisible();
     await expect(page.getByText('No tenés compras pendientes.')).toBeVisible();
     await expect(page.getByText('No hay compras marcadas como realizadas.')).toBeVisible();
   });
 
-  test('creates with the exact manual payload, toggles only status, and confirms exact-row deletion', async ({ page }) => {
+  test('creates with the exact manual payload, toggles only status, and confirms exact-row deletion', async ({
+    page,
+  }) => {
     const api = await openShoppingList(page, [manualItem, plannerItem]);
 
     await page.getByLabel(/ingrediente/i).fill('Leche');
@@ -180,47 +187,58 @@ test.describe('Shopping List UI', () => {
     await tomatoes.getByRole('button', { name: /marcar como comprado/i }).click();
     await expect(page.getByRole('heading', { name: /pendientes\s*\(1\)/i })).toBeVisible();
     await expect(page.getByRole('heading', { name: /comprados\s*\(2\)/i })).toBeVisible();
-    expect(api.requests.find((request) => request.method === 'PATCH')?.body).toEqual({ status: 'purchased' });
+    expect(api.requests.find((request) => request.method === 'PATCH')?.body).toEqual({
+      status: 'purchased',
+    });
 
     const rice = page.getByRole('article').filter({ hasText: 'Arroz' });
     await rice.getByRole('button', { name: /marcar como pendiente/i }).click();
     await expect(page.getByRole('heading', { name: /pendientes\s*\(2\)/i })).toBeVisible();
     await expect(page.getByRole('heading', { name: /comprados\s*\(1\)/i })).toBeVisible();
-    expect(api.requests.filter((request) => request.method === 'PATCH').map((request) => request.body)).toEqual([
-      { status: 'purchased' },
-      { status: 'pending' },
-    ]);
+    expect(
+      api.requests.filter((request) => request.method === 'PATCH').map((request) => request.body)
+    ).toEqual([{ status: 'purchased' }, { status: 'pending' }]);
 
     page.once('dialog', (dialog) => dialog.accept());
     await tomatoes.getByRole('button', { name: /eliminar/i }).click();
     await expect(tomatoes).toHaveCount(0);
-    expect(api.requests.find((request) => request.method === 'DELETE')?.pathname).toBe('/api/shopping-list/manual-row-1');
+    expect(api.requests.find((request) => request.method === 'DELETE')?.pathname).toBe(
+      '/api/shopping-list/manual-row-1'
+    );
     for (const request of api.requests) {
       expect(JSON.stringify(request.body ?? {})).not.toMatch(/tenant|userId|user_id/i);
     }
   });
 
-  test('retains state and announces controlled errors when create, status update, and delete fail', async ({ page }) => {
+  test('retains state and announces controlled errors when create, status update, and delete fail', async ({
+    page,
+  }) => {
     const api = await openShoppingList(page, [manualItem]);
 
     api.fail('POST');
     await page.getByLabel(/ingrediente/i).fill('Queso');
     const manualAddForm = page.locator('form').filter({ has: page.getByLabel(/ingrediente/i) });
     await manualAddForm.getByRole('button', { name: 'Agregar', exact: true }).click();
-    await expect(page.getByRole('alert').filter({ hasText: 'No se pudo guardar el artículo.' })).toBeVisible();
+    await expect(
+      page.getByRole('alert').filter({ hasText: 'No se pudo guardar el artículo.' })
+    ).toBeVisible();
     await expect(page.getByText('Queso')).toHaveCount(0);
 
     api.fail('PATCH');
     const tomatoes = page.getByRole('article').filter({ hasText: 'Tomates' });
     await tomatoes.getByRole('button', { name: /marcar como comprado/i }).click();
-    await expect(page.getByRole('alert').filter({ hasText: 'No se pudo cambiar el estado.' })).toBeVisible();
+    await expect(
+      page.getByRole('alert').filter({ hasText: 'No se pudo cambiar el estado.' })
+    ).toBeVisible();
     await expect(page.getByRole('heading', { name: /pendientes\s*\(1\)/i })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Tomates' })).toBeVisible();
 
     api.fail('DELETE');
     page.once('dialog', (dialog) => dialog.accept());
     await tomatoes.getByRole('button', { name: /eliminar/i }).click();
-    await expect(page.getByRole('alert').filter({ hasText: 'No se pudo eliminar el artículo.' })).toBeVisible();
+    await expect(
+      page.getByRole('alert').filter({ hasText: 'No se pudo eliminar el artículo.' })
+    ).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Tomates' })).toBeVisible();
   });
 });

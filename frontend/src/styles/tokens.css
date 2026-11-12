@@ -1,0 +1,162 @@
+@theme inline {
+  --color-bistro-page: var(--color-bg-page);
+  --color-bistro-cream: var(--color-brand-cream);
+  --color-bistro-champagne: var(--color-brand-champagne);
+  --color-bistro-inverse: var(--color-bg-inverse);
+  --color-bistro-surface: var(--color-bg-surface);
+  --color-bistro-surface-warm: var(--color-bg-surface-warm);
+  --color-bistro-text-primary: var(--color-text-primary);
+  --color-bistro-text-secondary: var(--color-text-secondary);
+  --color-bistro-border: var(--color-border-default);
+  --color-bistro-action-primary: var(--color-action-primary);
+  --color-bistro-action-primary-hover: var(--color-action-primary-hover);
+  --color-bistro-action-primary-active: var(--color-action-primary-active);
+  --color-bistro-action-primary-text: var(--color-action-primary-text);
+  --color-bistro-action-secondary: var(--color-action-secondary);
+  --color-bistro-focus: var(--color-focus-ring);
+  --color-bistro-success: var(--color-status-success);
+  --color-bistro-danger: var(--color-status-danger);
+  --color-bistro-warning: var(--color-status-warning);
+  --color-bistro-info: var(--color-status-info);
+  --font-bistro-body: var(--font-body);
+  --font-bistro-heading: var(--font-heading);
+  --radius-bistro-sm: var(--bistro-radius-sm);
+  --radius-bistro-md: var(--bistro-radius-md);
+  --radius-bistro-lg: var(--bistro-radius-lg);
+  --radius-bistro-card: var(--radius-card);
+  --radius-bistro-button: var(--radius-button);
+  --shadow-bistro-card: var(--shadow-card);
+  --shadow-bistro-elevated: var(--shadow-elevated);
+  --spacing-bistro-1: var(--space-1);
+  --spacing-bistro-2: var(--space-2);
+  --spacing-bistro-3: var(--space-3);
+  --spacing-bistro-4: var(--space-4);
+  --spacing-bistro-6: var(--space-6);
+  --spacing-bistro-8: var(--space-8);
+}
+
+:root {
+  /* Primitive brand palette */
+  --color-brand-burgundy: #722f37;
+  --color-brand-forest: #234638;
+  --color-brand-champagne: #d8bd8a;
+  --color-brand-chocolate: #493126;
+  --color-brand-cream: #f5ebdd;
+  --color-brand-ivory: #faf6f1;
+  --color-brand-white: #ffffff;
+  --color-brand-border-warm: #e8ddd2;
+  --color-brand-text-muted: #6b5a50;
+  --color-brand-ink: #16110d;
+  --color-neutral-black: #000000;
+
+  /* Named, non-brand accents retained for existing feature semantics. */
+  --color-accent-ai: #6d4aff;
+
+  /* Dedicated semantic status colors; never use the brand action as status. */
+  --color-status-success: #23623f;
+  --color-status-danger: #a12f32;
+  --color-status-warning: #795400;
+  --color-status-info: #205a83;
+
+  /* Semantic layer */
+  --color-bg-page: var(--color-brand-ivory);
+  --color-bg-surface: var(--color-brand-white);
+  --color-bg-surface-warm: var(--color-brand-cream);
+  --color-bg-inverse: var(--color-brand-forest);
+  --color-text-primary: var(--color-brand-chocolate);
+  --color-text-secondary: var(--color-brand-text-muted);
+  --color-text-inverse: var(--color-brand-white);
+  --color-border-default: var(--color-brand-border-warm);
+  --color-action-primary: var(--color-brand-burgundy);
+  --color-action-primary-hover: color-mix(
+    in srgb,
+    var(--color-action-primary) 88%,
+    var(--color-neutral-black)
+  );
+  --color-action-primary-active: color-mix(
+    in srgb,
+    var(--color-action-primary) 78%,
+    var(--color-neutral-black)
+  );
+  --color-action-primary-text: var(--color-brand-white);
+  --color-action-secondary: var(--color-brand-forest);
+  --color-focus-ring: var(--color-brand-burgundy);
+  --color-focus-ring-on-dark: var(--color-brand-champagne);
+  --color-status-success-bg: color-mix(
+    in srgb,
+    var(--color-status-success) 9%,
+    var(--color-brand-white)
+  );
+  --color-status-danger-bg: color-mix(
+    in srgb,
+    var(--color-status-danger) 9%,
+    var(--color-brand-white)
+  );
+  --color-status-warning-bg: color-mix(
+    in srgb,
+    var(--color-status-warning) 10%,
+    var(--color-brand-white)
+  );
+  --color-status-info-bg: color-mix(in srgb, var(--color-status-info) 9%, var(--color-brand-white));
+  --color-control-disabled-bg: color-mix(
+    in srgb,
+    var(--color-bg-surface) 76%,
+    var(--color-border-default)
+  );
+  --color-control-disabled-text: color-mix(
+    in srgb,
+    var(--color-text-secondary) 70%,
+    var(--color-bg-surface)
+  );
+
+  /* Component aliases: components depend on semantics, never palette literals. */
+  --button-primary-bg: var(--color-action-primary);
+  --button-primary-hover: var(--color-action-primary-hover);
+  --button-primary-active: var(--color-action-primary-active);
+  --button-primary-fg: var(--color-action-primary-text);
+  --button-secondary-bg: var(--color-action-secondary);
+  --button-secondary-fg: var(--color-text-inverse);
+  --card-background: var(--color-bg-surface);
+  --card-border: var(--color-border-default);
+  --input-border: var(--color-border-default);
+  --input-focus-ring: var(--color-focus-ring);
+  --sidebar-background: var(--color-bg-inverse);
+  --navbar-background: var(--color-bg-surface);
+
+  /* Spacing scale */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  --space-14: 3.5rem;
+  --space-16: 4rem;
+
+  /* Radius and shadow scales */
+  --bistro-radius-xs: 0.25rem;
+  --bistro-radius-sm: 0.375rem;
+  --bistro-radius-md: 0.625rem;
+  --bistro-radius-lg: 0.875rem;
+  --bistro-radius-xl: 1.25rem;
+  --bistro-radius-pill: 9999px;
+  --radius-card: var(--bistro-radius-lg);
+  --radius-button: var(--bistro-radius-md);
+  --radius-input: var(--bistro-radius-sm);
+  --bistro-shadow-sm: 0 1px 2px rgb(35 23 16 / 8%);
+  --shadow-card: 0 8px 24px rgb(35 23 16 / 8%);
+  --shadow-elevated: 0 18px 44px rgb(35 23 16 / 14%);
+  --shadow-overlay: 0 24px 56px rgb(10 7 5 / 24%);
+  /* Transitional: preserve unmigrated premium/dark-panel visual contracts. */
+  --shadow-legacy-premium: 0 22px 42px rgb(35 23 16 / 14%);
+  --shadow-legacy-dark-panel: 0 24px 48px rgb(10 7 5 / 45%);
+
+  /* Motion scale */
+  --duration-fast: 120ms;
+  --duration-normal: 180ms;
+  --duration-slow: 260ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+}

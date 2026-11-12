@@ -16,11 +16,12 @@ function ResetPasswordForm() {
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    const form = event.currentTarget;
     setLoading(true);
     setErrorMessage(null);
     setSuccessMessage(null);
 
-    const formData = new FormData(event.currentTarget);
+    const formData = new FormData(form);
     const parsed = ResetPasswordSchema.safeParse({
       token,
       password: formData.get('password'),
@@ -46,8 +47,8 @@ function ResetPasswordForm() {
         return;
       }
 
+      form.reset();
       setSuccessMessage('Contraseña actualizada. Ya podés iniciar sesión.');
-      event.currentTarget.reset();
     } catch {
       setErrorMessage('No pudimos conectar con autenticación. Intentá nuevamente.');
     } finally {
@@ -56,16 +57,16 @@ function ResetPasswordForm() {
   };
 
   return (
-    <main className="texture-paper flex min-h-screen items-center justify-center bg-[#FAF6F1] px-4 py-8">
-      <section className="w-full max-w-md rounded-3xl border border-[#E8DDD2] bg-white/75 p-6 shadow-[0_20px_36px_rgba(36,26,20,0.12)] backdrop-blur-md md:p-8">
-        <p className="text-xs font-bold tracking-[0.15em] text-[#C56A1A]">COCINACORE</p>
-        <h1 className="mt-3 text-3xl font-semibold text-[#241A14]">Nueva contraseña</h1>
-        <p className="mt-2 text-sm text-[#6B5A50]">
+    <main className="texture-paper flex min-h-screen items-center justify-center bg-bistro-page px-4 py-8">
+      <section className="w-full max-w-md rounded-3xl border border-bistro-border bg-white/75 p-6 shadow-[0_20px_36px_rgba(36,26,20,0.12)] backdrop-blur-md md:p-8">
+        <p className="text-xs font-bold tracking-[0.15em] text-bistro-action-primary">COCINACORE</p>
+        <h1 className="mt-3 text-3xl font-semibold text-bistro-text-primary">Nueva contraseña</h1>
+        <p className="mt-2 text-sm text-bistro-text-secondary">
           Elegí una contraseña nueva para recuperar el acceso a tu cuenta.
         </p>
 
         <form onSubmit={onSubmit} className="mt-6 grid gap-4" noValidate>
-          <label className="grid gap-2 text-sm font-semibold text-[#3A2D24]">
+          <label className="grid gap-2 text-sm font-semibold text-bistro-text-primary">
             Contraseña
             <input
               type="password"
@@ -73,10 +74,10 @@ function ResetPasswordForm() {
               minLength={8}
               required
               disabled={!token || Boolean(successMessage)}
-              className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 text-[#241A14] outline-none transition focus:border-[#C56A1A] disabled:opacity-60"
+              className="h-11 rounded-xl border border-bistro-border bg-white px-3 text-bistro-text-primary outline-none transition focus:border-bistro-action-primary disabled:opacity-60"
             />
           </label>
-          <label className="grid gap-2 text-sm font-semibold text-[#3A2D24]">
+          <label className="grid gap-2 text-sm font-semibold text-bistro-text-primary">
             Confirmar contraseña
             <input
               type="password"
@@ -84,15 +85,17 @@ function ResetPasswordForm() {
               minLength={8}
               required
               disabled={!token || Boolean(successMessage)}
-              className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 text-[#241A14] outline-none transition focus:border-[#C56A1A] disabled:opacity-60"
+              className="h-11 rounded-xl border border-bistro-border bg-white px-3 text-bistro-text-primary outline-none transition focus:border-bistro-action-primary disabled:opacity-60"
             />
           </label>
 
           {errorMessage ? (
-            <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{errorMessage}</p>
+            <p className="rounded-xl bg-bistro-danger/10 px-3 py-2 text-sm text-bistro-danger">
+              {errorMessage}
+            </p>
           ) : null}
           {successMessage ? (
-            <p className="rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+            <p className="rounded-xl bg-bistro-success/10 px-3 py-2 text-sm text-bistro-success">
               {successMessage}
             </p>
           ) : null}
@@ -100,14 +103,17 @@ function ResetPasswordForm() {
           <button
             type="submit"
             disabled={loading || !token || Boolean(successMessage)}
-            className="h-11 rounded-xl bg-[#C56A1A] font-semibold text-white transition hover:bg-[#A55412] disabled:opacity-70"
+            className="h-11 rounded-xl bg-bistro-action-primary font-semibold text-white transition hover:bg-bistro-action-primary disabled:opacity-70"
           >
             {loading ? 'Procesando...' : 'Guardar contraseña'}
           </button>
         </form>
 
-        <p className="mt-6 text-center text-sm text-[#6B5A50]">
-          <Link href="/login" className="font-semibold text-[#A55412] hover:text-[#C56A1A]">
+        <p className="mt-6 text-center text-sm text-bistro-text-secondary">
+          <Link
+            href="/login"
+            className="font-semibold text-bistro-action-primary hover:text-bistro-action-primary"
+          >
             Ir al login
           </Link>
         </p>
@@ -120,8 +126,8 @@ export default function ResetPasswordPage() {
   return (
     <Suspense
       fallback={
-        <main className="texture-paper flex min-h-screen items-center justify-center bg-[#FAF6F1] px-4 py-8">
-          <section className="w-full max-w-md rounded-3xl border border-[#E8DDD2] bg-white/75 p-6 text-[#241A14] shadow-[0_20px_36px_rgba(36,26,20,0.12)] backdrop-blur-md md:p-8">
+        <main className="texture-paper flex min-h-screen items-center justify-center bg-bistro-page px-4 py-8">
+          <section className="w-full max-w-md rounded-3xl border border-bistro-border bg-white/75 p-6 text-bistro-text-primary shadow-[0_20px_36px_rgba(36,26,20,0.12)] backdrop-blur-md md:p-8">
             Cargando recuperación...
           </section>
         </main>

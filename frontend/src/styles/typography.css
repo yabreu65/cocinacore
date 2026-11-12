@@ -1,0 +1,55 @@
+:root {
+  --font-body: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
+  --font-heading: var(--font-fraunces), ui-serif, Georgia, serif;
+
+  /* Reusable type scale; responsive display and title sizes use bounded fluid growth. */
+  --text-caption: 0.75rem;
+  --text-body-sm: 0.875rem;
+  --text-body: 1rem;
+  --text-body-lg: 1.125rem;
+  --text-title-sm: 1.25rem;
+  --text-title-md: clamp(1.5rem, 1.25rem + 1vw, 2rem);
+  --text-title-lg: clamp(1.875rem, 1.45rem + 1.7vw, 2.75rem);
+  --text-display: clamp(2.5rem, 1.7rem + 3.2vw, 4.5rem);
+
+  --leading-tight: 1.12;
+  --leading-heading: 1.2;
+  --leading-body: 1.55;
+  --tracking-tight: -0.025em;
+  --tracking-normal: 0;
+  --tracking-wide: 0.04em;
+}
+
+@theme inline {
+  --text-bistro-caption: var(--text-caption);
+  --text-bistro-sm: var(--text-body-sm);
+  --text-bistro-base: var(--text-body);
+  --text-bistro-lg: var(--text-body-lg);
+  --text-bistro-title-sm: var(--text-title-sm);
+  --text-bistro-title-md: var(--text-title-md);
+  --text-bistro-title-lg: var(--text-title-lg);
+  --text-bistro-display: var(--text-display);
+}
+
+@layer base {
+  :where(h1, h2, h3, .type-display, .type-heading) {
+    font-family: var(--font-heading);
+    line-height: var(--leading-heading);
+    letter-spacing: var(--tracking-tight);
+  }
+
+  :where(button, input, textarea, select) {
+    font: inherit;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      scroll-behavior: auto !important;
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}

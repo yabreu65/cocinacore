@@ -39,30 +39,32 @@ export default async function OwnerGlobalBooksPage() {
 
   return (
     <section className="space-y-4">
-      <article className="rounded-3xl border border-[#E8DDD2] bg-white/90 p-5 premium-shadow">
-        <p className="inline-flex items-center gap-2 rounded-full border border-[#6D4AFF]/25 bg-[#6D4AFF]/10 px-3 py-1 text-xs font-semibold text-[#5A3EE6]">
+      <article className="rounded-3xl border border-bistro-border bg-white/90 p-5 premium-shadow">
+        <p className="inline-flex items-center gap-2 rounded-full border border-bistro-action-secondary/25 bg-bistro-action-secondary/10 px-3 py-1 text-xs font-semibold text-bistro-action-secondary">
           <BookOpenText size={14} /> Biblioteca global curada
         </p>
-        <h2 className="mt-3 text-2xl font-semibold text-[#241A14]">Global Books</h2>
-        <p className="mt-1 text-sm text-[#6B5A50]">
+        <h2 className="mt-3 text-2xl font-semibold text-bistro-text-primary">Global Books</h2>
+        <p className="mt-1 text-sm text-bistro-text-secondary">
           Vista mínima con datos reales desde PostgreSQL directo.
         </p>
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
-          <div className="rounded-2xl border border-[#E8DDD2] bg-white/70 p-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#6B5A50]">
+          <div className="rounded-2xl border border-bistro-border bg-white/70 p-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-bistro-text-secondary">
               Libros
             </p>
-            <p className="mt-1 text-2xl font-semibold text-[#241A14]">{rows.length}</p>
+            <p className="mt-1 text-2xl font-semibold text-bistro-text-primary">{rows.length}</p>
           </div>
-          <div className="rounded-2xl border border-[#E8DDD2] bg-white/70 p-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#6B5A50]">
+          <div className="rounded-2xl border border-bistro-border bg-white/70 p-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-bistro-text-secondary">
               Regiones
             </p>
-            <p className="mt-1 text-2xl font-semibold text-[#241A14]">{regions.length}</p>
+            <p className="mt-1 text-2xl font-semibold text-bistro-text-primary">{regions.length}</p>
           </div>
-          <div className="rounded-2xl border border-[#E8DDD2] bg-white/70 p-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#6B5A50]">Tags</p>
-            <p className="mt-1 text-2xl font-semibold text-[#241A14]">{allTags.length}</p>
+          <div className="rounded-2xl border border-bistro-border bg-white/70 p-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-bistro-text-secondary">
+              Tags
+            </p>
+            <p className="mt-1 text-2xl font-semibold text-bistro-text-primary">{allTags.length}</p>
           </div>
         </div>
       </article>
@@ -71,27 +73,33 @@ export default async function OwnerGlobalBooksPage() {
         {rows.map((row) => (
           <li
             key={row.id}
-            className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-4 premium-shadow"
+            className="rounded-2xl border border-bistro-border bg-white/85 p-4 premium-shadow"
           >
-            <p className="line-clamp-2 text-base font-semibold text-[#241A14]">{row.title}</p>
-            <p className="mt-2 inline-flex items-center gap-2 text-xs text-[#6B5A50]">
+            <p className="line-clamp-2 text-base font-semibold text-bistro-text-primary">
+              {row.title}
+            </p>
+            <p className="mt-2 inline-flex items-center gap-2 text-xs text-bistro-text-secondary">
               <Globe2 size={12} /> {row.cuisine_region} ·{' '}
               {row.cuisine_country ?? 'País no definido'}
             </p>
-            <p className="mt-1 text-xs text-[#6B5A50]">Estilo: {row.cuisine_style ?? 'General'}</p>
-            <p className="mt-1 text-xs text-[#6B5A50]">Autor: {row.author ?? 'No especificado'}</p>
+            <p className="mt-1 text-xs text-bistro-text-secondary">
+              Estilo: {row.cuisine_style ?? 'General'}
+            </p>
+            <p className="mt-1 text-xs text-bistro-text-secondary">
+              Autor: {row.author ?? 'No especificado'}
+            </p>
             <div className="mt-3 flex flex-wrap gap-2">
               {(row.tags ?? []).length > 0 ? (
                 row.tags.map((tag) => (
                   <span
                     key={tag}
-                    className="inline-flex items-center gap-1 rounded-full border border-[#E8DDD2] bg-[#FAF6F1] px-2 py-1 text-[11px] text-[#6B5A50]"
+                    className="inline-flex items-center gap-1 rounded-full border border-bistro-border bg-bistro-page px-2 py-1 text-[11px] text-bistro-text-secondary"
                   >
                     <Tag size={10} /> {tag}
                   </span>
                 ))
               ) : (
-                <span className="rounded-full border border-[#E8DDD2] bg-[#FAF6F1] px-2 py-1 text-[11px] text-[#6B5A50]">
+                <span className="rounded-full border border-bistro-border bg-bistro-page px-2 py-1 text-[11px] text-bistro-text-secondary">
                   Sin tags
                 </span>
               )}
@@ -99,7 +107,7 @@ export default async function OwnerGlobalBooksPage() {
           </li>
         ))}
         {rows.length === 0 ? (
-          <li className="text-sm text-[#6B5A50]">No hay libros globales cargados.</li>
+          <li className="text-sm text-bistro-text-secondary">No hay libros globales cargados.</li>
         ) : null}
       </ul>
     </section>

@@ -226,9 +226,15 @@ export default function MealPlannerPage() {
       setAdaptiveExpectedUpdatedAt(result.data.expectedUpdatedAt);
       setAdaptiveSourceFingerprint(result.data.sourceFingerprint);
     } catch (error) {
-      setAdaptiveError(
-        error instanceof Error ? error.message : 'No se pudo preparar la propuesta.'
-      );
+      if (
+        componentActiveRef.current &&
+        activePlanIdRef.current === mealPlanId &&
+        adaptiveRequestVersionRef.current === requestVersion
+      ) {
+        setAdaptiveError(
+          error instanceof Error ? error.message : 'No se pudo preparar la propuesta.'
+        );
+      }
     } finally {
       if (componentActiveRef.current && adaptiveRequestVersionRef.current === requestVersion) {
         setIsLoadingAdaptive(false);
@@ -286,9 +292,15 @@ export default function MealPlannerPage() {
       );
       void loadSuggestions(mealPlanId, true);
     } catch (error) {
-      setAdaptiveError(
-        error instanceof Error ? error.message : 'No se pudo confirmar la propuesta.'
-      );
+      if (
+        componentActiveRef.current &&
+        activePlanIdRef.current === mealPlanId &&
+        adaptiveRequestVersionRef.current === requestVersion
+      ) {
+        setAdaptiveError(
+          error instanceof Error ? error.message : 'No se pudo confirmar la propuesta.'
+        );
+      }
     } finally {
       if (componentActiveRef.current && adaptiveRequestVersionRef.current === requestVersion) {
         setIsConfirmingAdaptive(false);
@@ -569,25 +581,27 @@ export default function MealPlannerPage() {
   };
 
   return (
-    <main className="texture-paper min-h-screen bg-[#FAF6F1] px-4 py-6 text-[#241A14] md:px-6">
-      <section className="mx-auto w-full max-w-4xl rounded-3xl border border-[#E8DDD2] bg-white/80 p-5 premium-shadow">
+    <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 text-bistro-text-primary md:px-6">
+      <section className="mx-auto w-full max-w-4xl rounded-3xl border border-bistro-border bg-white/80 p-5 premium-shadow">
         <div className="mb-4 flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-semibold">Planificador de menú</h1>
-            <p className="text-[#6B5A50]">Generá un menú para el período elegido con IA.</p>
+            <p className="text-bistro-text-secondary">
+              Generá un menú para el período elegido con IA.
+            </p>
           </div>
-          <Link href="/app" className="text-sm font-semibold text-[#A55412]">
+          <Link href="/app" className="text-sm font-semibold text-bistro-action-primary">
             Volver
           </Link>
         </div>
 
         {isInitialLoading ? (
-          <p className="mb-3 text-sm text-[#6B5A50]">Cargando menú guardado...</p>
+          <p className="mb-3 text-sm text-bistro-text-secondary">Cargando menú guardado...</p>
         ) : null}
         {loadError ? <LoadErrorNotice message={loadError} /> : null}
 
         <form onSubmit={onSubmit} className="grid gap-3">
-          <label className="grid gap-1 text-sm font-semibold text-[#6B5A50]">
+          <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
             Comensales
             <input
               type="number"
@@ -597,11 +611,11 @@ export default function MealPlannerPage() {
                 userEditedRef.current = true;
                 setPeopleCount(Number(event.target.value));
               }}
-              className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 outline-none"
+              className="h-11 rounded-xl border border-bistro-border bg-white px-3 outline-none"
             />
           </label>
 
-          <label className="grid gap-1 text-sm font-semibold text-[#6B5A50]">
+          <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
             Período
             <select
               value={period}
@@ -609,7 +623,7 @@ export default function MealPlannerPage() {
                 userEditedRef.current = true;
                 setPeriod(event.target.value as 'week' | 'fortnight' | 'month');
               }}
-              className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 outline-none"
+              className="h-11 rounded-xl border border-bistro-border bg-white px-3 outline-none"
             >
               <option value="week">Semana</option>
               <option value="fortnight">Quincena</option>
@@ -617,7 +631,7 @@ export default function MealPlannerPage() {
             </select>
           </label>
 
-          <label className="grid gap-1 text-sm font-semibold text-[#6B5A50]">
+          <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
             Cocina base
             <input
               value={baseCuisine}
@@ -626,11 +640,11 @@ export default function MealPlannerPage() {
                 setBaseCuisine(event.target.value);
               }}
               placeholder="Latinoamericana"
-              className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 outline-none"
+              className="h-11 rounded-xl border border-bistro-border bg-white px-3 outline-none"
             />
           </label>
 
-          <label className="grid gap-1 text-sm font-semibold text-[#6B5A50]">
+          <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
             Restricciones (separadas por comas)
             <input
               value={restrictions}
@@ -638,49 +652,51 @@ export default function MealPlannerPage() {
                 userEditedRef.current = true;
                 setRestrictions(event.target.value);
               }}
-              className="h-11 rounded-xl border border-[#E8DDD2] bg-white px-3 outline-none"
+              className="h-11 rounded-xl border border-bistro-border bg-white px-3 outline-none"
             />
           </label>
 
           <button
             type="submit"
             disabled={isGenerating}
-            className="h-11 rounded-xl bg-[#C56A1A] px-4 font-semibold text-white disabled:opacity-60"
+            className="h-11 rounded-xl bg-bistro-action-primary px-4 font-semibold text-white disabled:opacity-60"
           >
             {isGenerating ? 'Generando...' : 'Generar menú'}
           </button>
         </form>
 
         {generationError ? (
-          <p className="mt-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <p className="mt-4 rounded-xl border border-bistro-danger/30 bg-bistro-danger/10 px-3 py-2 text-sm text-bistro-danger">
             {generationError}
           </p>
         ) : null}
 
         {plan ? (
-          <div className="mt-6 rounded-xl border border-[#E8DDD2] bg-[#faf7f3] p-4">
+          <div className="mt-6 rounded-xl border border-bistro-border bg-bistro-page p-4">
             <h2 className="font-semibold">Menú generado</h2>
-            <p className="mt-1 text-sm text-[#6B5A50]">
+            <p className="mt-1 text-sm text-bistro-text-secondary">
               Los tiempos son estimaciones de IA, no una garantía de duración real.
             </p>
             {isLoadingConsumptions ? (
-              <p className="mt-2 text-sm text-[#6B5A50]">Cargando comidas cocinadas...</p>
+              <p className="mt-2 text-sm text-bistro-text-secondary">
+                Cargando comidas cocinadas...
+              </p>
             ) : null}
             {consumptionError ? (
-              <p role="alert" className="mt-2 text-sm text-red-700">
+              <p role="alert" className="mt-2 text-sm text-bistro-danger">
                 {consumptionError}
               </p>
             ) : null}
             {consumptionMessage ? (
-              <p role="status" className="mt-2 text-sm font-semibold text-green-800">
+              <p role="status" className="mt-2 text-sm font-semibold text-bistro-success">
                 {consumptionMessage}
               </p>
             ) : null}
-            <section className="mt-4 rounded-xl border border-[#E8DDD2] bg-white p-3">
+            <section className="mt-4 rounded-xl border border-bistro-border bg-white p-3">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <h3 className="font-semibold">Adaptar menú con evidencia</h3>
-                  <p className="text-sm text-[#6B5A50]">
+                  <p className="text-sm text-bistro-text-secondary">
                     Prepara una propuesta con inventario y preferencias reales. No guarda ni
                     descuenta stock hasta que confirmes.
                   </p>
@@ -689,24 +705,24 @@ export default function MealPlannerPage() {
                   type="button"
                   onClick={() => void onRequestAdaptiveProposal()}
                   disabled={isLoadingAdaptive || isConfirmingAdaptive}
-                  className="h-10 rounded-lg border border-[#C56A1A] px-3 text-sm font-semibold text-[#A55412] disabled:opacity-60"
+                  className="h-10 rounded-lg border border-bistro-action-primary px-3 text-sm font-semibold text-bistro-action-primary disabled:opacity-60"
                 >
                   {isLoadingAdaptive ? 'Analizando...' : 'Preparar propuesta'}
                 </button>
               </div>
               {adaptiveError ? (
-                <p role="alert" className="mt-2 text-sm text-red-700">
+                <p role="alert" className="mt-2 text-sm text-bistro-danger">
                   {adaptiveError}
                 </p>
               ) : null}
               {adaptiveMessage ? (
-                <p role="status" className="mt-2 text-sm font-semibold text-green-800">
+                <p role="status" className="mt-2 text-sm font-semibold text-bistro-success">
                   {adaptiveMessage}
                 </p>
               ) : null}
               {adaptiveProposal ? (
                 <div className="mt-3 grid gap-3" data-testid="adaptive-proposal">
-                  <p className="text-sm text-[#6B5A50]">
+                  <p className="text-sm text-bistro-text-secondary">
                     Confianza declarada: <strong>{adaptiveProposal.confidence}</strong>. Los cambios
                     son temporales hasta confirmarlos.
                   </p>
@@ -714,7 +730,7 @@ export default function MealPlannerPage() {
                     {adaptiveProposal.evidence.map((item) => (
                       <p
                         key={item.label}
-                        className="rounded-lg bg-[#FAF6F1] p-2 text-xs text-[#6B5A50]"
+                        className="rounded-lg bg-bistro-page p-2 text-xs text-bistro-text-secondary"
                       >
                         <strong>{item.label}:</strong>{' '}
                         {item.status === 'known' ? 'conocido' : 'desconocido'} — {item.detail}
@@ -722,7 +738,7 @@ export default function MealPlannerPage() {
                     ))}
                   </div>
                   {adaptiveProposal.changes.length === 0 ? (
-                    <p className="rounded-lg bg-[#F4F8F1] p-2 text-sm text-green-800">
+                    <p className="rounded-lg bg-bistro-surface-warm p-2 text-sm text-bistro-success">
                       No hay una mejora justificable con la evidencia disponible. El menú no cambia.
                     </p>
                   ) : (
@@ -730,16 +746,20 @@ export default function MealPlannerPage() {
                       {adaptiveProposal.changes.map((change) => (
                         <li
                           key={`${change.slotKey}-${change.previousMeal}-${change.proposedMeal}`}
-                          className="rounded-lg border border-[#F0E7DE] p-2"
+                          className="rounded-lg border border-bistro-border p-2"
                         >
                           <strong>{change.slotKey}:</strong> {change.previousMeal} →{' '}
                           {change.proposedMeal}
-                          <span className="block text-xs text-[#6B5A50]">{change.reason}</span>
+                          <span className="block text-xs text-bistro-text-secondary">
+                            {change.reason}
+                          </span>
                         </li>
                       ))}
                     </ul>
                   )}
-                  <p className="text-xs text-[#6B5A50]">{adaptiveProposal.limitations.join(' ')}</p>
+                  <p className="text-xs text-bistro-text-secondary">
+                    {adaptiveProposal.limitations.join(' ')}
+                  </p>
                   {adaptiveProposal.changes.length > 0 ? (
                     <button
                       type="button"
@@ -750,7 +770,7 @@ export default function MealPlannerPage() {
                         isLoadingConsumptions ||
                         consumingMealKeys.size > 0
                       }
-                      className="h-10 rounded-lg bg-[#C56A1A] px-3 text-sm font-semibold text-white disabled:opacity-60"
+                      className="h-10 rounded-lg bg-bistro-action-primary px-3 text-sm font-semibold text-white disabled:opacity-60"
                     >
                       {isConfirmingAdaptive ? 'Guardando...' : 'Confirmar y guardar propuesta'}
                     </button>
@@ -762,7 +782,7 @@ export default function MealPlannerPage() {
               {plan.days.map((day) => (
                 <section
                   key={day.dayIndex}
-                  className="rounded-xl border border-[#E8DDD2] bg-white p-3"
+                  className="rounded-xl border border-bistro-border bg-white p-3"
                 >
                   <h3 className="font-semibold">{day.label}</h3>
                   <div className="mt-2 grid gap-2 text-sm">
@@ -773,21 +793,23 @@ export default function MealPlannerPage() {
                       return (
                         <article
                           key={meal.mealType}
-                          className="rounded-lg border border-[#F0E7DE] p-3"
+                          className="rounded-lg border border-bistro-border p-3"
                         >
-                          <p className="font-semibold text-[#6B5A50]">
+                          <p className="font-semibold text-bistro-text-secondary">
                             {mealTypeLabels[meal.mealType]}: {meal.title}
                           </p>
                           {meal.prepMinutes === null || meal.prepMinutes === undefined ? (
-                            <p className="text-[#6B5A50]">tiempo no estimado</p>
+                            <p className="text-bistro-text-secondary">tiempo no estimado</p>
                           ) : (
-                            <p className="text-[#6B5A50]">{meal.prepMinutes} min estimados</p>
+                            <p className="text-bistro-text-secondary">
+                              {meal.prepMinutes} min estimados
+                            </p>
                           )}
                           {meal.description ? (
-                            <p className="text-[#6B5A50]">{meal.description}</p>
+                            <p className="text-bistro-text-secondary">{meal.description}</p>
                           ) : null}
                           {meal.ingredients.length > 0 ? (
-                            <ul className="mt-1 list-disc pl-5 text-[#6B5A50]">
+                            <ul className="mt-1 list-disc pl-5 text-bistro-text-secondary">
                               {meal.ingredients.map((ingredient, index) => (
                                 <li key={`${ingredient.name}-${index}`}>
                                   {ingredient.quantity === null
@@ -800,7 +822,7 @@ export default function MealPlannerPage() {
                           {activePlanId ? (
                             <div className="mt-3">
                               {consumed ? (
-                                <span className="inline-flex rounded-full bg-green-50 px-3 py-1 text-xs font-semibold text-green-800">
+                                <span className="inline-flex rounded-full bg-bistro-success/10 px-3 py-1 text-xs font-semibold text-bistro-success">
                                   Cocinado
                                 </span>
                               ) : (
@@ -816,7 +838,7 @@ export default function MealPlannerPage() {
                                     isConfirmingAdaptive
                                   }
                                   aria-label={`Ya cociné ${mealTypeLabels[meal.mealType]}: ${meal.title}`}
-                                  className="h-9 rounded-lg border border-[#C56A1A] px-3 text-sm font-semibold text-[#A55412] disabled:opacity-60"
+                                  className="h-9 rounded-lg border border-bistro-action-primary px-3 text-sm font-semibold text-bistro-action-primary disabled:opacity-60"
                                 >
                                   {isConsuming ? 'Registrando...' : 'Ya cociné'}
                                 </button>
@@ -835,17 +857,17 @@ export default function MealPlannerPage() {
 
         {activePlanId ? (
           <section
-            className="mt-6 rounded-xl border border-[#E8DDD2] bg-white p-4"
+            className="mt-6 rounded-xl border border-bistro-border bg-white p-4"
             aria-busy={isLoadingSuggestions || isConfirming}
           >
             <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
               <div>
                 <h2 className="font-semibold">Compras anticipadas</h2>
-                <p className="mt-1 text-sm text-[#6B5A50]">
+                <p className="mt-1 text-sm text-bistro-text-secondary">
                   Calculadas sólo con agenda, porciones, inventario y comidas confirmadas.
                 </p>
               </div>
-              <label className="grid gap-1 text-sm font-semibold text-[#6B5A50]">
+              <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
                 Horizonte
                 <select
                   value={shoppingHorizon}
@@ -861,7 +883,7 @@ export default function MealPlannerPage() {
                     }
                   }}
                   disabled={isLoadingSuggestions || isConfirming || isGenerating}
-                  className="h-10 rounded-lg border border-[#E8DDD2] bg-white px-2 font-normal"
+                  className="h-10 rounded-lg border border-bistro-border bg-white px-2 font-normal"
                 >
                   <option value="7">7 días</option>
                   <option value="14">14 días</option>
@@ -869,17 +891,17 @@ export default function MealPlannerPage() {
               </label>
             </div>
             {isLoadingSuggestions ? (
-              <p className="mt-2 text-sm text-[#6B5A50]">Calculando compras...</p>
+              <p className="mt-2 text-sm text-bistro-text-secondary">Calculando compras...</p>
             ) : null}
             {shoppingError ? (
-              <p role="alert" className="mt-2 text-sm text-red-700">
+              <p role="alert" className="mt-2 text-sm text-bistro-danger">
                 {shoppingError}
               </p>
             ) : null}
             {!isLoadingSuggestions && shoppingStatus === 'unknown' ? (
               <p
                 aria-live="polite"
-                className="mt-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-900"
+                className="mt-2 rounded-lg bg-bistro-warning/10 p-3 text-sm text-bistro-warning"
               >
                 No se puede calcular este horizonte con seguridad
                 {shoppingReason ? ` (${shoppingReason}).` : '.'} Confirmá la agenda y las porciones
@@ -887,7 +909,7 @@ export default function MealPlannerPage() {
               </p>
             ) : null}
             {!isLoadingSuggestions && shoppingStatus === 'ready' && suggestions.length === 0 ? (
-              <p className="mt-2 text-sm text-[#6B5A50]">
+              <p className="mt-2 text-sm text-bistro-text-secondary">
                 No hay faltantes accionables para este menú.
               </p>
             ) : null}
@@ -906,7 +928,7 @@ export default function MealPlannerPage() {
                   return (
                     <li
                       key={item.normalizedName}
-                      className="rounded-xl border border-[#E8DDD2] p-3"
+                      className="rounded-xl border border-bistro-border p-3"
                     >
                       <label className="flex items-start gap-3">
                         <input
@@ -952,11 +974,11 @@ export default function MealPlannerPage() {
                                 : 'Revisar: cantidad o unidad desconocida')}
                           </span>
                           {item.existingShoppingSources.length > 0 ? (
-                            <span className="text-[#6B5A50]">
+                            <span className="text-bistro-text-secondary">
                               Ya existe en: {item.existingShoppingSources.join(', ')}.
                             </span>
                           ) : null}
-                          <span className="text-[#6B5A50]">
+                          <span className="text-bistro-text-secondary">
                             Usado en: {item.usedInRecipes.join('; ')}
                           </span>
                         </span>
@@ -967,12 +989,12 @@ export default function MealPlannerPage() {
               </ul>
             ) : null}
             {shoppingMessage ? (
-              <p role="status" className="mt-3 text-sm font-semibold text-green-800">
+              <p role="status" className="mt-3 text-sm font-semibold text-bistro-success">
                 {shoppingMessage}
               </p>
             ) : null}
             {shoppingCost && shoppingCost.itemCount > 0 ? (
-              <p className="mt-3 text-sm text-[#6B5A50]">
+              <p className="mt-3 text-sm text-bistro-text-secondary">
                 {shoppingCost.status === 'complete'
                   ? `Costo estimado total verificable: ${shoppingCost.estimatedTotal?.toFixed(2) ?? '0.00'}.`
                   : shoppingCost.status === 'partial'
@@ -992,7 +1014,7 @@ export default function MealPlannerPage() {
                 !shoppingFingerprint ||
                 selectedItems.size === 0
               }
-              className="mt-4 h-11 rounded-xl bg-[#C56A1A] px-4 font-semibold text-white disabled:opacity-60"
+              className="mt-4 h-11 rounded-xl bg-bistro-action-primary px-4 font-semibold text-white disabled:opacity-60"
             >
               {isConfirming ? 'Agregando...' : 'Agregar seleccionados a compras'}
             </button>

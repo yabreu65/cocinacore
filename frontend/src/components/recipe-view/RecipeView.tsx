@@ -145,11 +145,11 @@ export function RecipeView(props: Props) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-3 md:p-6">
-      <section className="max-h-[90vh] w-full max-w-6xl overflow-y-auto rounded-3xl border border-[#E8DDD2] bg-[#FAF6F1] p-4 shadow-2xl md:p-6">
+      <section className="max-h-[90vh] w-full max-w-6xl overflow-y-auto rounded-3xl border border-bistro-border bg-bistro-page p-4 shadow-2xl md:p-6">
         <header className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <Link
             href="/app"
-            className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-1.5 text-xs font-semibold text-[#6B5A50]"
+            className="rounded-xl border border-bistro-border bg-white px-3 py-1.5 text-xs font-semibold text-bistro-text-secondary"
           >
             ← Volver
           </Link>
@@ -157,7 +157,7 @@ export function RecipeView(props: Props) {
             <button
               type="button"
               onClick={copyRecipe}
-              className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-1.5 text-xs font-semibold text-[#6B5A50]"
+              className="rounded-xl border border-bistro-border bg-white px-3 py-1.5 text-xs font-semibold text-bistro-text-secondary"
             >
               <Clipboard size={12} className="mr-1 inline" />
               Copiar
@@ -166,14 +166,14 @@ export function RecipeView(props: Props) {
               type="button"
               onClick={props.onSave}
               disabled={props.savingRecipe}
-              className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-1.5 text-xs font-semibold text-[#6B5A50] disabled:opacity-60"
+              className="rounded-xl border border-bistro-border bg-white px-3 py-1.5 text-xs font-semibold text-bistro-text-secondary disabled:opacity-60"
             >
               {props.savingRecipe ? 'Guardando...' : 'Guardar'}
             </button>
             <button
               type="button"
               onClick={props.onClose}
-              className="rounded-xl border border-[#E8DDD2] bg-white px-3 py-1.5 text-xs font-semibold text-[#6B5A50]"
+              className="rounded-xl border border-bistro-border bg-white px-3 py-1.5 text-xs font-semibold text-bistro-text-secondary"
             >
               <XCircle size={12} className="mr-1 inline" />
               Cerrar
@@ -181,31 +181,33 @@ export function RecipeView(props: Props) {
           </div>
         </header>
 
-        <article className="relative overflow-hidden rounded-2xl border border-[#E8DDD2] bg-white/85 p-4">
-          <div className="pointer-events-none absolute -right-14 -top-10 h-40 w-40 rounded-full bg-[#C56A1A]/10 blur-3xl" />
+        <article className="relative overflow-hidden rounded-2xl border border-bistro-border bg-white/85 p-4">
+          <div className="pointer-events-none absolute -right-14 -top-10 h-40 w-40 rounded-full bg-bistro-action-primary/10 blur-3xl" />
           <div className="grid gap-4 md:grid-cols-[1fr_auto]">
             <div className="space-y-2">
-              <span className="inline-flex rounded-full border border-[#6D4AFF]/30 bg-[#6D4AFF]/10 px-2.5 py-1 text-xs font-semibold text-[#6D4AFF]">
+              <span className="inline-flex rounded-full border border-bistro-action-secondary/30 bg-bistro-action-secondary/10 px-2.5 py-1 text-xs font-semibold text-bistro-action-secondary">
                 Generado por CocinaCore AI
               </span>
-              <h2 className="text-2xl font-semibold text-[#241A14] md:text-3xl">{title}</h2>
-              <p className="text-sm text-[#6B5A50]">{subtitle}</p>
-              <div className="grid grid-cols-2 gap-2 pt-1 text-[11px] text-[#6B5A50] sm:grid-cols-4">
-                <span className="rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] px-2 py-1">
+              <h2 className="text-2xl font-semibold text-bistro-text-primary md:text-3xl">
+                {title}
+              </h2>
+              <p className="text-sm text-bistro-text-secondary">{subtitle}</p>
+              <div className="grid grid-cols-2 gap-2 pt-1 text-[11px] text-bistro-text-secondary sm:grid-cols-4">
+                <span className="rounded-xl border border-bistro-border bg-bistro-page px-2 py-1">
                   👥 {props.peopleCount || 4} porciones
                 </span>
-                <span className="rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] px-2 py-1">
+                <span className="rounded-xl border border-bistro-border bg-bistro-page px-2 py-1">
                   ⏱️ 35 min
                 </span>
-                <span className="rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] px-2 py-1">
+                <span className="rounded-xl border border-bistro-border bg-bistro-page px-2 py-1">
                   🔥 {props.level || 'Intermedio'}
                 </span>
-                <span className="rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] px-2 py-1">
+                <span className="rounded-xl border border-bistro-border bg-bistro-page px-2 py-1">
                   🌍 {props.region || 'Fusión'}
                 </span>
               </div>
             </div>
-            <div className="mx-auto w-full max-w-[150px] overflow-hidden rounded-2xl bg-[#FAF6F1] md:max-w-[190px]">
+            <div className="mx-auto w-full max-w-[150px] overflow-hidden rounded-2xl bg-bistro-page md:max-w-[190px]">
               <Image
                 src="/plato-logo.png"
                 alt="Plato CocinaCore"
@@ -218,55 +220,55 @@ export function RecipeView(props: Props) {
         </article>
 
         <section className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-          <article className="rounded-2xl border border-[#E8DDD2] bg-white p-3">
-            <p className="text-xs text-[#6B5A50]">Ingredientes disponibles</p>
-            <p className="mt-1 text-lg font-semibold text-[#567A3B]">
+          <article className="rounded-2xl border border-bistro-border bg-white p-3">
+            <p className="text-xs text-bistro-text-secondary">Ingredientes disponibles</p>
+            <p className="mt-1 text-lg font-semibold text-bistro-action-secondary">
               {ingredientStatus.available.length}
             </p>
           </article>
-          <article className="rounded-2xl border border-[#E8DDD2] bg-white p-3">
-            <p className="text-xs text-[#6B5A50]">Faltantes</p>
-            <p className="mt-1 text-lg font-semibold text-[#B84D4D]">
+          <article className="rounded-2xl border border-bistro-border bg-white p-3">
+            <p className="text-xs text-bistro-text-secondary">Faltantes</p>
+            <p className="mt-1 text-lg font-semibold text-bistro-danger">
               {ingredientStatus.missing.length}
             </p>
           </article>
-          <article className="rounded-2xl border border-[#E8DDD2] bg-white p-3">
-            <p className="text-xs text-[#6B5A50]">Reutilizados</p>
-            <p className="mt-1 text-lg font-semibold text-[#241A14]">
+          <article className="rounded-2xl border border-bistro-border bg-white p-3">
+            <p className="text-xs text-bistro-text-secondary">Reutilizados</p>
+            <p className="mt-1 text-lg font-semibold text-bistro-text-primary">
               {ingredientStatus.reused.length}
             </p>
           </article>
-          <article className="rounded-2xl border border-[#E8DDD2] bg-white p-3">
-            <p className="text-xs text-[#6B5A50]">Críticos</p>
-            <p className="mt-1 text-lg font-semibold text-[#A55412]">
+          <article className="rounded-2xl border border-bistro-border bg-white p-3">
+            <p className="text-xs text-bistro-text-secondary">Críticos</p>
+            <p className="mt-1 text-lg font-semibold text-bistro-action-primary">
               {ingredientStatus.critical.length}
             </p>
           </article>
         </section>
 
-        <section className="mt-4 rounded-2xl border border-[#E8DDD2] bg-white p-4">
+        <section className="mt-4 rounded-2xl border border-bistro-border bg-white p-4">
           <div className="flex flex-wrap gap-2 text-xs font-semibold">
             <a
               href="#rv-ingredients"
-              className="rounded-full border border-[#E8DDD2] bg-[#FAF6F1] px-3 py-1.5 text-[#6B5A50]"
+              className="rounded-full border border-bistro-border bg-bistro-page px-3 py-1.5 text-bistro-text-secondary"
             >
               Ingredientes
             </a>
             <a
               href="#rv-prep"
-              className="rounded-full border border-[#E8DDD2] bg-[#FAF6F1] px-3 py-1.5 text-[#6B5A50]"
+              className="rounded-full border border-bistro-border bg-bistro-page px-3 py-1.5 text-bistro-text-secondary"
             >
               Preparación
             </a>
             <a
               href="#rv-tips"
-              className="rounded-full border border-[#E8DDD2] bg-[#FAF6F1] px-3 py-1.5 text-[#6B5A50]"
+              className="rounded-full border border-bistro-border bg-bistro-page px-3 py-1.5 text-bistro-text-secondary"
             >
               Tips
             </a>
             <a
               href="#rv-origin"
-              className="rounded-full border border-[#E8DDD2] bg-[#FAF6F1] px-3 py-1.5 text-[#6B5A50]"
+              className="rounded-full border border-bistro-border bg-bistro-page px-3 py-1.5 text-bistro-text-secondary"
             >
               Origen
             </a>
@@ -275,7 +277,7 @@ export function RecipeView(props: Props) {
 
         <section
           id="rv-ingredients"
-          className="mt-4 rounded-2xl border border-[#E8DDD2] bg-white p-4"
+          className="mt-4 rounded-2xl border border-bistro-border bg-white p-4"
         >
           <button
             type="button"
@@ -294,21 +296,21 @@ export function RecipeView(props: Props) {
                 return (
                   <li
                     key={`${row.name}-${index}`}
-                    className="flex items-center gap-3 rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] px-3 py-2 text-sm"
+                    className="flex items-center gap-3 rounded-xl border border-bistro-border bg-bistro-page px-3 py-2 text-sm"
                   >
                     {isAvailable ? (
-                      <CheckCircle2 size={16} className="text-[#567A3B]" />
+                      <CheckCircle2 size={16} className="text-bistro-action-secondary" />
                     ) : (
-                      <XCircle size={16} className="text-[#B84D4D]" />
+                      <XCircle size={16} className="text-bistro-danger" />
                     )}
-                    <span className="min-w-24 font-semibold text-[#6B5A50]">
+                    <span className="min-w-24 font-semibold text-bistro-text-secondary">
                       {row.structured
                         ? `${row.quantity ?? '—'} ${row.unit ?? ''}`.trim()
                         : 'No estructurada'}
                     </span>
-                    <span className="text-[#241A14]">{row.name}</span>
+                    <span className="text-bistro-text-primary">{row.name}</span>
                     {!row.structured ? (
-                      <span className="rounded-full border border-[#E8DDD2] bg-white px-2 py-0.5 text-[10px] font-semibold text-[#A55412]">
+                      <span className="rounded-full border border-bistro-border bg-white px-2 py-0.5 text-[10px] font-semibold text-bistro-action-primary">
                         ⚠️ Ambigua
                       </span>
                     ) : null}
@@ -319,7 +321,7 @@ export function RecipeView(props: Props) {
           ) : null}
         </section>
 
-        <section id="rv-prep" className="mt-4 rounded-2xl border border-[#E8DDD2] bg-white p-4">
+        <section id="rv-prep" className="mt-4 rounded-2xl border border-bistro-border bg-white p-4">
           <button
             type="button"
             onClick={() => toggle('preparation')}
@@ -333,9 +335,9 @@ export function RecipeView(props: Props) {
               {(props.parsedRecipe?.preparation ?? []).map((step, index) => (
                 <li
                   key={`${step}-${index}`}
-                  className="flex gap-3 rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] px-3 py-3 text-sm"
+                  className="flex gap-3 rounded-xl border border-bistro-border bg-bistro-page px-3 py-3 text-sm"
                 >
-                  <span className="mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-[#C56A1A] text-xs font-bold text-white">
+                  <span className="mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-bistro-action-primary text-xs font-bold text-white">
                     {index + 1}
                   </span>
                   <span className="leading-relaxed">{step}</span>
@@ -345,7 +347,7 @@ export function RecipeView(props: Props) {
           ) : null}
         </section>
 
-        <section id="rv-tips" className="mt-4 rounded-2xl border border-[#E8DDD2] bg-white p-4">
+        <section id="rv-tips" className="mt-4 rounded-2xl border border-bistro-border bg-white p-4">
           <button
             type="button"
             onClick={() => toggle('tips')}
@@ -359,17 +361,22 @@ export function RecipeView(props: Props) {
               {(props.parsedRecipe?.tips ?? []).map((tip, index) => (
                 <div
                   key={`${tip}-${index}`}
-                  className="rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] p-3 text-sm"
+                  className="rounded-xl border border-bistro-border bg-bistro-page p-3 text-sm"
                 >
-                  <p className="text-xs font-semibold text-[#6B5A50]">Tip #{index + 1}</p>
-                  <p className="mt-1 text-[#241A14]">{tip}</p>
+                  <p className="text-xs font-semibold text-bistro-text-secondary">
+                    Tip #{index + 1}
+                  </p>
+                  <p className="mt-1 text-bistro-text-primary">{tip}</p>
                 </div>
               ))}
             </div>
           ) : null}
         </section>
 
-        <section id="rv-origin" className="mt-4 rounded-2xl border border-[#E8DDD2] bg-white p-4">
+        <section
+          id="rv-origin"
+          className="mt-4 rounded-2xl border border-bistro-border bg-white p-4"
+        >
           <button
             type="button"
             onClick={() => toggle('origin')}
@@ -380,7 +387,7 @@ export function RecipeView(props: Props) {
           </button>
           {expanded.origin ? (
             <>
-              <p className="mt-3 text-sm text-[#6B5A50]">
+              <p className="mt-3 text-sm text-bistro-text-secondary">
                 {props.recipeMode === 'rag'
                   ? 'Receta generada por CocinaCore AI usando tu biblioteca culinaria, ingredientes y preferencias.'
                   : 'Receta generada por CocinaCore AI usando tus ingredientes, preferencias culinarias y restricciones.'}
@@ -390,9 +397,9 @@ export function RecipeView(props: Props) {
                 {insights.map((insight) => (
                   <article
                     key={insight}
-                    className="rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] p-3 text-sm text-[#241A14]"
+                    className="rounded-xl border border-bistro-border bg-bistro-page p-3 text-sm text-bistro-text-primary"
                   >
-                    <p className="text-xs font-semibold text-[#6D4AFF]">
+                    <p className="text-xs font-semibold text-bistro-action-secondary">
                       <Sparkles size={12} className="mr-1 inline" />
                       Insight IA
                     </p>
@@ -405,13 +412,15 @@ export function RecipeView(props: Props) {
         </section>
 
         {props.recipeMode === 'rag' && props.citations.length > 0 ? (
-          <section className="mt-4 rounded-2xl border border-[#E8DDD2] bg-white p-4">
-            <h3 className="text-sm font-semibold text-[#6B5A50]">Citas válidas de biblioteca</h3>
-            <ul className="mt-2 space-y-1 text-xs text-[#6B5A50]">
+          <section className="mt-4 rounded-2xl border border-bistro-border bg-white p-4">
+            <h3 className="text-sm font-semibold text-bistro-text-secondary">
+              Citas válidas de biblioteca
+            </h3>
+            <ul className="mt-2 space-y-1 text-xs text-bistro-text-secondary">
               {props.citations.map((row) => (
                 <li
                   key={row.id}
-                  className="rounded-lg border border-[#E8DDD2] bg-[#FAF6F1] px-2 py-1"
+                  className="rounded-lg border border-bistro-border bg-bistro-page px-2 py-1"
                 >
                   <Eye size={12} className="mr-1 inline" />
                   {row.metadata?.book_title ?? 'Documento'} · pág {row.metadata?.page_number ?? '-'}{' '}
@@ -422,26 +431,28 @@ export function RecipeView(props: Props) {
           </section>
         ) : null}
 
-        <section className="mt-4 rounded-2xl border border-[#E8DDD2] bg-white p-4">
-          <h3 className="text-base font-semibold text-[#241A14]">Estado de ingredientes</h3>
+        <section className="mt-4 rounded-2xl border border-bistro-border bg-white p-4">
+          <h3 className="text-base font-semibold text-bistro-text-primary">
+            Estado de ingredientes
+          </h3>
           <div className="mt-2 grid gap-2 sm:grid-cols-2">
-            <article className="rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] p-3 text-sm">
-              <p className="text-xs font-semibold text-[#567A3B]">
+            <article className="rounded-xl border border-bistro-border bg-bistro-page p-3 text-sm">
+              <p className="text-xs font-semibold text-bistro-action-secondary">
                 <ShoppingBasket size={12} className="mr-1 inline" />
                 Disponibles
               </p>
-              <ul className="mt-1 space-y-1 text-[#241A14]">
+              <ul className="mt-1 space-y-1 text-bistro-text-primary">
                 {ingredientStatus.available.slice(0, 4).map((item) => (
                   <li key={`ok-${item.name}`}>• {item.name}</li>
                 ))}
               </ul>
             </article>
-            <article className="rounded-xl border border-[#E8DDD2] bg-[#FAF6F1] p-3 text-sm">
-              <p className="text-xs font-semibold text-[#B84D4D]">
+            <article className="rounded-xl border border-bistro-border bg-bistro-page p-3 text-sm">
+              <p className="text-xs font-semibold text-bistro-danger">
                 <XCircle size={12} className="mr-1 inline" />
                 Falta comprar
               </p>
-              <ul className="mt-1 space-y-1 text-[#241A14]">
+              <ul className="mt-1 space-y-1 text-bistro-text-primary">
                 {ingredientStatus.missing.slice(0, 4).map((item) => (
                   <li key={`missing-${item.name}`}>• {item.name}</li>
                 ))}

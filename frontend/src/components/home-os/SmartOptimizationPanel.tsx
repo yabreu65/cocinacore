@@ -16,13 +16,13 @@ const OPTIONS: Array<{ mode: OptimizationMode; label: string }> = [
 
 export function SmartOptimizationPanel(props: Props) {
   return (
-    <article className="rounded-2xl border border-[#E8DDD2] bg-white/85 p-3 sm:p-4 xl:p-5">
-      <h3 className="text-lg font-semibold text-[#241A14]">Modo optimización</h3>
-      <p className="mt-1 text-sm text-[#6B5A50]">
+    <article className="rounded-2xl border border-bistro-border bg-white/85 p-3 sm:p-4 xl:p-5">
+      <h3 className="text-lg font-semibold text-bistro-text-primary">Modo optimización</h3>
+      <p className="mt-1 text-sm text-bistro-text-secondary">
         Reordena temporalmente el menú con foco operativo.
       </p>
       {props.activeMode ? (
-        <p className="mt-2 rounded-lg border border-[#E8DDD2] bg-[#FAF6F1] px-2 py-1 text-xs font-semibold text-[#6B5A50]">
+        <p className="mt-2 rounded-lg border border-bistro-border bg-bistro-page px-2 py-1 text-xs font-semibold text-bistro-text-secondary">
           Optimización activa:{' '}
           {OPTIONS.find((option) => option.mode === props.activeMode)?.label ?? props.activeMode}
         </p>
@@ -35,8 +35,8 @@ export function SmartOptimizationPanel(props: Props) {
             onClick={() => props.onOptimize(option.mode)}
             className={`rounded-xl border px-3 py-2 text-sm font-semibold ${
               props.activeMode === option.mode
-                ? 'border-[#16110D] bg-[#16110D] text-[#F5ECE2]'
-                : 'border-[#E8DDD2] bg-white text-[#6B5A50]'
+                ? 'border-bistro-border bg-bistro-inverse text-bistro-cream'
+                : 'border-bistro-border bg-white text-bistro-text-secondary'
             }`}
           >
             {option.label}

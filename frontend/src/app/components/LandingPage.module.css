@@ -1,0 +1,83 @@
+/* Landing-only decorative surfaces; use shared Bistro design tokens. */
+.page {
+  min-height: 100vh;
+  color: var(--color-text-primary);
+  background-color: var(--color-bg-page);
+  background-image:
+    radial-gradient(
+      circle at 10% 8%,
+      color-mix(in srgb, var(--color-brand-champagne) 18%, transparent),
+      transparent 37%
+    ),
+    radial-gradient(
+      circle at 95% 45%,
+      color-mix(in srgb, var(--color-brand-forest) 5%, transparent),
+      transparent 42%
+    );
+}
+
+.mockupGlow {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(
+      circle at 3% 0%,
+      color-mix(in srgb, var(--color-brand-champagne) 18%, transparent),
+      transparent 43%
+    ),
+    radial-gradient(
+      circle at 100% 100%,
+      color-mix(in srgb, var(--color-brand-burgundy) 27%, transparent),
+      transparent 42%
+    );
+}
+
+.familyIllustration {
+  position: relative;
+  min-height: 280px;
+  background:
+    radial-gradient(
+      circle at 20% 20%,
+      color-mix(in srgb, var(--color-brand-champagne) 25%, transparent),
+      transparent 47%
+    ),
+    linear-gradient(145deg, var(--color-brand-forest), var(--color-brand-ink));
+}
+
+.familyGlow {
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(
+    circle at 80% 75%,
+    color-mix(in srgb, var(--color-brand-champagne) 24%, transparent),
+    transparent 38%
+  );
+}
+
+/* Global legacy anchor color inheritance is unlayered; scope readable CTA text
+   and interactive navigation colors to the marketing page only. */
+.primaryLink,
+.primaryLink:hover {
+  color: var(--color-action-primary-text);
+}
+
+.navLink {
+  color: var(--color-text-primary);
+  transition: color var(--duration-normal) var(--ease-standard);
+}
+
+.navLink:hover {
+  color: var(--color-action-primary);
+}
+
+/* In-page links have a genuine destination and explicit accessible color. */
+.secondaryLink,
+.secondaryLink:hover {
+  color: var(--color-action-primary);
+}
+
+.secondaryLinkOnDark,
+.secondaryLinkOnDark:hover {
+  color: var(--color-brand-cream);
+}

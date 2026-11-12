@@ -8,9 +8,11 @@ test.describe('Dashboard and Inventory', () => {
     await page.goto('/dashboard');
 
     await expect(page).toHaveURL('/app');
-    await expect(page.getByText('CocinaCore', { exact: true })).toBeVisible();
+    await expect(page.locator('aside').getByRole('link', { name: 'CocinaCore' })).toBeVisible();
     await expect(page.locator('body')).not.toContainText('Restaurante Central');
-    await expect(page.locator('body')).not.toContainText('Configuración del Sistema de Diseño Visual');
+    await expect(page.locator('body')).not.toContainText(
+      'Configuración del Sistema de Diseño Visual'
+    );
     await expect(page.locator('body')).not.toContainText('Guardar Cambios');
     await expect(page.locator('a[href="/dashboard"]')).toHaveCount(0);
   });

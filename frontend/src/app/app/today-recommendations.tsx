@@ -64,11 +64,19 @@ interface SessionInventoryInput {
   decisionKey: string;
 }
 
-function scaleInventoryRequirement(requiredQuantity: number | null, factor: number | null): number | null {
+function scaleInventoryRequirement(
+  requiredQuantity: number | null,
+  factor: number | null
+): number | null {
   if (
-    requiredQuantity === null || !Number.isFinite(requiredQuantity) || requiredQuantity <= 0 ||
-    factor === null || !Number.isFinite(factor) || factor <= 0
-  ) return null;
+    requiredQuantity === null ||
+    !Number.isFinite(requiredQuantity) ||
+    requiredQuantity <= 0 ||
+    factor === null ||
+    !Number.isFinite(factor) ||
+    factor <= 0
+  )
+    return null;
   const scaled = requiredQuantity * factor;
   return Number.isFinite(scaled) && scaled > 0 ? scaled : null;
 }
@@ -76,7 +84,7 @@ function scaleInventoryRequirement(requiredQuantity: number | null, factor: numb
 function inventoryDecisionKey(
   ingredient: TodayIngredientAvailability,
   targetServings: number | null,
-  factor: number | null,
+  factor: number | null
 ): string {
   return [
     targetServings ?? 'unknown',
@@ -95,7 +103,11 @@ const slots: Array<{ value: TodaySlot; label: string }> = [
   { value: 'dinner', label: 'Cena' },
 ];
 
-export function getNextSlotIndex(currentIndex: number, key: string, slotCount: number): number | null {
+export function getNextSlotIndex(
+  currentIndex: number,
+  key: string,
+  slotCount: number
+): number | null {
   if (slotCount <= 0) return null;
   if (key === 'ArrowRight' || key === 'ArrowDown') return (currentIndex + 1) % slotCount;
   if (key === 'ArrowLeft' || key === 'ArrowUp') return (currentIndex - 1 + slotCount) % slotCount;
@@ -126,16 +138,19 @@ function parseNonNegativeNumber(value: string): number | null {
 function formatIngredientAvailability(
   ingredient: TodayIngredientAvailability,
   requiredQuantity: number | null,
-  requirementIsScaled: boolean,
+  requirementIsScaled: boolean
 ): string {
   const required = formatAmount(requiredQuantity, ingredient.requiredUnit);
   const sourceRequirement = formatAmount(ingredient.requiredQuantity, ingredient.requiredUnit);
   const registered = formatAmount(ingredient.availableQuantity, ingredient.availableUnit);
-  const quantitySource = ingredient.quantityProvenance === undefined
-    ? []
-    : [ingredient.quantityProvenance === 'ai_estimate'
-      ? 'cantidad estimada por IA; no se puede verificar suficiencia'
-      : 'procedencia de cantidad desconocida'];
+  const quantitySource =
+    ingredient.quantityProvenance === undefined
+      ? []
+      : [
+          ingredient.quantityProvenance === 'ai_estimate'
+            ? 'cantidad estimada por IA; no se puede verificar suficiencia'
+            : 'procedencia de cantidad desconocida',
+        ];
   const requirement = required
     ? `${requirementIsScaled ? 'requiere' : 'requerimiento de origen'} ${required}`
     : sourceRequirement && !requirementIsScaled
@@ -144,7 +159,11 @@ function formatIngredientAvailability(
   return [
     `${ingredient.name}: ${requirement}`,
     ...quantitySource,
-    registered ? `registrado ${registered} (sin confirmar)` : ingredient.present ? 'cantidad registrada no comparable' : 'sin cantidad registrada; no se asume cero',
+    registered
+      ? `registrado ${registered} (sin confirmar)`
+      : ingredient.present
+        ? 'cantidad registrada no comparable'
+        : 'sin cantidad registrada; no se asume cero',
   ].join('; ');
 }
 
@@ -155,48 +174,77 @@ const sourceLabels: Record<TodayOptionSource, string> = {
   saved_recipe: 'receta guardada',
 };
 
-export function TodayRecommendationResults({ response, slot, onChoose }: TodayRecommendationResultsProps) {
-  const [portionInputs, setPortionInputs] = useState<Record<string, { original: string; target: string }>>({});
+export function TodayRecommendationResults({
+  response,
+  slot,
+  onChoose,
+}: TodayRecommendationResultsProps) {
+  const [portionInputs, setPortionInputs] = useState<
+    Record<string, { original: string; target: string }>
+  >({});
   const [inventoryInputs, setInventoryInputs] = useState<Record<string, SessionInventoryInput>>({});
   const slotLabel = slots.find((item) => item.value === slot)?.label ?? 'Momento elegido';
   const options = response.options.filter((option) => option.slot === slot);
   return (
     <div className="mt-5" aria-live="polite">
       {response.status === 'degraded' ? (
-        <p role="status" className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        <p
+          role="status"
+          className="mb-4 rounded-xl border border-bistro-warning/30 bg-bistro-warning/10 px-4 py-3 text-sm text-bistro-warning"
+        >
           {options.length > 0
             ? 'No pudimos obtener suficientes sugerencias; mostramos las opciones disponibles.'
             : 'No encontramos opciones para este momento.'}
         </p>
       ) : null}
       {options.length === 0 ? (
-        response.status === 'success' ? <p role="status">No encontramos opciones para este momento.</p> : null
+        response.status === 'success' ? (
+          <p role="status">No encontramos opciones para este momento.</p>
+        ) : null
       ) : (
         <>
-          <h3 className="mb-3 text-lg font-semibold text-[#241A14]">Opciones para {slotLabel}</h3>
+          <h3 className="mb-3 text-lg font-semibold text-bistro-text-primary">
+            Opciones para {slotLabel}
+          </h3>
           <ul role="list" className="grid gap-4 md:grid-cols-2">
             {options.map((option, index) => {
               const portionKey = `${option.slot}:${option.source}:${option.title}:${index}`;
               const input = portionInputs[portionKey] ?? { original: '', target: '' };
-              const declaredBaseServings = typeof option.servings === 'number'
-                && Number.isFinite(option.servings) && option.servings > 0
-                ? option.servings
-                : null;
+              const declaredBaseServings =
+                typeof option.servings === 'number' &&
+                Number.isFinite(option.servings) &&
+                option.servings > 0
+                  ? option.servings
+                  : null;
               const baseServings = declaredBaseServings ?? parsePositiveNumber(input.original);
               const targetServings = parseTargetServings(input.target);
-              const scaling = scaleRecipeIngredients(option.ingredients, baseServings, targetServings);
+              const scaling = scaleRecipeIngredients(
+                option.ingredients,
+                baseServings,
+                targetServings
+              );
               const ingredientAvailability = option.ingredientAvailability ?? [];
               const requirementNameCounts = new Map<string, number>();
               for (const ingredient of ingredientAvailability) {
                 const normalizedName = normalizeInventoryName(ingredient.name);
-                requirementNameCounts.set(normalizedName, (requirementNameCounts.get(normalizedName) ?? 0) + 1);
+                requirementNameCounts.set(
+                  normalizedName,
+                  (requirementNameCounts.get(normalizedName) ?? 0) + 1
+                );
               }
               const duplicateRequirementNames = new Set(
                 [...requirementNameCounts].filter(([, count]) => count > 1).map(([name]) => name)
               );
-              const getConfirmation = (ingredient: TodayIngredientAvailability, ingredientIndex: number) => {
+              const getConfirmation = (
+                ingredient: TodayIngredientAvailability,
+                ingredientIndex: number
+              ) => {
                 const stored = inventoryInputs[`${portionKey}:${ingredientIndex}`];
-                const decisionKey = inventoryDecisionKey(ingredient, targetServings, scaling.factor);
+                const decisionKey = inventoryDecisionKey(
+                  ingredient,
+                  targetServings,
+                  scaling.factor
+                );
                 return stored?.response === response && stored.decisionKey === decisionKey
                   ? stored
                   : { quantity: '', confirmed: false };
@@ -204,208 +252,363 @@ export function TodayRecommendationResults({ response, slot, onChoose }: TodayRe
               const sessionStatuses = ingredientAvailability.map((ingredient, ingredientIndex) => {
                 const confirmation = getConfirmation(ingredient, ingredientIndex);
                 const confirmedQuantity = parseNonNegativeNumber(confirmation.quantity);
-                if (ingredient.requiredUnit === 'unknown' || ingredient.quantityProvenance !== undefined || duplicateRequirementNames.has(normalizeInventoryName(ingredient.name))) return 'unknown' as const;
+                if (
+                  ingredient.requiredUnit === 'unknown' ||
+                  ingredient.quantityProvenance !== undefined ||
+                  duplicateRequirementNames.has(normalizeInventoryName(ingredient.name))
+                )
+                  return 'unknown' as const;
                 return assessSessionInventoryQuantity(
                   scaleInventoryRequirement(ingredient.requiredQuantity, scaling.factor),
                   confirmedQuantity,
                   confirmation.confirmed
                 );
               });
-              const decisionAvailability = sessionStatuses.length === 0 || sessionStatuses.includes('unknown')
-                ? 'unknown'
-                : sessionStatuses.every((status) => status === 'sufficient')
-                  ? 'sufficient'
-                  : sessionStatuses.every((status) => status === 'missing')
-                    ? 'missing'
-                    : 'partial';
-              const registeredIngredients = ingredientAvailability.filter((ingredient) => ingredient.present).map((ingredient) => ingredient.name);
-              const reportedInventoryIngredients = [...new Set([
-                ...option.availableIngredients,
-                ...option.missingIngredients,
-                ...(option.unknownIngredients ?? []),
-              ])];
+              const decisionAvailability =
+                sessionStatuses.length === 0 || sessionStatuses.includes('unknown')
+                  ? 'unknown'
+                  : sessionStatuses.every((status) => status === 'sufficient')
+                    ? 'sufficient'
+                    : sessionStatuses.every((status) => status === 'missing')
+                      ? 'missing'
+                      : 'partial';
+              const registeredIngredients = ingredientAvailability
+                .filter((ingredient) => ingredient.present)
+                .map((ingredient) => ingredient.name);
+              const reportedInventoryIngredients = [
+                ...new Set([
+                  ...option.availableIngredients,
+                  ...option.missingIngredients,
+                  ...(option.unknownIngredients ?? []),
+                ]),
+              ];
               const canChoose = baseServings !== null && targetServings !== null;
               const updatePortionInput = (field: 'original' | 'target', value: string) => {
                 setPortionInputs((previous) => ({
                   ...previous,
-                  [portionKey]: { ...(previous[portionKey] ?? { original: '', target: '' }), [field]: value },
+                  [portionKey]: {
+                    ...(previous[portionKey] ?? { original: '', target: '' }),
+                    [field]: value,
+                  },
                 }));
               };
 
               return (
-              <li key={`${option.title}-${index}`} role="listitem" className="rounded-2xl border border-[#E8DDD2] bg-white p-5 shadow-sm">
-                <article aria-labelledby={`today-option-${index}`}>
-                  <div className="flex flex-wrap items-start justify-between gap-2">
-                    <h4 id={`today-option-${index}`} className="text-lg font-semibold text-[#241A14]">{option.title}</h4>
-                    <span className="rounded-full bg-[#F8F4EF] px-3 py-1 text-xs font-semibold text-[#6B5A50]">{slotLabel}</span>
-                  </div>
-                  <p className="mt-2 text-sm text-[#6B5A50]">{option.reason}</p>
-                  <p className="mt-1 text-xs text-[#6B5A50]">Origen: {sourceLabels[option.source]}</p>
-                  {option.quantityProvenance === 'ai_estimate' ? (
-                    <p className="mt-1 text-xs text-amber-800">Cantidades estimadas por IA; no verificadas.</p>
-                  ) : option.quantityProvenance === 'unknown' ? (
-                    <p className="mt-1 text-xs text-[#6B5A50]">Procedencia de cantidades desconocida.</p>
-                  ) : null}
-                  <p className="mt-2 text-sm text-[#6B5A50]">
-                    {option.prepMinutes === null ? 'Tiempo no estimado' : `${option.prepMinutes} minutos`}
-                  </p>
-                  <p className="mt-3 text-xs text-[#6B5A50]">Las cantidades registradas no se consideran verificadas hasta que confirmes lo que tenés ahora para esta decisión. Esta confirmación no se guarda.</p>
-                  <dl className="mt-3 grid gap-2 text-sm">
-                    <div><dt className="inline font-semibold text-[#241A14]">{ingredientAvailability.length ? 'Inventario registrado, aún sin confirmar: ' : 'Datos de inventario reportados (sin confirmar): '}</dt><dd className="inline text-[#6B5A50]">{ingredientAvailability.length ? (registeredIngredients.length ? registeredIngredients.join(', ') : 'sin cantidades registradas') : (reportedInventoryIngredients.length ? reportedInventoryIngredients.join(', ') : 'sin detalle disponible')}</dd></div>
-                    <div><dt className="inline font-semibold text-[#241A14]">Disponibilidad para esta decisión: </dt><dd className="inline text-[#6B5A50]">{decisionAvailability === 'unknown' ? 'desconocida' : decisionAvailability === 'sufficient' ? 'suficiente' : decisionAvailability === 'missing' ? 'faltante según cantidades confirmadas' : 'parcial según cantidades confirmadas'}</dd></div>
-                    {ingredientAvailability.length ? (
+                <li
+                  key={`${option.title}-${index}`}
+                  role="listitem"
+                  className="rounded-2xl border border-bistro-border bg-white p-5 shadow-sm"
+                >
+                  <article aria-labelledby={`today-option-${index}`}>
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <h4
+                        id={`today-option-${index}`}
+                        className="text-lg font-semibold text-bistro-text-primary"
+                      >
+                        {option.title}
+                      </h4>
+                      <span className="rounded-full bg-bistro-surface-warm px-3 py-1 text-xs font-semibold text-bistro-text-secondary">
+                        {slotLabel}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-sm text-bistro-text-secondary">{option.reason}</p>
+                    <p className="mt-1 text-xs text-bistro-text-secondary">
+                      Origen: {sourceLabels[option.source]}
+                    </p>
+                    {option.quantityProvenance === 'ai_estimate' ? (
+                      <p className="mt-1 text-xs text-bistro-warning">
+                        Cantidades estimadas por IA; no verificadas.
+                      </p>
+                    ) : option.quantityProvenance === 'unknown' ? (
+                      <p className="mt-1 text-xs text-bistro-text-secondary">
+                        Procedencia de cantidades desconocida.
+                      </p>
+                    ) : null}
+                    <p className="mt-2 text-sm text-bistro-text-secondary">
+                      {option.prepMinutes === null
+                        ? 'Tiempo no estimado'
+                        : `${option.prepMinutes} minutos`}
+                    </p>
+                    <p className="mt-3 text-xs text-bistro-text-secondary">
+                      Las cantidades registradas no se consideran verificadas hasta que confirmes lo
+                      que tenés ahora para esta decisión. Esta confirmación no se guarda.
+                    </p>
+                    <dl className="mt-3 grid gap-2 text-sm">
                       <div>
-                        <dt className="font-semibold text-[#241A14]">Detalle de cantidades registradas</dt>
-                        <dd className="text-[#6B5A50]">
-                          {scaling.factor !== null && targetServings !== null
-                            ? `Requerimientos ajustados para ${targetServings} porciones.`
-                            : 'Requerimientos de origen; disponibilidad desconocida hasta definir porciones.'}
-                          <ul className="mt-1 grid gap-3">
-                            {ingredientAvailability.map((ingredient, ingredientIndex) => {
-                              const confirmationKey = `${portionKey}:${ingredientIndex}`;
-                              const decisionKey = inventoryDecisionKey(ingredient, targetServings, scaling.factor);
-                              const confirmation = getConfirmation(ingredient, ingredientIndex);
-                              const scaledRequiredQuantity = scaleInventoryRequirement(ingredient.requiredQuantity, scaling.factor);
-                              const duplicateRequirement = duplicateRequirementNames.has(normalizeInventoryName(ingredient.name));
-                              const isComparable = ingredient.requiredQuantity !== null && ingredient.requiredUnit !== 'unknown' && ingredient.quantityProvenance === undefined && !duplicateRequirement;
-                              const canConfirm = isComparable && parseNonNegativeNumber(confirmation.quantity) !== null;
-                              return (
-                                <li key={`${ingredient.name}-${ingredientIndex}`}>
-                                  <p>{formatIngredientAvailability(ingredient, scaledRequiredQuantity, scaling.factor !== null)}</p>
-                                  {ingredient.quantityProvenance === 'ai_estimate' ? (
-                                    <p className="mt-1 text-amber-800">Cantidad estimada por IA; no se puede verificar suficiencia.</p>
-                                  ) : ingredient.quantityProvenance === 'unknown' ? (
-                                    <p className="mt-1">Procedencia de cantidad desconocida; no se puede verificar suficiencia.</p>
-                                  ) : duplicateRequirement ? (
-                                    <p className="mt-1">Ingrediente repetido; confirmación individual no disponible.</p>
-                                  ) : isComparable ? (
-                                    <div className="mt-1 grid gap-1">
-                                      <label htmlFor={`today-inventory-quantity-${index}-${ingredientIndex}`} className="font-medium">Cantidad actual de {ingredient.name} ({ingredient.requiredUnit})</label>
-                                      <input
-                                        id={`today-inventory-quantity-${index}-${ingredientIndex}`}
-                                        type="number"
-                                        min="0"
-                                        step="any"
-                                        value={confirmation.quantity}
-                                        aria-label={`Cantidad actual de ${ingredient.name} (${ingredient.requiredUnit})`}
-                                        onChange={(event) => setInventoryInputs((previous) => ({
-                                          ...previous,
-                                          [confirmationKey]: { quantity: event.target.value, confirmed: false, response, decisionKey },
-                                        }))}
-                                        className="rounded-lg border border-[#C8B9AC] px-3 py-2 text-sm"
-                                      />
-                                      <label className="flex items-center gap-2">
+                        <dt className="inline font-semibold text-bistro-text-primary">
+                          {ingredientAvailability.length
+                            ? 'Inventario registrado, aún sin confirmar: '
+                            : 'Datos de inventario reportados (sin confirmar): '}
+                        </dt>
+                        <dd className="inline text-bistro-text-secondary">
+                          {ingredientAvailability.length
+                            ? registeredIngredients.length
+                              ? registeredIngredients.join(', ')
+                              : 'sin cantidades registradas'
+                            : reportedInventoryIngredients.length
+                              ? reportedInventoryIngredients.join(', ')
+                              : 'sin detalle disponible'}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="inline font-semibold text-bistro-text-primary">
+                          Disponibilidad para esta decisión:{' '}
+                        </dt>
+                        <dd className="inline text-bistro-text-secondary">
+                          {decisionAvailability === 'unknown'
+                            ? 'desconocida'
+                            : decisionAvailability === 'sufficient'
+                              ? 'suficiente'
+                              : decisionAvailability === 'missing'
+                                ? 'faltante según cantidades confirmadas'
+                                : 'parcial según cantidades confirmadas'}
+                        </dd>
+                      </div>
+                      {ingredientAvailability.length ? (
+                        <div>
+                          <dt className="font-semibold text-bistro-text-primary">
+                            Detalle de cantidades registradas
+                          </dt>
+                          <dd className="text-bistro-text-secondary">
+                            {scaling.factor !== null && targetServings !== null
+                              ? `Requerimientos ajustados para ${targetServings} porciones.`
+                              : 'Requerimientos de origen; disponibilidad desconocida hasta definir porciones.'}
+                            <ul className="mt-1 grid gap-3">
+                              {ingredientAvailability.map((ingredient, ingredientIndex) => {
+                                const confirmationKey = `${portionKey}:${ingredientIndex}`;
+                                const decisionKey = inventoryDecisionKey(
+                                  ingredient,
+                                  targetServings,
+                                  scaling.factor
+                                );
+                                const confirmation = getConfirmation(ingredient, ingredientIndex);
+                                const scaledRequiredQuantity = scaleInventoryRequirement(
+                                  ingredient.requiredQuantity,
+                                  scaling.factor
+                                );
+                                const duplicateRequirement = duplicateRequirementNames.has(
+                                  normalizeInventoryName(ingredient.name)
+                                );
+                                const isComparable =
+                                  ingredient.requiredQuantity !== null &&
+                                  ingredient.requiredUnit !== 'unknown' &&
+                                  ingredient.quantityProvenance === undefined &&
+                                  !duplicateRequirement;
+                                const canConfirm =
+                                  isComparable &&
+                                  parseNonNegativeNumber(confirmation.quantity) !== null;
+                                return (
+                                  <li key={`${ingredient.name}-${ingredientIndex}`}>
+                                    <p>
+                                      {formatIngredientAvailability(
+                                        ingredient,
+                                        scaledRequiredQuantity,
+                                        scaling.factor !== null
+                                      )}
+                                    </p>
+                                    {ingredient.quantityProvenance === 'ai_estimate' ? (
+                                      <p className="mt-1 text-bistro-warning">
+                                        Cantidad estimada por IA; no se puede verificar suficiencia.
+                                      </p>
+                                    ) : ingredient.quantityProvenance === 'unknown' ? (
+                                      <p className="mt-1">
+                                        Procedencia de cantidad desconocida; no se puede verificar
+                                        suficiencia.
+                                      </p>
+                                    ) : duplicateRequirement ? (
+                                      <p className="mt-1">
+                                        Ingrediente repetido; confirmación individual no disponible.
+                                      </p>
+                                    ) : isComparable ? (
+                                      <div className="mt-1 grid gap-1">
+                                        <label
+                                          htmlFor={`today-inventory-quantity-${index}-${ingredientIndex}`}
+                                          className="font-medium"
+                                        >
+                                          Cantidad actual de {ingredient.name} (
+                                          {ingredient.requiredUnit})
+                                        </label>
                                         <input
-                                          type="checkbox"
-                                          aria-label={`Confirmo que la cantidad de ${ingredient.name} está vigente`}
-                                          checked={confirmation.confirmed}
-                                          disabled={!canConfirm}
-                                          onChange={(event) => setInventoryInputs((previous) => {
-                                            const stored = previous[confirmationKey];
-                                            const current = stored?.response === response && stored.decisionKey === decisionKey
-                                              ? stored
-                                              : { quantity: '', confirmed: false };
-                                            return {
+                                          id={`today-inventory-quantity-${index}-${ingredientIndex}`}
+                                          type="number"
+                                          min="0"
+                                          step="any"
+                                          value={confirmation.quantity}
+                                          aria-label={`Cantidad actual de ${ingredient.name} (${ingredient.requiredUnit})`}
+                                          onChange={(event) =>
+                                            setInventoryInputs((previous) => ({
                                               ...previous,
                                               [confirmationKey]: {
-                                                ...current,
-                                                confirmed: event.target.checked && canConfirm,
+                                                quantity: event.target.value,
+                                                confirmed: false,
                                                 response,
                                                 decisionKey,
                                               },
-                                            };
-                                          })}
+                                            }))
+                                          }
+                                          className="rounded-lg border border-bistro-border px-3 py-2 text-sm"
                                         />
-                                        Confirmo que esta cantidad está vigente para esta decisión.
-                                      </label>
-                                    </div>
-                                  ) : (
-                                    <p className="mt-1">Requerimiento o unidad no comparable; queda desconocido.</p>
-                                  )}
-                                </li>
-                              );
-                            })}
-                          </ul>
-                          <p className="mt-2 text-xs">El inventario solo se confirma para esta decisión y no se guarda.</p>
-                        </dd>
-                      </div>
-                    ) : <p role="status">No hay cantidades comparables para confirmar; la disponibilidad queda desconocida.</p>}
-                  </dl>
-                  <fieldset className="mt-4 grid gap-2 rounded-xl border border-[#E8DDD2] p-3" aria-label={`Porciones de ${option.title}`}>
-                    <legend className="px-1 text-sm font-semibold text-[#241A14]">Ajustar porciones</legend>
-                    {declaredBaseServings !== null ? (
-                      <p className="text-sm text-[#6B5A50]">Porciones originales declaradas: {declaredBaseServings}</p>
-                    ) : (
-                      <>
-                        <p className="text-sm text-[#6B5A50]">Porciones originales no declaradas. Ingresá el dato de la receta para calcular.</p>
-                        <label htmlFor={`today-original-servings-${index}`} className="text-sm font-medium text-[#241A14]">Porciones originales: {option.title}</label>
-                        <input
-                          id={`today-original-servings-${index}`}
-                          type="number"
-                          min="0.01"
-                          step="any"
-                          value={input.original}
-                          onChange={(event) => updatePortionInput('original', event.target.value)}
-                          className="rounded-lg border border-[#C8B9AC] px-3 py-2 text-sm"
-                        />
-                      </>
-                    )}
-                    <label htmlFor={`today-target-servings-${index}`} className="text-sm font-medium text-[#241A14]">Porciones deseadas: {option.title}</label>
-                    <input
-                      id={`today-target-servings-${index}`}
-                      type="number"
-                      min="1"
-                      max="100"
-                      step="1"
-                      value={input.target}
-                      onChange={(event) => updatePortionInput('target', event.target.value)}
-                      className="rounded-lg border border-[#C8B9AC] px-3 py-2 text-sm"
-                    />
-                    {baseServings === null ? (
-                      <p role="status" className="text-sm text-[#6B5A50]">Porciones originales desconocidas; ingresá el dato declarado para calcular.</p>
-                    ) : !targetServings ? (
-                      <p role="status" className="text-sm text-[#6B5A50]">Elegí cuántas porciones querés preparar.</p>
-                    ) : (
-                      <div aria-live="polite" className="text-sm text-[#6B5A50]">
+                                        <label className="flex items-center gap-2">
+                                          <input
+                                            type="checkbox"
+                                            aria-label={`Confirmo que la cantidad de ${ingredient.name} está vigente`}
+                                            checked={confirmation.confirmed}
+                                            disabled={!canConfirm}
+                                            onChange={(event) =>
+                                              setInventoryInputs((previous) => {
+                                                const stored = previous[confirmationKey];
+                                                const current =
+                                                  stored?.response === response &&
+                                                  stored.decisionKey === decisionKey
+                                                    ? stored
+                                                    : { quantity: '', confirmed: false };
+                                                return {
+                                                  ...previous,
+                                                  [confirmationKey]: {
+                                                    ...current,
+                                                    confirmed: event.target.checked && canConfirm,
+                                                    response,
+                                                    decisionKey,
+                                                  },
+                                                };
+                                              })
+                                            }
+                                          />
+                                          Confirmo que esta cantidad está vigente para esta
+                                          decisión.
+                                        </label>
+                                      </div>
+                                    ) : (
+                                      <p className="mt-1">
+                                        Requerimiento o unidad no comparable; queda desconocido.
+                                      </p>
+                                    )}
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                            <p className="mt-2 text-xs">
+                              El inventario solo se confirma para esta decisión y no se guarda.
+                            </p>
+                          </dd>
+                        </div>
+                      ) : (
                         <p role="status">
-                          {scaling.status === 'scaled'
-                            ? `Cantidades ajustadas para ${targetServings} porciones.`
-                            : scaling.status === 'partial'
-                              ? `Solo se ajustaron las cantidades compatibles para ${targetServings} porciones; el resto queda sin escalar.`
-                              : 'No se encontraron cantidades compatibles para escalar; los valores originales quedan intactos.'}
+                          No hay cantidades comparables para confirmar; la disponibilidad queda
+                          desconocida.
                         </p>
-                        <ul className="mt-1 grid gap-1">
-                          {scaling.ingredients.map((ingredient, ingredientIndex) => (
-                            <li key={`${ingredient.source}-${ingredientIndex}`}>
-                              {ingredient.text}{ingredient.scaled ? '' : ' (texto de origen, sin escalar)'}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                  </fieldset>
-                  <button
-                    type="button"
-                    aria-label={`Ver receta: ${option.title}`}
-                    disabled={!canChoose}
-                    onClick={() => {
-                      if (!canChoose || targetServings === null) return;
-                      onChoose({ slot: option.slot, title: option.title, ingredients: [...option.ingredients], targetServings });
-                    }}
-                    className="mt-4 rounded-xl bg-[#A55412] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#87440F] disabled:cursor-not-allowed disabled:bg-[#C8B9AC] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#A55412]"
-                  >
-                    Ver receta
-                  </button>
-                </article>
-              </li>
+                      )}
+                    </dl>
+                    <fieldset
+                      className="mt-4 grid gap-2 rounded-xl border border-bistro-border p-3"
+                      aria-label={`Porciones de ${option.title}`}
+                    >
+                      <legend className="px-1 text-sm font-semibold text-bistro-text-primary">
+                        Ajustar porciones
+                      </legend>
+                      {declaredBaseServings !== null ? (
+                        <p className="text-sm text-bistro-text-secondary">
+                          Porciones originales declaradas: {declaredBaseServings}
+                        </p>
+                      ) : (
+                        <>
+                          <p className="text-sm text-bistro-text-secondary">
+                            Porciones originales no declaradas. Ingresá el dato de la receta para
+                            calcular.
+                          </p>
+                          <label
+                            htmlFor={`today-original-servings-${index}`}
+                            className="text-sm font-medium text-bistro-text-primary"
+                          >
+                            Porciones originales: {option.title}
+                          </label>
+                          <input
+                            id={`today-original-servings-${index}`}
+                            type="number"
+                            min="0.01"
+                            step="any"
+                            value={input.original}
+                            onChange={(event) => updatePortionInput('original', event.target.value)}
+                            className="rounded-lg border border-bistro-border px-3 py-2 text-sm"
+                          />
+                        </>
+                      )}
+                      <label
+                        htmlFor={`today-target-servings-${index}`}
+                        className="text-sm font-medium text-bistro-text-primary"
+                      >
+                        Porciones deseadas: {option.title}
+                      </label>
+                      <input
+                        id={`today-target-servings-${index}`}
+                        type="number"
+                        min="1"
+                        max="100"
+                        step="1"
+                        value={input.target}
+                        onChange={(event) => updatePortionInput('target', event.target.value)}
+                        className="rounded-lg border border-bistro-border px-3 py-2 text-sm"
+                      />
+                      {baseServings === null ? (
+                        <p role="status" className="text-sm text-bistro-text-secondary">
+                          Porciones originales desconocidas; ingresá el dato declarado para
+                          calcular.
+                        </p>
+                      ) : !targetServings ? (
+                        <p role="status" className="text-sm text-bistro-text-secondary">
+                          Elegí cuántas porciones querés preparar.
+                        </p>
+                      ) : (
+                        <div aria-live="polite" className="text-sm text-bistro-text-secondary">
+                          <p role="status">
+                            {scaling.status === 'scaled'
+                              ? `Cantidades ajustadas para ${targetServings} porciones.`
+                              : scaling.status === 'partial'
+                                ? `Solo se ajustaron las cantidades compatibles para ${targetServings} porciones; el resto queda sin escalar.`
+                                : 'No se encontraron cantidades compatibles para escalar; los valores originales quedan intactos.'}
+                          </p>
+                          <ul className="mt-1 grid gap-1">
+                            {scaling.ingredients.map((ingredient, ingredientIndex) => (
+                              <li key={`${ingredient.source}-${ingredientIndex}`}>
+                                {ingredient.text}
+                                {ingredient.scaled ? '' : ' (texto de origen, sin escalar)'}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </fieldset>
+                    <button
+                      type="button"
+                      aria-label={`Ver receta: ${option.title}`}
+                      disabled={!canChoose}
+                      onClick={() => {
+                        if (!canChoose || targetServings === null) return;
+                        onChoose({
+                          slot: option.slot,
+                          title: option.title,
+                          ingredients: [...option.ingredients],
+                          targetServings,
+                        });
+                      }}
+                      className="mt-4 rounded-xl bg-bistro-action-primary px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-bistro-action-primary-hover disabled:cursor-not-allowed disabled:bg-bistro-border focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-bistro-action-primary"
+                    >
+                      Ver receta
+                    </button>
+                  </article>
+                </li>
               );
             })}
           </ul>
         </>
       )}
       {response.warnings?.includes('PROFILE_NOT_CONFIGURED') ? (
-        <p role="alert" className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          Solo se aplican las restricciones guardadas. No se han verificado alergias ni preferencias desconocidas.
+        <p
+          role="alert"
+          className="mt-4 rounded-xl border border-bistro-warning/30 bg-bistro-warning/10 px-4 py-3 text-sm text-bistro-warning"
+        >
+          Solo se aplican las restricciones guardadas. No se han verificado alergias ni preferencias
+          desconocidas.
         </p>
       ) : null}
     </div>
@@ -421,13 +624,23 @@ export default function TodayRecommendations({ onChoose }: TodayRecommendationsP
   const radioRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const requestGeneration = useRef(0);
   const activeRequest = useRef(0);
+  const activeController = useRef<AbortController | null>(null);
   const [response, setResponse] = useState<TodayResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingSlot, setLoadingSlot] = useState<TodaySlot | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const selectSlot = (nextSlot: TodaySlot) => {
-    if (nextSlot !== slot) requestGeneration.current += 1;
+    if (nextSlot !== slot) {
+      // A response for the previous meal can no longer update this selection.
+      // Release the UI immediately rather than waiting for that request to settle.
+      requestGeneration.current += 1;
+      activeRequest.current += 1;
+      activeController.current?.abort();
+      activeController.current = null;
+      setLoading(false);
+      setLoadingSlot(null);
+    }
     setSlot(nextSlot);
     setResponse(null);
     setError(null);
@@ -438,6 +651,8 @@ export default function TodayRecommendations({ onChoose }: TodayRecommendationsP
     const generation = requestGeneration.current;
     const requestId = ++activeRequest.current;
     const requestedSlot = slot;
+    const controller = new AbortController();
+    activeController.current = controller;
     setLoading(true);
     setLoadingSlot(requestedSlot);
     setError(null);
@@ -446,6 +661,7 @@ export default function TodayRecommendations({ onChoose }: TodayRecommendationsP
       const result = await safeFetch<TodayResponse>('/api/today', {
         method: 'POST',
         credentials: 'same-origin',
+        signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ slot: requestedSlot }),
       });
@@ -453,10 +669,15 @@ export default function TodayRecommendations({ onChoose }: TodayRecommendationsP
       if (generation === requestGeneration.current) setResponse(result.data);
     } catch (cause) {
       if (generation === requestGeneration.current) {
-        setError(cause instanceof Error ? cause.message : 'No pudimos cargar sugerencias. Inténtalo de nuevo.');
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : 'No pudimos cargar sugerencias. Inténtalo de nuevo.'
+        );
       }
     } finally {
       if (requestId === activeRequest.current) {
+        activeController.current = null;
         setLoading(false);
         setLoadingSlot(null);
       }
@@ -464,12 +685,28 @@ export default function TodayRecommendations({ onChoose }: TodayRecommendationsP
   };
 
   return (
-    <section aria-labelledby="today-recommendations-title" className="mt-6 rounded-3xl border border-[#E8DDD2] bg-gradient-to-br from-white to-[#F8F4EF] p-5 shadow-sm md:p-7">
+    <section
+      aria-labelledby="today-recommendations-title"
+      className="mt-6 rounded-3xl border border-bistro-border bg-gradient-to-br from-white to-bistro-surface-warm p-5 shadow-sm md:p-7"
+    >
       <div className="max-w-2xl">
-        <p className="text-sm font-bold uppercase tracking-wide text-[#A55412]">Inspiración para tu cocina</p>
-        <h2 id="today-recommendations-title" className="mt-1 text-2xl font-semibold text-[#241A14]">¿Qué cocino hoy?</h2>
-        <p className="mt-2 text-sm text-[#6B5A50]">Elegí un momento de comida para ver opciones basadas en tus datos disponibles.</p>
-        <div role="radiogroup" aria-label="Elegí el momento de comida" className="mt-4 flex flex-wrap gap-2">
+        <p className="text-sm font-bold uppercase tracking-wide text-bistro-action-primary">
+          Inspiración para tu cocina
+        </p>
+        <h2
+          id="today-recommendations-title"
+          className="mt-1 text-2xl font-semibold text-bistro-text-primary"
+        >
+          ¿Qué cocino hoy?
+        </h2>
+        <p className="mt-2 text-sm text-bistro-text-secondary">
+          Elegí un momento de comida para ver opciones basadas en tus datos disponibles.
+        </p>
+        <div
+          role="radiogroup"
+          aria-label="Elegí el momento de comida"
+          className="mt-4 flex flex-wrap gap-2"
+        >
           {slots.map((item, index) => (
             <button
               key={item.value}
@@ -477,7 +714,9 @@ export default function TodayRecommendations({ onChoose }: TodayRecommendationsP
               role="radio"
               aria-checked={slot === item.value}
               tabIndex={slot === item.value || (slot === null && index === 0) ? 0 : -1}
-              ref={(element) => { radioRefs.current[index] = element; }}
+              ref={(element) => {
+                radioRefs.current[index] = element;
+              }}
               onKeyDown={(event) => {
                 const nextIndex = getNextSlotIndex(index, event.key, slots.length);
                 if (nextIndex === null) return;
@@ -487,7 +726,7 @@ export default function TodayRecommendations({ onChoose }: TodayRecommendationsP
                 radioRefs.current[nextIndex]?.focus();
               }}
               onClick={() => selectSlot(item.value)}
-              className={`rounded-full border px-4 py-2 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#A55412] ${slot === item.value ? 'border-[#A55412] bg-[#A55412] text-white' : 'border-[#E8DDD2] bg-white text-[#6B5A50] hover:border-[#A55412]'}`}
+              className={`rounded-full border px-4 py-2 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-bistro-action-primary ${slot === item.value ? 'border-bistro-action-primary bg-bistro-action-primary text-white' : 'border-bistro-border bg-white text-bistro-text-secondary hover:border-bistro-action-primary'}`}
             >
               {item.label}
             </button>
@@ -497,14 +736,27 @@ export default function TodayRecommendations({ onChoose }: TodayRecommendationsP
           type="button"
           disabled={!slot || loading}
           onClick={() => void requestRecommendations()}
-          className="mt-4 rounded-xl bg-[#A55412] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#87440F] disabled:cursor-not-allowed disabled:bg-[#C8B9AC]"
+          className="mt-4 rounded-xl bg-bistro-action-primary px-5 py-3 text-sm font-semibold text-white transition hover:bg-bistro-action-primary-hover disabled:cursor-not-allowed disabled:bg-bistro-border"
         >
           {loading ? 'Buscando opciones…' : 'Ver opciones'}
         </button>
       </div>
-      {loading && loadingSlot ? <p role="status" aria-live="polite" className="mt-4 text-sm text-[#6B5A50]">Buscando opciones para {slots.find((item) => item.value === loadingSlot)?.label}…</p> : null}
-      {error ? <p role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : null}
-      {response && slot ? <TodayRecommendationResults response={response} slot={slot} onChoose={onChoose} /> : null}
+      {loading && loadingSlot ? (
+        <p role="status" aria-live="polite" className="mt-4 text-sm text-bistro-text-secondary">
+          Buscando opciones para {slots.find((item) => item.value === loadingSlot)?.label}…
+        </p>
+      ) : null}
+      {error ? (
+        <p
+          role="alert"
+          className="mt-4 rounded-xl border border-bistro-danger/30 bg-bistro-danger/10 px-4 py-3 text-sm text-bistro-danger"
+        >
+          {error}
+        </p>
+      ) : null}
+      {response && slot ? (
+        <TodayRecommendationResults response={response} slot={slot} onChoose={onChoose} />
+      ) : null}
     </section>
   );
 }
