@@ -21,7 +21,9 @@ async function providerCaptureUrl(path: string): Promise<string> {
   return `http://127.0.0.1:${port}${path}`;
 }
 
-test('connects saved culinary context to safe Today recommendations and recipe handoff', async ({ page }) => {
+test('connects saved culinary context to safe Today recommendations and recipe handoff', async ({
+  page,
+}) => {
   test.skip(
     process.env.COCINACORE_ISOLATED_E2E !== '1',
     'Requires the isolated E2E runner to prevent creating data in the default environment.'
@@ -52,7 +54,9 @@ test('connects saved culinary context to safe Today recommendations and recipe h
   await householdNames.nth(1).fill(adultMemberName);
   await page.getByLabel('Grupo de edad').nth(1).selectOption('adult');
   await page.getByRole('button', { name: 'Guardar perfil culinario' }).click();
-  await expect(page.getByText('Perfil culinario guardado. CocinaCore ya usará estas preferencias.')).toBeVisible();
+  await expect(
+    page.getByText('Perfil culinario guardado. CocinaCore ya usará estas preferencias.')
+  ).toBeVisible();
 
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Perfil', exact: true })).toBeVisible();
@@ -63,6 +67,26 @@ test('connects saved culinary context to safe Today recommendations and recipe h
   await expect(householdNames.nth(1)).toHaveValue(adultMemberName);
   await expect(page.getByLabel('Grupo de edad').nth(0)).toHaveValue('child');
   await expect(page.getByLabel('Grupo de edad').nth(1)).toHaveValue('adult');
+
+  // Complete the first-run prerequisites from the authenticated browser context.
+  // Keep the same session used to save and reload the culinary preferences.
+  const setupStatus = await page.evaluate(async () => {
+    const onboarding = await fetch('/api/profile', {
+      method: 'PUT',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ level: 'Intermedio', onboardingCompleted: true }),
+    });
+    if (!onboarding.ok) return { onboarding: onboarding.status, inventory: null };
+    const inventory = await fetch('/api/inventory', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ingredientName: 'rice', quantity: '2', unit: 'kg' }),
+    });
+    return { onboarding: onboarding.status, inventory: inventory.status };
+  });
+  expect(setupStatus).toEqual({ onboarding: 200, inventory: 201 });
 
   await page.goto('/app');
   await expect(page.getByRole('heading', { name: '¿Qué cocino hoy?' })).toBeVisible();
@@ -77,22 +101,27 @@ test('connects saved culinary context to safe Today recommendations and recipe h
   for (const title of safeTitles) {
     await expect(todaySection.getByRole('heading', { name: title, exact: true })).toBeVisible();
   }
-  await expect(todaySection.getByRole('heading', { name: 'Peanut bowl', exact: true })).toHaveCount(0);
+  await expect(todaySection.getByRole('heading', { name: 'Peanut bowl', exact: true })).toHaveCount(
+    0
+  );
   await expect(todaySection.getByRole('article')).toHaveCount(3);
 
   const captureResponse = await fetch(await providerCaptureUrl('/__e2e/requests'));
   expect(captureResponse.ok).toBe(true);
   const capture = (await captureResponse.json()) as ProviderCapture;
   expect(capture.generationCallCount).toBe(1);
-  const todayRequest = capture.requests.find((entry) => entry.pathname.endsWith(':generateContent'));
+  const todayRequest = capture.requests.find((entry) =>
+    entry.pathname.endsWith(':generateContent')
+  );
   expect(Boolean(todayRequest)).toBe(true);
   const prompt = todayRequest?.body.contents?.[0]?.parts?.[0]?.text ?? '';
   const contextMarker = 'Trusted meal context JSON:\n';
   const contextStart = prompt.indexOf(contextMarker);
   const contextEnd = prompt.indexOf('\nOptional trusted cookbook text', contextStart);
-  const contextText = contextStart < 0
-    ? ''
-    : prompt.slice(contextStart + contextMarker.length, contextEnd < 0 ? undefined : contextEnd);
+  const contextText =
+    contextStart < 0
+      ? ''
+      : prompt.slice(contextStart + contextMarker.length, contextEnd < 0 ? undefined : contextEnd);
   let context: {
     slot?: string;
     maxPrepMinutes?: number;
@@ -134,9 +163,16 @@ test('connects saved culinary context to safe Today recommendations and recipe h
     'Spinach pasta': ['pasta', 'spinach', 'garlic'],
   };
   const expectedIngredients = selectedOptionIngredients[selectedTitle];
-  expect(JSON.stringify(handoffUrl.searchParams.getAll('ingredient')) === JSON.stringify(expectedIngredients)).toBe(true);
-  expect((await page.getByLabel('Nombre de receta (opcional)').inputValue()) === selectedTitle).toBe(true);
-  expect((await page.getByLabel(/Quiero cocinar con/).inputValue()) === expectedIngredients.join('\n')).toBe(true);
+  expect(
+    JSON.stringify(handoffUrl.searchParams.getAll('ingredient')) ===
+      JSON.stringify(expectedIngredients)
+  ).toBe(true);
+  expect(
+    (await page.getByLabel('Nombre de receta (opcional)').inputValue()) === selectedTitle
+  ).toBe(true);
+  expect(
+    (await page.getByLabel(/Quiero cocinar con/).inputValue()) === expectedIngredients.join('\n')
+  ).toBe(true);
 
   const afterHandoffResponse = await fetch(await providerCaptureUrl('/__e2e/requests'));
   expect(afterHandoffResponse.ok).toBe(true);
