@@ -7,6 +7,11 @@ vi.mock('@aws-sdk/client-s3', () => ({
   S3Client: class MockS3Client {
     send = sendMock;
   },
+  ListObjectsV2Command: class MockListObjectsV2Command {
+    constructor(input: unknown) {
+      commandPayloads.push({ type: 'list', input });
+    }
+  },
   PutObjectCommand: class MockPutObjectCommand {
     constructor(input: unknown) {
       commandPayloads.push({ type: 'put', input });
@@ -100,6 +105,17 @@ describe('s3StorageAdapter', () => {
       expect(sendMock).not.toHaveBeenCalled();
     }
   );
+
+  it('uses a bounded prefix-scoped listing for readiness', async () => {
+    const { checkS3StorageReadiness } = await import('./s3StorageAdapter');
+    const signal = new AbortController().signal;
+    await checkS3StorageReadiness(signal);
+    expect(commandPayloads[0]).toMatchObject({
+      type: 'list',
+      input: { Bucket: 'cocinacore-test', Prefix: 'global-pdfs/', MaxKeys: 1 },
+    });
+    expect(sendMock).toHaveBeenCalledWith(expect.anything(), { abortSignal: signal });
+  });
 
   it('requires S3 configuration before writes', async () => {
     vi.unstubAllEnvs();

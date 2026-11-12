@@ -1,4 +1,9 @@
-import { DeleteObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import {
+  DeleteObjectCommand,
+  ListObjectsV2Command,
+  PutObjectCommand,
+  S3Client,
+} from '@aws-sdk/client-s3';
 import path from 'path';
 import type { SaveFileInput, StorageAdapter, StoredFile } from './types';
 
@@ -103,3 +108,12 @@ export const s3StorageAdapter: StorageAdapter = {
     );
   },
 };
+
+/** Read-only readiness probe; uses the actual scoped application identity. */
+export async function checkS3StorageReadiness(signal: AbortSignal): Promise<void> {
+  const config = getS3Config();
+  await getS3Client().send(
+    new ListObjectsV2Command({ Bucket: config.bucket, Prefix: 'global-pdfs/', MaxKeys: 1 }),
+    { abortSignal: signal }
+  );
+}
