@@ -7,6 +7,7 @@ import {
   type InventoryCurrency,
   type StoredInventoryPrice,
 } from './inventory-price';
+import { addCost } from './exact-inventory-cost';
 import { expirationCalendarDay, normalizeInventoryName } from './normalize-inventory';
 
 export type OverviewItem = StoredInventoryPrice & {
@@ -51,27 +52,6 @@ export function filterInventory<T extends OverviewItem>(
         inventoryStockState(row.quantity, row.unit, row.low_stock_threshold) === filters.stock) &&
       (filters.expiry === 'all' || expiryState(row.expiration_date, today) === filters.expiry)
   );
-}
-function gcd(a: bigint, b: bigint): bigint {
-  while (b !== BigInt(0)) {
-    const r = a % b;
-    a = b;
-    b = r;
-  }
-  return a;
-}
-function addCost(a: ExactInventoryCost, b: ExactInventoryCost): ExactInventoryCost {
-  if (a.currency !== b.currency) throw new Error('Incompatible currencies');
-  const divisor = gcd(a.denominator, b.denominator);
-  const denominator = (a.denominator / divisor) * b.denominator;
-  const numerator =
-    a.numerator * (b.denominator / divisor) + b.numerator * (a.denominator / divisor);
-  const reduced = gcd(numerator, denominator);
-  return {
-    currency: a.currency,
-    numerator: numerator / reduced,
-    denominator: denominator / reduced,
-  };
 }
 export function summarizeInventory(
   rows: readonly OverviewItem[],
