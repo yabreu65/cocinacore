@@ -260,3 +260,58 @@ it('applies Chef Instructor timeouts and options on the scoped inventory client'
   ]);
   expect(client.query.mock.calls[2][0]).not.toMatch(/user_id\s*=/i);
 });
+
+it('persists all price columns atomically and preserves omitted fields', async () => {
+  const { createInventoryItem, updateInventoryItem } = await import('./inventoryRepository');
+  const client = { query: vi.fn().mockResolvedValue({ rows: [{ id: 'item-1' }] }) };
+  scopedTransactionMock
+    .mockReset()
+    .mockImplementation(
+      async (_scope: unknown, callback: (connection: typeof client) => Promise<unknown>) =>
+        callback(client)
+    );
+  const scope = { tenantId: 'tenant-1', userId: 'user-1' };
+  const priceReference = {
+    amount: '4000',
+    currency: 'COP',
+    referenceQuantity: '1',
+    referenceUnit: 'kg',
+  } as const;
+  await createInventoryItem({ ...scope, ingredientName: 'Arroz', priceReference });
+  expect(client.query.mock.calls[0][0]).toContain(
+    'price_currency, price_reference_quantity, price_reference_unit'
+  );
+  expect(client.query.mock.calls[0][1]).toEqual([
+    'tenant-1',
+    'user-1',
+    'Arroz',
+    null,
+    null,
+    null,
+    null,
+    '4000',
+    null,
+    null,
+    null,
+    null,
+    'COP',
+    '1',
+    'kg',
+  ]);
+  await updateInventoryItem('item-1', scope.tenantId, { priceReference }, scope);
+  expect(client.query.mock.calls[1][0]).toMatch(
+    /estimated_unit_price = \$1, price_currency = \$2, price_reference_quantity = \$3, price_reference_unit = \$4, updated_at = now\(\) where id = \$5 and tenant_id = \$6/
+  );
+  expect(client.query.mock.calls[1][1]).toEqual(['4000', 'COP', '1', 'kg', 'item-1', 'tenant-1']);
+  await updateInventoryItem('item-1', scope.tenantId, { quantity: '500' }, scope);
+  expect(client.query.mock.calls[2][0]).not.toMatch(
+    /estimated_unit_price|price_currency|price_reference/
+  );
+  await expect(updateInventoryItem('item-1', scope.tenantId, { priceReference })).rejects.toThrow(
+    'authenticated inventory scope'
+  );
+  await expect(updateInventoryItem('item-1', 'other', { priceReference }, scope)).rejects.toThrow(
+    'Inventory scope mismatch'
+  );
+  expect(client.query).toHaveBeenCalledTimes(3);
+});

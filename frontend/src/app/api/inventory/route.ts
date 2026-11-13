@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/auth/server';
+import { parseInventoryPriceWrite } from '@/lib/inventory/inventory-price';
 import {
   INVENTORY_CATEGORIES,
   isValidInventoryExpirationDate,
@@ -24,6 +25,7 @@ interface InventoryItemBody {
   category?: string;
   expirationDate?: string;
   estimatedUnitPrice?: string;
+  priceReference?: unknown;
   purchaseLocation?: string;
   lowStockThreshold?: string;
   notes?: string;
@@ -116,6 +118,14 @@ export async function POST(request: NextRequest) {
       { status: 400 }
     );
   }
+  // Reject ambiguous legacy writes rather than silently assigning a currency or clearing a price.
+  if (estimatedUnitPrice?.trim())
+    return NextResponse.json(
+      { error: 'Usa una referencia de precio con moneda y unidad.' },
+      { status: 400 }
+    );
+  const price = parseInventoryPriceWrite(body.priceReference);
+  if (!price.ok) return NextResponse.json({ error: price.error }, { status: 400 });
   const selectedCategory = category?.trim();
   if (selectedCategory && !INVENTORY_CATEGORIES.some((option) => option === selectedCategory)) {
     return NextResponse.json({ error: 'Selecciona una categoría válida.' }, { status: 400 });
@@ -131,7 +141,7 @@ export async function POST(request: NextRequest) {
         unit: validated.unit,
         category: selectedCategory || detectInventoryCategory(name),
         expirationDate: expirationDate || null,
-        estimatedUnitPrice: validated.estimatedUnitPrice,
+        ...(price.price ? { priceReference: price.price } : {}),
         purchaseLocation: purchaseLocation?.trim() || null,
         lowStockThreshold: validated.lowStockThreshold,
         normalizedName: normalizeInventoryName(name),
@@ -139,6 +149,8 @@ export async function POST(request: NextRequest) {
       },
       scope
     );
+    if (!updated)
+      return NextResponse.json({ error: 'Ingrediente no encontrado.' }, { status: 404 });
     return NextResponse.json({ item: updated });
   }
 
@@ -150,7 +162,7 @@ export async function POST(request: NextRequest) {
     unit: validated.unit,
     category: selectedCategory || detectInventoryCategory(name),
     expirationDate: expirationDate || null,
-    estimatedUnitPrice: validated.estimatedUnitPrice,
+    ...(price.price ? { priceReference: price.price } : {}),
     purchaseLocation: purchaseLocation?.trim() || null,
     lowStockThreshold: validated.lowStockThreshold,
     normalizedName: normalizeInventoryName(name),
@@ -158,6 +170,47 @@ export async function POST(request: NextRequest) {
   });
 
   return NextResponse.json({ item }, { status: 201 });
+}
+
+// Price-only confirmation/update: never overwrite quantities, stock, or other fields.
+export async function PATCH(request: NextRequest) {
+  let user: Awaited<ReturnType<typeof requireUser>>;
+  try {
+    user = await requireUser();
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Unauthorized')
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    throw error;
+  }
+  if (!user.tenant) return NextResponse.json({ error: 'Tenant context required' }, { status: 403 });
+  const body: unknown = await request.json().catch(() => null);
+  if (
+    !body ||
+    typeof body !== 'object' ||
+    Array.isArray(body) ||
+    Object.keys(body).length !== 2 ||
+    !('id' in body) ||
+    typeof body.id !== 'string' ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.id) ||
+    !('priceReference' in body)
+  ) {
+    return NextResponse.json({ error: 'Solicitud de precio inválida.' }, { status: 400 });
+  }
+  const price = parseInventoryPriceWrite(body.priceReference);
+  if (!price.ok || !price.price)
+    return NextResponse.json(
+      { error: price.ok ? 'Introduce una referencia de precio completa.' : price.error },
+      { status: 400 }
+    );
+  const scope = { tenantId: user.tenant.tenantId, userId: user.id };
+  const item = await updateInventoryItem(
+    body.id,
+    scope.tenantId,
+    { priceReference: price.price },
+    scope
+  );
+  if (!item) return NextResponse.json({ error: 'Ingrediente no encontrado.' }, { status: 404 });
+  return NextResponse.json({ item });
 }
 
 export async function DELETE(request: NextRequest) {

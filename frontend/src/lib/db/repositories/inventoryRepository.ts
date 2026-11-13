@@ -8,6 +8,10 @@ import {
   type DbOperationOptions,
 } from '@/lib/db';
 import { RecipeInventoryItemRow } from '@/lib/db/types';
+import {
+  validatePriceReference,
+  type InventoryPriceReference,
+} from '@/lib/inventory/inventory-price';
 
 export interface CreateInventoryItemInput {
   tenantId: string;
@@ -17,7 +21,7 @@ export interface CreateInventoryItemInput {
   unit?: string | null;
   category?: string | null;
   expirationDate?: string | null;
-  estimatedUnitPrice?: number | null;
+  priceReference?: InventoryPriceReference;
   purchaseLocation?: string | null;
   lowStockThreshold?: number | null;
   normalizedName?: string | null;
@@ -184,9 +188,20 @@ export async function updateInventoryItem(
     fields.push(`expiration_date = $${paramIndex++}`);
     values.push(input.expirationDate);
   }
-  if (input.estimatedUnitPrice !== undefined) {
-    fields.push(`estimated_unit_price = $${paramIndex++}`);
-    values.push(input.estimatedUnitPrice);
+  if (input.priceReference !== undefined) {
+    if (!scope) throw new Error('Price updates require authenticated inventory scope.');
+    const validated = validatePriceReference(input.priceReference);
+    if (!validated.ok) throw new Error(validated.error);
+    const price = validated.price;
+    for (const [column, value] of [
+      ['estimated_unit_price', price.amount],
+      ['price_currency', price.currency],
+      ['price_reference_quantity', price.referenceQuantity],
+      ['price_reference_unit', price.referenceUnit],
+    ]) {
+      fields.push(`${column} = $${paramIndex++}`);
+      values.push(value);
+    }
   }
   if (input.purchaseLocation !== undefined) {
     fields.push(`purchase_location = $${paramIndex++}`);
@@ -253,11 +268,17 @@ export async function createInventoryItemInTransaction(
   client: PoolClient,
   input: CreateInventoryItemInput
 ): Promise<RecipeInventoryItemRow> {
+  const price =
+    input.priceReference === undefined ? undefined : validatePriceReference(input.priceReference);
+  if (price && !price.ok) throw new Error(price.error);
+  const reference = price?.price;
+  // Existing purchase-transfer callers have no price. Preserve the historical
+  // insert shape for that path; confirmed prices always write the full tuple.
   const result = await client.query<RecipeInventoryItemRow>(
     `insert into public.recipe_inventory_items
      (tenant_id, user_id, ingredient_name, quantity, unit, category, expiration_date,
-      estimated_unit_price, purchase_location, low_stock_threshold, normalized_name, notes)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      estimated_unit_price, purchase_location, low_stock_threshold, normalized_name, notes${reference ? ', price_currency, price_reference_quantity, price_reference_unit' : ''})
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12${reference ? ', $13, $14, $15' : ''})
      returning *`,
     [
       input.tenantId,
@@ -267,11 +288,14 @@ export async function createInventoryItemInTransaction(
       input.unit ?? null,
       input.category ?? null,
       input.expirationDate ?? null,
-      input.estimatedUnitPrice ?? null,
+      reference?.amount ?? null,
       input.purchaseLocation ?? null,
       input.lowStockThreshold ?? null,
       input.normalizedName ?? null,
       input.notes ?? null,
+      ...(reference
+        ? [reference.currency, reference.referenceQuantity, reference.referenceUnit]
+        : []),
     ]
   );
 

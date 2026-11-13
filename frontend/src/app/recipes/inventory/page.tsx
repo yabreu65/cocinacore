@@ -9,23 +9,159 @@ import {
 } from '@/lib/inventory/normalize-inventory';
 import { safeFetch } from '@/lib/api';
 import {
+  INVENTORY_CURRENCIES,
+  calculateInventoryCost,
+  isInventoryCurrency,
+  readInventoryPrice,
+  roundInventoryCost,
+  validatePriceReference,
+  type InventoryCurrency,
+  type StoredInventoryPrice,
+} from '@/lib/inventory/inventory-price';
+import type { InventoryCurrencySettings } from '@/lib/db/repositories/inventoryCurrencyRepository';
+
+import {
   INVENTORY_CATEGORIES,
   INVENTORY_UNITS,
   inventoryStockState,
   validateInventoryFields,
 } from '@/lib/inventory/inventory-input';
 
-type InventoryItem = {
+type InventoryItem = StoredInventoryPrice & {
   id: string;
   ingredient_name: string;
   quantity: string | null;
   unit: string | null;
   category: string | null;
   expiration_date: string | null;
-  estimated_unit_price: number | string | null;
   purchase_location: string | null;
   low_stock_threshold: number | string | null;
 };
+
+const CURRENCY_LABELS: Record<InventoryCurrency, string> = {
+  ARS: 'Peso argentino',
+  COP: 'Peso colombiano',
+  VES: 'Bolívar venezolano',
+  USD: 'Dólar estadounidense',
+  EUR: 'Euro',
+  MXN: 'Peso mexicano',
+  CLP: 'Peso chileno',
+  PEN: 'Sol peruano',
+};
+const fieldClass =
+  'h-11 min-w-0 rounded-xl border border-bistro-border bg-white px-3 focus-visible:outline-2 focus-visible:outline-bistro-action-primary';
+type PriceDraft = {
+  amount: string;
+  currency: string;
+  referenceQuantity: string;
+  referenceUnit: string;
+};
+const emptyPrice = (currency = ''): PriceDraft => ({
+  amount: '',
+  currency,
+  referenceQuantity: '',
+  referenceUnit: '',
+});
+
+function CurrencyOptions() {
+  return (
+    <>
+      {INVENTORY_CURRENCIES.map((currency) => (
+        <option key={currency} value={currency}>
+          {currency} — {CURRENCY_LABELS[currency]}
+        </option>
+      ))}
+    </>
+  );
+}
+
+function PriceFields({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: PriceDraft;
+  onChange: (value: PriceDraft) => void;
+  disabled: boolean;
+}) {
+  return (
+    <fieldset
+      disabled={disabled}
+      className="grid gap-3 rounded-xl border border-bistro-border p-3 sm:grid-cols-2 md:grid-cols-4"
+    >
+      <legend className="px-1 text-sm font-semibold">Precio de referencia</legend>
+      <label className="grid gap-1 text-sm font-semibold">
+        Importe
+        <input
+          inputMode="decimal"
+          value={value.amount}
+          onChange={(e) => onChange({ ...value, amount: e.target.value })}
+          placeholder="Ej. 4000"
+          className={fieldClass}
+        />
+      </label>
+      <label className="grid gap-1 text-sm font-semibold">
+        Moneda del precio
+        <select
+          value={value.currency}
+          onChange={(e) => onChange({ ...value, currency: e.target.value })}
+          className={fieldClass}
+        >
+          <option value="">Seleccionar</option>
+          <CurrencyOptions />
+        </select>
+      </label>
+      <label className="grid gap-1 text-sm font-semibold">
+        Cantidad de referencia
+        <input
+          inputMode="decimal"
+          value={value.referenceQuantity}
+          onChange={(e) => onChange({ ...value, referenceQuantity: e.target.value })}
+          placeholder="Ej. 1"
+          className={fieldClass}
+        />
+      </label>
+      <label className="grid gap-1 text-sm font-semibold">
+        Unidad de referencia
+        <select
+          value={value.referenceUnit}
+          onChange={(e) => onChange({ ...value, referenceUnit: e.target.value })}
+          className={fieldClass}
+        >
+          <option value="">Seleccionar</option>
+          {INVENTORY_UNITS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="text-xs font-normal text-bistro-text-secondary sm:col-span-2 md:col-span-4">
+        Ejemplo: 4.000 COP por 1 kg. La cantidad en stock puede ser distinta de la presentación del
+        precio.
+      </p>
+    </fieldset>
+  );
+}
+
+function formatPrice(amount: string, currency: InventoryCurrency) {
+  return new Intl.NumberFormat('es', {
+    style: 'currency',
+    currency,
+    currencyDisplay: 'code',
+    maximumFractionDigits: 4,
+  }).format(Number(amount));
+}
+
+function priceDescription(item: InventoryItem): string {
+  const state = readInventoryPrice(item);
+  if (state.status === 'known')
+    return `${formatPrice(state.price.amount, state.price.currency)} por ${state.price.referenceQuantity} ${state.price.referenceUnit}`;
+  if (state.status === 'unconfirmed')
+    return `${item.estimated_unit_price} — moneda y referencia sin confirmar`;
+  if (state.status === 'invalid') return 'Precio por revisar';
+  return 'Sin precio';
+}
 
 export default function RecipeInventoryPage() {
   const [rows, setRows] = useState<InventoryItem[]>([]);
@@ -34,7 +170,15 @@ export default function RecipeInventoryPage() {
   const [unit, setUnit] = useState('');
   const [category, setCategory] = useState('');
   const [expirationDate, setExpirationDate] = useState('');
-  const [estimatedUnitPrice, setEstimatedUnitPrice] = useState('');
+  const [price, setPrice] = useState<PriceDraft>(() => emptyPrice());
+  const [settings, setSettings] = useState<InventoryCurrencySettings | null>(null);
+  const [currencySelection, setCurrencySelection] = useState('');
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingPrice, setEditingPrice] = useState<PriceDraft>(() => emptyPrice());
+  const [notice, setNotice] = useState<string | null>(null);
   const [purchaseLocation, setPurchaseLocation] = useState('');
   const [lowStockThreshold, setLowStockThreshold] = useState('');
   const [loading, setLoading] = useState(true);
@@ -59,24 +203,133 @@ export default function RecipeInventoryPage() {
 
   useEffect(() => {
     void load();
+    let active = true;
+    async function loadSettings() {
+      try {
+        const result = await safeFetch<InventoryCurrencySettings>('/api/inventory/currency', {
+          credentials: 'same-origin',
+        });
+        if (!result.ok) throw new Error(result.error);
+        if (!active) return;
+        setSettings(result.data);
+        setCurrencySelection(result.data.currency ?? '');
+        setPrice((current) =>
+          current.amount || current.currency || current.referenceQuantity || current.referenceUnit
+            ? current
+            : emptyPrice(result.data.currency ?? '')
+        );
+      } catch (error) {
+        if (active)
+          setSettingsError(error instanceof Error ? error.message : 'No se pudo cargar la moneda.');
+      } finally {
+        if (active) setSettingsLoading(false);
+      }
+    }
+    void loadSettings();
+    return () => {
+      active = false;
+    };
   }, []);
 
-  const onSubmit = async (event: FormEvent) => {
+  const saveCurrency = async (event: FormEvent) => {
     event.preventDefault();
-    const value = name.trim();
-    if (!value) return;
-    const validated = validateInventoryFields({
-      quantity,
-      unit,
-      estimatedUnitPrice,
-      lowStockThreshold,
-    });
+    if (!settings?.canManageCurrency || !isInventoryCurrency(currencySelection) || settingsSaving)
+      return;
+    setSettingsSaving(true);
+    setSettingsError(null);
+    setNotice(null);
+    try {
+      const result = await safeFetch<InventoryCurrencySettings>('/api/inventory/currency', {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currency: currencySelection }),
+      });
+      if (!result.ok) throw new Error(result.error);
+      setSettings(result.data);
+      setCurrencySelection(result.data.currency ?? '');
+      // Only empty drafts follow the preference. Never relabel a draft with an amount.
+      setPrice((current) =>
+        current.amount || current.referenceQuantity || current.referenceUnit
+          ? current
+          : emptyPrice(result.data.currency ?? '')
+      );
+      setNotice('Moneda guardada. Los precios registrados conservan su moneda original.');
+    } catch (error) {
+      setSettingsError(error instanceof Error ? error.message : 'No se pudo guardar la moneda.');
+    } finally {
+      setSettingsSaving(false);
+    }
+  };
+
+  const startPriceEdit = (item: InventoryItem) => {
+    const state = readInventoryPrice(item);
+    setEditingPrice(
+      state.status === 'known'
+        ? { ...state.price }
+        : {
+            ...emptyPrice(),
+            amount: item.estimated_unit_price == null ? '' : String(item.estimated_unit_price),
+          }
+    );
+    setEditingId(item.id);
+    setError(null);
+    setNotice(null);
+  };
+
+  const saveItemPrice = async (event: FormEvent, id: string) => {
+    event.preventDefault();
+    if (working || loading || editingId !== id) return;
+    const validated = validatePriceReference(editingPrice);
     if (!validated.ok) {
       setError(validated.error);
       return;
     }
     setWorking(true);
     setError(null);
+    setNotice(null);
+    try {
+      const result = await safeFetch<{ item: InventoryItem }>('/api/inventory', {
+        method: 'PATCH',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, priceReference: validated.price }),
+      });
+      if (!result.ok) throw new Error(result.error);
+      setRows((current) => current.map((item) => (item.id === id ? result.data.item : item)));
+      setEditingId(null);
+      setNotice('Precio de referencia guardado.');
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'No se pudo guardar el precio.');
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const onSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    const value = name.trim();
+    if (!value || working || loading) return;
+    const validated = validateInventoryFields({
+      quantity,
+      unit,
+      lowStockThreshold,
+    });
+    if (!validated.ok) {
+      setError(validated.error);
+      return;
+    }
+    const hasPrice = Boolean(
+      price.amount.trim() || price.referenceQuantity.trim() || price.referenceUnit
+    );
+    const validatedPrice = hasPrice ? validatePriceReference(price) : null;
+    if (validatedPrice && !validatedPrice.ok) {
+      setError(validatedPrice.error);
+      return;
+    }
+    setWorking(true);
+    setError(null);
+    setNotice(null);
     try {
       const result = await safeFetch<{ item: InventoryItem }>('/api/inventory', {
         method: 'POST',
@@ -88,7 +341,7 @@ export default function RecipeInventoryPage() {
           unit: validated.unit ?? '',
           category: category.trim() || detectInventoryCategory(value),
           expirationDate,
-          estimatedUnitPrice,
+          ...(validatedPrice?.ok ? { priceReference: validatedPrice.price } : {}),
           purchaseLocation,
           lowStockThreshold,
           normalizedName: normalizeInventoryName(value),
@@ -104,7 +357,7 @@ export default function RecipeInventoryPage() {
       setUnit('');
       setCategory('');
       setExpirationDate('');
-      setEstimatedUnitPrice('');
+      setPrice(emptyPrice(settings?.currency ?? ''));
       setPurchaseLocation('');
       setLowStockThreshold('');
       await load();
@@ -147,7 +400,71 @@ export default function RecipeInventoryPage() {
           </Link>
         </div>
 
-        <form onSubmit={onSubmit} className="grid gap-2 md:grid-cols-[1fr_160px_140px_auto]">
+        <section
+          aria-labelledby="inventory-currency-heading"
+          className="mb-4 rounded-xl border border-bistro-border bg-bistro-page p-3"
+        >
+          <h2 id="inventory-currency-heading" className="font-semibold">
+            Moneda de la organización
+          </h2>
+          <p className="text-sm text-bistro-text-secondary">
+            {settingsLoading
+              ? 'Cargando configuración...'
+              : !settings
+                ? 'No se pudo consultar la moneda de trabajo.'
+                : settings.currency
+                  ? `Moneda de trabajo: ${settings.currency} — ${CURRENCY_LABELS[settings.currency]}`
+                  : 'Moneda de trabajo sin configurar.'}
+          </p>
+          {settings?.canManageCurrency ? (
+            <form onSubmit={saveCurrency} className="mt-2 flex flex-wrap items-end gap-2">
+              <label className="grid flex-1 gap-1 text-sm font-semibold">
+                Elegir moneda
+                <select
+                  value={currencySelection}
+                  onChange={(e) => setCurrencySelection(e.target.value)}
+                  disabled={settingsSaving}
+                  className={fieldClass}
+                >
+                  <option value="">Seleccionar</option>
+                  <CurrencyOptions />
+                </select>
+              </label>
+              <button
+                type="submit"
+                disabled={
+                  settingsSaving ||
+                  !isInventoryCurrency(currencySelection) ||
+                  currencySelection === settings.currency
+                }
+                className="h-11 rounded-xl bg-bistro-action-primary px-4 font-semibold text-white disabled:opacity-60"
+              >
+                {settingsSaving ? 'Guardando...' : 'Guardar moneda'}
+              </button>
+            </form>
+          ) : (
+            settings && (
+              <p className="mt-1 text-xs text-bistro-text-secondary">
+                Solo propietarios y administradores pueden cambiarla.
+              </p>
+            )
+          )}
+          <p className="mt-2 text-xs text-bistro-text-secondary">
+            Cambiar esta preferencia no convierte ni modifica los precios ya registrados.
+          </p>
+          {settingsError && (
+            <p role="alert" className="mt-2 text-sm text-bistro-danger">
+              {settingsError}
+            </p>
+          )}
+        </section>
+        {notice && (
+          <p role="status" className="mb-3 text-sm text-bistro-success">
+            {notice}
+          </p>
+        )}
+
+        <form onSubmit={onSubmit} className="grid gap-3 md:grid-cols-4">
           <label className="grid gap-1 text-sm font-semibold">
             Ingrediente
             <input
@@ -155,7 +472,7 @@ export default function RecipeInventoryPage() {
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Ej. Harina"
-              className="h-11 min-w-0 rounded-xl border border-bistro-border bg-white px-3 outline-none"
+              className={fieldClass}
             />
           </label>
           <label className="grid gap-1 text-sm font-semibold">
@@ -165,16 +482,12 @@ export default function RecipeInventoryPage() {
               value={quantity}
               onChange={(e) => setQuantity(e.target.value)}
               placeholder="Ej. 500"
-              className="h-11 min-w-0 rounded-xl border border-bistro-border bg-white px-3 outline-none"
+              className={fieldClass}
             />
           </label>
           <label className="grid gap-1 text-sm font-semibold">
             Unidad
-            <select
-              value={unit}
-              onChange={(e) => setUnit(e.target.value)}
-              className="h-11 min-w-0 rounded-xl border border-bistro-border bg-white px-3 outline-none"
-            >
+            <select value={unit} onChange={(e) => setUnit(e.target.value)} className={fieldClass}>
               <option value="">Seleccionar</option>
               {INVENTORY_UNITS.map((option) => (
                 <option key={option.value} value={option.value}>
@@ -188,7 +501,7 @@ export default function RecipeInventoryPage() {
             <select
               value={category}
               onChange={(e) => setCategory(e.target.value)}
-              className="h-11 min-w-0 rounded-xl border border-bistro-border bg-white px-3 outline-none"
+              className={fieldClass}
             >
               <option value="">
                 Automática{name.trim() ? ` (${detectInventoryCategory(name)})` : ''}
@@ -206,19 +519,7 @@ export default function RecipeInventoryPage() {
               type="date"
               value={expirationDate}
               onChange={(e) => setExpirationDate(e.target.value)}
-              className="h-11 rounded-xl border border-bistro-border bg-white px-3 outline-none"
-            />
-          </label>
-          <label className="grid gap-1 text-sm font-semibold">
-            Precio estimado
-            <input
-              type="number"
-              min="0"
-              step="0.0001"
-              value={estimatedUnitPrice}
-              onChange={(e) => setEstimatedUnitPrice(e.target.value)}
-              placeholder="Precio estimado"
-              className="h-11 rounded-xl border border-bistro-border bg-white px-3 outline-none"
+              className={fieldClass}
             />
           </label>
           <label className="grid gap-1 text-sm font-semibold">
@@ -227,7 +528,7 @@ export default function RecipeInventoryPage() {
               value={purchaseLocation}
               onChange={(e) => setPurchaseLocation(e.target.value)}
               placeholder="Lugar de compra"
-              className="h-11 rounded-xl border border-bistro-border bg-white px-3 outline-none"
+              className={fieldClass}
             />
           </label>
           <label className="grid gap-1 text-sm font-semibold">
@@ -239,12 +540,18 @@ export default function RecipeInventoryPage() {
               value={lowStockThreshold}
               onChange={(e) => setLowStockThreshold(e.target.value)}
               placeholder={unit ? `Stock mínimo (${unit})` : 'Stock mínimo'}
-              className="h-11 rounded-xl border border-bistro-border bg-white px-3 outline-none"
+              className={fieldClass}
             />
           </label>
+          <div className="md:col-span-4">
+            <PriceFields value={price} onChange={setPrice} disabled={working} />
+            <p className="mt-1 text-xs text-bistro-text-secondary">
+              Opcional. Deja el importe y la referencia vacíos si aún no conoces el precio.
+            </p>
+          </div>
           <button
             type="submit"
-            disabled={working}
+            disabled={working || loading}
             className="h-11 rounded-xl bg-bistro-action-primary px-4 font-semibold text-white disabled:opacity-60"
           >
             {working ? 'Guardando...' : 'Agregar'}
@@ -264,6 +571,15 @@ export default function RecipeInventoryPage() {
         <ul className="mt-4 grid gap-2">
           {rows.map((item) => {
             const stock = inventoryStockState(item.quantity, item.unit, item.low_stock_threshold);
+            const priceState = readInventoryPrice(item);
+            const stockCost =
+              priceState.status === 'known'
+                ? calculateInventoryCost({
+                    quantity: item.quantity,
+                    unit: item.unit,
+                    price: priceState.price,
+                  })
+                : null;
             const parsed = validateInventoryFields({ quantity: item.quantity, unit: item.unit });
             const normalizedLabel =
               parsed.ok && parsed.quantity !== null ? `${parsed.quantity} ${parsed.unit}` : null;
@@ -322,9 +638,57 @@ export default function RecipeInventoryPage() {
                   <span>Cantidad normalizada: {normalizedLabel ?? 'No disponible'}</span>
                   <span>Categoría: {item.category ?? 'Sin categoría'}</span>
                   <span>Vence: {item.expiration_date ?? '—'}</span>
-                  <span>Precio estimado: {item.estimated_unit_price ?? '—'}</span>
+                  <span>Precio: {priceDescription(item)}</span>
+                  <span>
+                    Valor estimado del stock:{' '}
+                    {stockCost?.status === 'known'
+                      ? `${stockCost.cost.currency} ${roundInventoryCost(stockCost.cost)}`
+                      : 'No disponible'}
+                  </span>
                   <span>Lugar: {item.purchase_location ?? '—'}</span>
                 </div>
+                {editingId === item.id ? (
+                  <form
+                    onSubmit={(event) => void saveItemPrice(event, item.id)}
+                    className="mt-3 grid gap-2"
+                  >
+                    <PriceFields
+                      value={editingPrice}
+                      onChange={setEditingPrice}
+                      disabled={working}
+                    />
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="submit"
+                        disabled={working}
+                        className="rounded-xl bg-bistro-action-primary px-4 py-2 font-semibold text-white disabled:opacity-60"
+                      >
+                        Guardar precio
+                      </button>
+                      <button
+                        type="button"
+                        disabled={working}
+                        onClick={() => setEditingId(null)}
+                        className="rounded-xl border border-bistro-border px-4 py-2 font-semibold"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={working || loading || editingId !== null}
+                    onClick={() => startPriceEdit(item)}
+                    className="mt-2 text-sm font-semibold text-bistro-action-primary underline disabled:opacity-60"
+                  >
+                    {priceState.status === 'known'
+                      ? 'Actualizar precio'
+                      : priceState.status === 'missing'
+                        ? 'Registrar precio'
+                        : 'Confirmar precio'}
+                  </button>
+                )}
               </li>
             );
           })}

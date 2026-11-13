@@ -19,7 +19,7 @@ vi.mock('@/lib/db/repositories/inventoryRepository', () => ({
   deleteInventoryItem: deleteInventoryItemMock,
 }));
 
-const { GET, POST, DELETE } = await import('./route');
+const { GET, POST, PATCH, DELETE } = await import('./route');
 
 describe('GET /api/inventory', () => {
   beforeEach(() => {
@@ -258,5 +258,118 @@ describe('authenticated inventory scope', () => {
     requireUserMock.mockResolvedValueOnce({ id: 'user-1', tenant: null });
     await expect(GET()).rejects.toThrow('Tenant context required');
     expect(listInventoryItemsByTenantMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('inventory price reference writes', () => {
+  const id = '01234567-89ab-4cde-8fab-0123456789ab';
+  const reference = {
+    amount: '4000',
+    currency: 'COP',
+    referenceQuantity: '1',
+    referenceUnit: 'kg',
+  };
+  const scope = { tenantId: 'tenant-1', userId: 'user-1' };
+  function request(method: string, body: unknown) {
+    return new NextRequest('http://localhost/api/inventory', {
+      method,
+      body: JSON.stringify(body),
+    });
+  }
+  beforeEach(() => {
+    vi.clearAllMocks();
+    requireUserMock.mockResolvedValue({ id: scope.userId, tenant: { tenantId: scope.tenantId } });
+    createInventoryItemMock.mockResolvedValue({ id });
+    updateInventoryItemMock.mockResolvedValue({ id });
+  });
+  it('writes the complete normalized price on creation, with session identity only', async () => {
+    const response = await POST(
+      request('POST', {
+        ingredientName: 'Arroz',
+        quantity: '500',
+        unit: 'g',
+        priceReference: { ...reference, amount: '4000,00', referenceUnit: 'kilogramos' },
+        tenantId: 'other',
+      })
+    );
+    expect(response.status).toBe(201);
+    expect(createInventoryItemMock).toHaveBeenCalledWith(
+      expect.objectContaining({ ...scope, priceReference: reference })
+    );
+  });
+  it('preserves prices on ordinary updates with omitted or old blank price', async () => {
+    for (const estimatedUnitPrice of [undefined, '']) {
+      expect(
+        (
+          await POST(
+            request('POST', {
+              id,
+              ingredientName: 'Arroz',
+              quantity: '500',
+              unit: 'g',
+              estimatedUnitPrice,
+            })
+          )
+        ).status
+      ).toBe(200);
+    }
+    for (const call of updateInventoryItemMock.mock.calls) {
+      expect(call[2]).not.toHaveProperty('priceReference');
+      expect(call[2]).not.toHaveProperty('estimatedUnitPrice');
+    }
+  });
+  it.each([
+    null,
+    42,
+    {},
+    { ...reference, amount: 4000 },
+    { ...reference, currency: '$' },
+    { ...reference, referenceQuantity: '0' },
+    { ...reference, referenceUnit: '500 g' },
+    { ...reference, tenantId: 'other' },
+  ])('rejects invalid reference %j before repository calls', async (priceReference) => {
+    expect((await POST(request('POST', { ingredientName: 'Arroz', priceReference }))).status).toBe(
+      400
+    );
+    expect((await PATCH(request('PATCH', { id, priceReference }))).status).toBe(400);
+    expect(createInventoryItemMock).not.toHaveBeenCalled();
+    expect(updateInventoryItemMock).not.toHaveBeenCalled();
+  });
+  it('rejects new ambiguous legacy amounts', async () => {
+    expect(
+      (await POST(request('POST', { ingredientName: 'Arroz', estimatedUnitPrice: '4000' }))).status
+    ).toBe(400);
+    expect(createInventoryItemMock).not.toHaveBeenCalled();
+  });
+  it('updates only the complete price using server scope', async () => {
+    expect((await PATCH(request('PATCH', { id, priceReference: reference }))).status).toBe(200);
+    expect(updateInventoryItemMock).toHaveBeenCalledWith(
+      id,
+      scope.tenantId,
+      { priceReference: reference },
+      scope
+    );
+  });
+  it('rejects extra identity/stock fields and invalid ids on price-only request', async () => {
+    for (const body of [
+      { id, priceReference: reference, tenantId: 'other' },
+      { id, priceReference: reference, quantity: '0' },
+      { id: 'invalid', priceReference: reference },
+      { id },
+    ]) {
+      expect((await PATCH(request('PATCH', body))).status).toBe(400);
+    }
+    expect(updateInventoryItemMock).not.toHaveBeenCalled();
+  });
+  it('returns not found for inaccessible or absent item', async () => {
+    updateInventoryItemMock.mockResolvedValue(null);
+    expect((await PATCH(request('PATCH', { id, priceReference: reference }))).status).toBe(404);
+  });
+  it('rejects missing session and tenant before price writes', async () => {
+    requireUserMock.mockRejectedValueOnce(new Error('Unauthorized'));
+    expect((await PATCH(request('PATCH', { id, priceReference: reference }))).status).toBe(401);
+    requireUserMock.mockResolvedValueOnce({ id: scope.userId, tenant: null });
+    expect((await PATCH(request('PATCH', { id, priceReference: reference }))).status).toBe(403);
+    expect(updateInventoryItemMock).not.toHaveBeenCalled();
   });
 });

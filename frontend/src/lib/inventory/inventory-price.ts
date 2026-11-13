@@ -78,6 +78,30 @@ export function validatePriceReference(input: PriceFields): PriceValidation {
   };
 }
 
+// API DTO: omission means preserve (or no price on creation). Only a complete
+// explicit price reference can change a stored amount. No implicit clearing.
+export function parseInventoryPriceWrite(
+  raw: unknown
+): PriceValidation | { ok: true; price: undefined } {
+  if (raw === undefined) return { ok: true, price: undefined };
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+    return { ok: false, error: 'Introduce una referencia de precio completa.' };
+  const candidate = raw as Record<string, unknown>;
+  const keys = ['amount', 'currency', 'referenceQuantity', 'referenceUnit'];
+  if (
+    Object.keys(candidate).length !== keys.length ||
+    !keys.every((key) => typeof candidate[key] === 'string')
+  ) {
+    return { ok: false, error: 'Introduce una referencia de precio completa.' };
+  }
+  return validatePriceReference({
+    amount: candidate.amount as string,
+    currency: candidate.currency,
+    referenceQuantity: candidate.referenceQuantity as string,
+    referenceUnit: candidate.referenceUnit as string,
+  });
+}
+
 export type StoredInventoryPrice = {
   estimated_unit_price: string | number | null;
   price_currency?: string | null;
