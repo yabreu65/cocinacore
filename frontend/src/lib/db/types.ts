@@ -180,6 +180,7 @@ export interface ShoppingListItemRow {
 }
 
 export interface RecipeInventoryItemRow {
+  revision?: string;
   id: string;
   tenant_id: string;
   user_id: string;

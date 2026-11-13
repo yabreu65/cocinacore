@@ -89,7 +89,7 @@ describe('POST /api/inventory', () => {
     expect(updateInventoryItemMock).not.toHaveBeenCalled();
   });
 
-  it('normalizes quantities and units for create and update', async () => {
+  it('normalizes creation and rejects legacy stock edits', async () => {
     createInventoryItemMock.mockResolvedValue({ id: 'new' });
     updateInventoryItemMock.mockResolvedValue({ id: 'item-1' });
     const payload = {
@@ -112,18 +112,10 @@ describe('POST /api/inventory', () => {
           body: JSON.stringify({ id, ...payload }),
         })
       );
-      expect(response.status).toBe(id ? 200 : 201);
+      expect(response.status).toBe(id ? 409 : 201);
     }
     expect(createInventoryItemMock).toHaveBeenCalledWith(expect.objectContaining(expected));
-    expect(updateInventoryItemMock).toHaveBeenCalledWith(
-      'item-1',
-      'tenant-1',
-      expect.objectContaining(expected),
-      {
-        tenantId: 'tenant-1',
-        userId: 'user-1',
-      }
-    );
+    expect(updateInventoryItemMock).not.toHaveBeenCalled();
   });
 
   it('rejects a non-string ingredient name without persisting', async () => {
@@ -227,7 +219,7 @@ describe('authenticated inventory scope', () => {
     );
     expect(requireUserMock).toHaveBeenCalledTimes(1);
   });
-  it('POST update uses server actor and tenant', async () => {
+  it('rejects legacy POST edit even with client identity fields', async () => {
     const req = new NextRequest('http://localhost/api/inventory', {
       method: 'POST',
       body: JSON.stringify({
@@ -237,11 +229,9 @@ describe('authenticated inventory scope', () => {
         userId: 'attacker',
       }),
     });
-    expect((await POST(req)).status).toBe(200);
-    expect(updateInventoryItemMock).toHaveBeenCalledWith('item-1', 'tenant-1', expect.any(Object), {
-      tenantId: 'tenant-1',
-      userId: 'user-1',
-    });
+    expect((await POST(req)).status).toBe(409);
+    expect(updateInventoryItemMock).not.toHaveBeenCalled();
+    expect(createInventoryItemMock).not.toHaveBeenCalled();
   });
   it('DELETE uses server actor and tenant', async () => {
     const req = new NextRequest(
@@ -297,7 +287,7 @@ describe('inventory price reference writes', () => {
       expect.objectContaining({ ...scope, priceReference: reference })
     );
   });
-  it('preserves prices on ordinary updates with omitted or old blank price', async () => {
+  it('blocks legacy full edits rather than silently overwriting stock or historical prices', async () => {
     for (const estimatedUnitPrice of [undefined, '']) {
       expect(
         (
@@ -311,12 +301,10 @@ describe('inventory price reference writes', () => {
             })
           )
         ).status
-      ).toBe(200);
+      ).toBe(409);
     }
-    for (const call of updateInventoryItemMock.mock.calls) {
-      expect(call[2]).not.toHaveProperty('priceReference');
-      expect(call[2]).not.toHaveProperty('estimatedUnitPrice');
-    }
+    expect(updateInventoryItemMock).not.toHaveBeenCalled();
+    expect(createInventoryItemMock).not.toHaveBeenCalled();
   });
   it.each([
     null,

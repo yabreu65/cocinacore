@@ -197,7 +197,7 @@ it('executes list, update and delete through the scoped client', async () => {
   );
   const scope = { tenantId: 'tenant-1', userId: 'user-1' };
   await listInventoryItemsScoped(scope);
-  await updateInventoryItem('item-1', scope.tenantId, { quantity: '2' }, scope);
+  await updateInventoryItem('item-1', scope.tenantId, { ingredientName: 'Rice' }, scope);
   await deleteInventoryItem('item-1', scope.tenantId, scope);
   expect(scopedTransactionMock).toHaveBeenCalledTimes(3);
   for (const n of [1, 2, 3])
@@ -303,7 +303,7 @@ it('persists all price columns atomically and preserves omitted fields', async (
     /estimated_unit_price = \$1, price_currency = \$2, price_reference_quantity = \$3, price_reference_unit = \$4, updated_at = now\(\) where id = \$5 and tenant_id = \$6/
   );
   expect(client.query.mock.calls[1][1]).toEqual(['4000', 'COP', '1', 'kg', 'item-1', 'tenant-1']);
-  await updateInventoryItem('item-1', scope.tenantId, { quantity: '500' }, scope);
+  await updateInventoryItem('item-1', scope.tenantId, { ingredientName: 'Arroz' }, scope);
   expect(client.query.mock.calls[2][0]).not.toMatch(
     /estimated_unit_price|price_currency|price_reference/
   );
@@ -313,5 +313,14 @@ it('persists all price columns atomically and preserves omitted fields', async (
   await expect(updateInventoryItem('item-1', 'other', { priceReference }, scope)).rejects.toThrow(
     'Inventory scope mismatch'
   );
+  await expect(
+    updateInventoryItem('item-1', scope.tenantId, { quantity: '500' }, scope)
+  ).rejects.toThrow('audited inventory management');
+  await expect(
+    updateInventoryItem('item-1', scope.tenantId, { unit: 'kg' }, scope)
+  ).rejects.toThrow('audited inventory management');
+  await expect(
+    updateInventoryItem('item-1', scope.tenantId, { lowStockThreshold: 1 }, scope)
+  ).rejects.toThrow('audited inventory management');
   expect(client.query).toHaveBeenCalledTimes(3);
 });

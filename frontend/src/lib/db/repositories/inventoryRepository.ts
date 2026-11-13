@@ -13,6 +13,9 @@ import {
   type InventoryPriceReference,
 } from '@/lib/inventory/inventory-price';
 
+// PostgreSQL row version plus exact timestamp; never use millisecond-truncated JS Date.
+export const INVENTORY_ROW_REVISION = "xmin::text || ':' || extract(epoch from updated_at)::text";
+
 export interface CreateInventoryItemInput {
   tenantId: string;
   userId: string;
@@ -132,7 +135,7 @@ export async function listInventoryItemsScoped(
 ): Promise<RecipeInventoryItemRow[]> {
   return scopedTransaction(scope, async (client) => {
     const result = await client.query<RecipeInventoryItemRow>(
-      `select * from public.recipe_inventory_items where tenant_id = $1 order by created_at desc`,
+      `select *, ${INVENTORY_ROW_REVISION} as revision from public.recipe_inventory_items where tenant_id = $1 order by created_at desc`,
       [scope.tenantId]
     );
     return result.rows;
@@ -164,6 +167,8 @@ export async function updateInventoryItem(
   input: Partial<Omit<CreateInventoryItemInput, 'tenantId' | 'userId'>>,
   scope?: AuthenticatedDbScope
 ): Promise<RecipeInventoryItemRow | null> {
+  if ('quantity' in input || 'unit' in input || 'lowStockThreshold' in input)
+    throw new Error('Use the audited inventory management transaction.');
   const fields: string[] = [];
   const values: unknown[] = [];
   let paramIndex = 1;
@@ -171,14 +176,6 @@ export async function updateInventoryItem(
   if (input.ingredientName !== undefined) {
     fields.push(`ingredient_name = $${paramIndex++}`);
     values.push(input.ingredientName);
-  }
-  if (input.quantity !== undefined) {
-    fields.push(`quantity = $${paramIndex++}`);
-    values.push(input.quantity);
-  }
-  if (input.unit !== undefined) {
-    fields.push(`unit = $${paramIndex++}`);
-    values.push(input.unit);
   }
   if (input.category !== undefined) {
     fields.push(`category = $${paramIndex++}`);
@@ -207,10 +204,6 @@ export async function updateInventoryItem(
     fields.push(`purchase_location = $${paramIndex++}`);
     values.push(input.purchaseLocation);
   }
-  if (input.lowStockThreshold !== undefined) {
-    fields.push(`low_stock_threshold = $${paramIndex++}`);
-    values.push(input.lowStockThreshold);
-  }
   if (input.normalizedName !== undefined) {
     fields.push(`normalized_name = $${paramIndex++}`);
     values.push(input.normalizedName);
@@ -235,7 +228,7 @@ export async function updateInventoryItem(
   fields.push(`updated_at = now()`);
   values.push(id, tenantId);
 
-  const sql = `update public.recipe_inventory_items set ${fields.join(', ')} where id = $${paramIndex} and tenant_id = $${paramIndex + 1} returning *`;
+  const sql = `update public.recipe_inventory_items set ${fields.join(', ')} where id = $${paramIndex} and tenant_id = $${paramIndex + 1} returning *, ${INVENTORY_ROW_REVISION} as revision`;
   if (scope && scope.tenantId !== tenantId) throw new Error('Inventory scope mismatch.');
   const result = scope
     ? await scopedTransaction(scope, (client) => client.query<RecipeInventoryItemRow>(sql, values))

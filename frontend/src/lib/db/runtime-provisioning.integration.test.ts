@@ -24,8 +24,9 @@ import {
   createInventoryItem,
   deleteInventoryItem,
   findInventoryItemById,
-  updateInventoryItem,
+  listInventoryItemsScoped,
 } from '@/lib/db/repositories/inventoryRepository';
+import { manageInventoryItem } from '@/lib/db/repositories/inventoryManagementRepository';
 import {
   createShoppingListItem,
   deleteShoppingListItem,
@@ -164,9 +165,17 @@ describe.skipIf(!enabled)('provisioned runtime PostgreSQL access', () => {
       unit: 'kg',
     });
     expect((await findInventoryItemById(inventory.id, tenantId))?.id).toBe(inventory.id);
-    expect((await updateInventoryItem(inventory.id, tenantId, { quantity: '3' }))?.quantity).toBe(
-      '3'
-    );
+    const scope = { tenantId, userId };
+    const current = (await listInventoryItemsScoped(scope)).find((row) => row.id === inventory.id);
+    if (!current?.revision) throw new Error('Missing inventory revision');
+    expect(
+      await manageInventoryItem(scope, {
+        id: inventory.id,
+        revision: current.revision,
+        action: 'stock',
+        command: { kind: 'convert', unit: 'g' },
+      })
+    ).toMatchObject({ status: 'updated', item: { quantity: '2000', unit: 'g' } });
     await deleteInventoryItem(inventory.id, tenantId);
     expect(await findInventoryItemById(inventory.id, tenantId)).toBeNull();
 

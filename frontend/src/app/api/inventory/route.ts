@@ -80,7 +80,6 @@ export async function POST(request: NextRequest) {
   }
   if (!authUser.tenant) throw new Error('Tenant context required');
   const tenant = authUser.tenant;
-  const scope = { tenantId: tenant.tenantId, userId: authUser.id };
 
   const body: unknown = await request.json().catch(() => null);
   if (!isInventoryItemBody(body)) {
@@ -131,27 +130,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Selecciona una categoría válida.' }, { status: 400 });
   }
 
-  if (id) {
-    const updated = await updateInventoryItem(
-      id,
-      tenant.tenantId,
-      {
-        ingredientName: name,
-        quantity: validated.quantity,
-        unit: validated.unit,
-        category: selectedCategory || detectInventoryCategory(name),
-        expirationDate: expirationDate || null,
-        ...(price.price ? { priceReference: price.price } : {}),
-        purchaseLocation: purchaseLocation?.trim() || null,
-        lowStockThreshold: validated.lowStockThreshold,
-        normalizedName: normalizeInventoryName(name),
-        notes: notes?.trim() || null,
-      },
-      scope
+  if (id !== undefined) {
+    return NextResponse.json(
+      { error: 'Usa la edición de inventario con revisión de existencias.' },
+      { status: 409 }
     );
-    if (!updated)
-      return NextResponse.json({ error: 'Ingrediente no encontrado.' }, { status: 404 });
-    return NextResponse.json({ item: updated });
   }
 
   const item = await createInventoryItem({
