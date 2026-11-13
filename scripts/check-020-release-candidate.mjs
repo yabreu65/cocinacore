@@ -186,11 +186,31 @@ function checkCandidate({ candidateRoot, releaseSha }) {
     String(index + 1).padStart(3, "0"),
   );
   const entries = manifest.migrations;
+  // A historical release approval is still bound to exactly 001–020.
+  // Working-tree CI may validate the one reviewed successor separately; it
+  // does not authorize a release or change the original 020 artifact checks.
+  const successor = !releaseSha && entries.length === 21;
   if (
-    entries.length !== expectedIds.length ||
-    entries.some((entry, index) => entry.id !== expectedIds[index])
+    entries.length !== (successor ? 21 : expectedIds.length) ||
+    entries.slice(0, 20).some((entry, index) => entry.id !== expectedIds[index])
   )
-    fail("manifest migration sequence must contain exactly 001 through 020");
+    fail("manifest migration sequence must contain the exact 001 through 020 prefix");
+  if (successor) {
+    const entry = entries[20];
+    const relativePath = "db/migrations/021_inventory_price_reference.sql";
+    const file = readCandidate(relativePath, candidateRoot, releaseSha);
+    if (entry.id !== "021" || entry.filename !== "021_inventory_price_reference.sql" ||
+        entry.lane !== "migration" || entry.transactional !== "required" ||
+        entry.legacyChecksumBackfillAllowed !== false || entry.byteLength !== file.length ||
+        entry.sha256 !== "90f3f0c401f8383c1d073d6717fce46b1bf8cc4347216097c3c5ab653f904a19" ||
+        sha256(file) !== entry.sha256 ||
+        JSON.stringify(entry.catalogAdditions) !== JSON.stringify([
+          {kind: "constraint", schema: "public", identity: "tenants.tenants_currency_code_check"},
+          {kind: "constraint", schema: "public", identity: "recipe_inventory_items.recipe_inventory_price_reference_check"}
+        ]))
+      fail("unreviewed migration 021 successor");
+    console.log("PASS reviewed 021 successor present in working-tree artifact check only");
+  }
 
   for (const id of expectedIds.slice(0, 19)) {
     const entry = entries.find((candidate) => candidate.id === id);

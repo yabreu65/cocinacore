@@ -33,11 +33,13 @@ const orderedCommands = [
   'scripts/provision-020-inert-capabilities.sql',
   'attestPreparedCapabilities(client, { required: true })',
   'scripts/rls-candidates/020e-a1-inert-capability-guard.sql',
-  'MIGRATION_EXPECTED_PENDING=020_tenant_rls_hardening.sql npm run db:migrate\n',
+  'MIGRATION_EXPECTED_PENDING=020_tenant_rls_hardening.sql,021_inventory_price_reference.sql npm run db:migrate -- --stop-after 020\n',
   "if (state !== 'pending')",
   'if npm run db:migrate:verify',
   'scripts/activate-020-capabilities.js',
+  'MIGRATION_EXPECTED_PENDING=021_inventory_price_reference.sql npm run db:migrate\n',
   'npm run db:migrate:verify\n',
+  'scripts/tests/test-inventory-021-constraints.sql',
   'npm run test:e2e',
 ];
 let previous = -1;

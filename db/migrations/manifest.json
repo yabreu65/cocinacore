@@ -1228,6 +1228,27 @@
       "transactional": "required",
       "legacyChecksumBackfillAllowed": false,
       "catalogAdditions": []
+    },
+    {
+      "id": "021",
+      "filename": "021_inventory_price_reference.sql",
+      "lane": "migration",
+      "sha256": "90f3f0c401f8383c1d073d6717fce46b1bf8cc4347216097c3c5ab653f904a19",
+      "byteLength": 2193,
+      "transactional": "required",
+      "legacyChecksumBackfillAllowed": false,
+      "catalogAdditions": [
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "tenants.tenants_currency_code_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "recipe_inventory_items.recipe_inventory_price_reference_check"
+        }
+      ]
     }
   ],
   "baselineObjects": {
