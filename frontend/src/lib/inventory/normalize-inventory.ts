@@ -59,7 +59,7 @@ export function getStockBadge(
 
 // A date-only value (including its persisted UTC-midnight form) denotes a
 // calendar day, not an instant to shift into the browser's local time zone.
-function expirationCalendarDay(value: string): number | null {
+export function expirationCalendarDay(value: string): number | null {
   const calendar = value.match(/^(\d{4}-\d{2}-\d{2})(?:T00:00:00(?:\.0+)?Z)?$/);
   if (calendar) {
     const parsed = new Date(`${calendar[1]}T00:00:00.000Z`);

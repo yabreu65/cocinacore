@@ -1,10 +1,33 @@
 'use client';
 
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
+import {
+  ArrowLeft,
+  Plus,
+  Package,
+  Search,
+  ChevronDown,
+  Settings2,
+  CalendarDays,
+  Wheat,
+  Beef,
+  Carrot,
+  Apple,
+  Milk,
+  CookingPot,
+  Leaf,
+} from 'lucide-react';
+import {
+  EMPTY_INVENTORY_FILTERS,
+  expiryState,
+  filterInventory,
+  summarizeInventory,
+  type InventoryFilters,
+} from '@/lib/inventory/inventory-overview';
 import Link from 'next/link';
+import { InventorySummary } from './InventorySummary';
 import {
   detectInventoryCategory,
-  isExpiringSoon,
   normalizeInventoryName,
 } from '@/lib/inventory/normalize-inventory';
 import { safeFetch } from '@/lib/api';
@@ -165,6 +188,14 @@ function priceDescription(item: InventoryItem): string {
 
 export default function RecipeInventoryPage() {
   const [rows, setRows] = useState<InventoryItem[]>([]);
+  const [filters, setFilters] = useState<InventoryFilters>(EMPTY_INVENTORY_FILTERS);
+  const [formOpen, setFormOpen] = useState(false);
+  const [optionalOpen, setOptionalOpen] = useState(false);
+  const [currencyOpen, setCurrencyOpen] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
+  const addRef = useRef<HTMLButtonElement>(null);
+  const returnFocus = useRef(false);
   const [name, setName] = useState('');
   const [quantity, setQuantity] = useState('');
   const [unit, setUnit] = useState('');
@@ -187,7 +218,7 @@ export default function RecipeInventoryPage() {
 
   const load = async () => {
     setLoading(true);
-    setError(null);
+    setLoadError(null);
     try {
       const result = await safeFetch<{ items: InventoryItem[] }>('/api/inventory', {
         credentials: 'same-origin',
@@ -195,7 +226,7 @@ export default function RecipeInventoryPage() {
       if (!result.ok) throw new Error(result.error);
       setRows(result.data.items);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'No se pudo cargar inventario.');
+      setLoadError(e instanceof Error ? e.message : 'No se pudo cargar inventario.');
     } finally {
       setLoading(false);
     }
@@ -231,6 +262,27 @@ export default function RecipeInventoryPage() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!formOpen && returnFocus.current && !working && !loading && !loadError) {
+      returnFocus.current = false;
+      addRef.current?.focus();
+    }
+  }, [formOpen, working, loading, loadError]);
+
+  useEffect(() => {
+    if (formOpen) nameRef.current?.focus();
+  }, [formOpen]);
+
+  const openForm = () => {
+    setFormOpen(true);
+    setError(null);
+    setNotice(null);
+  };
+  const closeForm = () => {
+    setFormOpen(false);
+    setError(null);
+    returnFocus.current = true;
+  };
   const saveCurrency = async (event: FormEvent) => {
     event.preventDefault();
     if (!settings?.canManageCurrency || !isInventoryCurrency(currencySelection) || settingsSaving)
@@ -279,7 +331,7 @@ export default function RecipeInventoryPage() {
 
   const saveItemPrice = async (event: FormEvent, id: string) => {
     event.preventDefault();
-    if (working || loading || editingId !== id) return;
+    if (working || loading || loadError || editingId !== id) return;
     const validated = validatePriceReference(editingPrice);
     if (!validated.ok) {
       setError(validated.error);
@@ -309,13 +361,14 @@ export default function RecipeInventoryPage() {
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
     const value = name.trim();
-    if (!value || working || loading) return;
+    if (!value || working || loading || loadError || editingId) return;
     const validated = validateInventoryFields({
       quantity,
       unit,
       lowStockThreshold,
     });
     if (!validated.ok) {
+      setOptionalOpen(true);
       setError(validated.error);
       return;
     }
@@ -324,6 +377,7 @@ export default function RecipeInventoryPage() {
     );
     const validatedPrice = hasPrice ? validatePriceReference(price) : null;
     if (validatedPrice && !validatedPrice.ok) {
+      setOptionalOpen(true);
       setError(validatedPrice.error);
       return;
     }
@@ -360,6 +414,11 @@ export default function RecipeInventoryPage() {
       setPrice(emptyPrice(settings?.currency ?? ''));
       setPurchaseLocation('');
       setLowStockThreshold('');
+      setFormOpen(false);
+      setOptionalOpen(false);
+      setFilters(EMPTY_INVENTORY_FILTERS);
+      setNotice('Ingrediente agregado correctamente.');
+      returnFocus.current = true;
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo guardar ingrediente.');
@@ -369,7 +428,15 @@ export default function RecipeInventoryPage() {
   };
 
   const onDelete = async (id: string) => {
-    if (!confirm('¿Eliminar este ingrediente?')) return;
+    if (
+      working ||
+      loading ||
+      loadError ||
+      formOpen ||
+      editingId ||
+      !confirm('¿Eliminar este ingrediente?')
+    )
+      return;
     setWorking(true);
     try {
       const result = await safeFetch<{ ok: true }>(`/api/inventory?id=${encodeURIComponent(id)}`, {
@@ -385,78 +452,129 @@ export default function RecipeInventoryPage() {
     }
   };
 
+  const today = new Date();
+  const summary = summarizeInventory(rows, settings?.currency ?? null, today);
+  const visibleRows = filterInventory(rows, filters, today);
+  const categories = [
+    ...new Set([...INVENTORY_CATEGORIES, ...rows.map((row) => row.category || 'Sin categoría')]),
+  ];
+  const hasFilters = Boolean(
+    filters.search || filters.category || filters.stock !== 'all' || filters.expiry !== 'all'
+  );
+  const dataReady = !loading && !loadError;
   return (
     <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 text-bistro-text-primary md:px-6">
-      <section className="mx-auto w-full max-w-4xl rounded-3xl border border-bistro-border bg-white/80 p-5 premium-shadow">
-        <div className="mb-4 flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-semibold">Inventario de ingredientes</h1>
-            <p className="text-bistro-text-secondary">
-              Gestioná tu inventario para mejorar recetas y menús.
+      <div className="mx-auto w-full max-w-6xl space-y-5">
+        <header className="flex flex-wrap items-end justify-between gap-4">
+          <div className="min-w-0">
+            <Link
+              href="/app"
+              className="mb-3 inline-flex items-center gap-2 text-sm font-semibold text-bistro-action-secondary"
+            >
+              <ArrowLeft size={16} aria-hidden="true" /> Inicio
+            </Link>
+            <p className="text-xs font-bold uppercase tracking-wider text-bistro-action-secondary">
+              Mi cocina · Despensa
+            </p>
+            <h1 className="mt-1 font-bistro-heading text-bistro-title-lg font-semibold">
+              Inventario de ingredientes
+            </h1>
+            <p className="mt-1 text-sm text-bistro-text-secondary">
+              Lo que tienes, lo que falta y cuánto vale tu despensa.
             </p>
           </div>
-          <Link href="/app" className="text-sm font-semibold text-bistro-action-primary">
-            Volver
-          </Link>
-        </div>
-
+          <button
+            ref={addRef}
+            type="button"
+            onClick={openForm}
+            aria-expanded={formOpen}
+            aria-controls="inventory-add-panel"
+            disabled={working || loading || !!loadError || formOpen || editingId !== null}
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-bistro-action-primary px-5 py-3 font-semibold text-white hover:bg-bistro-action-primary-hover disabled:opacity-60"
+          >
+            <Plus size={19} aria-hidden="true" /> Agregar ingrediente
+          </button>
+        </header>
+        <InventorySummary summary={summary} loading={loading} dataReady={dataReady} />
         <section
           aria-labelledby="inventory-currency-heading"
-          className="mb-4 rounded-xl border border-bistro-border bg-bistro-page p-3"
+          className="rounded-2xl border border-bistro-border bg-bistro-surface p-4"
         >
-          <h2 id="inventory-currency-heading" className="font-semibold">
-            Moneda de la organización
+          <h2 id="inventory-currency-heading">
+            <button
+              type="button"
+              aria-expanded={currencyOpen}
+              aria-controls="inventory-currency-panel"
+              onClick={() => setCurrencyOpen((value) => !value)}
+              className="flex w-full items-center justify-between gap-2 text-left font-semibold text-bistro-action-secondary"
+            >
+              <span className="inline-flex items-center gap-2">
+                <Settings2 size={18} aria-hidden="true" /> Moneda de la organización{' '}
+                {settingsError
+                  ? '· Error de consulta'
+                  : settings?.currency
+                    ? `· ${settings.currency}`
+                    : ''}
+              </span>
+              <ChevronDown
+                size={18}
+                aria-hidden="true"
+                className={currencyOpen ? 'rotate-180' : ''}
+              />
+            </button>
           </h2>
-          <p className="text-sm text-bistro-text-secondary">
-            {settingsLoading
-              ? 'Cargando configuración...'
-              : !settings
-                ? 'No se pudo consultar la moneda de trabajo.'
-                : settings.currency
-                  ? `Moneda de trabajo: ${settings.currency} — ${CURRENCY_LABELS[settings.currency]}`
-                  : 'Moneda de trabajo sin configurar.'}
-          </p>
-          {settings?.canManageCurrency ? (
-            <form onSubmit={saveCurrency} className="mt-2 flex flex-wrap items-end gap-2">
-              <label className="grid flex-1 gap-1 text-sm font-semibold">
-                Elegir moneda
-                <select
-                  value={currencySelection}
-                  onChange={(e) => setCurrencySelection(e.target.value)}
-                  disabled={settingsSaving}
-                  className={fieldClass}
-                >
-                  <option value="">Seleccionar</option>
-                  <CurrencyOptions />
-                </select>
-              </label>
-              <button
-                type="submit"
-                disabled={
-                  settingsSaving ||
-                  !isInventoryCurrency(currencySelection) ||
-                  currencySelection === settings.currency
-                }
-                className="h-11 rounded-xl bg-bistro-action-primary px-4 font-semibold text-white disabled:opacity-60"
-              >
-                {settingsSaving ? 'Guardando...' : 'Guardar moneda'}
-              </button>
-            </form>
-          ) : (
-            settings && (
-              <p className="mt-1 text-xs text-bistro-text-secondary">
-                Solo propietarios y administradores pueden cambiarla.
-              </p>
-            )
-          )}
-          <p className="mt-2 text-xs text-bistro-text-secondary">
-            Cambiar esta preferencia no convierte ni modifica los precios ya registrados.
-          </p>
-          {settingsError && (
-            <p role="alert" className="mt-2 text-sm text-bistro-danger">
-              {settingsError}
+          <div id="inventory-currency-panel" hidden={!currencyOpen} className="mt-3">
+            <p className="text-sm text-bistro-text-secondary">
+              {settingsLoading
+                ? 'Cargando configuración...'
+                : !settings
+                  ? 'No se pudo consultar la moneda de trabajo.'
+                  : settings.currency
+                    ? `Moneda de trabajo: ${settings.currency} — ${CURRENCY_LABELS[settings.currency]}`
+                    : 'Moneda de trabajo sin configurar.'}
             </p>
-          )}
+            {settings?.canManageCurrency ? (
+              <form onSubmit={saveCurrency} className="mt-2 flex flex-wrap items-end gap-2">
+                <label className="grid flex-1 gap-1 text-sm font-semibold">
+                  Elegir moneda
+                  <select
+                    value={currencySelection}
+                    onChange={(e) => setCurrencySelection(e.target.value)}
+                    disabled={settingsSaving}
+                    className={fieldClass}
+                  >
+                    <option value="">Seleccionar</option>
+                    <CurrencyOptions />
+                  </select>
+                </label>
+                <button
+                  type="submit"
+                  disabled={
+                    settingsSaving ||
+                    !isInventoryCurrency(currencySelection) ||
+                    currencySelection === settings.currency
+                  }
+                  className="h-11 rounded-xl bg-bistro-action-primary px-4 font-semibold text-white disabled:opacity-60"
+                >
+                  {settingsSaving ? 'Guardando...' : 'Guardar moneda'}
+                </button>
+              </form>
+            ) : (
+              settings && (
+                <p className="mt-1 text-xs text-bistro-text-secondary">
+                  Solo propietarios y administradores pueden cambiarla.
+                </p>
+              )
+            )}
+            <p className="mt-2 text-xs text-bistro-text-secondary">
+              Cambiar esta preferencia no convierte ni modifica los precios ya registrados.
+            </p>
+            {settingsError && (
+              <p role="alert" className="mt-2 text-sm text-bistro-danger">
+                {settingsError}
+              </p>
+            )}
+          </div>
         </section>
         {notice && (
           <p role="status" className="mb-3 text-sm text-bistro-success">
@@ -464,101 +582,157 @@ export default function RecipeInventoryPage() {
           </p>
         )}
 
-        <form onSubmit={onSubmit} className="grid gap-3 md:grid-cols-4">
-          <label className="grid gap-1 text-sm font-semibold">
-            Ingrediente
-            <input
-              required
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Ej. Harina"
-              className={fieldClass}
-            />
-          </label>
-          <label className="grid gap-1 text-sm font-semibold">
-            Cantidad
-            <input
-              inputMode="decimal"
-              value={quantity}
-              onChange={(e) => setQuantity(e.target.value)}
-              placeholder="Ej. 500"
-              className={fieldClass}
-            />
-          </label>
-          <label className="grid gap-1 text-sm font-semibold">
-            Unidad
-            <select value={unit} onChange={(e) => setUnit(e.target.value)} className={fieldClass}>
-              <option value="">Seleccionar</option>
-              {INVENTORY_UNITS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="grid gap-1 text-sm font-semibold md:col-span-2">
-            Categoría
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              className={fieldClass}
-            >
-              <option value="">
-                Automática{name.trim() ? ` (${detectInventoryCategory(name)})` : ''}
-              </option>
-              {INVENTORY_CATEGORIES.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="grid gap-1 text-sm font-semibold">
-            Fecha de vencimiento
-            <input
-              type="date"
-              value={expirationDate}
-              onChange={(e) => setExpirationDate(e.target.value)}
-              className={fieldClass}
-            />
-          </label>
-          <label className="grid gap-1 text-sm font-semibold">
-            Lugar de compra
-            <input
-              value={purchaseLocation}
-              onChange={(e) => setPurchaseLocation(e.target.value)}
-              placeholder="Lugar de compra"
-              className={fieldClass}
-            />
-          </label>
-          <label className="grid gap-1 text-sm font-semibold">
-            {unit ? `Stock mínimo (${unit})` : 'Stock mínimo'}
-            <input
-              type="number"
-              min="0"
-              step="0.0001"
-              value={lowStockThreshold}
-              onChange={(e) => setLowStockThreshold(e.target.value)}
-              placeholder={unit ? `Stock mínimo (${unit})` : 'Stock mínimo'}
-              className={fieldClass}
-            />
-          </label>
-          <div className="md:col-span-4">
-            <PriceFields value={price} onChange={setPrice} disabled={working} />
-            <p className="mt-1 text-xs text-bistro-text-secondary">
-              Opcional. Deja el importe y la referencia vacíos si aún no conoces el precio.
+        <section
+          id="inventory-add-panel"
+          hidden={!formOpen}
+          className="rounded-2xl border border-bistro-border bg-bistro-surface p-4 sm:p-5"
+        >
+          <div className="mb-4">
+            <h2 className="font-bistro-heading text-bistro-title-sm font-semibold">
+              Nuevo ingrediente
+            </h2>
+            <p className="text-sm text-bistro-text-secondary">
+              Solo el nombre es obligatorio. Completa cantidad y unidad si las conoces.
             </p>
           </div>
-          <button
-            type="submit"
-            disabled={working || loading}
-            className="h-11 rounded-xl bg-bistro-action-primary px-4 font-semibold text-white disabled:opacity-60"
-          >
-            {working ? 'Guardando...' : 'Agregar'}
-          </button>
-        </form>
+          <form onSubmit={onSubmit} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <label className="grid gap-1 text-sm font-semibold">
+              Ingrediente
+              <input
+                required
+                ref={nameRef}
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Ej. Harina"
+                className={fieldClass}
+              />
+            </label>
+            <label className="grid gap-1 text-sm font-semibold">
+              Cantidad disponible
+              <input
+                inputMode="decimal"
+                value={quantity}
+                onChange={(e) => setQuantity(e.target.value)}
+                placeholder="Ej. 500"
+                className={fieldClass}
+              />
+            </label>
+            <label className="grid gap-1 text-sm font-semibold">
+              Unidad
+              <select value={unit} onChange={(e) => setUnit(e.target.value)} className={fieldClass}>
+                <option value="">Seleccionar</option>
+                {INVENTORY_UNITS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-1 text-sm font-semibold">
+              Categoría
+              <select
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+                className={fieldClass}
+              >
+                <option value="">
+                  Automática{name.trim() ? ` (${detectInventoryCategory(name)})` : ''}
+                </option>
+                {INVENTORY_CATEGORIES.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="sm:col-span-2 lg:col-span-4 rounded-xl border border-bistro-border bg-bistro-page p-3">
+              <button
+                type="button"
+                onClick={() => setOptionalOpen((v) => !v)}
+                aria-expanded={optionalOpen}
+                aria-controls="inventory-optional-fields"
+                className="flex w-full items-center justify-between gap-2 text-left text-sm font-semibold text-bistro-action-secondary"
+              >
+                <span>
+                  Detalles opcionales: precio, vencimiento y stock mínimo
+                  {!optionalOpen &&
+                  (price.amount ||
+                    price.referenceQuantity ||
+                    price.referenceUnit ||
+                    expirationDate ||
+                    purchaseLocation ||
+                    lowStockThreshold)
+                    ? ' · Con datos'
+                    : ''}
+                </span>
+                <ChevronDown
+                  size={18}
+                  aria-hidden="true"
+                  className={optionalOpen ? 'rotate-180' : ''}
+                />
+              </button>
+              <div
+                id="inventory-optional-fields"
+                hidden={!optionalOpen}
+                className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"
+              >
+                <label className="grid gap-1 text-sm font-semibold">
+                  Fecha de vencimiento
+                  <input
+                    type="date"
+                    value={expirationDate}
+                    onChange={(e) => setExpirationDate(e.target.value)}
+                    className={fieldClass}
+                  />
+                </label>
+                <label className="grid gap-1 text-sm font-semibold">
+                  Lugar de compra
+                  <input
+                    value={purchaseLocation}
+                    onChange={(e) => setPurchaseLocation(e.target.value)}
+                    placeholder="Lugar de compra"
+                    className={fieldClass}
+                  />
+                </label>
+                <label className="grid gap-1 text-sm font-semibold">
+                  {unit ? `Stock mínimo (${unit})` : 'Stock mínimo'}
+                  <input
+                    inputMode="decimal"
+                    value={lowStockThreshold}
+                    onChange={(e) => setLowStockThreshold(e.target.value)}
+                    placeholder={unit ? `Stock mínimo (${unit})` : 'Stock mínimo'}
+                    className={fieldClass}
+                  />
+                </label>
+                <div className="sm:col-span-2 lg:col-span-4">
+                  <PriceFields value={price} onChange={setPrice} disabled={working} />
+                  <p className="mt-1 text-xs text-bistro-text-secondary">
+                    Opcional. Deja el importe y la referencia vacíos si aún no conoces el precio.
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2 sm:col-span-2 lg:col-span-4">
+              <button
+                type="submit"
+                disabled={working || loading || !!loadError}
+                className="h-11 rounded-xl bg-bistro-action-primary px-4 font-semibold text-white disabled:opacity-60"
+              >
+                {working ? 'Guardando...' : 'Guardar ingrediente'}
+              </button>
+              <button
+                type="button"
+                onClick={closeForm}
+                disabled={working}
+                className="min-h-11 rounded-xl border border-bistro-border px-4 font-semibold disabled:opacity-60"
+              >
+                Cerrar (conservar borrador)
+              </button>
+            </div>
+          </form>
+        </section>
 
-        {error ? (
+        {error && editingId === null ? (
           <p
             role="alert"
             className="mt-3 rounded-xl border border-bistro-danger/30 bg-bistro-danger/10 px-3 py-2 text-sm text-bistro-danger"
@@ -566,139 +740,334 @@ export default function RecipeInventoryPage() {
             {error}
           </p>
         ) : null}
-        {loading ? <p className="mt-3 text-sm text-bistro-text-secondary">Cargando...</p> : null}
-
-        <ul className="mt-4 grid gap-2">
-          {rows.map((item) => {
-            const stock = inventoryStockState(item.quantity, item.unit, item.low_stock_threshold);
-            const priceState = readInventoryPrice(item);
-            const stockCost =
-              priceState.status === 'known'
-                ? calculateInventoryCost({
-                    quantity: item.quantity,
-                    unit: item.unit,
-                    price: priceState.price,
-                  })
-                : null;
-            const parsed = validateInventoryFields({ quantity: item.quantity, unit: item.unit });
-            const normalizedLabel =
-              parsed.ok && parsed.quantity !== null ? `${parsed.quantity} ${parsed.unit}` : null;
-
-            return (
-              <li
-                key={item.id}
-                className="rounded-xl border border-bistro-border bg-white/70 px-3 py-3 text-sm"
+        <section
+          aria-labelledby="inventory-list-heading"
+          className="rounded-2xl border border-bistro-border bg-bistro-surface p-4 sm:p-5"
+        >
+          <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
+            <h2
+              id="inventory-list-heading"
+              className="font-bistro-heading text-bistro-title-sm font-semibold"
+            >
+              Mi despensa
+            </h2>
+            <p aria-live="polite" className="text-sm text-bistro-text-secondary">
+              {dataReady ? `${visibleRows.length} de ${rows.length} ingredientes` : 'Inventario'}
+            </p>
+          </div>
+          <fieldset
+            disabled={editingId !== null || working}
+            className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"
+          >
+            <legend className="sr-only">Filtros de inventario</legend>
+            <label className="grid gap-1 text-sm font-semibold">
+              Buscar ingrediente
+              <span className="relative">
+                <Search
+                  size={17}
+                  aria-hidden="true"
+                  className="absolute left-3 top-3.5 text-bistro-text-secondary"
+                />
+                <input
+                  type="search"
+                  value={filters.search}
+                  onChange={(event) =>
+                    setFilters((old) => ({ ...old, search: event.target.value }))
+                  }
+                  placeholder="Ej. Arroz, tomate..."
+                  className={`${fieldClass} w-full pl-9`}
+                />
+              </span>
+            </label>
+            <label className="grid gap-1 text-sm font-semibold">
+              Categoría
+              <select
+                value={filters.category}
+                onChange={(e) => setFilters((old) => ({ ...old, category: e.target.value }))}
+                className={fieldClass}
               >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="font-medium">{item.ingredient_name}</span>
-                  <div className="flex items-center gap-2">
-                    <span className="text-bistro-text-secondary">
-                      {item.quantity ?? 'Sin cantidad'} {item.unit ?? ''}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => void onDelete(item.id)}
-                      disabled={working}
-                      className="text-xs text-bistro-danger underline disabled:opacity-60"
-                    >
-                      Eliminar
-                    </button>
-                  </div>
-                </div>
-                <div className="mt-1 flex flex-wrap gap-1">
-                  <span
-                    className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
-                      stock === 'agotado' ||
-                      stock === 'bajo stock' ||
-                      stock === 'revisar cantidad' ||
-                      stock === 'sin cantidad'
-                        ? 'border-bistro-warning/30 bg-bistro-warning/10 text-bistro-warning'
-                        : 'border-bistro-success/30 bg-bistro-success/10 text-bistro-success'
-                    }`}
-                  >
-                    {stock}
-                  </span>
-                  {isExpiringSoon(item.expiration_date ?? null) ? (
-                    <span className="rounded-full border border-bistro-danger/30 bg-bistro-danger/10 px-2 py-0.5 text-[10px] font-semibold text-bistro-danger">
-                      vence pronto
-                    </span>
-                  ) : null}
-                  {!item.unit ? (
-                    <span className="rounded-full border border-bistro-action-secondary/30 bg-bistro-action-secondary/10 px-2 py-0.5 text-[10px] font-semibold text-bistro-action-secondary">
-                      sin unidad
-                    </span>
-                  ) : null}
-                  {!parsed.ok ? (
-                    <span className="rounded-full border border-bistro-border/30 bg-bistro-surface-warm/10 px-2 py-0.5 text-[10px] font-semibold text-bistro-text-secondary">
-                      revisar datos originales
-                    </span>
-                  ) : null}
-                </div>
-                <div className="mt-1 grid gap-1 text-xs text-bistro-text-secondary md:grid-cols-2">
-                  <span>Cantidad normalizada: {normalizedLabel ?? 'No disponible'}</span>
-                  <span>Categoría: {item.category ?? 'Sin categoría'}</span>
-                  <span>Vence: {item.expiration_date ?? '—'}</span>
-                  <span>Precio: {priceDescription(item)}</span>
-                  <span>
-                    Valor estimado del stock:{' '}
-                    {stockCost?.status === 'known'
-                      ? `${stockCost.cost.currency} ${roundInventoryCost(stockCost.cost)}`
-                      : 'No disponible'}
-                  </span>
-                  <span>Lugar: {item.purchase_location ?? '—'}</span>
-                </div>
-                {editingId === item.id ? (
-                  <form
-                    onSubmit={(event) => void saveItemPrice(event, item.id)}
-                    className="mt-3 grid gap-2"
-                  >
-                    <PriceFields
-                      value={editingPrice}
-                      onChange={setEditingPrice}
-                      disabled={working}
-                    />
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="submit"
-                        disabled={working}
-                        className="rounded-xl bg-bistro-action-primary px-4 py-2 font-semibold text-white disabled:opacity-60"
-                      >
-                        Guardar precio
-                      </button>
+                <option value="">Todas</option>
+                {categories.map((category) => (
+                  <option key={category}>{category}</option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-1 text-sm font-semibold">
+              Existencias
+              <select
+                value={filters.stock}
+                onChange={(e) =>
+                  setFilters((old) => ({
+                    ...old,
+                    stock: e.target.value as InventoryFilters['stock'],
+                  }))
+                }
+                className={fieldClass}
+              >
+                <option value="all">Todos los estados</option>
+                {[
+                  'agotado',
+                  'bajo stock',
+                  'suficiente',
+                  'disponible',
+                  'sin cantidad',
+                  'revisar cantidad',
+                ].map((state) => (
+                  <option key={state}>{state}</option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-1 text-sm font-semibold">
+              Vencimiento
+              <select
+                value={filters.expiry}
+                onChange={(e) =>
+                  setFilters((old) => ({
+                    ...old,
+                    expiry: e.target.value as InventoryFilters['expiry'],
+                  }))
+                }
+                className={fieldClass}
+              >
+                <option value="all">Todos</option>
+                <option value="expired">Vencidos</option>
+                <option value="soon">Próximos (5 días)</option>
+                <option value="later">Vigentes</option>
+                <option value="missing">Sin fecha</option>
+                <option value="invalid">Por revisar</option>
+              </select>
+            </label>
+          </fieldset>
+          {hasFilters && (
+            <button
+              type="button"
+              onClick={() => setFilters(EMPTY_INVENTORY_FILTERS)}
+              disabled={editingId !== null || working}
+              className="mt-2 min-h-11 text-sm font-semibold text-bistro-action-primary underline"
+            >
+              Limpiar filtros
+            </button>
+          )}
+          {loading && (
+            <p
+              role="status"
+              className="mt-4 rounded-xl bg-bistro-page p-4 text-sm text-bistro-text-secondary"
+            >
+              Cargando inventario...
+            </p>
+          )}
+          {loadError && (
+            <div
+              role="alert"
+              className="mt-4 rounded-xl border border-bistro-danger/30 p-4 text-sm text-bistro-danger"
+            >
+              <p>{loadError}</p>
+              <button
+                type="button"
+                onClick={() => void load()}
+                disabled={loading}
+                className="mt-2 min-h-11 font-semibold underline"
+              >
+                Volver a intentar
+              </button>
+            </div>
+          )}
+          <ul aria-busy={loading} className="mt-4 grid gap-3 lg:grid-cols-2">
+            {(dataReady ? visibleRows : []).map((item) => {
+              const stock = inventoryStockState(item.quantity, item.unit, item.low_stock_threshold);
+              const expiry = expiryState(item.expiration_date, today);
+              const CategoryIcon =
+                Object.entries({
+                  Proteínas: Beef,
+                  Verduras: Carrot,
+                  Frutas: Apple,
+                  Lácteos: Milk,
+                  Granos: Wheat,
+                  Especias: Leaf,
+                  Despensa: CookingPot,
+                }).find(([category]) => category === item.category)?.[1] ?? Package;
+              const priceState = readInventoryPrice(item);
+              const stockCost =
+                priceState.status === 'known'
+                  ? calculateInventoryCost({
+                      quantity: item.quantity,
+                      unit: item.unit,
+                      price: priceState.price,
+                    })
+                  : null;
+              const parsed = validateInventoryFields({ quantity: item.quantity, unit: item.unit });
+              const normalizedLabel =
+                parsed.ok && parsed.quantity !== null ? `${parsed.quantity} ${parsed.unit}` : null;
+
+              return (
+                <li
+                  key={item.id}
+                  className="min-w-0 rounded-2xl border border-bistro-border bg-bistro-surface p-4 text-sm"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <span className="shrink-0 rounded-xl bg-bistro-surface-warm p-2 text-bistro-action-secondary">
+                        <CategoryIcon size={22} aria-hidden="true" />
+                      </span>
+                      <div className="min-w-0">
+                        <h3 className="break-words font-semibold">{item.ingredient_name}</h3>
+                        <p className="text-xs text-bistro-text-secondary">
+                          {item.category ?? 'Sin categoría'}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold tabular-nums">
+                        {item.quantity ?? 'Sin cantidad'} {item.unit ?? ''}
+                      </span>
                       <button
                         type="button"
-                        disabled={working}
-                        onClick={() => setEditingId(null)}
-                        className="rounded-xl border border-bistro-border px-4 py-2 font-semibold"
+                        onClick={() => void onDelete(item.id)}
+                        disabled={
+                          working || loading || !!loadError || formOpen || editingId !== null
+                        }
+                        className="min-h-11 px-2 text-xs text-bistro-danger underline disabled:opacity-60"
                       >
-                        Cancelar
+                        Eliminar
                       </button>
                     </div>
-                  </form>
-                ) : (
-                  <button
-                    type="button"
-                    disabled={working || loading || editingId !== null}
-                    onClick={() => startPriceEdit(item)}
-                    className="mt-2 text-sm font-semibold text-bistro-action-primary underline disabled:opacity-60"
-                  >
-                    {priceState.status === 'known'
-                      ? 'Actualizar precio'
-                      : priceState.status === 'missing'
-                        ? 'Registrar precio'
-                        : 'Confirmar precio'}
-                  </button>
-                )}
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    <span
+                      className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${
+                        stock === 'agotado' ||
+                        stock === 'bajo stock' ||
+                        stock === 'revisar cantidad' ||
+                        stock === 'sin cantidad'
+                          ? 'border-bistro-warning/30 bg-bistro-warning/10 text-bistro-warning'
+                          : 'border-bistro-success/30 bg-bistro-success/10 text-bistro-success'
+                      }`}
+                    >
+                      {stock}
+                    </span>
+                    {expiry === 'expired' || expiry === 'soon' || expiry === 'invalid' ? (
+                      <span
+                        className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${expiry === 'expired' ? 'border-bistro-danger/30 bg-bistro-danger/10 text-bistro-danger' : 'border-bistro-warning/30 bg-bistro-warning/10 text-bistro-warning'}`}
+                      >
+                        <CalendarDays size={12} aria-hidden="true" className="mr-1 inline" />
+                        {expiry === 'expired'
+                          ? 'Vencido'
+                          : expiry === 'soon'
+                            ? 'Vence pronto'
+                            : 'Fecha por revisar'}
+                      </span>
+                    ) : null}
+                    {!item.unit ? (
+                      <span className="rounded-full border border-bistro-action-secondary/30 bg-bistro-action-secondary/10 px-2 py-0.5 text-xs font-semibold text-bistro-action-secondary">
+                        sin unidad
+                      </span>
+                    ) : null}
+                    {!parsed.ok ? (
+                      <span className="rounded-full border border-bistro-border/30 bg-bistro-surface-warm/10 px-2 py-0.5 text-xs font-semibold text-bistro-text-secondary">
+                        revisar datos originales
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="mt-1 grid gap-1 text-xs text-bistro-text-secondary md:grid-cols-2">
+                    <span>Cantidad normalizada: {normalizedLabel ?? 'No disponible'}</span>
+                    <span>
+                      Vence:{' '}
+                      {item.expiration_date
+                        ? item.expiration_date.replace(/T00:00:00(?:\.0+)?Z$/, '')
+                        : 'Sin fecha'}
+                    </span>
+                    <span>Precio: {priceDescription(item)}</span>
+                    <span>
+                      Valor estimado del stock:{' '}
+                      {stockCost?.status === 'known'
+                        ? `${stockCost.cost.currency} ${roundInventoryCost(stockCost.cost)}`
+                        : 'No disponible'}
+                    </span>
+                    <span>Lugar: {item.purchase_location ?? '—'}</span>
+                  </div>
+                  {editingId === item.id ? (
+                    <form
+                      onSubmit={(event) => void saveItemPrice(event, item.id)}
+                      className="mt-3 grid gap-2"
+                    >
+                      <PriceFields
+                        value={editingPrice}
+                        onChange={setEditingPrice}
+                        disabled={working}
+                      />
+                      {error && (
+                        <p role="alert" className="text-sm text-bistro-danger">
+                          {error}
+                        </p>
+                      )}
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="submit"
+                          disabled={working}
+                          className="rounded-xl bg-bistro-action-primary px-4 py-2 font-semibold text-white disabled:opacity-60"
+                        >
+                          Guardar precio
+                        </button>
+                        <button
+                          type="button"
+                          disabled={working}
+                          onClick={() => {
+                            setEditingId(null);
+                            setError(null);
+                          }}
+                          className="rounded-xl border border-bistro-border px-4 py-2 font-semibold"
+                        >
+                          Cancelar
+                        </button>
+                      </div>
+                    </form>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={working || loading || !!loadError || formOpen || editingId !== null}
+                      onClick={() => startPriceEdit(item)}
+                      className="mt-2 min-h-11 text-sm font-semibold text-bistro-action-primary underline disabled:opacity-60"
+                    >
+                      {priceState.status === 'known'
+                        ? 'Actualizar precio'
+                        : priceState.status === 'missing'
+                          ? 'Registrar precio'
+                          : 'Confirmar precio'}
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+            {dataReady && visibleRows.length === 0 && (
+              <li className="rounded-xl border border-dashed border-bistro-border bg-bistro-page p-6 text-center lg:col-span-2">
+                <Package
+                  className="mx-auto mb-2 text-bistro-action-secondary"
+                  size={32}
+                  aria-hidden="true"
+                />
+                <p className="font-semibold">
+                  {rows.length
+                    ? 'No encontramos ingredientes con esos filtros'
+                    : 'Tu despensa está lista para comenzar'}
+                </p>
+                <p className="mt-1 text-sm text-bistro-text-secondary">
+                  {rows.length
+                    ? 'Prueba otra búsqueda o limpia los filtros.'
+                    : 'Agrega el primer ingrediente para organizar tus compras y recetas.'}
+                </p>
+                <button
+                  type="button"
+                  onClick={rows.length ? () => setFilters(EMPTY_INVENTORY_FILTERS) : openForm}
+                  disabled={working || editingId !== null || (!rows.length && formOpen)}
+                  className="mt-3 min-h-11 rounded-xl border border-bistro-border bg-bistro-surface px-4 font-semibold text-bistro-action-primary disabled:opacity-60"
+                >
+                  {rows.length ? 'Limpiar filtros' : 'Agregar primer ingrediente'}
+                </button>
               </li>
-            );
-          })}
-          {!loading && rows.length === 0 ? (
-            <li className="text-sm text-bistro-text-secondary">
-              Aún no tienes ingredientes cargados.
-            </li>
-          ) : null}
-        </ul>
-      </section>
+            )}
+          </ul>
+        </section>
+      </div>
     </main>
   );
 }
