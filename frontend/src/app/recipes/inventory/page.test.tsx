@@ -19,5 +19,6 @@ describe('Bistró inventory initial render', () => {
     expect(html).toContain('Buscar ingrediente');
     expect(html).toContain('Cantidad disponible');
     expect(html).toContain('Fecha de vencimiento');
+    expect(html).toContain('Se valida como fecha calendario local (AAAA-MM-DD)');
   });
 });
