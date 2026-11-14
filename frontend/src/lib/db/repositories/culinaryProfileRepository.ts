@@ -150,7 +150,7 @@ export async function lockCulinaryProfileUpdateInTransaction(
   tenantId: string
 ): Promise<void> {
   const typedClient = queryClient(client);
-  const lockKey = `culinary-profile:${tenantId}:${userId}`;
+  const lockKey = `culinary-profile:${tenantId.toLowerCase()}:${userId.toLowerCase()}`;
   await typedClient.execute('select pg_advisory_xact_lock(hashtextextended($1, 0))', [lockKey]);
 }
 
@@ -253,6 +253,7 @@ export async function upsertCulinaryProfile(
   const result = await scopedTransaction(
     { tenantId: input.tenantId, userId: input.userId },
     async (client) => {
+      await lockCulinaryProfileUpdateInTransaction(client, input.userId, input.tenantId);
       try {
         return await client.query<UserCulinaryProfileRow>(
           `insert into public.user_culinary_profiles (user_id, tenant_id, level)
@@ -283,6 +284,7 @@ export async function setCulinaryProfileTerms(
 ): Promise<void> {
   await scopedTransaction({ tenantId, userId }, async (client) => {
     const typedClient = queryClient(client);
+    await lockCulinaryProfileUpdateInTransaction(typedClient, userId, tenantId);
     const profile = await typedClient.queryProfile(
       `select user_id, tenant_id
        from public.user_culinary_profiles
@@ -331,6 +333,7 @@ export async function saveCulinaryProfileInTransaction(
   input: SaveCulinaryProfileInput
 ): Promise<UserCulinaryProfileRow> {
   const typedClient = queryClient(client);
+  await lockCulinaryProfileUpdateInTransaction(typedClient, input.userId, input.tenantId);
   let result: { rows: UserCulinaryProfileRow[] };
   try {
     result = await typedClient.queryProfile(

@@ -225,26 +225,69 @@ describe('mealPlanRepository', () => {
     expect(params).toEqual(['tenant-1', 'user-1']);
   });
 
-  it('uses tenant ownership, exact snapshot and updated_at for an atomic adaptive replacement', async () => {
+  function adaptiveInput(plan = structuredPlan()) {
+    return {
+      mealPlanId: 'meal-plan-1',
+      userId: 'user-1',
+      tenantId: 'tenant-1',
+      expectedUpdatedAt: '2026-01-01T00:00:00.000Z',
+      expectedCalendarPayload: plan,
+      structuredPlan: plan,
+    };
+  }
+
+  const profile = {
+    user_id: 'user-1',
+    tenant_id: 'tenant-1',
+    allergies: [],
+  };
+
+  function mockAdaptiveReads(
+    current = mealPlanRow(),
+    currentProfile: unknown = profile,
+    terms: unknown[] = []
+  ) {
+    queryMock
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [current] })
+      .mockResolvedValueOnce({ rows: currentProfile ? [currentProfile] : [] })
+      .mockResolvedValueOnce({ rows: terms });
+  }
+
+  it('locks and re-reads profile and exact plan revision before an atomic adaptive replacement', async () => {
     const plan = structuredPlan();
     const updatedRow = mealPlanRow({
       calendar_payload: plan,
       updated_at: '2026-01-01T00:01:00.000Z',
     });
-    queryMock.mockResolvedValue({ rows: [updatedRow] });
-
-    await expect(
-      replaceMealPlanForAdaptiveProposal({
-        mealPlanId: 'meal-plan-1',
-        userId: 'user-1',
-        tenantId: 'tenant-1',
-        expectedUpdatedAt: '2026-01-01T00:00:00.000Z',
-        expectedCalendarPayload: plan,
-        structuredPlan: plan,
-      })
-    ).resolves.toEqual(updatedRow);
-
-    const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
+    mockAdaptiveReads();
+    queryMock.mockResolvedValueOnce({ rows: [updatedRow] });
+    await expect(replaceMealPlanForAdaptiveProposal(adaptiveInput(plan))).resolves.toEqual(
+      updatedRow
+    );
+    expect(scopedMock).toHaveBeenCalledWith(
+      { tenantId: 'tenant-1', userId: 'user-1' },
+      expect.any(Function),
+      { isolationLevel: 'read committed' }
+    );
+    expect(queryMock).toHaveBeenCalledTimes(5);
+    expect(queryMock.mock.calls[0]).toEqual([
+      'select pg_advisory_xact_lock(hashtextextended($1, 0))',
+      ['culinary-profile:tenant-1:user-1'],
+    ]);
+    const [readSql, readParams] = queryMock.mock.calls[1] as [string, unknown[]];
+    expect(readSql).toContain('for update');
+    expect(readSql).toContain('and updated_at = $4::timestamptz and calendar_payload = $5::jsonb');
+    expect(readParams).toEqual([
+      'meal-plan-1',
+      'tenant-1',
+      'user-1',
+      '2026-01-01T00:00:00.000Z',
+      JSON.stringify(plan),
+    ]);
+    expect(queryMock.mock.calls[2]?.[0]).toContain('public.user_culinary_profiles');
+    expect(queryMock.mock.calls[3]?.[0]).toContain('public.user_culinary_profile_terms');
+    const [sql, params] = queryMock.mock.calls[4] as [string, unknown[]];
     expect(sql).toContain('and updated_at = $6::timestamptz');
     expect(sql).toContain('and calendar_payload = $7::jsonb');
     expect(sql).toContain('tenant_id = $4 and user_id = $5');
@@ -257,6 +300,63 @@ describe('mealPlanRepository', () => {
       '2026-01-01T00:00:00.000Z',
       JSON.stringify(plan),
     ]);
+  });
+
+  it('rejects restrictions observed after acquiring the shared profile lock', async () => {
+    mockAdaptiveReads(mealPlanRow(), { ...profile, allergies: ['Arroz'] });
+    await expect(replaceMealPlanForAdaptiveProposal(adaptiveInput())).resolves.toBeNull();
+    expect(queryMock).toHaveBeenCalledTimes(4);
+  });
+
+  it('enforces persisted plan restrictions even when the profile is absent', async () => {
+    mockAdaptiveReads(mealPlanRow({ restrictions: ['Arroz'] }), null);
+    await expect(replaceMealPlanForAdaptiveProposal(adaptiveInput())).resolves.toBeNull();
+    expect(queryMock).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not truncate persisted avoid terms to the prompt context limit', async () => {
+    const terms = Array.from({ length: 12 }, (_, index) => ({
+      user_id: 'user-1',
+      preference_type: 'avoid',
+      term_label: `Ingrediente ${index}`,
+    }));
+    terms.push({ user_id: 'user-1', preference_type: 'avoid', term_label: 'Arroz' });
+    mockAdaptiveReads(mealPlanRow(), profile, terms);
+    await expect(replaceMealPlanForAdaptiveProposal(adaptiveInput())).resolves.toBeNull();
+    expect(queryMock).toHaveBeenCalledTimes(4);
+  });
+
+  it.each([
+    ['foreign profile', { ...profile, tenant_id: 'other-tenant' }, []],
+    ['malformed allergies', { ...profile, allergies: null }, []],
+    [
+      'terms without profile',
+      null,
+      [{ user_id: 'user-1', preference_type: 'avoid', term_label: 'Arroz' }],
+    ],
+    [
+      'foreign term',
+      profile,
+      [{ user_id: 'other-user', preference_type: 'avoid', term_label: 'Arroz' }],
+    ],
+  ])('fails closed on %s', async (_label, currentProfile, terms) => {
+    mockAdaptiveReads(mealPlanRow(), currentProfile, terms as unknown[]);
+    await expect(replaceMealPlanForAdaptiveProposal(adaptiveInput())).resolves.toBeNull();
+    expect(queryMock).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not write after a stale plan revision', async () => {
+    queryMock.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] });
+    await expect(replaceMealPlanForAdaptiveProposal(adaptiveInput())).resolves.toBeNull();
+    expect(queryMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not read or write after failure to acquire the profile lock', async () => {
+    queryMock.mockRejectedValueOnce(new Error('lock failed'));
+    await expect(replaceMealPlanForAdaptiveProposal(adaptiveInput())).rejects.toThrow(
+      'lock failed'
+    );
+    expect(queryMock).toHaveBeenCalledTimes(1);
   });
 
   it('attaches an exact recipe version only after confirmation and an unchanged snapshot', async () => {

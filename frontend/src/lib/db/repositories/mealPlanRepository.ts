@@ -1,4 +1,10 @@
 import { mapSingleRow, scopedTransaction, type AuthenticatedDbScope } from '@/lib/db';
+import {
+  lockCulinaryProfileUpdateInTransaction,
+  findCulinaryProfileByUserIdInTransaction,
+  findCulinaryProfileTermsByUserIdInTransaction,
+} from './culinaryProfileRepository';
+import { containsRestrictedIngredientName } from '@/lib/recipes/structured-ingredients';
 import type {
   FusionIntensity,
   MealPlanMode,
@@ -261,8 +267,76 @@ export async function replaceMealPlanForAdaptiveProposal(
 ): Promise<UserMealPlanRow | null> {
   const result = await scopedTransaction(
     { tenantId: input.tenantId, userId: input.userId },
-    (client) =>
-      client.query<UserMealPlanRow>(
+    async (client) => {
+      // The profile lock covers both existing and absent profiles, including all
+      // participating profile writers. Re-read under READ COMMITTED after waiting.
+      await lockCulinaryProfileUpdateInTransaction(client, input.userId, input.tenantId);
+      const current = (
+        await client.query<UserMealPlanRow>(
+          `select * from public.user_meal_plans
+           where id = $1 and tenant_id = $2 and user_id = $3
+             and updated_at = $4::timestamptz and calendar_payload = $5::jsonb
+           for update`,
+          [
+            input.mealPlanId,
+            input.tenantId,
+            input.userId,
+            input.expectedUpdatedAt,
+            JSON.stringify(input.expectedCalendarPayload),
+          ]
+        )
+      ).rows[0];
+      if (
+        !current ||
+        current.id !== input.mealPlanId ||
+        current.tenant_id !== input.tenantId ||
+        current.user_id !== input.userId ||
+        !Array.isArray(current.restrictions)
+      )
+        return { rows: [] };
+      const profile = await findCulinaryProfileByUserIdInTransaction(
+        client,
+        input.userId,
+        input.tenantId
+      );
+      const terms = await findCulinaryProfileTermsByUserIdInTransaction(
+        client,
+        input.userId,
+        input.tenantId
+      );
+      if (
+        (profile &&
+          (profile.user_id !== input.userId ||
+            profile.tenant_id !== input.tenantId ||
+            !Array.isArray(profile.allergies))) ||
+        (!profile && terms.length > 0) ||
+        terms.some(
+          (term) =>
+            term.user_id !== input.userId ||
+            !['identity', 'prefer', 'avoid', 'goal'].includes(term.preference_type) ||
+            typeof term.term_label !== 'string' ||
+            !term.term_label.trim()
+        )
+      )
+        return { rows: [] };
+      // Do not use the bounded prompt context as a safety decision: validate
+      // every persisted hard restriction against the proposed ingredients.
+      const restrictions = [
+        ...current.restrictions,
+        ...(profile?.allergies ?? []),
+        ...terms.filter((term) => term.preference_type === 'avoid').map((term) => term.term_label),
+      ];
+      if (
+        restrictions.some((term) => typeof term !== 'string' || !term.trim()) ||
+        containsRestrictedIngredientName(
+          input.structuredPlan.days.flatMap((day) =>
+            day.meals.flatMap((meal) => meal.ingredients.map((ingredient) => ingredient.name))
+          ),
+          restrictions
+        )
+      )
+        return { rows: [] };
+      return client.query<UserMealPlanRow>(
         `update public.user_meal_plans
         set calendar_payload = $1::jsonb,
             ai_content = $2,
@@ -280,9 +354,11 @@ export async function replaceMealPlanForAdaptiveProposal(
           input.expectedUpdatedAt,
           JSON.stringify(input.expectedCalendarPayload),
         ]
-      )
+      );
+    },
+    { isolationLevel: 'read committed' }
   );
-  return mapSingleRow(result);
+  return result.rows[0] ?? null;
 }
 
 export async function updateMealPlanScheduleForUserAndTenant(

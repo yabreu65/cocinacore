@@ -268,7 +268,7 @@ describe('legacy upsertCulinaryProfile tenant guard', () => {
   });
 
   it('rejects a tenant mismatch when the guarded upsert returns no row', async () => {
-    globalQueryMock.mockResolvedValueOnce(queryResult([]));
+    globalQueryMock.mockResolvedValueOnce(queryResult([])).mockResolvedValueOnce(queryResult([]));
 
     await expect(
       upsertCulinaryProfile({
@@ -282,11 +282,15 @@ describe('legacy upsertCulinaryProfile tenant guard', () => {
       { tenantId: 'tenant-2', userId: 'user-1' },
       expect.any(Function)
     );
-    expect(globalQueryMock).toHaveBeenCalledTimes(1);
-    expect(globalQueryMock.mock.calls[0]?.[0]).toContain(
+    expect(globalQueryMock).toHaveBeenCalledTimes(2);
+    expect(globalQueryMock.mock.calls[0]).toEqual([
+      'select pg_advisory_xact_lock(hashtextextended($1, 0))',
+      ['culinary-profile:tenant-2:user-1'],
+    ]);
+    expect(globalQueryMock.mock.calls[1]?.[0]).toContain(
       'where user_culinary_profiles.tenant_id = excluded.tenant_id'
     );
-    expect(globalQueryMock.mock.calls[0]?.[0]).not.toMatch(
+    expect(globalQueryMock.mock.calls[1]?.[0]).not.toMatch(
       /set\s+tenant_id\s*=\s*excluded\.tenant_id/i
     );
   });
@@ -329,9 +333,14 @@ describe('saveCulinaryProfile transaction boundary', () => {
 
     expect(transactionMock).not.toHaveBeenCalled();
     expect(scopedTransactionMock).not.toHaveBeenCalled();
-    expect(queryCalls).toHaveLength(1);
-    expect(queryCalls[0]?.sql).toContain('insert into public.user_culinary_profiles');
-    expect(queryCalls[0]?.sql).not.toMatch(/set\s+tenant_id\s*=\s*excluded\.tenant_id/i);
+    expect(queryCalls).toHaveLength(2);
+    expect(queryCalls[0]).toEqual({
+      operation: 'execute',
+      sql: 'select pg_advisory_xact_lock(hashtextextended($1, 0))',
+      params: ['culinary-profile:tenant-1:user-1'],
+    });
+    expect(queryCalls[1]?.sql).toContain('insert into public.user_culinary_profiles');
+    expect(queryCalls[1]?.sql).not.toMatch(/set\s+tenant_id\s*=\s*excluded\.tenant_id/i);
   });
 
   it('replaces terms only after locking a profile owned by the requested tenant', async () => {
@@ -341,10 +350,10 @@ describe('saveCulinaryProfile transaction boundary', () => {
       { termId: 'term-1', preferenceType: 'avoid' },
     ]);
 
-    expect(queryCalls[0]?.sql).toContain('for update');
-    expect(queryCalls[0]?.params).toEqual(['user-1', 'tenant-1']);
-    expect(queryCalls[1]?.sql).toContain('delete from public.user_culinary_profile_terms');
-    expect(queryCalls[2]?.sql).toContain('insert into public.user_culinary_profile_terms');
+    expect(queryCalls[1]?.sql).toContain('for update');
+    expect(queryCalls[1]?.params).toEqual(['user-1', 'tenant-1']);
+    expect(queryCalls[2]?.sql).toContain('delete from public.user_culinary_profile_terms');
+    expect(queryCalls[3]?.sql).toContain('insert into public.user_culinary_profile_terms');
     expect(transactionEvents).toEqual(['BEGIN', 'COMMIT']);
   });
 
@@ -355,9 +364,12 @@ describe('saveCulinaryProfile transaction boundary', () => {
       setCulinaryProfileTerms('user-1', 'tenant-2', [{ termId: 'term-1', preferenceType: 'avoid' }])
     ).rejects.toBeInstanceOf(ProfileTenantMismatchError);
 
-    expect(queryCalls).toHaveLength(1);
-    expect(queryCalls[0]?.sql).toContain('where user_id = $1 and tenant_id = $2');
-    expect(executeMock).not.toHaveBeenCalled();
+    expect(queryCalls).toHaveLength(2);
+    expect(queryCalls[1]?.sql).toContain('where user_id = $1 and tenant_id = $2');
+    expect(executeMock).toHaveBeenCalledExactlyOnceWith(
+      'select pg_advisory_xact_lock(hashtextextended($1, 0))',
+      ['culinary-profile:tenant-2:user-1']
+    );
     expect(transactionEvents).toEqual(['BEGIN', 'ROLLBACK']);
   });
 
@@ -373,11 +385,11 @@ describe('saveCulinaryProfile transaction boundary', () => {
       })
     ).rejects.toBeInstanceOf(ProfileTenantMismatchError);
 
-    expect(queryCalls).toHaveLength(1);
-    expect(queryCalls[0]?.sql).toContain(
+    expect(queryCalls).toHaveLength(2);
+    expect(queryCalls[1]?.sql).toContain(
       'where user_culinary_profiles.tenant_id = excluded.tenant_id'
     );
-    expect(queryCalls[0]?.sql).not.toMatch(/set\s+tenant_id\s*=\s*excluded\.tenant_id/i);
+    expect(queryCalls[1]?.sql).not.toMatch(/set\s+tenant_id\s*=\s*excluded\.tenant_id/i);
     expect(globalQueryMock).not.toHaveBeenCalled();
   });
 
@@ -395,7 +407,7 @@ describe('saveCulinaryProfile transaction boundary', () => {
         level: 'Chef',
       })
     ).rejects.toBeInstanceOf(ProfileTenantMismatchError);
-    expect(queryCalls).toHaveLength(1);
+    expect(queryCalls).toHaveLength(2);
   });
 
   it('writes the profile and replacement terms on one transaction client', async () => {
@@ -413,8 +425,8 @@ describe('saveCulinaryProfile transaction boundary', () => {
       { tenantId: 'tenant-1', userId: 'user-1' },
       expect.any(Function)
     );
-    expect(queryCalls).toHaveLength(3);
-    expect(queryCalls[0]?.params).toEqual([
+    expect(queryCalls).toHaveLength(4);
+    expect(queryCalls[1]?.params).toEqual([
       'user-1',
       'tenant-1',
       'Intermedio',
@@ -428,10 +440,10 @@ describe('saveCulinaryProfile transaction boundary', () => {
       false,
       false,
     ]);
-    expect(queryCalls[1]?.sql).toContain('delete from public.user_culinary_profile_terms');
-    expect(queryCalls[1]?.params).toEqual(['user-1', 'tenant-1']);
-    expect(queryCalls[2]?.sql).toContain('insert into public.user_culinary_profile_terms');
-    expect(queryCalls[2]?.params).toEqual(['user-1', 'term-1', 'avoid', 1]);
+    expect(queryCalls[2]?.sql).toContain('delete from public.user_culinary_profile_terms');
+    expect(queryCalls[2]?.params).toEqual(['user-1', 'tenant-1']);
+    expect(queryCalls[3]?.sql).toContain('insert into public.user_culinary_profile_terms');
+    expect(queryCalls[3]?.params).toEqual(['user-1', 'term-1', 'avoid', 1]);
     expect(transactionEvents).toEqual(['BEGIN', 'COMMIT']);
   });
 
@@ -449,9 +461,9 @@ describe('saveCulinaryProfile transaction boundary', () => {
       terms: [{ termId: 'term-1', preferenceType: 'avoid' }],
     });
 
-    expect(queryCalls[0]?.sql).toContain('available_time_minutes');
-    expect(queryCalls[0]?.sql).toContain('disliked_ingredients');
-    expect(queryCalls[0]?.params).toEqual([
+    expect(queryCalls[1]?.sql).toContain('available_time_minutes');
+    expect(queryCalls[1]?.sql).toContain('disliked_ingredients');
+    expect(queryCalls[1]?.params).toEqual([
       'user-1',
       'tenant-1',
       'Chef',
@@ -472,6 +484,7 @@ describe('saveCulinaryProfile transaction boundary', () => {
     profileQueryMock.mockResolvedValueOnce(queryResult([{ ...savedProfile }]));
     executeMock
       .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new Error('term constraint failed'));
 
     await expect(
@@ -484,7 +497,7 @@ describe('saveCulinaryProfile transaction boundary', () => {
     ).rejects.toThrow('term constraint failed');
 
     expect(transactionEvents).toEqual(['BEGIN', 'ROLLBACK']);
-    expect(queryCalls[0]?.params).toEqual([
+    expect(queryCalls[1]?.params).toEqual([
       'user-1',
       'tenant-1',
       'Chef',
@@ -505,9 +518,9 @@ describe('saveCulinaryProfile transaction boundary', () => {
 
     await saveCulinaryProfile({ userId: 'user-1', tenantId: 'tenant-1', level: 'Intermedio' });
 
-    expect(queryCalls).toHaveLength(1);
-    expect(queryCalls[0]?.sql).toContain('on conflict (user_id) do update');
-    expect(queryCalls[0]?.params).toEqual([
+    expect(queryCalls).toHaveLength(2);
+    expect(queryCalls[1]?.sql).toContain('on conflict (user_id) do update');
+    expect(queryCalls[1]?.params).toEqual([
       'user-1',
       'tenant-1',
       'Intermedio',
@@ -537,9 +550,9 @@ describe('saveCulinaryProfile transaction boundary', () => {
       terms: [],
     });
 
-    expect(queryCalls).toHaveLength(2);
-    expect(queryCalls[1]?.sql).toContain('delete from public.user_culinary_profile_terms');
-    expect(queryCalls[1]?.params).toEqual(['user-1', 'tenant-1']);
+    expect(queryCalls).toHaveLength(3);
+    expect(queryCalls[2]?.sql).toContain('delete from public.user_culinary_profile_terms');
+    expect(queryCalls[2]?.params).toEqual(['user-1', 'tenant-1']);
     expect(transactionEvents).toEqual(['BEGIN', 'COMMIT']);
   });
 });
