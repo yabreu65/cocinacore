@@ -1,3 +1,4 @@
+import { lockInventorySourceTenant } from '@/lib/db/inventory-source-lock';
 import { PoolClient } from 'pg';
 import {
   query,
@@ -167,6 +168,8 @@ export async function updateInventoryItem(
   input: Partial<Omit<CreateInventoryItemInput, 'tenantId' | 'userId'>>,
   scope?: AuthenticatedDbScope
 ): Promise<RecipeInventoryItemRow | null> {
+  if (!scope) throw new Error('Updates require authenticated inventory scope.');
+  if (scope.tenantId !== tenantId) throw new Error('Inventory scope mismatch.');
   if ('quantity' in input || 'unit' in input || 'lowStockThreshold' in input)
     throw new Error('Use the audited inventory management transaction.');
   const fields: string[] = [];
@@ -186,7 +189,6 @@ export async function updateInventoryItem(
     values.push(input.expirationDate);
   }
   if (input.priceReference !== undefined) {
-    if (!scope) throw new Error('Price updates require authenticated inventory scope.');
     const validated = validatePriceReference(input.priceReference);
     if (!validated.ok) throw new Error(validated.error);
     const price = validated.price;
@@ -214,8 +216,6 @@ export async function updateInventoryItem(
   }
 
   if (fields.length === 0) {
-    if (!scope) return findInventoryItemById(id, tenantId);
-    if (scope.tenantId !== tenantId) throw new Error('Inventory scope mismatch.');
     return scopedTransaction(scope, async (client) => {
       const result = await client.query<RecipeInventoryItemRow>(
         'select * from public.recipe_inventory_items where id = $1 and tenant_id = $2',
@@ -229,10 +229,11 @@ export async function updateInventoryItem(
   values.push(id, tenantId);
 
   const sql = `update public.recipe_inventory_items set ${fields.join(', ')} where id = $${paramIndex} and tenant_id = $${paramIndex + 1} returning *, ${INVENTORY_ROW_REVISION} as revision`;
-  if (scope && scope.tenantId !== tenantId) throw new Error('Inventory scope mismatch.');
-  const result = scope
-    ? await scopedTransaction(scope, (client) => client.query<RecipeInventoryItemRow>(sql, values))
-    : await query<RecipeInventoryItemRow>(sql, values);
+  const write = async (client: PoolClient) => {
+    await lockInventorySourceTenant(client, tenantId);
+    return client.query<RecipeInventoryItemRow>(sql, values);
+  };
+  const result = await scopedTransaction(scope, write);
   return mapSingleRow(result);
 }
 
@@ -240,27 +241,47 @@ export async function deleteInventoryItem(
   id: string,
   tenantId: string,
   scope?: AuthenticatedDbScope
-): Promise<void> {
-  if (scope && scope.tenantId !== tenantId) throw new Error('Inventory scope mismatch.');
-  if (scope) {
-    await scopedTransaction(scope, (client) =>
-      client.query('delete from public.recipe_inventory_items where id = $1 and tenant_id = $2', [
-        id,
-        tenantId,
-      ])
+): Promise<'deleted' | 'not_found' | 'has_history'> {
+  if (!scope) throw new Error('Deletion requires authenticated inventory scope.');
+  if (scope.tenantId !== tenantId) throw new Error('Inventory scope mismatch.');
+  try {
+    return await scopedTransaction(
+      scope,
+      async (client) => {
+        await lockInventorySourceTenant(client, tenantId);
+        const locked = await client.query<{ id: string }>(
+          'select id from public.recipe_inventory_items where id = $1 and tenant_id = $2 for update',
+          [id, tenantId]
+        );
+        if (!locked.rows.length) return 'not_found';
+        // The inventory movement FK cascades on deletion. Preserve existing audit history.
+        const history = await client.query<{ id: string }>(
+          'select id from public.inventory_movements where inventory_item_id = $1 and tenant_id = $2 limit 1',
+          [id, tenantId]
+        );
+        if (history.rows.length) return 'has_history';
+        const deleted = await client.query<{ id: string }>(
+          `delete from public.recipe_inventory_items where id = $1 and tenant_id = $2
+         and not exists (select 1 from public.inventory_movements m where m.inventory_item_id = $1 and m.tenant_id = $2)
+         returning id`,
+          [id, tenantId]
+        );
+        return deleted.rows.length === 1 ? 'deleted' : 'not_found';
+      },
+      { isolationLevel: 'read committed' }
     );
-    return;
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === '23503')
+      return 'has_history';
+    throw error;
   }
-  await query('delete from public.recipe_inventory_items where id = $1 and tenant_id = $2', [
-    id,
-    tenantId,
-  ]);
 }
 
 export async function createInventoryItemInTransaction(
   client: PoolClient,
   input: CreateInventoryItemInput
 ): Promise<RecipeInventoryItemRow> {
+  await lockInventorySourceTenant(client, input.tenantId);
   const price =
     input.priceReference === undefined ? undefined : validatePriceReference(input.priceReference);
   if (price && !price.ok) throw new Error(price.error);

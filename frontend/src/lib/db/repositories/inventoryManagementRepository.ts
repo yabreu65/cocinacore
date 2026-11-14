@@ -1,3 +1,4 @@
+import { lockInventorySourceTenant } from '@/lib/db/inventory-source-lock';
 import { scopedTransaction, type AuthenticatedDbScope } from '@/lib/db';
 import type { RecipeInventoryItemRow } from '@/lib/db/types';
 import { INVENTORY_ROW_REVISION } from './inventoryRepository';
@@ -22,6 +23,7 @@ export async function manageInventoryItem(
   if (!parsed.success) return { status: 'invalid', error: 'Solicitud de inventario inválida.' };
   const request = parsed.data;
   return scopedTransaction(scope, async (client) => {
+    await lockInventorySourceTenant(client, scope.tenantId);
     const locked = await client.query<RecipeInventoryItemRow>(
       `select *, ${INVENTORY_ROW_REVISION} as revision from public.recipe_inventory_items where id=$1 and tenant_id=$2 for update`,
       [request.id, scope.tenantId]

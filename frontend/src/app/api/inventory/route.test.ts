@@ -234,15 +234,61 @@ describe('authenticated inventory scope', () => {
     expect(createInventoryItemMock).not.toHaveBeenCalled();
   });
   it('DELETE uses server actor and tenant', async () => {
+    deleteInventoryItemMock.mockResolvedValue('deleted');
     const req = new NextRequest(
-      'http://localhost/api/inventory?id=item-1&tenantId=other&userId=attacker',
+      'http://localhost/api/inventory?id=01234567-89ab-4cde-8fab-0123456789ab&tenantId=other&userId=attacker',
       { method: 'DELETE' }
     );
     expect((await DELETE(req)).status).toBe(200);
-    expect(deleteInventoryItemMock).toHaveBeenCalledWith('item-1', 'tenant-1', {
-      tenantId: 'tenant-1',
-      userId: 'user-1',
-    });
+    expect(deleteInventoryItemMock).toHaveBeenCalledWith(
+      '01234567-89ab-4cde-8fab-0123456789ab',
+      'tenant-1',
+      {
+        tenantId: 'tenant-1',
+        userId: 'user-1',
+      }
+    );
+  });
+  it.each([
+    ['has_history', 409],
+    ['not_found', 404],
+  ] as const)('DELETE maps repository outcome %s to %s', async (outcome, status) => {
+    deleteInventoryItemMock.mockResolvedValue(outcome);
+    const response = await DELETE(
+      new NextRequest('http://localhost/api/inventory?id=01234567-89ab-4cde-8fab-0123456789ab', {
+        method: 'DELETE',
+      })
+    );
+    expect(response.status).toBe(status);
+  });
+
+  it.each([
+    '',
+    '?id=',
+    '?id=abc',
+    '?id=01234567-89ab-4cde-8fab-0123456789ag',
+    '?id=01234567-89ab-4cde-8fab-0123456789ab%0A',
+    '?id=01234567-89ab-4cde-8fab-0123456789ab&id=01234567-89ab-4cde-8fab-0123456789ab',
+    '?id=0123456789ab4cde8fab0123456789ab',
+  ])(
+    'DELETE rejects malformed or ambiguous identifiers %s without repository access',
+    async (query) => {
+      const response = await DELETE(
+        new NextRequest('http://localhost/api/inventory' + query, { method: 'DELETE' })
+      );
+      expect(response.status).toBe(400);
+      expect(deleteInventoryItemMock).not.toHaveBeenCalled();
+    }
+  );
+  it('DELETE rejects missing tenant without repository access', async () => {
+    requireUserMock.mockResolvedValueOnce({ id: 'user-1', tenant: null });
+    const response = await DELETE(
+      new NextRequest('http://localhost/api/inventory?id=01234567-89ab-4cde-8fab-0123456789ab', {
+        method: 'DELETE',
+      })
+    );
+    expect(response.status).toBe(403);
+    expect(deleteInventoryItemMock).not.toHaveBeenCalled();
   });
   it('denies session without tenant before reading data', async () => {
     requireUserMock.mockResolvedValueOnce({ id: 'user-1', tenant: null });

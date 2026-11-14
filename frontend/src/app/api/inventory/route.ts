@@ -17,6 +17,8 @@ import {
   normalizeInventoryName,
 } from '@/lib/inventory/normalize-inventory';
 
+const INVENTORY_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 interface InventoryItemBody {
   id?: string;
   ingredientName?: string;
@@ -174,7 +176,8 @@ export async function PATCH(request: NextRequest) {
     Object.keys(body).length !== 2 ||
     !('id' in body) ||
     typeof body.id !== 'string' ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.id) ||
+    body.id.length !== 36 ||
+    !INVENTORY_ID.test(body.id) ||
     !('priceReference' in body)
   ) {
     return NextResponse.json({ error: 'Solicitud de precio inválida.' }, { status: 400 });
@@ -206,13 +209,25 @@ export async function DELETE(request: NextRequest) {
     }
     throw error;
   }
-  if (!user.tenant) throw new Error('Tenant context required');
+  if (!user.tenant) return NextResponse.json({ error: 'Tenant context required' }, { status: 403 });
   const tenant = user.tenant;
-  const id = request.nextUrl.searchParams.get('id');
-  if (!id) {
-    return NextResponse.json({ error: 'ID is required' }, { status: 400 });
+  const ids = request.nextUrl.searchParams.getAll('id');
+  const id = ids[0];
+  if (ids.length !== 1 || !id || id.length !== 36 || !INVENTORY_ID.test(id)) {
+    return NextResponse.json({ error: 'ID de inventario inválido.' }, { status: 400 });
   }
 
-  await deleteInventoryItem(id, tenant.tenantId, { tenantId: tenant.tenantId, userId: user.id });
+  const result = await deleteInventoryItem(id, tenant.tenantId, {
+    tenantId: tenant.tenantId,
+    userId: user.id,
+  });
+  if (result === 'has_history')
+    return NextResponse.json(
+      { error: 'No se puede eliminar un ingrediente con historial de movimientos.' },
+      { status: 409 }
+    );
+  if (result === 'not_found')
+    return NextResponse.json({ error: 'Ingrediente no encontrado.' }, { status: 404 });
+  if (result !== 'deleted') throw new Error('Unexpected inventory deletion result');
   return NextResponse.json({ ok: true });
 }

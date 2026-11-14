@@ -176,7 +176,7 @@ describe.skipIf(!enabled)('provisioned runtime PostgreSQL access', () => {
         command: { kind: 'convert', unit: 'g' },
       })
     ).toMatchObject({ status: 'updated', item: { quantity: '2000', unit: 'g' } });
-    await deleteInventoryItem(inventory.id, tenantId);
+    expect(await deleteInventoryItem(inventory.id, tenantId, scope)).toBe('deleted');
     expect(await findInventoryItemById(inventory.id, tenantId)).toBeNull();
 
     const shoppingItem = await createShoppingListItem({
