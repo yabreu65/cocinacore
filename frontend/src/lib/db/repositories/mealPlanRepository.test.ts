@@ -71,7 +71,7 @@ function expectedStoredContent(plan: StructuredMealPlan): string {
 function mealPlanRow(overrides: Partial<UserMealPlanRow> = {}): UserMealPlanRow {
   return {
     id: 'meal-plan-1',
-    tenant_id: 'tenant-1',
+    tenant_id: '00000000-0000-4000-8000-000000000001',
     user_id: 'user-1',
     people_count: 4,
     period: 'week',
@@ -91,15 +91,29 @@ function mealPlanRow(overrides: Partial<UserMealPlanRow> = {}): UserMealPlanRow 
   };
 }
 
+const tenantId = '00000000-0000-4000-8000-000000000001';
+const tenantLockSql = 'select pg_advisory_xact_lock(hashtextextended($1, 0))';
+const tenantLockKey = 'cocinacore:inventory-source:v1:' + tenantId;
+const tenantLockMock = vi.fn();
+function instrumentClient(client: { query: typeof queryMock }): { query: typeof queryMock } {
+  return {
+    query: ((sql: string, params: unknown[]): unknown => {
+      if (sql === tenantLockSql && params[0] === tenantLockKey) return tenantLockMock(sql, params);
+      return client.query(sql, params);
+    }) as unknown as typeof queryMock,
+  };
+}
+
 describe('mealPlanRepository', () => {
   beforeEach(() => {
     queryMock.mockReset();
+    tenantLockMock.mockReset().mockResolvedValue({ rows: [] });
     transactionMock.mockReset();
     scopedMock
       .mockReset()
       .mockImplementation(
         async (_scope: unknown, callback: (client: { query: typeof queryMock }) => unknown) =>
-          callback({ query: queryMock })
+          callback(instrumentClient({ query: queryMock }))
       );
   });
 
@@ -108,7 +122,7 @@ describe('mealPlanRepository', () => {
     queryMock.mockResolvedValue({ rows: [mealPlanRow({ calendar_payload: plan })] });
 
     const created = await createMealPlan({
-      tenantId: 'tenant-1',
+      tenantId: '00000000-0000-4000-8000-000000000001',
       userId: 'user-1',
       peopleCount: 4,
       period: 'week',
@@ -121,9 +135,13 @@ describe('mealPlanRepository', () => {
       structuredPlan: plan,
     });
 
+    expect(tenantLockMock).toHaveBeenCalledWith(tenantLockSql, [tenantLockKey]);
+    expect(tenantLockMock.mock.invocationCallOrder[0]).toBeLessThan(
+      queryMock.mock.invocationCallOrder[0]
+    );
     expect(created).toEqual(mealPlanRow({ calendar_payload: plan }));
     expect(scopedMock).toHaveBeenCalledWith(
-      { tenantId: 'tenant-1', userId: 'user-1' },
+      { tenantId: '00000000-0000-4000-8000-000000000001', userId: 'user-1' },
       expect.any(Function)
     );
     expect(transactionMock).not.toHaveBeenCalled();
@@ -135,7 +153,7 @@ describe('mealPlanRepository', () => {
     expect(sql).toContain('calendar_payload');
     expect(sql).toContain('ai_content');
     expect(params).toEqual([
-      'tenant-1',
+      '00000000-0000-4000-8000-000000000001',
       'user-1',
       4,
       'week',
@@ -155,24 +173,29 @@ describe('mealPlanRepository', () => {
     queryMock.mockResolvedValue({ rows: [row] });
 
     await expect(
-      findMealPlanByIdForUserAndTenant('meal-plan-1', 'user-1', 'tenant-1')
+      findMealPlanByIdForUserAndTenant(
+        'meal-plan-1',
+        'user-1',
+        '00000000-0000-4000-8000-000000000001'
+      )
     ).resolves.toEqual(row);
 
     expect(scopedMock).toHaveBeenCalledWith(
-      { tenantId: 'tenant-1', userId: 'user-1' },
+      { tenantId: '00000000-0000-4000-8000-000000000001', userId: 'user-1' },
       expect.any(Function)
     );
     const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
     expect(sql).toMatch(/where id = \$1 and tenant_id = \$2 and user_id = \$3/);
-    expect(params).toEqual(['meal-plan-1', 'tenant-1', 'user-1']);
+    expect(params).toEqual(['meal-plan-1', '00000000-0000-4000-8000-000000000001', 'user-1']);
   });
 
   it('adds confirmed schedule metadata without replacing the persisted plan JSON', async () => {
     const plan = structuredPlan();
     const schedule = {
-      startDate: '2026-10-26',
+      startDate: '2099-10-26',
       timeZone: 'America/Argentina/Buenos_Aires',
       confirmedAt: '2026-10-25T12:00:00.000Z',
+      portionConfirmation: { peopleCount: 4, confirmedAt: '2026-10-25T12:00:00.000Z' },
     };
     const updatedRow = mealPlanRow({ calendar_payload: { ...plan, schedule } });
     queryMock.mockResolvedValue({ rows: [updatedRow] });
@@ -180,8 +203,12 @@ describe('mealPlanRepository', () => {
     const updated = await updateMealPlanScheduleForUserAndTenant({
       mealPlanId: 'meal-plan-1',
       userId: 'user-1',
-      tenantId: 'tenant-1',
+      tenantId: '00000000-0000-4000-8000-000000000001',
       schedule,
+      expectedUpdatedAt: updatedRow.updated_at,
+      expectedCalendarPayload: plan,
+      expectedPeopleCount: 4,
+      expectedPeriod: 'week',
     });
 
     expect(updated).toEqual(updatedRow);
@@ -189,7 +216,21 @@ describe('mealPlanRepository', () => {
     const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain("jsonb_set(calendar_payload, '{schedule}', $1::jsonb, true)");
     expect(sql).toMatch(/where id = \$2 and tenant_id = \$3 and user_id = \$4/);
-    expect(params).toEqual([JSON.stringify(schedule), 'meal-plan-1', 'tenant-1', 'user-1']);
+    expect(params).toEqual([
+      JSON.stringify(schedule),
+      'meal-plan-1',
+      tenantId,
+      'user-1',
+      updatedRow.updated_at,
+      JSON.stringify(plan),
+      4,
+      'week',
+    ]);
+    expect(sql).toContain('and updated_at = $5::timestamptz and calendar_payload = $6::jsonb');
+    expect(sql).toContain('and people_count = $7 and period = $8');
+    expect(tenantLockMock.mock.invocationCallOrder[0]).toBeLessThan(
+      queryMock.mock.invocationCallOrder[0]
+    );
   });
 
   it('throws a controlled error when an insert returns no row', async () => {
@@ -197,7 +238,7 @@ describe('mealPlanRepository', () => {
 
     await expect(
       createMealPlan({
-        tenantId: 'tenant-1',
+        tenantId: '00000000-0000-4000-8000-000000000001',
         userId: 'user-1',
         peopleCount: 4,
         period: 'week',
@@ -216,20 +257,22 @@ describe('mealPlanRepository', () => {
     const row = mealPlanRow();
     queryMock.mockResolvedValue({ rows: [row] });
 
-    await expect(findLatestMealPlanByUserAndTenant('user-1', 'tenant-1')).resolves.toEqual(row);
+    await expect(
+      findLatestMealPlanByUserAndTenant('user-1', '00000000-0000-4000-8000-000000000001')
+    ).resolves.toEqual(row);
 
     const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
     expect(sql).toMatch(/where tenant_id = \$1 and user_id = \$2/);
     expect(sql).toMatch(/order by created_at desc, id desc/);
     expect(sql).toMatch(/limit 1/);
-    expect(params).toEqual(['tenant-1', 'user-1']);
+    expect(params).toEqual(['00000000-0000-4000-8000-000000000001', 'user-1']);
   });
 
   function adaptiveInput(plan = structuredPlan()) {
     return {
       mealPlanId: 'meal-plan-1',
       userId: 'user-1',
-      tenantId: 'tenant-1',
+      tenantId: '00000000-0000-4000-8000-000000000001',
       expectedUpdatedAt: '2026-01-01T00:00:00.000Z',
       expectedCalendarPayload: plan,
       structuredPlan: plan,
@@ -238,7 +281,7 @@ describe('mealPlanRepository', () => {
 
   const profile = {
     user_id: 'user-1',
-    tenant_id: 'tenant-1',
+    tenant_id: '00000000-0000-4000-8000-000000000001',
     allergies: [],
   };
 
@@ -266,21 +309,24 @@ describe('mealPlanRepository', () => {
       updatedRow
     );
     expect(scopedMock).toHaveBeenCalledWith(
-      { tenantId: 'tenant-1', userId: 'user-1' },
+      { tenantId: '00000000-0000-4000-8000-000000000001', userId: 'user-1' },
       expect.any(Function),
       { isolationLevel: 'read committed' }
+    );
+    expect(tenantLockMock.mock.invocationCallOrder[0]).toBeLessThan(
+      queryMock.mock.invocationCallOrder[0]
     );
     expect(queryMock).toHaveBeenCalledTimes(5);
     expect(queryMock.mock.calls[0]).toEqual([
       'select pg_advisory_xact_lock(hashtextextended($1, 0))',
-      ['culinary-profile:tenant-1:user-1'],
+      ['culinary-profile:00000000-0000-4000-8000-000000000001:user-1'],
     ]);
     const [readSql, readParams] = queryMock.mock.calls[1] as [string, unknown[]];
     expect(readSql).toContain('for update');
     expect(readSql).toContain('and updated_at = $4::timestamptz and calendar_payload = $5::jsonb');
     expect(readParams).toEqual([
       'meal-plan-1',
-      'tenant-1',
+      '00000000-0000-4000-8000-000000000001',
       'user-1',
       '2026-01-01T00:00:00.000Z',
       JSON.stringify(plan),
@@ -295,7 +341,7 @@ describe('mealPlanRepository', () => {
       JSON.stringify(plan),
       expectedStoredContent(plan),
       'meal-plan-1',
-      'tenant-1',
+      '00000000-0000-4000-8000-000000000001',
       'user-1',
       '2026-01-01T00:00:00.000Z',
       JSON.stringify(plan),
@@ -390,7 +436,8 @@ describe('mealPlanRepository', () => {
     });
     const client = { query: vi.fn() };
     scopedMock.mockImplementation(
-      async (_scope: unknown, callback: (value: typeof client) => unknown) => callback(client)
+      async (_scope: unknown, callback: (value: typeof client) => unknown) =>
+        callback(instrumentClient(client))
     );
     client.query
       .mockResolvedValueOnce({ rows: [current] })
@@ -403,7 +450,7 @@ describe('mealPlanRepository', () => {
       attachRecipeToMealPlanSlot({
         mealPlanId: 'meal-plan-1',
         userId: 'user-1',
-        tenantId: 'tenant-1',
+        tenantId: '00000000-0000-4000-8000-000000000001',
         dayIndex: 1,
         mealType: 'lunch',
         recipeId: 'recipe-1',
@@ -412,13 +459,29 @@ describe('mealPlanRepository', () => {
         expectedCalendarPayload: current.calendar_payload,
       })
     ).resolves.toMatchObject({ status: 'applied', recipeId: 'recipe-1', versionId: 'version-1' });
+    expect(tenantLockMock.mock.invocationCallOrder[0]).toBeLessThan(
+      client.query.mock.invocationCallOrder[0]
+    );
     expect(client.query).toHaveBeenCalledTimes(5);
-    expect(client.query.mock.calls[0][1]).toEqual(['meal-plan-1', 'tenant-1', 'user-1']);
-    expect(client.query.mock.calls[1][1]).toEqual(['recipe-1', 'tenant-1', 'user-1']);
-    expect(client.query.mock.calls[2][1]).toEqual(['version-1', 'recipe-1', 'tenant-1', 'user-1']);
+    expect(client.query.mock.calls[0][1]).toEqual([
+      'meal-plan-1',
+      '00000000-0000-4000-8000-000000000001',
+      'user-1',
+    ]);
+    expect(client.query.mock.calls[1][1]).toEqual([
+      'recipe-1',
+      '00000000-0000-4000-8000-000000000001',
+      'user-1',
+    ]);
+    expect(client.query.mock.calls[2][1]).toEqual([
+      'version-1',
+      'recipe-1',
+      '00000000-0000-4000-8000-000000000001',
+      'user-1',
+    ]);
     expect(client.query.mock.calls[3][1]).toEqual([
       'meal-plan-1',
-      'tenant-1',
+      '00000000-0000-4000-8000-000000000001',
       'user-1',
       current.updated_at,
       JSON.stringify(current.calendar_payload),
@@ -439,7 +502,8 @@ describe('mealPlanRepository', () => {
     });
     const client = { query: vi.fn() };
     scopedMock.mockImplementation(
-      async (_scope: unknown, callback: (value: typeof client) => unknown) => callback(client)
+      async (_scope: unknown, callback: (value: typeof client) => unknown) =>
+        callback(instrumentClient(client))
     );
     client.query
       .mockResolvedValueOnce({ rows: [current] })
@@ -451,7 +515,7 @@ describe('mealPlanRepository', () => {
       attachRecipeToMealPlanSlot({
         mealPlanId: 'meal-plan-1',
         userId: 'user-1',
-        tenantId: 'tenant-1',
+        tenantId: '00000000-0000-4000-8000-000000000001',
         dayIndex: 1,
         mealType: 'lunch',
         recipeId: 'recipe-1',
@@ -462,6 +526,77 @@ describe('mealPlanRepository', () => {
     ).resolves.toEqual({ status: 'conflict' });
     expect(client.query).toHaveBeenCalledTimes(4);
   });
+  it.each(['create', 'attach', 'adaptive', 'schedule'] as const)(
+    'does not access business rows when tenant lock fails for %s',
+    async (writer) => {
+      tenantLockMock.mockRejectedValueOnce(new Error('tenant lock failed'));
+      const common = { tenantId, userId: 'user-1' };
+      const input = adaptiveInput();
+      const writers = {
+        create: () =>
+          createMealPlan({
+            ...common,
+            peopleCount: 4,
+            period: 'week',
+            mode: 'inventory_to_menu',
+            baseCuisine: 'Latinoamericana',
+            fusionCuisines: [],
+            fusionIntensity: 'media',
+            restrictions: [],
+            inventorySnapshot: { inventoryLines: [] },
+            structuredPlan: structuredPlan(),
+          }),
+        attach: () =>
+          attachRecipeToMealPlanSlot({
+            ...input,
+            dayIndex: 1,
+            mealType: 'lunch',
+            recipeId: 'recipe-1',
+            versionId: 'version-1',
+          }),
+        adaptive: () => replaceMealPlanForAdaptiveProposal(input),
+        schedule: () =>
+          updateMealPlanScheduleForUserAndTenant({
+            ...input,
+            expectedPeopleCount: 4,
+            expectedPeriod: 'week',
+            schedule: {
+              startDate: '2099-10-26',
+              timeZone: 'UTC',
+              confirmedAt: '2026-10-25T12:00:00.000Z',
+              portionConfirmation: { peopleCount: 4, confirmedAt: '2026-10-25T12:00:00.000Z' },
+            },
+          }),
+      };
+      await expect(writers[writer]()).rejects.toThrow('tenant lock failed');
+      expect(tenantLockMock).toHaveBeenCalledOnce();
+      expect(queryMock).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['stale', 'wrong people', 'past', 'malformed timestamp'] as const)(
+    'rejects schedule %s without applying a stale confirmation',
+    async (kind) => {
+      const plan = structuredPlan();
+      const input = {
+        ...adaptiveInput(plan),
+        expectedPeopleCount: 4,
+        expectedPeriod: 'week' as const,
+        schedule: {
+          startDate: '2099-10-26',
+          timeZone: 'UTC',
+          confirmedAt: '2026-10-25T12:00:00.000Z',
+          portionConfirmation: { peopleCount: 4, confirmedAt: '2026-10-25T12:00:00.000Z' },
+        },
+      };
+      if (kind === 'wrong people') input.schedule.portionConfirmation.peopleCount = 2;
+      if (kind === 'past') input.schedule.startDate = '2000-01-01';
+      if (kind === 'malformed timestamp') input.expectedUpdatedAt = 'not a timestamp';
+      queryMock.mockResolvedValue({ rows: [] });
+      await expect(updateMealPlanScheduleForUserAndTenant(input)).resolves.toBeNull();
+      expect(queryMock).toHaveBeenCalledTimes(kind === 'stale' ? 1 : 0);
+    }
+  );
 });
 
 it('executes scoped plan read on the supplied transaction client', async () => {
@@ -470,16 +605,16 @@ it('executes scoped plan read on the supplied transaction client', async () => {
     async (
       _scope: unknown,
       callback: (connection: typeof client) => Promise<unknown>
-    ): Promise<unknown> => callback(client)
+    ): Promise<unknown> => callback(instrumentClient(client))
   );
-  const scope = { tenantId: 'tenant-1', userId: 'user-1' };
+  const scope = { tenantId: '00000000-0000-4000-8000-000000000001', userId: 'user-1' };
   await expect(
     findMealPlanByIdForUserAndTenant('plan', scope.userId, scope.tenantId, scope)
   ).resolves.toEqual({ id: 'plan' });
   expect(scopedMock).toHaveBeenCalledWith(scope, expect.any(Function));
   expect(client.query).toHaveBeenCalledWith(
     expect.stringContaining('tenant_id = $2 and user_id = $3'),
-    ['plan', 'tenant-1', 'user-1']
+    ['plan', '00000000-0000-4000-8000-000000000001', 'user-1']
   );
   await expect(
     findMealPlanByIdForUserAndTenant('plan', 'other', scope.tenantId, scope)
