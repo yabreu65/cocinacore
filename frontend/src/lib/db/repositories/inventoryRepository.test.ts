@@ -14,8 +14,14 @@ const { listTodayInventoryContextByTenant, listWastePreventionInventoryByTenant 
   await import('./inventoryRepository');
 
 it('creates inventory on the scoped transaction client with actor and tenant', async () => {
-  const { createInventoryItem } = await import('./inventoryRepository');
-  const client = { query: vi.fn().mockResolvedValue({ rows: [{ id: 'item-1' }] }) };
+  const { createInventoryItem, INVENTORY_ROW_REVISION } = await import('./inventoryRepository');
+  const row = { id: 'item-1', revision: '123:1794520000.123456' };
+  const client = {
+    query: vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [row] }),
+  };
   scopedTransactionMock.mockImplementation(
     async (
       _scope: unknown,
@@ -27,12 +33,15 @@ it('creates inventory on the scoped transaction client with actor and tenant', a
     userId: 'user-1',
     ingredientName: 'Rice',
   };
-  await expect(createInventoryItem(input)).resolves.toEqual({ id: 'item-1' });
+  await expect(createInventoryItem(input)).resolves.toEqual(row);
   expect(scopedTransactionMock).toHaveBeenCalledWith(
     { tenantId: input.tenantId, userId: input.userId },
     expect.any(Function)
   );
   expect(client.query).toHaveBeenNthCalledWith(1, lockSql, lockParams);
+  expect(client.query.mock.calls[1][0]).toContain(
+    `returning *, ${INVENTORY_ROW_REVISION} as revision`
+  );
   expect(client.query).toHaveBeenNthCalledWith(
     2,
     expect.stringContaining('insert into public.recipe_inventory_items'),
@@ -53,13 +62,21 @@ describe('listTodayInventoryContextByTenant', () => {
         expiration_date: '2025-04-12',
       },
     ];
-    queryMock.mockResolvedValue({ rows });
+    const client = { query: vi.fn().mockResolvedValue({ rows }) };
+    scopedTransactionMock
+      .mockReset()
+      .mockImplementation(
+        async (_scope: unknown, callback: (connection: typeof client) => Promise<unknown>) =>
+          callback(client)
+      );
+    const scope = { tenantId: '00000000-0000-4000-8000-000000000001', userId: 'user-1' };
     const result = await listTodayInventoryContextByTenant(
       '00000000-0000-4000-8000-000000000001',
       '2025-04-10',
-      500
+      500,
+      scope
     );
-    const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
+    const [sql, params] = client.query.mock.calls[0] as [string, unknown[]];
     expect(sql).toMatch(
       /select\s+tenant_id,\s*ingredient_name,\s*quantity,\s*unit,\s*expiration_date/i
     );
@@ -121,13 +138,21 @@ describe('listTodayInventoryContextByTenant', () => {
   });
 
   it('bounds small and invalid limits to a positive maximum-safe value', async () => {
-    queryMock.mockResolvedValue({ rows: [] });
+    const client = { query: vi.fn().mockResolvedValue({ rows: [] }) };
+    scopedTransactionMock
+      .mockReset()
+      .mockImplementation(
+        async (_scope: unknown, callback: (connection: typeof client) => Promise<unknown>) =>
+          callback(client)
+      );
+    const scope = { tenantId: '00000000-0000-4000-8000-000000000001', userId: 'user-1' };
     await listTodayInventoryContextByTenant(
       '00000000-0000-4000-8000-000000000001',
       '2025-04-10',
-      0
+      0,
+      scope
     );
-    expect((queryMock.mock.calls[0] as [string, unknown[]])[1][2]).toBe(1);
+    expect((client.query.mock.calls[0] as [string, unknown[]])[1][2]).toBe(1);
   });
 });
 
@@ -154,14 +179,22 @@ describe('listWastePreventionInventoryByTenant', () => {
         updated_at: '2026-10-20T00:00:00.000Z',
       },
     ];
-    queryMock.mockResolvedValue({ rows });
+    const client = { query: vi.fn().mockResolvedValue({ rows }) };
+    scopedTransactionMock
+      .mockReset()
+      .mockImplementation(
+        async (_scope: unknown, callback: (connection: typeof client) => Promise<unknown>) =>
+          callback(client)
+      );
+    const scope = { tenantId: '00000000-0000-4000-8000-000000000001', userId: 'user-1' };
 
     const result = await listWastePreventionInventoryByTenant(
       '00000000-0000-4000-8000-000000000001',
-      500
+      500,
+      scope
     );
 
-    const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
+    const [sql, params] = client.query.mock.calls[0] as [string, unknown[]];
     expect(result).toEqual(rows);
     expect(sql).toContain('tenant_id = $1');
     expect(sql).toMatch(/order by expiration_date asc nulls last, created_at asc, id asc/i);
@@ -200,11 +233,18 @@ describe('listWastePreventionInventoryByTenant', () => {
   });
 
   it('keeps the read limit positive and bounded', async () => {
-    queryMock.mockResolvedValue({ rows: [] });
+    const client = { query: vi.fn().mockResolvedValue({ rows: [] }) };
+    scopedTransactionMock
+      .mockReset()
+      .mockImplementation(
+        async (_scope: unknown, callback: (connection: typeof client) => Promise<unknown>) =>
+          callback(client)
+      );
+    const scope = { tenantId: '00000000-0000-4000-8000-000000000001', userId: 'user-1' };
 
-    await listWastePreventionInventoryByTenant('00000000-0000-4000-8000-000000000001', 0);
+    await listWastePreventionInventoryByTenant('00000000-0000-4000-8000-000000000001', 0, scope);
 
-    expect((queryMock.mock.calls[0] as [string, unknown[]])[1][1]).toBe(2);
+    expect((client.query.mock.calls[0] as [string, unknown[]])[1][1]).toBe(2);
   });
 });
 
@@ -296,7 +336,8 @@ it('applies Chef Instructor timeouts and options on the scoped inventory client'
 });
 
 it('persists all price columns atomically and preserves omitted fields', async () => {
-  const { createInventoryItem, updateInventoryItem } = await import('./inventoryRepository');
+  const { createInventoryItem, updateInventoryItem, INVENTORY_ROW_REVISION } =
+    await import('./inventoryRepository');
   const client = { query: vi.fn().mockResolvedValue({ rows: [{ id: 'item-1' }] }) };
   scopedTransactionMock
     .mockReset()
@@ -312,6 +353,9 @@ it('persists all price columns atomically and preserves omitted fields', async (
     referenceUnit: 'kg',
   } as const;
   await createInventoryItem({ ...scope, ingredientName: 'Arroz', priceReference });
+  expect(client.query.mock.calls[1][0]).toContain(
+    `returning *, ${INVENTORY_ROW_REVISION} as revision`
+  );
   expect(client.query.mock.calls[1][0]).toContain(
     'price_currency, price_reference_quantity, price_reference_unit'
   );
@@ -348,9 +392,9 @@ it('persists all price columns atomically and preserves omitted fields', async (
   expect(client.query.mock.calls[5][0]).not.toMatch(
     /estimated_unit_price|price_currency|price_reference/
   );
-  await expect(updateInventoryItem('item-1', scope.tenantId, { priceReference })).rejects.toThrow(
-    'authenticated inventory scope'
-  );
+  await expect(
+    updateInventoryItem('item-1', scope.tenantId, { priceReference }, undefined as never)
+  ).rejects.toThrow('authenticated inventory scope');
   await expect(updateInventoryItem('item-1', 'other', { priceReference }, scope)).rejects.toThrow(
     'Inventory scope mismatch'
   );
@@ -372,10 +416,10 @@ it('rejects writes without authenticated scope before any database access', asyn
   scopedTransactionMock.mockClear();
   queryMock.mockClear();
   const tenantId = '00000000-0000-4000-8000-000000000001';
-  await expect(updateInventoryItem('item-1', tenantId, { notes: 'note' })).rejects.toThrow(
-    'authenticated inventory scope'
-  );
-  await expect(deleteInventoryItem('item-1', tenantId)).rejects.toThrow(
+  await expect(
+    updateInventoryItem('item-1', tenantId, { notes: 'note' }, undefined as never)
+  ).rejects.toThrow('authenticated inventory scope');
+  await expect(deleteInventoryItem('item-1', tenantId, undefined as never)).rejects.toThrow(
     'authenticated inventory scope'
   );
   expect(scopedTransactionMock).not.toHaveBeenCalled();
@@ -443,5 +487,70 @@ it.each(['create', 'update', 'delete'] as const)(
     };
     await expect(actions[operation]()).rejects.toThrow('lock failed');
     expect(client.query).toHaveBeenCalledExactlyOnceWith(lockSql, lockParams);
+  }
+);
+
+it('reads a single item with its exact revision through authenticated scope', async () => {
+  const { findInventoryItemById, updateInventoryItem, INVENTORY_ROW_REVISION } =
+    await import('./inventoryRepository');
+  const scope = { tenantId: '00000000-0000-4000-8000-000000000001', userId: 'user-1' };
+  const row = { id: 'item-1', revision: '123:1794520000.123456' };
+  const client = {
+    query: vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [row] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [row] }),
+  };
+  scopedTransactionMock
+    .mockReset()
+    .mockImplementation(
+      async (_scope: unknown, callback: (connection: typeof client) => Promise<unknown>) =>
+        callback(client)
+    );
+  queryMock.mockClear();
+  expect(await findInventoryItemById('item-1', scope.tenantId, scope)).toEqual(row);
+  expect(await findInventoryItemById('missing', scope.tenantId, scope)).toBeNull();
+  expect(await updateInventoryItem('item-1', scope.tenantId, {}, scope)).toEqual(row);
+  expect(client.query).toHaveBeenNthCalledWith(
+    1,
+    expect.stringContaining(`select *, ${INVENTORY_ROW_REVISION} as revision`),
+    ['item-1', scope.tenantId]
+  );
+  expect(client.query).toHaveBeenNthCalledWith(
+    3,
+    expect.stringContaining(`select *, ${INVENTORY_ROW_REVISION} as revision`),
+    ['item-1', scope.tenantId]
+  );
+  expect(scopedTransactionMock).toHaveBeenCalledTimes(3);
+  expect(queryMock).not.toHaveBeenCalled();
+});
+
+it.each(['find', 'list', 'today', 'waste'] as const)(
+  'rejects missing or mismatched scope for %s before database access',
+  async (operation) => {
+    const {
+      findInventoryItemById,
+      listInventoryItemsByTenant,
+      listTodayInventoryContextByTenant,
+      listWastePreventionInventoryByTenant,
+    } = await import('./inventoryRepository');
+    const tenantId = '00000000-0000-4000-8000-000000000001';
+    const foreign = { tenantId: '00000000-0000-4000-8000-000000000002', userId: 'user-2' };
+    scopedTransactionMock.mockClear();
+    queryMock.mockClear();
+    for (const scope of [undefined as never, foreign]) {
+      const actions = {
+        find: () => findInventoryItemById('item-1', tenantId, scope),
+        list: () => listInventoryItemsByTenant(tenantId, 501, undefined, {}, scope),
+        today: () => listTodayInventoryContextByTenant(tenantId, '2026-11-14', 50, scope),
+        waste: () => listWastePreventionInventoryByTenant(tenantId, 100, scope),
+      };
+      await expect(actions[operation]()).rejects.toThrow(
+        scope ? 'Inventory scope mismatch' : 'authenticated inventory scope'
+      );
+    }
+    expect(scopedTransactionMock).not.toHaveBeenCalled();
+    expect(queryMock).not.toHaveBeenCalled();
   }
 );

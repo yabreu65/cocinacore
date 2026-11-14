@@ -164,20 +164,21 @@ describe.skipIf(!enabled)('provisioned runtime PostgreSQL access', () => {
       quantity: '2',
       unit: 'kg',
     });
-    expect((await findInventoryItemById(inventory.id, tenantId))?.id).toBe(inventory.id);
     const scope = { tenantId, userId };
+    expect((await findInventoryItemById(inventory.id, tenantId, scope))?.id).toBe(inventory.id);
     const current = (await listInventoryItemsScoped(scope)).find((row) => row.id === inventory.id);
-    if (!current?.revision) throw new Error('Missing inventory revision');
+    if (!inventory.revision) throw new Error('Missing created inventory revision');
+    expect(current?.revision).toBe(inventory.revision);
     expect(
       await manageInventoryItem(scope, {
         id: inventory.id,
-        revision: current.revision,
+        revision: inventory.revision,
         action: 'stock',
         command: { kind: 'convert', unit: 'g' },
       })
     ).toMatchObject({ status: 'updated', item: { quantity: '2000', unit: 'g' } });
     expect(await deleteInventoryItem(inventory.id, tenantId, scope)).toBe('deleted');
-    expect(await findInventoryItemById(inventory.id, tenantId)).toBeNull();
+    expect(await findInventoryItemById(inventory.id, tenantId, scope)).toBeNull();
 
     const shoppingItem = await createShoppingListItem({
       tenantId,

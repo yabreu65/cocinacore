@@ -89,6 +89,24 @@ describe('POST /api/inventory', () => {
     expect(updateInventoryItemMock).not.toHaveBeenCalled();
   });
 
+  it('returns the created inventory revision unchanged for subsequent audited edits', async () => {
+    const item = {
+      id: '01234567-89ab-4cde-8fab-0123456789ab',
+      revision: '123:1794520000.123456',
+      quantity: '2',
+      unit: 'kg',
+    };
+    createInventoryItemMock.mockResolvedValue(item);
+    const response = await POST(
+      new NextRequest('http://localhost/api/inventory', {
+        method: 'POST',
+        body: JSON.stringify({ ingredientName: 'Harina', quantity: '2', unit: 'kg' }),
+      })
+    );
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual({ item });
+  });
+
   it('normalizes creation and rejects legacy stock edits', async () => {
     createInventoryItemMock.mockResolvedValue({ id: 'new' });
     updateInventoryItemMock.mockResolvedValue({ id: 'item-1' });
