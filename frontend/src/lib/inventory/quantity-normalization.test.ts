@@ -4,6 +4,7 @@ import {
   compareInventoryToRequirement,
   convertQuantity,
   parseQuantity,
+  parseExplicitQuantity,
 } from './quantity-normalization';
 
 describe('quantity-normalization', () => {
@@ -32,6 +33,65 @@ describe('quantity-normalization', () => {
     });
     expect(parseQuantity('al gusto')).toMatchObject({ structured: false });
     expect(parseQuantity('')).toMatchObject({ structured: false });
+  });
+
+  it.each([
+    ['1 1/2 kg', 1.5, 'kg'],
+    ['1 / 2 kg', 0.5, 'kg'],
+    ['1 1 / 2 kg', 1.5, 'kg'],
+    ['0,5 KILOS', 0.5, 'kg'],
+    ['500 g', 500, 'g'],
+    ['3 unidades', 3, 'unidad'],
+    ['2 litros', 2, 'l'],
+    ['1 paquete', 1, 'paquete'],
+    ['0.0001 kg', 0.0001, 'kg'],
+    ['1/10000 kg', 0.0001, 'kg'],
+    ['99999999.9999 kg', 99999999.9999, 'kg'],
+    ['1.234500000 kg', 1.2345, 'kg'],
+  ])('accepts an explicit complete quantity %s', (raw, value, unit) => {
+    expect(parseExplicitQuantity(raw)).toEqual({ value, unit });
+  });
+
+  it.each([
+    '1 1/2',
+    '1 / 2',
+    '1/2',
+    '3',
+    '0,5',
+    '1 bolsa',
+    '1 tomate',
+    '1 tomates',
+    '1 kg extra',
+    '1 kg g',
+    '1/0 kg',
+    '0 kg',
+    '-1 kg',
+    '1 constructor',
+    '1 __proto__',
+    'al gusto',
+    '',
+  ])('rejects missing, unsupported or ambiguous units: %s', (raw) => {
+    expect(parseExplicitQuantity(raw)).toBeNull();
+  });
+
+  it.each([
+    '1/3 kg',
+    '0.00001 kg',
+    '1/100000 kg',
+    '0.00015 kg',
+    '100000000 kg',
+    '99999999.99995 kg',
+    '1.00000000000000000001 kg',
+    '9007199254740993 kg',
+    '1e2 kg',
+    '0.000099999999999999999 kg',
+  ])('rejects amounts that cannot be stored exactly: %s', (raw) => {
+    expect(parseExplicitQuantity(raw)).toBeNull();
+  });
+
+  it('preserves legacy inferred recipe quantities', () => {
+    expect(parseQuantity('1 1/2')).toMatchObject({ value: 1.5, unit: 'unidad' });
+    expect(parseQuantity('3 tomates')).toMatchObject({ value: 3, unit: 'unidad' });
   });
 
   it('compares and converts compatible units', () => {

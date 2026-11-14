@@ -1,3 +1,6 @@
+import { parseExactQuantity, exactQuantityText } from './exact-quantity';
+import { exactStorageQuantity } from './stock-precision';
+
 export type NormalizedUnit =
   | 'unidad'
   | 'g'
@@ -172,6 +175,27 @@ export function parseQuantity(input: string): ParsedQuantity {
     unit,
     structured: true,
   };
+}
+
+/** Strict, exactly persistable quantity for stock transfers; never infer units or round. */
+export function parseExplicitQuantity(
+  input: string
+): { value: number; unit: Exclude<NormalizedUnit, 'unknown'> } | null {
+  if (input.length > 128) return null;
+  const normalized = normalizeText(input);
+  const match = /^(.+?)\s+([a-z]+)$/.exec(normalized);
+  if (!match) return null;
+  const [, amount, token] = match;
+  // Ingredient-name aliases are useful in recipes, but are not explicit units.
+  if (token === 'tomate' || token === 'tomates' || !Object.hasOwn(UNIT_ALIASES, token)) return null;
+  const unit = normalizeUnit(token);
+  const exact = parseExactQuantity(amount);
+  if (!exact) return null;
+  const value = exactStorageQuantity(exact);
+  if (unit === 'unknown' || value === null || value <= 0) return null;
+  // Verify the decimal representation used for both stock and audit is lossless.
+  if (String(value) !== exactQuantityText(exact)) return null;
+  return { value, unit };
 }
 
 export function formatQuantity(value: number | null, unit: NormalizedUnit): string {

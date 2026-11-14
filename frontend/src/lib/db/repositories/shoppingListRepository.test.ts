@@ -3,6 +3,25 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const queryMock = vi.fn();
 const mapSingleRowMock = vi.fn();
 const transactionMock = vi.fn();
+const lockCalls: Array<{ client: unknown; sql: string; params: unknown[] }> = [];
+const lockFailure = { error: null as Error | null };
+function instrumentClient(query: typeof queryMock) {
+  const client = {
+    query: async (sql: string, params: unknown[] = []) => {
+      if (
+        sql === 'select pg_advisory_xact_lock(hashtextextended($1, 0))' &&
+        typeof params[0] === 'string' &&
+        params[0].startsWith('cocinacore:inventory-source:v1:')
+      ) {
+        lockCalls.push({ client, sql, params });
+        if (lockFailure.error) throw lockFailure.error;
+        return { rows: [] };
+      }
+      return query(sql, params) as unknown;
+    },
+  };
+  return client as unknown as { query: typeof queryMock };
+}
 const scopedTransactionMock = vi.fn(
   async (
     _scope: unknown,
@@ -32,7 +51,7 @@ const {
 
 const row = {
   id: 'shopping-1',
-  tenant_id: 'tenant-1',
+  tenant_id: '00000000-0000-4000-8000-000000000001',
   user_id: 'user-1',
   source: 'manual',
   premium_recipe_id: null,
@@ -47,7 +66,7 @@ const row = {
 
 const inventoryItem = {
   id: 'inventory-1',
-  tenant_id: 'tenant-1',
+  tenant_id: '00000000-0000-4000-8000-000000000001',
   user_id: 'user-1',
   ingredient_name: 'Arroz',
   quantity: '1',
@@ -65,13 +84,15 @@ const inventoryItem = {
 
 describe('shoppingListRepository', () => {
   beforeEach(() => {
+    lockCalls.length = 0;
+    lockFailure.error = null;
     queryMock.mockReset();
     mapSingleRowMock.mockReset();
     transactionMock.mockReset();
     transactionMock.mockImplementation(
       async (
         callback: (client: { query: typeof queryMock }) => Promise<unknown>
-      ): Promise<unknown> => callback({ query: queryMock })
+      ): Promise<unknown> => callback(instrumentClient(queryMock))
     );
     scopedTransactionMock.mockReset();
     scopedTransactionMock.mockImplementation(
@@ -87,45 +108,52 @@ describe('shoppingListRepository', () => {
   it('lists only authenticated tenant and user rows in deterministic newest-first order', async () => {
     queryMock.mockResolvedValue({ rows: [row] });
 
-    await expect(listShoppingListItems('tenant-1', 'user-1')).resolves.toEqual([row]);
+    await expect(
+      listShoppingListItems('00000000-0000-4000-8000-000000000001', 'user-1')
+    ).resolves.toEqual([row]);
 
     const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
     expect(sql).toMatch(/where tenant_id = \$1 and user_id = \$2/);
     expect(sql).toMatch(/order by created_at desc, id desc/);
-    expect(params).toEqual(['tenant-1', 'user-1']);
+    expect(params).toEqual(['00000000-0000-4000-8000-000000000001', 'user-1']);
   });
 
   it('uses one scoped client for HTTP list and rejects scope mismatch', async () => {
     queryMock.mockResolvedValue({ rows: [row] });
-    const scope = { tenantId: 'tenant-1', userId: 'user-1' };
+    const scope = { tenantId: '00000000-0000-4000-8000-000000000001', userId: 'user-1' };
     await expect(
-      listShoppingListItems('tenant-1', 'user-1', {}, undefined, scope)
+      listShoppingListItems('00000000-0000-4000-8000-000000000001', 'user-1', {}, undefined, scope)
     ).resolves.toEqual([row]);
     expect(scopedTransactionMock).toHaveBeenCalledWith(scope, expect.any(Function));
     expect(queryMock).toHaveBeenCalledOnce();
     await expect(
-      listShoppingListItems('tenant-1', 'user-1', {}, undefined, { ...scope, userId: 'other' })
+      listShoppingListItems('00000000-0000-4000-8000-000000000001', 'user-1', {}, undefined, {
+        ...scope,
+        userId: 'other',
+      })
     ).rejects.toThrow('Shopping scope mismatch');
   });
 
   it('applies an optional status filter inside the tenant and user scope', async () => {
     queryMock.mockResolvedValue({ rows: [row] });
 
-    await listShoppingListItems('tenant-1', 'user-1', { status: 'pending' });
+    await listShoppingListItems('00000000-0000-4000-8000-000000000001', 'user-1', {
+      status: 'pending',
+    });
 
     const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
     expect(sql).toMatch(/tenant_id = \$1 and user_id = \$2 and status = \$3/);
-    expect(params).toEqual(['tenant-1', 'user-1', 'pending']);
+    expect(params).toEqual(['00000000-0000-4000-8000-000000000001', 'user-1', 'pending']);
   });
 
   it('bounds list reads when the caller requests a fail-closed sentinel', async () => {
     queryMock.mockResolvedValue({ rows: [row] });
 
-    await listShoppingListItems('tenant-1', 'user-1', {}, 501);
+    await listShoppingListItems('00000000-0000-4000-8000-000000000001', 'user-1', {}, 501);
 
     const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
     expect(sql).toMatch(/limit \$3/);
-    expect(params).toEqual(['tenant-1', 'user-1', 501]);
+    expect(params).toEqual(['00000000-0000-4000-8000-000000000001', 'user-1', 501]);
   });
 
   it('creates only manually-sourced values without a premium recipe input', async () => {
@@ -133,7 +161,7 @@ describe('shoppingListRepository', () => {
 
     await expect(
       createShoppingListItem({
-        tenantId: 'tenant-1',
+        tenantId: '00000000-0000-4000-8000-000000000001',
         userId: 'user-1',
         ingredientName: 'Arroz',
         quantity: '1 kg',
@@ -142,13 +170,19 @@ describe('shoppingListRepository', () => {
     ).resolves.toEqual(row);
 
     expect(scopedTransactionMock).toHaveBeenCalledWith(
-      { tenantId: 'tenant-1', userId: 'user-1' },
+      { tenantId: '00000000-0000-4000-8000-000000000001', userId: 'user-1' },
       expect.any(Function)
     );
     const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain('insert into public.shopping_list_items');
     expect(sql).not.toContain('premium_recipe_id');
-    expect(params).toEqual(['tenant-1', 'user-1', 'manual', 'Arroz', '1 kg']);
+    expect(params).toEqual([
+      '00000000-0000-4000-8000-000000000001',
+      'user-1',
+      'manual',
+      'Arroz',
+      '1 kg',
+    ]);
   });
 
   it('locks, reads scoped source rows, and inserts only absent normalized identities in one transaction', async () => {
@@ -161,11 +195,11 @@ describe('shoppingListRepository', () => {
       });
     scopedTransactionMock.mockImplementation(
       async (_scope: unknown, callback: (client: { query: typeof clientQuery }) => unknown) =>
-        callback({ query: clientQuery })
+        callback(instrumentClient(clientQuery))
     );
 
     const result = await addMealPlanShoppingItems({
-      tenantId: 'tenant-1',
+      tenantId: '00000000-0000-4000-8000-000000000001',
       userId: 'user-1',
       source: 'meal-plan:plan-1',
       items: [
@@ -176,7 +210,7 @@ describe('shoppingListRepository', () => {
 
     expect(scopedTransactionMock).toHaveBeenCalledOnce();
     expect(scopedTransactionMock).toHaveBeenCalledWith(
-      { tenantId: 'tenant-1', userId: 'user-1' },
+      { tenantId: '00000000-0000-4000-8000-000000000001', userId: 'user-1' },
       expect.any(Function)
     );
     expect(transactionMock).not.toHaveBeenCalled();
@@ -187,10 +221,16 @@ describe('shoppingListRepository', () => {
       expect.stringContaining('where tenant_id = $1 and user_id = $2 and source = $3'),
       expect.stringContaining('insert into public.shopping_list_items'),
     ]);
-    expect(clientQuery.mock.calls[0]?.[1]).toEqual(['tenant-1:user-1:meal-plan:plan-1']);
-    expect(clientQuery.mock.calls[1]?.[1]).toEqual(['tenant-1', 'user-1', 'meal-plan:plan-1']);
+    expect(clientQuery.mock.calls[0]?.[1]).toEqual([
+      '00000000-0000-4000-8000-000000000001:user-1:meal-plan:plan-1',
+    ]);
+    expect(clientQuery.mock.calls[1]?.[1]).toEqual([
+      '00000000-0000-4000-8000-000000000001',
+      'user-1',
+      'meal-plan:plan-1',
+    ]);
     expect(clientQuery.mock.calls[2]?.[1]).toEqual([
-      'tenant-1',
+      '00000000-0000-4000-8000-000000000001',
       'user-1',
       'meal-plan:plan-1',
       'Sal',
@@ -210,12 +250,12 @@ describe('shoppingListRepository', () => {
       .mockResolvedValueOnce({ rows: [existingManual] });
     scopedTransactionMock.mockImplementation(
       async (_scope: unknown, callback: (client: { query: typeof clientQuery }) => unknown) =>
-        callback({ query: clientQuery })
+        callback(instrumentClient(clientQuery))
     );
 
     await expect(
       addMealPlanShoppingItems({
-        tenantId: 'tenant-1',
+        tenantId: '00000000-0000-4000-8000-000000000001',
         userId: 'user-1',
         source: 'meal-plan:plan-2',
         dedupeScope: 'user',
@@ -223,7 +263,9 @@ describe('shoppingListRepository', () => {
       })
     ).resolves.toEqual({ added: [], alreadyPresent: [existingManual] });
 
-    expect(clientQuery.mock.calls[0]?.[1]).toEqual(['tenant-1:user-1:shopping-list']);
+    expect(clientQuery.mock.calls[0]?.[1]).toEqual([
+      '00000000-0000-4000-8000-000000000001:user-1:shopping-list',
+    ]);
     expect(clientQuery.mock.calls[1]?.[0]).toEqual(
       expect.stringContaining('where tenant_id = $1 and user_id = $2')
     );
@@ -240,12 +282,12 @@ describe('shoppingListRepository', () => {
       .mockRejectedValueOnce(failure);
     scopedTransactionMock.mockImplementation(
       async (_scope: unknown, callback: (client: { query: typeof clientQuery }) => unknown) =>
-        callback({ query: clientQuery })
+        callback(instrumentClient(clientQuery))
     );
 
     await expect(
       addMealPlanShoppingItems({
-        tenantId: 'tenant-1',
+        tenantId: '00000000-0000-4000-8000-000000000001',
         userId: 'user-1',
         source: 'meal-plan:plan-1',
         items: [{ ingredientName: 'Sal', quantity: null }],
@@ -265,10 +307,10 @@ describe('shoppingListRepository', () => {
       .mockResolvedValueOnce({ rows: [inserted] });
     scopedTransactionMock.mockImplementation(
       async (_scope: unknown, callback: (client: { query: typeof clientQuery }) => unknown) =>
-        callback({ query: clientQuery })
+        callback(instrumentClient(clientQuery))
     );
     const input = {
-      tenantId: 'tenant-1',
+      tenantId: '00000000-0000-4000-8000-000000000001',
       userId: 'user-1',
       source: 'meal-plan:plan-1',
       items: [
@@ -305,12 +347,16 @@ describe('shoppingListRepository', () => {
       .mockResolvedValueOnce({ rows: [transferred] });
     transactionMock.mockImplementation(
       async (callback: (client: { query: typeof clientQuery }) => unknown) =>
-        callback({ query: clientQuery })
+        callback(instrumentClient(clientQuery))
     );
     createInventoryItemInTransactionMock.mockResolvedValue(inventoryItem);
 
     await expect(
-      transferPurchasedShoppingListItem('shopping-1', 'tenant-1', 'user-1')
+      transferPurchasedShoppingListItem(
+        'shopping-1',
+        '00000000-0000-4000-8000-000000000001',
+        'user-1'
+      )
     ).resolves.toEqual({
       item: transferred,
       inventoryItem,
@@ -318,13 +364,13 @@ describe('shoppingListRepository', () => {
 
     expect(transactionMock).toHaveBeenCalledOnce();
     expect(scopedTransactionMock).toHaveBeenCalledWith(
-      { tenantId: 'tenant-1', userId: 'user-1' },
+      { tenantId: '00000000-0000-4000-8000-000000000001', userId: 'user-1' },
       expect.any(Function)
     );
     expect(createInventoryItemInTransactionMock).toHaveBeenCalledWith(
       clientQuery.mock.calls.length ? expect.anything() : null,
       {
-        tenantId: 'tenant-1',
+        tenantId: '00000000-0000-4000-8000-000000000001',
         userId: 'user-1',
         ingredientName: 'Arroz',
         quantity: '1',
@@ -353,10 +399,14 @@ describe('shoppingListRepository', () => {
       .mockResolvedValueOnce({ rows: [inventoryItem] });
     transactionMock.mockImplementationOnce(
       async (callback: (client: { query: typeof replayClientQuery }) => unknown) =>
-        callback({ query: replayClientQuery })
+        callback(instrumentClient(replayClientQuery))
     );
     await expect(
-      transferPurchasedShoppingListItem('shopping-1', 'tenant-1', 'user-1')
+      transferPurchasedShoppingListItem(
+        'shopping-1',
+        '00000000-0000-4000-8000-000000000001',
+        'user-1'
+      )
     ).resolves.toEqual({
       item: transferred,
       inventoryItem,
@@ -368,6 +418,12 @@ describe('shoppingListRepository', () => {
   it.each([
     { quantity: '4 kilos', expectedQuantity: '4' },
     { quantity: '1 kilo', expectedQuantity: '1' },
+    { quantity: '1 1/2 kg', expectedQuantity: '1.5' },
+    { quantity: '1 / 2 kg', expectedQuantity: '0.5' },
+    { quantity: '0,5 kg', expectedQuantity: '0.5' },
+    { quantity: '0.0001 kg', expectedQuantity: '0.0001' },
+    { quantity: '1/10000 kg', expectedQuantity: '0.0001' },
+    { quantity: '99999999.9999 kg', expectedQuantity: '99999999.9999' },
   ])(
     'transfers an existing purchased row with quantity "$quantity" as $expectedQuantity kg',
     async ({ quantity, expectedQuantity }) => {
@@ -387,14 +443,18 @@ describe('shoppingListRepository', () => {
         });
       transactionMock.mockImplementation(
         async (callback: (client: { query: typeof clientQuery }) => unknown) =>
-          callback({ query: clientQuery })
+          callback(instrumentClient(clientQuery))
       );
       createInventoryItemInTransactionMock.mockResolvedValue(inventoryItem);
 
-      await transferPurchasedShoppingListItem('shopping-1', 'tenant-1', 'user-1');
+      await transferPurchasedShoppingListItem(
+        'shopping-1',
+        '00000000-0000-4000-8000-000000000001',
+        'user-1'
+      );
 
       expect(createInventoryItemInTransactionMock).toHaveBeenCalledWith(expect.anything(), {
-        tenantId: 'tenant-1',
+        tenantId: '00000000-0000-4000-8000-000000000001',
         userId: 'user-1',
         ingredientName: 'Arroz',
         quantity: expectedQuantity,
@@ -402,6 +462,11 @@ describe('shoppingListRepository', () => {
         category: 'Granos',
         normalizedName: 'arroz',
       });
+      expect(clientQuery).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('insert into public.inventory_movements'),
+        [row.tenant_id, row.user_id, inventoryItem.id, expectedQuantity, 'kg', 'arroz']
+      );
     }
   );
 
@@ -411,11 +476,15 @@ describe('shoppingListRepository', () => {
     });
     transactionMock.mockImplementation(
       async (callback: (client: { query: typeof clientQuery }) => unknown) =>
-        callback({ query: clientQuery })
+        callback(instrumentClient(clientQuery))
     );
 
     await expect(
-      transferPurchasedShoppingListItem('shopping-1', 'tenant-1', 'user-1')
+      transferPurchasedShoppingListItem(
+        'shopping-1',
+        '00000000-0000-4000-8000-000000000001',
+        'user-1'
+      )
     ).rejects.toThrow();
     expect(clientQuery).toHaveBeenCalledOnce();
     expect(createInventoryItemInTransactionMock).not.toHaveBeenCalled();
@@ -426,19 +495,43 @@ describe('shoppingListRepository', () => {
     { status: 'purchased' as const, quantity: null, expected: /quantity/i },
     { status: 'purchased' as const, quantity: 'al gusto', expected: /quantity/i },
     { status: 'purchased' as const, quantity: '3', expected: /quantity/i },
-  ])('rejects untransferable shopping rows without writes', async ({ status, quantity }) => {
-    const clientQuery = vi.fn().mockResolvedValue({ rows: [{ ...row, status, quantity }] });
-    transactionMock.mockImplementation(
-      async (callback: (client: { query: typeof clientQuery }) => unknown) =>
-        callback({ query: clientQuery })
-    );
+    ...[
+      '1 1/2',
+      '1 / 2',
+      '1/2',
+      '1 kg extra',
+      '1 tomates',
+      '1/0 kg',
+      '0 kg',
+      '1 constructor',
+      '1/3 kg',
+      '0.00001 kg',
+      '1/100000 kg',
+      '0.00015 kg',
+      '100000000 kg',
+      '99999999.99995 kg',
+      '1.00000000000000000001 kg',
+    ].map((quantity) => ({ status: 'purchased' as const, quantity, expected: /quantity/i })),
+  ])(
+    'rejects untransferable shopping rows without writes',
+    async ({ status, quantity, expected }) => {
+      const clientQuery = vi.fn().mockResolvedValue({ rows: [{ ...row, status, quantity }] });
+      transactionMock.mockImplementation(
+        async (callback: (client: { query: typeof clientQuery }) => unknown) =>
+          callback(instrumentClient(clientQuery))
+      );
 
-    await expect(
-      transferPurchasedShoppingListItem('shopping-1', 'tenant-1', 'user-1')
-    ).rejects.toThrow();
-    expect(clientQuery).toHaveBeenCalledOnce();
-    expect(createInventoryItemInTransactionMock).not.toHaveBeenCalled();
-  });
+      await expect(
+        transferPurchasedShoppingListItem(
+          'shopping-1',
+          '00000000-0000-4000-8000-000000000001',
+          'user-1'
+        )
+      ).rejects.toThrow(expected);
+      expect(clientQuery).toHaveBeenCalledOnce();
+      expect(createInventoryItemInTransactionMock).not.toHaveBeenCalled();
+    }
+  );
 
   it('does not persist a transfer marker when recording its movement fails', async () => {
     const purchased = { ...row, status: 'purchased' as const };
@@ -448,12 +541,16 @@ describe('shoppingListRepository', () => {
       .mockRejectedValueOnce(new Error('movement insert failed'));
     transactionMock.mockImplementation(
       async (callback: (client: { query: typeof clientQuery }) => unknown) =>
-        callback({ query: clientQuery })
+        callback(instrumentClient(clientQuery))
     );
     createInventoryItemInTransactionMock.mockResolvedValue(inventoryItem);
 
     await expect(
-      transferPurchasedShoppingListItem('shopping-1', 'tenant-1', 'user-1')
+      transferPurchasedShoppingListItem(
+        'shopping-1',
+        '00000000-0000-4000-8000-000000000001',
+        'user-1'
+      )
     ).rejects.toThrow('movement insert failed');
     expect(clientQuery).toHaveBeenCalledTimes(2);
     expect(clientQuery.mock.calls[1]?.[0]).toContain('insert into public.inventory_movements');
@@ -463,11 +560,15 @@ describe('shoppingListRepository', () => {
     const clientQuery = vi.fn().mockResolvedValue({ rows: [] });
     transactionMock.mockImplementation(
       async (callback: (client: { query: typeof clientQuery }) => unknown) =>
-        callback({ query: clientQuery })
+        callback(instrumentClient(clientQuery))
     );
 
     await expect(
-      transferPurchasedShoppingListItem('shopping-1', 'tenant-2', 'user-2')
+      transferPurchasedShoppingListItem(
+        'shopping-1',
+        '00000000-0000-4000-8000-000000000002',
+        'user-2'
+      )
     ).resolves.toBeNull();
     expect(clientQuery).toHaveBeenCalledOnce();
     expect(createInventoryItemInTransactionMock).not.toHaveBeenCalled();
@@ -477,36 +578,92 @@ describe('shoppingListRepository', () => {
     queryMock.mockResolvedValue({ rows: [{ ...row, status: 'purchased' }] });
 
     await expect(
-      updateShoppingListItemStatus('shopping-1', 'tenant-1', 'user-1', 'purchased')
+      updateShoppingListItemStatus(
+        'shopping-1',
+        '00000000-0000-4000-8000-000000000001',
+        'user-1',
+        'purchased'
+      )
     ).resolves.toEqual({ ...row, status: 'purchased' });
 
     expect(scopedTransactionMock).toHaveBeenCalledWith(
-      { tenantId: 'tenant-1', userId: 'user-1' },
+      { tenantId: '00000000-0000-4000-8000-000000000001', userId: 'user-1' },
       expect.any(Function)
     );
     const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
     expect(sql).toMatch(/where id = \$2 and tenant_id = \$3 and user_id = \$4/);
-    expect(params).toEqual(['purchased', 'shopping-1', 'tenant-1', 'user-1']);
+    expect(params).toEqual([
+      'purchased',
+      'shopping-1',
+      '00000000-0000-4000-8000-000000000001',
+      'user-1',
+    ]);
   });
 
   it('returns null when a scoped status update cannot access a row', async () => {
     queryMock.mockResolvedValue({ rows: [] });
 
     await expect(
-      updateShoppingListItemStatus('other-user-item', 'tenant-1', 'user-1', 'purchased')
+      updateShoppingListItemStatus(
+        'other-user-item',
+        '00000000-0000-4000-8000-000000000001',
+        'user-1',
+        'purchased'
+      )
     ).resolves.toBeNull();
   });
 
   it('deletes only with id, tenant, and user predicates and returns null when inaccessible', async () => {
     queryMock.mockResolvedValueOnce({ rows: [row] }).mockResolvedValueOnce({ rows: [] });
 
-    await expect(deleteShoppingListItem('shopping-1', 'tenant-1', 'user-1')).resolves.toEqual(row);
+    await expect(
+      deleteShoppingListItem('shopping-1', '00000000-0000-4000-8000-000000000001', 'user-1')
+    ).resolves.toEqual(row);
     const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
     expect(sql).toMatch(/where id = \$1 and tenant_id = \$2 and user_id = \$3/);
-    expect(params).toEqual(['shopping-1', 'tenant-1', 'user-1']);
+    expect(params).toEqual(['shopping-1', '00000000-0000-4000-8000-000000000001', 'user-1']);
 
     await expect(
-      deleteShoppingListItem('other-user-item', 'tenant-1', 'user-1')
+      deleteShoppingListItem('other-user-item', '00000000-0000-4000-8000-000000000001', 'user-1')
     ).resolves.toBeNull();
+  });
+  it.each(['create', 'add', 'transfer', 'status', 'delete'] as const)(
+    'acquires the shared tenant lock before any %s business query and stops on lock failure',
+    async (operation) => {
+      const tenantId = '00000000-0000-4000-8000-000000000001';
+      const userId = 'user-1';
+      lockFailure.error = new Error('tenant lock failed');
+      const actions = {
+        create: () =>
+          createShoppingListItem({ tenantId, userId, ingredientName: 'Arroz', source: 'manual' }),
+        add: () =>
+          addMealPlanShoppingItems({
+            tenantId,
+            userId,
+            source: 'meal-plan:plan-1',
+            items: [{ ingredientName: 'Arroz', quantity: '1 kg' }],
+          }),
+        transfer: () => transferPurchasedShoppingListItem('shopping-1', tenantId, userId),
+        status: () => updateShoppingListItemStatus('shopping-1', tenantId, userId, 'purchased'),
+        delete: () => deleteShoppingListItem('shopping-1', tenantId, userId),
+      };
+      await expect(actions[operation]()).rejects.toThrow('tenant lock failed');
+      expect(lockCalls).toHaveLength(1);
+      expect(lockCalls[0]?.params).toEqual([`cocinacore:inventory-source:v1:${tenantId}`]);
+      expect(queryMock).not.toHaveBeenCalled();
+      expect(createInventoryItemInTransactionMock).not.toHaveBeenCalled();
+    }
+  );
+
+  it('uses the same transaction client for the tenant lock and the purchase transfer', async () => {
+    const purchased = { ...row, status: 'purchased' };
+    queryMock
+      .mockResolvedValueOnce({ rows: [purchased] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [purchased] });
+    createInventoryItemInTransactionMock.mockResolvedValue(inventoryItem);
+    await transferPurchasedShoppingListItem('shopping-1', row.tenant_id, row.user_id);
+    expect(lockCalls).toHaveLength(1);
+    expect(createInventoryItemInTransactionMock.mock.calls[0]?.[0]).toBe(lockCalls[0]?.client);
   });
 });
