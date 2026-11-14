@@ -149,10 +149,10 @@ describe('GET /api/health', () => {
     vi.stubEnv('STORAGE_DRIVER', 's3');
     checkStorage.mockRejectedValue(new Error('sensitive provider detail'));
     const response = await GET();
-    const body = await response.json();
+    const body = (await response.json()) as HealthResponseBody;
     expect(response.status).toBe(503);
-    expect(body.dependencies.storage.status).toBe('unavailable');
-    expect(body.dependencies.storage.error).toBeUndefined();
+    expect(body.dependencies.storage?.status).toBe('unavailable');
+    expect(body.dependencies.storage?.error).toBeUndefined();
   });
 
   it('does not contact S3 in local mode', async () => {

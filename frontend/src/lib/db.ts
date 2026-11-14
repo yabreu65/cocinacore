@@ -15,6 +15,7 @@ let globalWriterPoolUrl: string | null = null;
 export interface DbOperationOptions {
   signal?: AbortSignal;
   deadlineAt?: number;
+  isolationLevel?: 'read committed' | 'serializable';
 }
 
 class DbOperationAbortedError extends Error {
@@ -308,7 +309,13 @@ async function transactionOnPool<T>(
   let began = false;
   let releaseError: Error | undefined;
   try {
-    await client.query('begin');
+    const beginStatement =
+      options.isolationLevel === 'serializable'
+        ? 'begin isolation level serializable'
+        : options.isolationLevel === 'read committed'
+          ? 'begin isolation level read committed'
+          : 'begin';
+    await client.query(beginStatement);
     began = true;
     if (cancellation.discarded || isCancelled(options)) throw cancellationError();
     const result = await callback(client);

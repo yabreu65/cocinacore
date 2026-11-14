@@ -20,6 +20,7 @@ vi.mock('./serverLogger', () => ({
 }));
 
 import { query, queryWithStatementTimeout, scopedTransaction, transaction } from './db';
+import { lockInventorySourceTenant } from './db/inventory-source-lock';
 
 describe('queryWithStatementTimeout', () => {
   beforeEach(() => {
@@ -54,6 +55,68 @@ describe('queryWithStatementTimeout', () => {
       ['commit'],
     ]);
     expect(releaseMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts authenticated transactions at serializable isolation when explicitly requested', async () => {
+    const scope = {
+      tenantId: '00000000-0000-4000-8000-000000000001',
+      userId: '00000000-0000-4000-8000-000000000002',
+    };
+    await scopedTransaction(scope, (client) => client.query('select 42'), {
+      isolationLevel: 'serializable',
+    });
+    expect(clientQueryMock.mock.calls[0]).toEqual(['begin isolation level serializable']);
+    expect(clientQueryMock.mock.calls.at(-1)).toEqual(['commit']);
+  });
+
+  it('starts authenticated transactions at read committed isolation when requested', async () => {
+    const scope = {
+      tenantId: '00000000-0000-4000-8000-000000000001',
+      userId: '00000000-0000-4000-8000-000000000002',
+    };
+    await scopedTransaction(scope, (client) => client.query('select 42'), {
+      isolationLevel: 'read committed',
+    });
+    expect(clientQueryMock.mock.calls).toEqual([
+      ['begin isolation level read committed'],
+      [
+        "select set_config('app.tenant_id', $1, true), set_config('app.user_id', $2, true)",
+        [scope.tenantId, scope.userId],
+      ],
+      ['select 42'],
+      ['commit'],
+    ]);
+  });
+
+  it('rolls back after common lock failure before any source query', async () => {
+    const scope = {
+      tenantId: '00000000-0000-4000-8000-000000000001',
+      userId: '00000000-0000-4000-8000-000000000002',
+    };
+    clientQueryMock
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockRejectedValueOnce(new Error('lock unavailable'));
+
+    await expect(
+      scopedTransaction(scope, async (client) => {
+        await lockInventorySourceTenant(client, scope.tenantId);
+        await client.query('select * from public.recipe_inventory_items');
+      })
+    ).rejects.toThrow('lock unavailable');
+
+    expect(clientQueryMock.mock.calls).toEqual([
+      ['begin'],
+      [
+        "select set_config('app.tenant_id', $1, true), set_config('app.user_id', $2, true)",
+        [scope.tenantId, scope.userId],
+      ],
+      [
+        'select pg_advisory_xact_lock(hashtextextended($1, 0))',
+        ['cocinacore:inventory-source:v1:00000000-0000-4000-8000-000000000001'],
+      ],
+      ['rollback'],
+    ]);
   });
 
   it('rolls back scoped errors and rejects malformed scope before acquisition', async () => {
