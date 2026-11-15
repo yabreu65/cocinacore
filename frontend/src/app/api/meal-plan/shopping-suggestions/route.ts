@@ -1,26 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/auth/server';
 import type { AuthUser } from '@/lib/auth/types';
-import type { ShoppingListItemRow, UserMealPlanRow } from '@/lib/db/types';
-import { findMealPlanByIdForUserAndTenant } from '@/lib/db/repositories/mealPlanRepository';
-import { listInventoryItemsByTenant } from '@/lib/db/repositories/inventoryRepository';
-import {
-  addMealPlanShoppingItems,
-  listShoppingListItems,
-} from '@/lib/db/repositories/shoppingListRepository';
+import type { ShoppingListItemRow } from '@/lib/db/types';
+import { withShoppingProposalSource } from '@/lib/db/repositories/shoppingProposalRepository';
+import { addMealPlanShoppingItemsInTransaction } from '@/lib/db/repositories/shoppingListRepository';
+import { equalPostgresTimestamps } from '@/lib/db/postgres-timestamp';
 import { ShoppingListIdSchema } from '@/lib/validation';
-import {
-  parseStructuredMealPlanValue,
-  type StructuredMealPlan,
-} from '@/lib/meal-planner/structured-plan';
-import {
-  buildPredictiveShoppingProposal,
-  type PredictiveShoppingProposal,
-} from '@/lib/meal-planner/predictive-shopping';
+import type { PredictiveShoppingProposal } from '@/lib/meal-planner/predictive-shopping';
 
 const MAX_SELECTED_ITEMS = 100;
-const MAX_SOURCE_ROWS = 500;
-const MAX_FINGERPRINT_LENGTH = 128;
 
 function parseHorizon(value: string | null): 7 | 14 | null {
   if (value === null || value === '7') return 7;
@@ -60,10 +48,10 @@ function parseConfirmationBody(value: unknown): {
     typeof expectedUpdatedAt !== 'string' ||
     expectedUpdatedAt.length < 1 ||
     expectedUpdatedAt.length > 100 ||
+    !equalPostgresTimestamps(expectedUpdatedAt, expectedUpdatedAt) ||
     typeof expectedFingerprint !== 'string' ||
-    expectedFingerprint.length < 1 ||
-    expectedFingerprint.length > MAX_FINGERPRINT_LENGTH ||
-    !/^[a-f0-9]+$/i.test(expectedFingerprint)
+    expectedFingerprint.length !== 64 ||
+    !/^[a-f0-9]{64}$/.test(expectedFingerprint)
   )
     return null;
   if (
@@ -81,38 +69,6 @@ function parseConfirmationBody(value: unknown): {
     selectedItems: Array.from(new Set(body.selectedItems as string[])),
     expectedUpdatedAt,
     expectedFingerprint,
-  };
-}
-
-function isSourceBounded<T>(rows: T[]): boolean {
-  return rows.length <= MAX_SOURCE_ROWS;
-}
-
-async function loadProposalInputs(
-  tenantId: string,
-  userId: string,
-  plan: StructuredMealPlan,
-  consumptionPayload: unknown,
-  horizonDays: 7 | 14,
-  now: Date
-) {
-  const [inventoryItems, shoppingItems] = await Promise.all([
-    listInventoryItemsByTenant(tenantId, MAX_SOURCE_ROWS + 1, undefined, {}, { tenantId, userId }),
-    listShoppingListItems(tenantId, userId, {}, MAX_SOURCE_ROWS + 1, { tenantId, userId }),
-  ]);
-  if (!isSourceBounded(inventoryItems) || !isSourceBounded(shoppingItems)) {
-    return { truncated: true as const };
-  }
-  return {
-    truncated: false as const,
-    proposal: buildPredictiveShoppingProposal({
-      plan,
-      inventoryItems,
-      shoppingItems,
-      consumptionPayload,
-      horizonDays,
-      now,
-    }),
   };
 }
 
@@ -155,42 +111,24 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Identificador u horizonte inválido.' }, { status: 400 });
   }
 
-  let persistedPlan: UserMealPlanRow | null;
   try {
-    persistedPlan = await findMealPlanByIdForUserAndTenant(
+    return await withShoppingProposalSource(
+      { tenantId: user.tenant.tenantId, userId: user.id },
       mealPlanId,
-      user.id,
-      user.tenant.tenantId,
-      { tenantId: user.tenant.tenantId, userId: user.id }
-    );
-  } catch {
-    return NextResponse.json({ error: 'No se pudo recuperar el menú.' }, { status: 500 });
-  }
-  if (!persistedPlan) return NextResponse.json({ error: 'Menú no encontrado.' }, { status: 404 });
-
-  const parsedPlan = parseStructuredMealPlanValue(
-    persistedPlan.calendar_payload,
-    persistedPlan.period
-  );
-  if (!parsedPlan.success) {
-    return NextResponse.json({ error: 'No se pudo recuperar el menú.' }, { status: 500 });
-  }
-
-  try {
-    const loaded = await loadProposalInputs(
-      user.tenant.tenantId,
-      user.id,
-      parsedPlan.plan,
-      persistedPlan.consumption_payload,
       horizonDays,
-      new Date()
+      (_client, source) => {
+        if (source.status === 'not_found')
+          return NextResponse.json({ error: 'Menú no encontrado.' }, { status: 404 });
+        if (source.status === 'invalid_plan')
+          return NextResponse.json({ error: 'No se pudo recuperar el menú.' }, { status: 500 });
+        if (source.status === 'truncated') return unknownSourceResponse();
+        return NextResponse.json({
+          mealPlanId: source.plan.id,
+          expectedUpdatedAt: source.plan.updated_at,
+          ...source.proposal,
+        });
+      }
     );
-    if (loaded.truncated) return unknownSourceResponse();
-    return NextResponse.json({
-      mealPlanId: persistedPlan.id,
-      expectedUpdatedAt: persistedPlan.updated_at,
-      ...loaded.proposal,
-    });
   } catch {
     return NextResponse.json(
       { error: 'No se pudieron calcular las sugerencias.' },
@@ -217,74 +155,55 @@ export async function POST(request: NextRequest) {
   const body = parseConfirmationBody(rawBody);
   if (!body) return NextResponse.json({ error: 'Solicitud inválida.' }, { status: 400 });
 
-  let persistedPlan: UserMealPlanRow | null;
   try {
-    persistedPlan = await findMealPlanByIdForUserAndTenant(
+    const scope = { tenantId: user.tenant.tenantId, userId: user.id };
+    return await withShoppingProposalSource(
+      scope,
       body.mealPlanId,
-      user.id,
-      user.tenant.tenantId,
-      { tenantId: user.tenant.tenantId, userId: user.id }
-    );
-  } catch {
-    return NextResponse.json({ error: 'No se pudo recuperar el menú.' }, { status: 500 });
-  }
-  if (!persistedPlan) return NextResponse.json({ error: 'Menú no encontrado.' }, { status: 404 });
-
-  const parsedPlan = parseStructuredMealPlanValue(
-    persistedPlan.calendar_payload,
-    persistedPlan.period
-  );
-  if (!parsedPlan.success) {
-    return NextResponse.json({ error: 'No se pudo recuperar el menú.' }, { status: 500 });
-  }
-
-  try {
-    const loaded = await loadProposalInputs(
-      user.tenant.tenantId,
-      user.id,
-      parsedPlan.plan,
-      persistedPlan.consumption_payload,
       body.horizonDays,
-      new Date()
+      async (client, source) => {
+        if (source.status === 'not_found')
+          return NextResponse.json({ error: 'Menú no encontrado.' }, { status: 404 });
+        if (source.status === 'invalid_plan')
+          return NextResponse.json({ error: 'No se pudo recuperar el menú.' }, { status: 500 });
+        if (source.status === 'truncated') return unknownSourceResponse();
+        const proposal = source.proposal;
+        if (
+          proposal.status !== 'ready' ||
+          !equalPostgresTimestamps(source.plan.updated_at, body.expectedUpdatedAt) ||
+          proposal.sourceFingerprint !== body.expectedFingerprint
+        ) {
+          return NextResponse.json(
+            { error: 'La propuesta está desactualizada. Prepará una nueva propuesta.' },
+            { status: 409 }
+          );
+        }
+        const selected = new Set(body.selectedItems);
+        const selectedCandidates = proposal.items.filter(
+          (item) => selected.has(item.normalizedName) && item.status === 'buy'
+        );
+        const ignored = body.selectedItems.filter(
+          (name) => !selectedCandidates.some((item) => item.normalizedName === name)
+        );
+        const result =
+          selectedCandidates.length === 0
+            ? { added: [], alreadyPresent: [] }
+            : await addMealPlanShoppingItemsInTransaction(client, {
+                ...scope,
+                source: `meal-plan:${source.plan.id}`,
+                dedupeScope: 'user',
+                items: selectedCandidates.map((item) => ({
+                  ingredientName: item.ingredientName,
+                  quantity: quantityForShopping(item),
+                })),
+              });
+        return NextResponse.json({
+          added: result.added.map(toConfirmationItem),
+          alreadyPresent: result.alreadyPresent.map(toConfirmationItem),
+          ignored,
+        });
+      }
     );
-    if (loaded.truncated) return unknownSourceResponse();
-    const proposal = loaded.proposal;
-    if (
-      proposal.status !== 'ready' ||
-      persistedPlan.updated_at !== body.expectedUpdatedAt ||
-      proposal.sourceFingerprint !== body.expectedFingerprint
-    ) {
-      return NextResponse.json(
-        { error: 'La propuesta está desactualizada. Prepará una nueva propuesta.' },
-        { status: 409 }
-      );
-    }
-
-    const selected = new Set(body.selectedItems);
-    const selectedCandidates = proposal.items.filter(
-      (item) => selected.has(item.normalizedName) && item.status === 'buy'
-    );
-    const ignored = body.selectedItems.filter(
-      (name) => !selectedCandidates.some((item) => item.normalizedName === name)
-    );
-    const result =
-      selectedCandidates.length === 0
-        ? { added: [], alreadyPresent: [] }
-        : await addMealPlanShoppingItems({
-            tenantId: user.tenant.tenantId,
-            userId: user.id,
-            source: `meal-plan:${body.mealPlanId}`,
-            dedupeScope: 'user',
-            items: selectedCandidates.map((item) => ({
-              ingredientName: item.ingredientName,
-              quantity: quantityForShopping(item),
-            })),
-          });
-    return NextResponse.json({
-      added: result.added.map(toConfirmationItem),
-      alreadyPresent: result.alreadyPresent.map(toConfirmationItem),
-      ignored,
-    });
   } catch {
     return NextResponse.json(
       { error: 'No se pudieron guardar los artículos seleccionados.' },

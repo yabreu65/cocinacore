@@ -1,3 +1,4 @@
+import type { DbTransactionClient } from '@/lib/db/transaction-client';
 import { lockInventorySourceTenant } from '@/lib/db/inventory-source-lock';
 import { mapSingleRow, query, scopedTransaction, type AuthenticatedDbScope } from '@/lib/db';
 import type {
@@ -103,53 +104,62 @@ export async function createShoppingListItem(
 export async function addMealPlanShoppingItems(
   input: AddMealPlanShoppingItemsInput
 ): Promise<AddMealPlanShoppingItemsResult> {
-  return scopedTransaction({ tenantId: input.tenantId, userId: input.userId }, async (client) => {
-    await lockInventorySourceTenant(client, input.tenantId);
-    const dedupeScope = input.dedupeScope ?? 'source';
-    const lockKey = `${input.tenantId}:${input.userId}:${dedupeScope === 'user' ? 'shopping-list' : input.source}`;
-    await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [lockKey]);
-    const existingScope =
-      dedupeScope === 'user'
-        ? 'tenant_id = $1 and user_id = $2'
-        : 'tenant_id = $1 and user_id = $2 and source = $3';
-    const existingResult = await client.query<ShoppingListItemRow>(
-      `select * from public.shopping_list_items
-       where ${existingScope}`,
-      dedupeScope === 'user'
-        ? [input.tenantId, input.userId]
-        : [input.tenantId, input.userId, input.source]
-    );
-    const byIdentity = new Map(
-      existingResult.rows.map((row) => [normalizeInventoryName(row.ingredient_name), row])
-    );
-    const added: ShoppingListItemRow[] = [];
-    const alreadyPresent: ShoppingListItemRow[] = [];
-    const seen = new Set<string>();
+  return scopedTransaction({ tenantId: input.tenantId, userId: input.userId }, (client) =>
+    addMealPlanShoppingItemsInTransaction(client, input)
+  );
+}
 
-    for (const item of input.items) {
-      const identity = normalizeInventoryName(item.ingredientName);
-      if (seen.has(identity)) continue;
-      seen.add(identity);
-      const existing = byIdentity.get(identity);
-      if (existing) {
-        alreadyPresent.push(existing);
-        continue;
-      }
-      const result = await client.query<ShoppingListItemRow>(
-        `insert into public.shopping_list_items
+/** Caller supplies an authenticated transaction. Reacquiring the same tenant
+ * advisory lock is safe; it remains held until that transaction ends. */
+export async function addMealPlanShoppingItemsInTransaction(
+  client: DbTransactionClient,
+  input: AddMealPlanShoppingItemsInput
+): Promise<AddMealPlanShoppingItemsResult> {
+  await lockInventorySourceTenant(client, input.tenantId);
+  const dedupeScope = input.dedupeScope ?? 'source';
+  const lockKey = `${input.tenantId}:${input.userId}:${dedupeScope === 'user' ? 'shopping-list' : input.source}`;
+  await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [lockKey]);
+  const existingScope =
+    dedupeScope === 'user'
+      ? 'tenant_id = $1 and user_id = $2'
+      : 'tenant_id = $1 and user_id = $2 and source = $3';
+  const existingResult = await client.query<ShoppingListItemRow>(
+    `select * from public.shopping_list_items
+       where ${existingScope}`,
+    dedupeScope === 'user'
+      ? [input.tenantId, input.userId]
+      : [input.tenantId, input.userId, input.source]
+  );
+  const byIdentity = new Map(
+    existingResult.rows.map((row) => [normalizeInventoryName(row.ingredient_name), row])
+  );
+  const added: ShoppingListItemRow[] = [];
+  const alreadyPresent: ShoppingListItemRow[] = [];
+  const seen = new Set<string>();
+
+  for (const item of input.items) {
+    const identity = normalizeInventoryName(item.ingredientName);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    const existing = byIdentity.get(identity);
+    if (existing) {
+      alreadyPresent.push(existing);
+      continue;
+    }
+    const result = await client.query<ShoppingListItemRow>(
+      `insert into public.shopping_list_items
          (tenant_id, user_id, source, ingredient_name, quantity)
          values ($1, $2, $3, $4, $5)
          returning *`,
-        [input.tenantId, input.userId, input.source, item.ingredientName, item.quantity]
-      );
-      const inserted = result.rows[0];
-      if (!inserted) throw new Error('Failed to create meal-plan shopping item');
-      added.push(inserted);
-      byIdentity.set(identity, inserted);
-    }
+      [input.tenantId, input.userId, input.source, item.ingredientName, item.quantity]
+    );
+    const inserted = result.rows[0];
+    if (!inserted) throw new Error('Failed to create meal-plan shopping item');
+    added.push(inserted);
+    byIdentity.set(identity, inserted);
+  }
 
-    return { added, alreadyPresent };
-  });
+  return { added, alreadyPresent };
 }
 
 export async function transferPurchasedShoppingListItem(
