@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   calculateInventoryCost,
+  readInventoryPrice,
   roundInventoryCost,
   type InventoryPriceReference,
 } from './inventory-price';
@@ -45,6 +46,37 @@ describe('inventory costing', () => {
     expect(shortage.status === 'known' ? roundInventoryCost(shortage.cost) : null).toBe('1000.00');
   });
 
+  it.each([
+    ['1/2', '2000.00', '1000.00'],
+    ['1 1/2', '6000.00', '3000.00'],
+    ['1/3', '1333.33', '666.67'],
+  ])(
+    'calculates the exact recipe fraction %s without imposing stock storage precision',
+    (quantity, total, half) => {
+      const requirements = [{ ingredientName: 'arroz', quantity, unit: 'kg' }];
+      expect(costRequirements(requirements, [lot(copKg)], 'COP')).toMatchObject({
+        status: 'complete',
+        amount: total,
+      });
+      expect(
+        costRecipePortions({
+          requirements,
+          recipeServings: 2,
+          requestedServings: 1,
+          lots: [lot(copKg)],
+          currency: 'COP',
+        })
+      ).toMatchObject({ status: 'complete', amount: half });
+    }
+  );
+  it.each(['1/0', '-1/2', '1 kg', 'constructor', ''])(
+    'rejects invalid recipe amount %s',
+    (quantity) => {
+      expect(
+        costRequirements([{ ingredientName: 'arroz', quantity, unit: 'kg' }], [lot(copKg)], 'COP')
+      ).toMatchObject({ status: 'unknown', amount: null });
+    }
+  );
   it('keeps legitimate zero prices known and rounds only the final amount', () => {
     const zero = { ...copKg, amount: '0' };
     expect(
@@ -148,7 +180,36 @@ describe('inventory costing', () => {
     ).toBe('399999996000.00');
   });
 
-  it('compares reference rates only within exact units or the g/kg and ml/l pairs', () => {
+  it('accepts multiple equivalent price references across mass and volume bases', () => {
+    const perGram = { ...copKg, amount: '4', referenceUnit: 'g' as const, referenceQuantity: '1' };
+    const perLiter: InventoryPriceReference = {
+      amount: '2',
+      currency: 'COP',
+      referenceQuantity: '1',
+      referenceUnit: 'l',
+    };
+    const perMilliliter = { ...perLiter, amount: '0.002', referenceUnit: 'ml' as const };
+
+    expect(selectIngredientPrice('arroz', [lot(copKg), lot(perGram)])).toMatchObject({
+      status: 'known',
+    });
+    expect(
+      selectIngredientPrice('leche', [lot(perLiter, 'leche'), lot(perMilliliter, 'leche')])
+    ).toMatchObject({ status: 'known' });
+  });
+
+  it('treats an omitted stored amount as missing or invalid metadata, never as a price', () => {
+    expect(readInventoryPrice({})).toMatchObject({ status: 'missing', price: null });
+    expect(
+      readInventoryPrice({
+        price_currency: 'COP',
+        price_reference_quantity: '1',
+        price_reference_unit: 'kg',
+      })
+    ).toMatchObject({ status: 'invalid', price: null });
+  });
+
+  it('compares reference rates only within exact units or the approved conversion pairs', () => {
     const units: readonly InventoryUnit[] = [
       'g',
       'kg',
@@ -163,7 +224,8 @@ describe('inventory costing', () => {
     const compatible = (a: InventoryUnit, b: InventoryUnit) =>
       a === b ||
       (['g', 'kg'].includes(a) && ['g', 'kg'].includes(b)) ||
-      (['ml', 'l'].includes(a) && ['ml', 'l'].includes(b));
+      (['ml', 'l'].includes(a) && ['ml', 'l'].includes(b)) ||
+      (['cucharada', 'cucharadita'].includes(a) && ['cucharada', 'cucharadita'].includes(b));
 
     for (const a of units) {
       for (const b of units) {
@@ -205,11 +267,12 @@ describe('inventory costing', () => {
     expect(portions('0.5', '1')).toMatchObject({ status: 'complete', amount: '8000.00' });
     expect(portions('2', '0.5')).toMatchObject({ status: 'complete', amount: '1000.00' });
     expect(portions('2', '0')).toMatchObject({
-      status: 'complete',
-      amount: '0.00',
-      knownCount: 1,
+      status: 'unknown',
+      amount: null,
+      knownCount: 0,
       totalCount: 1,
     });
+    expect(portions('2', '-1')).toMatchObject({ status: 'unknown', amount: null });
     expect(portions('0', '1')).toMatchObject({ status: 'unknown', amount: null });
     expect(portions('1', '99999999')).toMatchObject({
       status: 'complete',
@@ -291,5 +354,41 @@ describe('inventory costing', () => {
       currency: null,
       knownCount: 0,
     });
+  });
+  it('uses the same 3:1 spoon conversion in costs and lot reference rates', () => {
+    const tablespoon: InventoryPriceReference = {
+      amount: '300',
+      currency: 'COP',
+      referenceQuantity: '1',
+      referenceUnit: 'cucharada',
+    };
+    const teaspoon: InventoryPriceReference = {
+      ...tablespoon,
+      amount: '100',
+      referenceUnit: 'cucharadita',
+    };
+    expect(
+      selectIngredientPrice('Sal', [lot(tablespoon, 'Sal'), lot(teaspoon, 'Sal')])
+    ).toMatchObject({ status: 'known' });
+    expect(
+      selectIngredientPrice('Sal', [
+        lot(tablespoon, 'Sal'),
+        lot({ ...teaspoon, amount: '300' }, 'Sal'),
+      ])
+    ).toEqual({ status: 'unknown' });
+    expect(
+      costRequirements(
+        [{ ingredientName: 'Sal', quantity: '1', unit: 'cucharadita' }],
+        [lot(tablespoon, 'Sal')],
+        'COP'
+      )
+    ).toMatchObject({ status: 'complete', amount: '100.00' });
+    expect(
+      costRequirements(
+        [{ ingredientName: 'Sal', quantity: '1', unit: 'cucharada' }],
+        [lot(teaspoon, 'Sal')],
+        'COP'
+      )
+    ).toMatchObject({ status: 'complete', amount: '300.00' });
   });
 });

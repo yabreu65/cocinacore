@@ -10,6 +10,7 @@ import {
 } from './inventory-price';
 import { addCost } from './exact-inventory-cost';
 import { normalizeInventoryName } from './normalize-inventory';
+import { quantityBaseUnit, quantityUnitFactor } from './quantity-normalization';
 
 export type CostCoverage = Readonly<{
   status: 'complete' | 'partial' | 'unknown';
@@ -28,9 +29,8 @@ export type CostRequirement = Readonly<{
 export type InventoryCostLot = StoredInventoryPrice & Readonly<{ ingredient_name: string }>;
 
 function normalizedUnitRate(price: InventoryPriceReference): string {
-  // Normalize only units whose quantities share a physical basis. Other units
-  // remain distinct: a cup is not a gram, tablespoon, or teaspoon.
-  const multiplier = price.referenceUnit === 'kg' || price.referenceUnit === 'l' ? 1000 : 1;
+  // Share the exact conversion basis used by inventory deductions.
+  const multiplier = quantityUnitFactor(price.referenceUnit);
   const amount = parseInventoryDecimal(price.amount);
   const quantity = parseInventoryDecimal(price.referenceQuantity);
   if (amount === null || quantity === null || quantity <= 0) return '';
@@ -39,15 +39,10 @@ function normalizedUnitRate(price: InventoryPriceReference): string {
     return BigInt(whole) * BigInt(10000) + BigInt(fraction.padEnd(4, '0'));
   };
   const numerator = toScaled(amount);
-  const denominator = toScaled(quantity) * BigInt(multiplier);
+  const denominator = toScaled(quantity) * multiplier;
   const gcd = (a: bigint, b: bigint): bigint => (b === BigInt(0) ? a : gcd(b, a % b));
   const divisor = gcd(numerator, denominator);
-  const basis =
-    price.referenceUnit === 'g' || price.referenceUnit === 'kg'
-      ? 'mass'
-      : price.referenceUnit === 'ml' || price.referenceUnit === 'l'
-        ? 'volume'
-        : price.referenceUnit;
+  const basis = quantityBaseUnit(price.referenceUnit);
   return `${basis}:${numerator / divisor}/${denominator / divisor}`;
 }
 
@@ -140,7 +135,7 @@ export function costRecipePortions(input: {
 }): CostCoverage {
   const base = parseInventoryDecimal(input.recipeServings);
   const requested = parseInventoryDecimal(input.requestedServings);
-  if (base === null || requested === null || base <= 0)
+  if (base === null || requested === null || base <= 0 || requested <= 0)
     return {
       status: 'unknown',
       currency: input.currency,

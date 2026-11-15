@@ -1,8 +1,10 @@
+import { parseExactQuantity, type ExactQuantity } from './exact-quantity';
 import {
   normalizeInventoryUnit,
   parseInventoryDecimal,
   type InventoryUnit,
 } from './inventory-input';
+import { canCompareUnits, quantityUnitFactor } from './quantity-normalization';
 
 // Initial supported currencies, chosen explicitly by the organization. Never infer
 // a historical price's currency from the current preference or the browser locale.
@@ -103,7 +105,7 @@ export function parseInventoryPriceWrite(
 }
 
 export type StoredInventoryPrice = {
-  estimated_unit_price: string | number | null;
+  estimated_unit_price?: string | number | null;
   price_currency?: string | null;
   price_reference_quantity?: string | number | null;
   price_reference_unit?: string | null;
@@ -118,7 +120,7 @@ export type InventoryPriceState =
 export function readInventoryPrice(row: StoredInventoryPrice): InventoryPriceState {
   const metadata = [row.price_currency, row.price_reference_quantity, row.price_reference_unit];
   const hasMetadata = metadata.some((value) => value !== null && value !== undefined);
-  if (row.estimated_unit_price === null)
+  if (row.estimated_unit_price == null)
     return { status: hasMetadata ? 'invalid' : 'missing', price: null };
   if (!hasMetadata) return { status: 'unconfirmed', price: null };
   const validated = validatePriceReference({
@@ -155,33 +157,29 @@ function scaledDecimal(raw: string | number | null | undefined): bigint | null {
   return BigInt(whole) * DECIMAL_SCALE + BigInt(fraction.padEnd(4, '0'));
 }
 
-function compatibleUnits(a: InventoryUnit, b: InventoryUnit): boolean {
-  return (
-    a === b ||
-    (['g', 'kg'].includes(a) && ['g', 'kg'].includes(b)) ||
-    (['ml', 'l'].includes(a) && ['ml', 'l'].includes(b))
-  );
-}
-
-function baseFactor(unit: InventoryUnit): bigint {
-  return BigInt(unit === 'kg' || unit === 'l' ? 1000 : 1);
-}
-
 export function calculateInventoryCost(input: {
   quantity: string | number | null;
   unit: string | null;
   price: InventoryPriceReference;
   expectedCurrency?: InventoryCurrency;
+  exactQuantity?: ExactQuantity;
 }): InventoryCostResult {
   const validated = validatePriceReference(input.price);
   if (!validated.ok) return { status: 'unknown', reason: 'invalid-price' };
   const price = validated.price;
   if (input.expectedCurrency !== undefined && input.expectedCurrency !== price.currency)
     return { status: 'unknown', reason: 'different-currency' };
-  const quantity = scaledDecimal(input.quantity);
+  const quantity =
+    input.exactQuantity ?? (input.quantity === null ? null : parseExactQuantity(input.quantity));
   const unit = normalizeInventoryUnit(input.unit);
-  if (quantity === null || unit === null) return { status: 'unknown', reason: 'invalid-quantity' };
-  if (!compatibleUnits(unit, price.referenceUnit))
+  if (
+    quantity === null ||
+    quantity.numerator < BigInt(0) ||
+    quantity.denominator <= BigInt(0) ||
+    unit === null
+  )
+    return { status: 'unknown', reason: 'invalid-quantity' };
+  if (!canCompareUnits(unit, price.referenceUnit))
     return { status: 'unknown', reason: 'incompatible-unit' };
   const amount = scaledDecimal(price.amount);
   const reference = scaledDecimal(price.referenceQuantity);
@@ -191,8 +189,8 @@ export function calculateInventoryCost(input: {
     status: 'known',
     cost: {
       currency: price.currency,
-      numerator: amount * quantity * baseFactor(unit),
-      denominator: DECIMAL_SCALE * reference * baseFactor(price.referenceUnit),
+      numerator: amount * quantity.numerator * quantityUnitFactor(unit),
+      denominator: quantity.denominator * reference * quantityUnitFactor(price.referenceUnit),
     },
   };
 }

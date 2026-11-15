@@ -5,6 +5,7 @@ import {
   convertQuantity,
   convertExactQuantity,
   parseQuantity,
+  normalizeUnit,
   parseExplicitQuantity,
 } from './quantity-normalization';
 import { parseExactQuantity, exactQuantityText } from './exact-quantity';
@@ -96,6 +97,15 @@ describe('quantity-normalization', () => {
     expect(parseQuantity('3 tomates')).toMatchObject({ value: 3, unit: 'unidad' });
   });
 
+  it.each(['constructor', '__proto__', 'toString', 'hasOwnProperty'])(
+    'does not recognize inherited object properties as units: %s',
+    (unit) => {
+      expect(normalizeUnit(unit)).toBe('unknown');
+      expect(
+        compareInventoryToRequirement({ quantity: '2', unit }, { quantity: '1', unit }).status
+      ).toBe('unknown');
+    }
+  );
   it('compares and converts compatible units', () => {
     expect(canCompareUnits('kg', 'g')).toBe(true);
     expect(convertQuantity(1, 'kg', 'g')).toBe(1000);

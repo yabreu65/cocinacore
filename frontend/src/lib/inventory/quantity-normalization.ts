@@ -127,7 +127,7 @@ function parseNumericValue(raw: string): number | null {
 export function normalizeUnit(unit: string | null): NormalizedUnit {
   if (!unit) return 'unknown';
   const normalized = normalizeText(unit);
-  return UNIT_ALIASES[normalized] ?? 'unknown';
+  return Object.hasOwn(UNIT_ALIASES, normalized) ? UNIT_ALIASES[normalized] : 'unknown';
 }
 
 /** Strict unit evidence for persistence; do not infer count from ingredient names. */
@@ -158,15 +158,22 @@ export function parseExactStoredQuantity(item: {
   return { quantity, unit };
 }
 
+/** Shared physical basis for quantities and monetary references. */
+export function quantityUnitFactor(unit: NormalizedUnit): bigint {
+  return BigInt(unit === 'kg' || unit === 'l' ? 1000 : unit === 'cucharada' ? 3 : 1);
+}
+
+export function quantityBaseUnit(unit: NormalizedUnit): NormalizedUnit {
+  return unit === 'kg' ? 'g' : unit === 'l' ? 'ml' : unit === 'cucharada' ? 'cucharadita' : unit;
+}
+
 export function convertExactQuantity(
   value: ExactQuantity,
   from: NormalizedUnit,
   to: NormalizedUnit
 ): ExactQuantity | null {
   if (!canCompareUnits(from, to)) return null;
-  const factor = (unit: NormalizedUnit) =>
-    BigInt(unit === 'kg' || unit === 'l' ? 1000 : unit === 'cucharada' ? 3 : 1);
-  return multiplyQuantity(value, rational(factor(from), factor(to)));
+  return multiplyQuantity(value, rational(quantityUnitFactor(from), quantityUnitFactor(to)));
 }
 
 export function parseQuantity(input: string): ParsedQuantity {
