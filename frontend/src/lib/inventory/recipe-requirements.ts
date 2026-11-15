@@ -1,10 +1,23 @@
+import {
+  addQuantity,
+  quantityNumber,
+  zeroQuantity,
+  quantityBasis,
+  readQuantityBasis,
+  readUntrustedQuantityBasis,
+  parseExactQuantity,
+  type ExactQuantityBasis,
+} from './exact-quantity';
 import { normalizeInventoryName } from './normalize-inventory';
 import {
   type NormalizedUnit,
   canCompareUnits,
   compareInventoryToRequirement,
   convertQuantity,
+  convertExactQuantity,
   normalizeUnit,
+  normalizeExplicitUnit,
+  parseExactStoredQuantity,
   parseQuantity,
 } from './quantity-normalization';
 
@@ -12,6 +25,7 @@ export type RecipeRequirement = {
   ingredientName: string;
   normalizedName: string;
   requiredQuantity: number | null;
+  exactQuantityBasis?: ExactQuantityBasis;
   requiredUnit: NormalizedUnit;
   usedInRecipes: string[];
 };
@@ -97,6 +111,7 @@ function extractIngredientsNode(recipePayload: unknown): unknown[] {
 function parseIngredientObject(input: Record<string, unknown>): {
   name: string;
   quantity: number | null;
+  exactQuantityBasis?: ExactQuantityBasis;
   unit: NormalizedUnit;
 } {
   const rawName =
@@ -104,12 +119,27 @@ function parseIngredientObject(input: Record<string, unknown>): {
     (typeof input.ingredient === 'string' && input.ingredient) ||
     (typeof input.title === 'string' && input.title) ||
     '';
-  const qty = typeof input.quantity === 'number' ? input.quantity : null;
-  const unit = normalizeUnit(typeof input.unit === 'string' ? input.unit : null);
+  const rawUnit = typeof input.unit === 'string' ? input.unit : null;
+  const stored =
+    typeof input.quantity === 'string' && input.exactQuantityBasis === undefined
+      ? parseExactStoredQuantity({ quantity: input.quantity, unit: rawUnit })
+      : null;
+  const unit = stored?.unit ?? normalizeExplicitUnit(rawUnit);
+  const exact =
+    input.structured === false || unit === 'unknown'
+      ? null
+      : input.exactQuantityBasis !== undefined
+        ? readUntrustedQuantityBasis(input.quantity, input.exactQuantityBasis)
+        : (stored?.quantity ??
+          (typeof input.quantity === 'number' ? parseExactQuantity(input.quantity) : null));
+  const numeric = exact && exact.numerator > BigInt(0) ? quantityNumber(exact) : null;
+  const known = numeric !== null && Number.isFinite(numeric) && numeric > 0;
+  const basis = known && exact ? quantityBasis(exact) : undefined;
   return {
     name: rawName.trim(),
-    quantity: qty,
-    unit: unit === 'unknown' ? 'unidad' : unit,
+    quantity: known ? numeric : null,
+    ...(basis ? { exactQuantityBasis: basis } : {}),
+    unit: known ? unit : 'unknown',
   };
 }
 
@@ -153,6 +183,7 @@ export function normalizeRecipeIngredient(input: unknown): RecipeRequirement | n
       ingredientName: parsed.name,
       normalizedName: normalizeInventoryName(parsed.name),
       requiredQuantity: parsed.quantity,
+      ...(parsed.exactQuantityBasis ? { exactQuantityBasis: parsed.exactQuantityBasis } : {}),
       requiredUnit: parsed.unit,
       usedInRecipes: [],
     };
@@ -183,62 +214,82 @@ export function extractRecipeRequirements(recipePayload: unknown): RecipeRequire
 export function groupRequirementsByIngredient(
   requirements: RecipeRequirement[]
 ): RecipeRequirement[] {
-  const map = new Map<string, RecipeRequirement>();
-  const incompatibleQuantities = new Set<string>();
+  const groups = new Map<string, RecipeRequirement[]>();
   for (const item of requirements) {
-    const existing = map.get(item.normalizedName);
-    if (!existing) {
-      map.set(item.normalizedName, { ...item, usedInRecipes: [...item.usedInRecipes] });
-      continue;
-    }
-
-    if (incompatibleQuantities.has(item.normalizedName)) {
-      existing.requiredQuantity = null;
-      existing.requiredUnit = 'unknown';
-    } else if (existing.requiredQuantity !== null && item.requiredQuantity !== null) {
-      const compatible = canCompareUnits(existing.requiredUnit, item.requiredUnit);
-      const targetUnit =
-        existing.requiredUnit === 'kg' || item.requiredUnit === 'kg'
-          ? 'kg'
-          : existing.requiredUnit === 'l' || item.requiredUnit === 'l'
-            ? 'l'
-            : existing.requiredUnit;
-      const existingQuantity =
-        compatible && existing.requiredUnit === targetUnit
-          ? existing.requiredQuantity
-          : compatible
-            ? convertQuantity(existing.requiredQuantity, existing.requiredUnit, targetUnit)
-            : null;
-      const itemQuantity =
-        compatible && item.requiredUnit === targetUnit
-          ? item.requiredQuantity
-          : compatible
-            ? convertQuantity(item.requiredQuantity, item.requiredUnit, targetUnit)
-            : null;
-
-      if (existingQuantity !== null && itemQuantity !== null) {
-        existing.requiredQuantity = Number((existingQuantity + itemQuantity).toFixed(2));
-        existing.requiredUnit = targetUnit;
-      } else {
-        existing.requiredQuantity = null;
-        existing.requiredUnit = 'unknown';
-        incompatibleQuantities.add(item.normalizedName);
-      }
-    } else if (existing.requiredQuantity === null && item.requiredQuantity !== null) {
-      existing.requiredQuantity = item.requiredQuantity;
-      existing.requiredUnit = item.requiredUnit;
-    } else if (existing.requiredQuantity !== null && item.requiredQuantity === null) {
-      // keep structured quantity
-    } else {
-      existing.requiredQuantity = null;
-      existing.requiredUnit = 'unknown';
-    }
-
-    for (const source of item.usedInRecipes) {
-      if (!existing.usedInRecipes.includes(source)) existing.usedInRecipes.push(source);
-    }
+    const group = groups.get(item.normalizedName) ?? [];
+    group.push(item);
+    groups.set(item.normalizedName, group);
   }
-  return Array.from(map.values()).sort((a, b) => a.normalizedName.localeCompare(b.normalizedName));
+
+  return Array.from(groups.entries())
+    .map(([normalizedName, group]): RecipeRequirement => {
+      const first = { ...group[0]! };
+      // Do not retain a previous group's fraction after regrouping or invalidation.
+      delete first.exactQuantityBasis;
+      const usedInRecipes = Array.from(new Set(group.flatMap((item) => item.usedInRecipes)));
+      const allKnown = group.every(
+        (item) => item.requiredQuantity !== null && item.requiredUnit !== 'unknown'
+      );
+      if (!allKnown)
+        return {
+          ...first,
+          normalizedName,
+          requiredQuantity: null,
+          requiredUnit: 'unknown',
+          usedInRecipes,
+        };
+
+      const units = group.map((item) => item.requiredUnit);
+      if (units.some((unit) => !canCompareUnits(units[0]!, unit))) {
+        return {
+          ...first,
+          normalizedName,
+          requiredQuantity: null,
+          requiredUnit: 'unknown',
+          usedInRecipes,
+        };
+      }
+      const targetUnit = units.includes('kg')
+        ? 'kg'
+        : units.includes('l')
+          ? 'l'
+          : units.includes('cucharada')
+            ? 'cucharada'
+            : units[0]!;
+      let exactTotal = zeroQuantity;
+      for (const item of group) {
+        const exact = readQuantityBasis(item.requiredQuantity, item.exactQuantityBasis);
+        const quantity = exact && convertExactQuantity(exact, item.requiredUnit, targetUnit);
+        if (!quantity || quantity.numerator <= BigInt(0))
+          return {
+            ...first,
+            normalizedName,
+            requiredQuantity: null,
+            requiredUnit: 'unknown',
+            usedInRecipes,
+          };
+        exactTotal = addQuantity(exactTotal, quantity);
+      }
+      const total = quantityNumber(exactTotal);
+      const basis = quantityBasis(exactTotal);
+      return !Number.isFinite(total) || (total === 0 && exactTotal.numerator > BigInt(0))
+        ? {
+            ...first,
+            normalizedName,
+            requiredQuantity: null,
+            requiredUnit: 'unknown',
+            usedInRecipes,
+          }
+        : {
+            ...first,
+            normalizedName,
+            requiredQuantity: total,
+            ...(basis ? { exactQuantityBasis: basis } : {}),
+            requiredUnit: targetUnit,
+            usedInRecipes,
+          };
+    })
+    .sort((a, b) => a.normalizedName.localeCompare(b.normalizedName));
 }
 
 export function compareRecipeRequirementsToInventory(

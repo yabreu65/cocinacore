@@ -176,6 +176,37 @@ export function convertExactQuantity(
   return multiplyQuantity(value, rational(quantityUnitFactor(from), quantityUnitFactor(to)));
 }
 
+/** Parse a recipe line only when a positive amount and a real unit are explicit.
+ * Keep its ingredient name even when quantity/unit are unknown.
+ */
+export function parseExplicitRecipeLine(input: string): {
+  name: string;
+  amount: ExactQuantity | null;
+  unit: NormalizedUnit;
+} {
+  const clean = input.replace(/^(?:-\s+|[*•]\s*)/, '').trim();
+  const prefix =
+    /^(\d+\s+\d+\s*\/\s*\d+|\d+\s*\/\s*\d+|\d+(?:[.,]\d+)?)(?:\s+|(?=[A-Za-z]))(.*)$/u.exec(clean);
+  if (!prefix) return { name: clean, amount: null, unit: 'unknown' };
+  const remainder = prefix[2].trim();
+  const token = remainder.split(/\s+/, 1)[0];
+  const unit = normalizeExplicitUnit(token);
+  const name =
+    (unit === 'unknown' ? remainder : remainder.replace(/^\S+\s*/, ''))
+      .replace(/^de\s+/i, '')
+      .trim() || clean;
+  const amount = parseExactQuantity(prefix[1]);
+  if (
+    !amount ||
+    amount.numerator <= BigInt(0) ||
+    unit === 'unknown' ||
+    name === clean ||
+    /\bal gusto\b|\bcantidad necesaria\b|\bpara fre[ií]r\b/i.test(clean)
+  )
+    return { name, amount: null, unit: 'unknown' };
+  return { name, amount, unit };
+}
+
 export function parseQuantity(input: string): ParsedQuantity {
   const raw = input ?? '';
   const normalized = normalizeText(raw);

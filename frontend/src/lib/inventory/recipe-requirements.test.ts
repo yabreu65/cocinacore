@@ -56,6 +56,29 @@ describe('recipe-requirements', () => {
     });
   });
 
+  it('accepts legacy embedded quantities and rejects contradictory columns', () => {
+    const requirements = extractRecipeRequirements([
+      { name: 'arroz', quantity: '1 kg', unit: null },
+      { name: 'harina', quantity: '1 kg', unit: 'g' },
+    ]);
+    expect(requirements[0]).toMatchObject({ requiredQuantity: 1, requiredUnit: 'kg' });
+    expect(requirements[1]).toMatchObject({ requiredQuantity: null, requiredUnit: 'unknown' });
+  });
+  it('groups exact fractions and keeps unknown quantities unknown', () => {
+    const ingredients = [{ name: 'aceite', quantity: '1/3', unit: 'taza' }];
+    const grouped = groupRequirementsByIngredient(
+      extractRecipeRequirements([...ingredients, ...ingredients, ...ingredients])
+    );
+    expect(grouped[0]).toMatchObject({ requiredQuantity: 1, requiredUnit: 'taza' });
+    expect(
+      groupRequirementsByIngredient(
+        extractRecipeRequirements([...ingredients, { name: 'aceite', quantity: 'al gusto' }])
+      )[0]
+    ).toMatchObject({ requiredQuantity: null, requiredUnit: 'unknown' });
+    expect(
+      extractRecipeRequirements([{ name: 'sal', quantity: '2', unit: null }])[0]
+    ).toMatchObject({ requiredQuantity: null, requiredUnit: 'unknown' });
+  });
   it('groups duplicated ingredients', () => {
     const grouped = groupRequirementsByIngredient([
       {

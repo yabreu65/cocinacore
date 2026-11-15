@@ -1,4 +1,12 @@
-import { canCompareUnits, formatQuantity, normalizeUnit, parseQuantity } from './quantity-normalization';
+import { parseExplicitRecipeLine } from './quantity-normalization';
+import {
+  divideQuantity,
+  exactQuantityText,
+  multiplyQuantity,
+  parseExactQuantity,
+  quantityNumber,
+  type ExactQuantity,
+} from './exact-quantity';
 
 export interface ScaledRecipeIngredient {
   source: string;
@@ -22,52 +30,52 @@ function isValidTarget(value: number | null): value is number {
   return value !== null && Number.isInteger(value) && value >= 1 && value <= MAX_TARGET_SERVINGS;
 }
 
-function scaleIngredient(source: string, factor: number): ScaledRecipeIngredient {
-  const match = source.match(/^\s*((?:\d+\s+\d+\/\d+)|(?:\d+\/\d+)|(?:\d+(?:[.,]\d+)?))\s+(\S+)(?:\s+(.*?))?\s*$/u);
-  if (!match) return { source, text: source, scaled: false };
+/** A single factor for text and structured recipes. */
+export function recipePortionFactor(
+  baseServings: number | null,
+  targetServings: number | null
+): ExactQuantity | null {
+  if (!isPositiveFinite(baseServings) || !isValidTarget(targetServings)) return null;
+  const base = parseExactQuantity(baseServings);
+  const target = parseExactQuantity(targetServings);
+  if (!base || !target || base.numerator <= BigInt(0)) return null;
+  const factor = divideQuantity(target, base);
+  const numeric = quantityNumber(factor);
+  return Number.isFinite(numeric) && numeric > 0 ? factor : null;
+}
 
-  const amountText = match[1];
-  const unitText = match[2];
-  const suffix = match[3] ?? '';
-  const parsed = parseQuantity(`${amountText} ${unitText}`);
-  const normalizedUnit = normalizeUnit(unitText);
-  if (
-    !parsed.structured ||
-    parsed.value === null ||
-    normalizedUnit === 'unknown' ||
-    !canCompareUnits(normalizedUnit, normalizedUnit)
-  ) return { source, text: source, scaled: false };
-
-  const scaledValue = parsed.value * factor;
-  const roundedValue = Math.round((scaledValue + Number.EPSILON) * 100) / 100;
-  if (!Number.isFinite(roundedValue) || (parsed.value > 0 && roundedValue === 0)) {
-    return { source, text: source, scaled: false };
-  }
-
-  const formattedValue = formatQuantity(roundedValue, 'unknown');
-  const text = `${formattedValue} ${unitText}${suffix ? ` ${suffix}` : ''}`;
-  return { source, text, scaled: true };
+function scaleIngredient(source: string, factor: ExactQuantity): ScaledRecipeIngredient {
+  const parsed = parseExplicitRecipeLine(source);
+  if (!parsed.amount) return { source, text: source, scaled: false };
+  const quantity = exactQuantityText(multiplyQuantity(parsed.amount, factor));
+  if (quantity.length > 100) return { source, text: source, scaled: false };
+  return { source, text: `${quantity} ${parsed.unit} ${parsed.name}`, scaled: true };
 }
 
 export function scaleRecipeIngredients(
   ingredients: readonly string[],
   baseServings: number | null,
-  targetServings: number | null,
+  targetServings: number | null
 ): PortionScalingResult {
-  if (!isPositiveFinite(baseServings) || !isValidTarget(targetServings)) {
+  const exactFactor = recipePortionFactor(baseServings, targetServings);
+  if (!exactFactor) {
     return {
       status: 'unknown',
       factor: null,
       ingredients: ingredients.map((source) => ({ source, text: source, scaled: false })),
     };
   }
-
-  const factor = targetServings / baseServings;
-  const scaledIngredients = ingredients.map((source) => scaleIngredient(source, factor));
+  const factor = quantityNumber(exactFactor);
+  const scaledIngredients = ingredients.map((source) => scaleIngredient(source, exactFactor));
   const scaledCount = scaledIngredients.filter((ingredient) => ingredient.scaled).length;
 
   return {
-    status: scaledCount === 0 ? 'unknown' : scaledCount === scaledIngredients.length ? 'scaled' : 'partial',
+    status:
+      scaledCount === 0
+        ? 'unknown'
+        : scaledCount === scaledIngredients.length
+          ? 'scaled'
+          : 'partial',
     factor,
     ingredients: scaledIngredients,
   };
