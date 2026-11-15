@@ -18,6 +18,22 @@ import {
   type CulinaryProfileFormState,
 } from '@/lib/profile/culinary-profile-form';
 
+// Keep the submitted lists within the existing /api/profile TextListSchema.
+// Validate the same trimmed, non-empty entries that the payload sends.
+const PROFILE_LIST_MAX_ITEMS = 20;
+const PROFILE_LIST_MAX_LENGTH = 80;
+
+function ingredientListError(values: string[], label: string): string | null {
+  if (values.length > PROFILE_LIST_MAX_ITEMS) {
+    return `${label}: escribe como máximo ${PROFILE_LIST_MAX_ITEMS} ingredientes.`;
+  }
+  const invalidIndex = values.findIndex((value) => value.length > PROFILE_LIST_MAX_LENGTH);
+  if (invalidIndex !== -1) {
+    return `${label}: el ingrediente ${invalidIndex + 1} supera los ${PROFILE_LIST_MAX_LENGTH} caracteres.`;
+  }
+  return null;
+}
+
 type PreferenceGroupProps = {
   title: string;
   description: string;
@@ -98,13 +114,14 @@ export default function ProfilePage() {
         });
         if (!result.ok) throw new Error(result.error);
 
-        setProfileData(result.data);
         setEmail(result.data.user.email ?? '');
         setFullName(result.data.user.fullName ?? '');
         setLevel(result.data.profile?.level ?? '');
         setSelections(result.data.selections);
         setDetailedForm(profileFormFromApi(result.data.profile));
+        setProfileData(result.data);
       } catch (caughtError) {
+        setProfileData(null);
         setError(caughtError instanceof Error ? caughtError.message : 'No se pudo cargar perfil.');
       } finally {
         setLoading(false);
@@ -147,12 +164,26 @@ export default function ProfilePage() {
     });
   };
 
+  const formDisabled = loading || saving || profileData === null;
+  const payload = createCulinaryProfileUpdatePayload({
+    fullName,
+    level,
+    selections,
+    ...detailedForm,
+  });
+  const dislikedError = ingredientListError(payload.dislikedIngredients, 'Ingredientes que no te gustan');
+  const allergiesError = ingredientListError(payload.allergies, 'Alergias');
+
   const onSave = async (event: FormEvent) => {
     event.preventDefault();
-    if (loading || saving) return;
-    setSaving(true);
+    if (formDisabled) return;
     setError(null);
     setMessage(null);
+    if (dislikedError || allergiesError) {
+      setError('Corrige los campos indicados antes de guardar el perfil.');
+      return;
+    }
+    setSaving(true);
 
     try {
       const result = await safeFetch<{
@@ -163,14 +194,7 @@ export default function ProfilePage() {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
-        body: JSON.stringify(
-          createCulinaryProfileUpdatePayload({
-            fullName,
-            level,
-            selections,
-            ...detailedForm,
-          })
-        ),
+        body: JSON.stringify(payload),
       });
 
       if (!result.ok) throw new Error(result.error ?? 'No se pudo guardar perfil.');
@@ -206,7 +230,7 @@ export default function ProfilePage() {
         </div>
 
         {error ? (
-          <p className="mb-4 rounded-xl border border-bistro-danger/30 bg-bistro-danger/10 px-3 py-2 text-sm text-bistro-danger">
+          <p role="alert" className="mb-4 rounded-xl border border-bistro-danger/30 bg-bistro-danger/10 px-3 py-2 text-sm text-bistro-danger">
             {error}
           </p>
         ) : null}
@@ -217,7 +241,7 @@ export default function ProfilePage() {
         ) : null}
 
         <form onSubmit={onSave} className="grid gap-4">
-          <fieldset disabled={loading || saving} className="contents">
+          <fieldset disabled={formDisabled} className="contents">
             <div className="grid gap-3 rounded-2xl border border-bistro-border bg-white/70 p-4 md:grid-cols-3">
               <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
                 Nombre completo
@@ -264,7 +288,7 @@ export default function ProfilePage() {
 
             <PreferenceGroup
               title="Restricciones y dietas"
-              description="Opciones persistentes que CocinaCore debe evitar o respetar."
+              description="Elige las restricciones que CocinaCore debe respetar. Las recetas y los nombres de ingredientes se trabajan en español."
               terms={taxonomyGroups.dietary}
               selectedIds={selections.dietaryAvoidTermIds}
               max={12}
@@ -309,7 +333,7 @@ export default function ProfilePage() {
                   type="number"
                   min={5}
                   max={240}
-                  step={5}
+                  step={1}
                   inputMode="numeric"
                   placeholder="30"
                   value={detailedForm.availableTimeMinutes}
@@ -329,7 +353,13 @@ export default function ProfilePage() {
               <div className="grid gap-4 md:grid-cols-2">
                 <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
                   Ingredientes que no te gustan
+                  <span id="disliked-ingredients-hint" className="text-xs font-normal">
+                    Un ingrediente por línea en español. Hasta {PROFILE_LIST_MAX_ITEMS} ingredientes,
+                    con {PROFILE_LIST_MAX_LENGTH} caracteres por ingrediente.
+                  </span>
                   <textarea
+                    aria-invalid={Boolean(dislikedError)}
+                    aria-describedby={dislikedError ? 'disliked-ingredients-hint disliked-ingredients-error' : 'disliked-ingredients-hint'}
                     rows={4}
                     value={detailedForm.dislikedIngredientsText}
                     onChange={(event) =>
@@ -341,10 +371,20 @@ export default function ProfilePage() {
                     placeholder={'Un ingrediente por línea'}
                     className="rounded-xl border border-bistro-border bg-white px-3 py-2 outline-none"
                   />
+                  {dislikedError ? (
+                    <span id="disliked-ingredients-error" className="text-xs text-bistro-danger">{dislikedError}</span>
+                  ) : null}
                 </label>
                 <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
                   Alergias
+                  <span id="allergies-language-hint" className="text-xs font-normal">
+                    Escribe un ingrediente por línea en español (por ejemplo: huevo, leche, nueces).
+                    Hasta {PROFILE_LIST_MAX_ITEMS} ingredientes, con {PROFILE_LIST_MAX_LENGTH} caracteres por ingrediente.
+                    Revisa siempre los ingredientes y las etiquetas: el filtro no certifica ausencia de alérgenos.
+                  </span>
                   <textarea
+                    aria-invalid={Boolean(allergiesError)}
+                    aria-describedby={allergiesError ? 'allergies-language-hint allergies-error' : 'allergies-language-hint'}
                     rows={4}
                     value={detailedForm.allergiesText}
                     onChange={(event) =>
@@ -353,9 +393,12 @@ export default function ProfilePage() {
                         allergiesText: event.target.value,
                       }))
                     }
-                    placeholder={'Una alergia por línea'}
+                    placeholder={'Huevo\nLeche\nNueces'}
                     className="rounded-xl border border-bistro-border bg-white px-3 py-2 outline-none"
                   />
+                  {allergiesError ? (
+                    <span id="allergies-error" className="text-xs text-bistro-danger">{allergiesError}</span>
+                  ) : null}
                 </label>
               </div>
 
@@ -458,7 +501,7 @@ export default function ProfilePage() {
             <div className="flex flex-wrap gap-2">
               <button
                 type="submit"
-                disabled={saving || loading}
+                disabled={formDisabled}
                 className="h-11 rounded-xl bg-bistro-action-primary px-4 font-semibold text-white disabled:opacity-60"
               >
                 {saving ? 'Guardando...' : 'Guardar perfil culinario'}
@@ -475,6 +518,10 @@ export default function ProfilePage() {
 
         {loading ? (
           <p className="mt-3 text-sm text-bistro-text-secondary">Cargando perfil...</p>
+        ) : profileData === null ? (
+          <p className="mt-3 text-sm text-bistro-text-secondary">
+            No puedes modificar el perfil hasta que se cargue correctamente. Recarga la página para volver a intentarlo.
+          </p>
         ) : null}
       </section>
     </main>
