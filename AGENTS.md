@@ -26,3 +26,7 @@
 ## GGA pre-commit checks
 
 For routine Guardian Angel pre-commit reviews, follow [docs/ops/gga-review-policy.md](docs/ops/gga-review-policy.md). This policy does not waive candidate-specific review, delivery, or production gates.
+
+## Small work units
+
+Use [docs/ops/small-work-units.md](docs/ops/small-work-units.md) to define scope, triage findings, validate and close each unit. All existing review and delivery gates remain mandatory.
