@@ -1,4 +1,10 @@
-import { parseExactQuantity, exactQuantityText } from './exact-quantity';
+import {
+  parseExactQuantity,
+  exactQuantityText,
+  multiplyQuantity,
+  rational,
+  type ExactQuantity,
+} from './exact-quantity';
 import { exactStorageQuantity } from './stock-precision';
 
 export type NormalizedUnit =
@@ -124,6 +130,45 @@ export function normalizeUnit(unit: string | null): NormalizedUnit {
   return UNIT_ALIASES[normalized] ?? 'unknown';
 }
 
+/** Strict unit evidence for persistence; do not infer count from ingredient names. */
+export function normalizeExplicitUnit(unit: string | null): NormalizedUnit {
+  if (!unit) return 'unknown';
+  const token = normalizeText(unit);
+  return token !== 'tomate' && token !== 'tomates' && Object.hasOwn(UNIT_ALIASES, token)
+    ? UNIT_ALIASES[token]
+    : 'unknown';
+}
+
+/** Strict complete amount and unit evidence, including compatible legacy embedded units. */
+export function parseExactStoredQuantity(item: {
+  quantity: string | null;
+  unit: string | null;
+}): { quantity: ExactQuantity; unit: Exclude<NormalizedUnit, 'unknown'> } | null {
+  const raw = normalizeText(item.quantity ?? '');
+  const columnUnit = normalizeExplicitUnit(item.unit);
+  if (item.unit?.trim() && columnUnit === 'unknown') return null;
+  const numeric = parseExactQuantity(raw);
+  if (numeric) return columnUnit === 'unknown' ? null : { quantity: numeric, unit: columnUnit };
+  const embedded = /^(.+?)\s+([a-z]+)$/.exec(raw);
+  if (!embedded) return null;
+  const quantity = parseExactQuantity(embedded[1]);
+  const unit = normalizeExplicitUnit(embedded[2]);
+  if (!quantity || unit === 'unknown' || (columnUnit !== 'unknown' && columnUnit !== unit))
+    return null;
+  return { quantity, unit };
+}
+
+export function convertExactQuantity(
+  value: ExactQuantity,
+  from: NormalizedUnit,
+  to: NormalizedUnit
+): ExactQuantity | null {
+  if (!canCompareUnits(from, to)) return null;
+  const factor = (unit: NormalizedUnit) =>
+    BigInt(unit === 'kg' || unit === 'l' ? 1000 : unit === 'cucharada' ? 3 : 1);
+  return multiplyQuantity(value, rational(factor(from), factor(to)));
+}
+
 export function parseQuantity(input: string): ParsedQuantity {
   const raw = input ?? '';
   const normalized = normalizeText(raw);
@@ -222,6 +267,8 @@ export function convertQuantity(
   if (fromUnit === 'g' && toUnit === 'kg') return value / 1000;
   if (fromUnit === 'l' && toUnit === 'ml') return value * 1000;
   if (fromUnit === 'ml' && toUnit === 'l') return value / 1000;
+  if (fromUnit === 'cucharada' && toUnit === 'cucharadita') return value * 3;
+  if (fromUnit === 'cucharadita' && toUnit === 'cucharada') return value / 3;
 
   return null;
 }

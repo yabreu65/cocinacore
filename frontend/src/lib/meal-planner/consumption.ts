@@ -11,7 +11,10 @@ export type MealConsumptionSkipReason =
   | 'unknown_quantity_or_unit'
   | 'not_in_inventory'
   | 'incompatible_or_unstructured_inventory'
-  | 'insufficient_tracked_quantity';
+  | 'insufficient_tracked_quantity'
+  | 'unrepresentable_inventory_quantity'
+  | 'expired_inventory'
+  | 'invalid_expiration_date';
 
 export type MealConsumptionSkip = {
   ingredientName: string;
@@ -73,7 +76,10 @@ function isSkipReason(value: unknown): value is MealConsumptionSkipReason {
     value === 'unknown_quantity_or_unit' ||
     value === 'not_in_inventory' ||
     value === 'incompatible_or_unstructured_inventory' ||
-    value === 'insufficient_tracked_quantity'
+    value === 'insufficient_tracked_quantity' ||
+    value === 'unrepresentable_inventory_quantity' ||
+    value === 'expired_inventory' ||
+    value === 'invalid_expiration_date'
   );
 }
 

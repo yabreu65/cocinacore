@@ -358,8 +358,9 @@ test.describe('M5 U4 real consumption reconciliation', () => {
 
       const options = await page.request.get(endpoint);
       expect(options.status()).toBe(200);
-      expect((await options.json()) as { inventory: Array<{ id: string }> }).toMatchObject({
+      expect(await options.json()).toMatchObject({
         inventory: [{ id: fixture.inventoryId }],
+        receipt: { operationId: JSON.parse(firstText).operationId, movementCount: 1 },
       });
     } finally {
       await cleanupFixture(fixture);

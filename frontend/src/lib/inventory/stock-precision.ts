@@ -1,9 +1,4 @@
-import {
-  parseExactQuantity,
-  subtractQuantity,
-  quantityNumber,
-  type ExactQuantity,
-} from './exact-quantity';
+import { parseExactQuantity, subtractQuantity, type ExactQuantity } from './exact-quantity';
 // NUMERIC(12,4) stores at most eight integer and four fractional digits.
 // No rounding of a real consumption amount: stock and audit must agree.
 const SCALE = 10_000;
@@ -33,5 +28,7 @@ export function planRationalStockDeduction(
     return { ok: false, reason: 'precision' };
   const remaining = subtractQuantity(available, requested);
   if (remaining.numerator < BigInt(0)) return { ok: false, reason: 'insufficient' };
-  return { ok: true, quantity, remaining: quantityNumber(remaining) };
+  const storedRemaining = exactStorageQuantity(remaining);
+  if (storedRemaining === null) return { ok: false, reason: 'precision' };
+  return { ok: true, quantity, remaining: storedRemaining };
 }

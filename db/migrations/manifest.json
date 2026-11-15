@@ -1249,6 +1249,32 @@
           "identity": "recipe_inventory_items.recipe_inventory_price_reference_check"
         }
       ]
+    },
+    {
+      "id": "022",
+      "filename": "022_real_consumption_occurrences.sql",
+      "lane": "migration",
+      "sha256": "371ad525d4081e801da81e9802a44af745b0091931be061af818f6ceabe073e3",
+      "byteLength": 710,
+      "transactional": "required",
+      "legacyChecksumBackfillAllowed": false,
+      "catalogAdditions": [
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_items.real_consumption_items_ingredient_index_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_items.real_consumption_items_occurrence_key"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "real_consumption_items.real_consumption_items_occurrence_key"
+        }
+      ]
     }
   ],
   "baselineObjects": {

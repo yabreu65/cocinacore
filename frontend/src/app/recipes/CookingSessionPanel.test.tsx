@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   cookingSessionStatusLabel,
   executeCookingSessionRequest,
-  hasDuplicateReconciliationIngredients,
+  initialReconciliationItems,
   stableIngredientRows,
 } from './CookingSessionPanel';
 
@@ -76,19 +76,22 @@ describe('UX5: friendly cooking session statuses', () => {
   });
 });
 
-describe('reconciliation backend compatibility', () => {
-  it('blocks duplicate normalized names but keeps their UI row identities distinct', () => {
+describe('reconciliation occurrence contract', () => {
+  it('keeps repeated names as independent snapshot positions', () => {
     const duplicate = [
       { name: 'Arroz', quantity: '100', unit: 'g' },
       { name: ' ARROZ ', quantity: '200', unit: 'g' },
     ];
-    expect(stableIngredientRows(duplicate)).toHaveLength(2);
-    expect(hasDuplicateReconciliationIngredients(duplicate)).toBe(true);
+    const items = initialReconciliationItems(duplicate);
     expect(
-      hasDuplicateReconciliationIngredients([
-        { name: 'Arroz', quantity: '100', unit: 'g' },
-        { name: 'Tomate', quantity: '200', unit: 'g' },
-      ])
-    ).toBe(false);
+      items.map(({ key, ingredientIndex, originalIngredient }) => ({
+        key,
+        ingredientIndex,
+        originalIngredient,
+      }))
+    ).toEqual([
+      { key: 'occurrence:0', ingredientIndex: 0, originalIngredient: 'Arroz' },
+      { key: 'occurrence:1', ingredientIndex: 1, originalIngredient: ' ARROZ ' },
+    ]);
   });
 });

@@ -105,7 +105,7 @@ docker run --rm --network "$NETWORK" --env-file "$MIGRATION_DATABASE_ENV_FILE" \
   -e COCINACORE_SKIP_DOTENV=1 -e COCINACORE_SEPARATED_DB_LANES_ENABLED=true \
   -e MIGRATION_PG_LOCK_TIMEOUT_MS=5000 -e MIGRATION_PG_STATEMENT_TIMEOUT_MS=120000 \
   -e MIGRATION_EXPECTED_PENDING="$EXPECTED_PENDING" \
-  "$IMAGE" node scripts/run-migrations.js --lane migration --dry-run >/dev/null 2>&1 || fail 'canonical ledger/exact-pending preflight failed'
+  "$IMAGE" node scripts/run-migrations.js --lane migration --dry-run --stop-after 019 >/dev/null 2>&1 || fail 'canonical ledger/exact-pending preflight failed'
 
 # Verify the existing scheduled backup read-only from the exact-SHA release tree.
 DAILY_BACKUP_VERIFIED=$("$SOURCE"/scripts/verify-pawtech-cocinacore-daily-backup.sh 2>/dev/null) || fail 'daily backup verification failed'
@@ -116,14 +116,13 @@ docker run --rm --network "$NETWORK" --env-file "$MIGRATION_DATABASE_ENV_FILE" \
   -e COCINACORE_SKIP_DOTENV=1 -e COCINACORE_SEPARATED_DB_LANES_ENABLED=true \
   -e MIGRATION_PG_LOCK_TIMEOUT_MS=5000 -e MIGRATION_PG_STATEMENT_TIMEOUT_MS=120000 \
   -e MIGRATION_EXPECTED_PENDING="$EXPECTED_PENDING" \
-  "$IMAGE" node scripts/run-migrations.js --lane migration >/dev/null 2>&1 || fail 'canonical exact-SHA migration runner failed'
+  "$IMAGE" node scripts/run-migrations.js --lane migration --stop-after 019 >/dev/null 2>&1 || fail 'canonical exact-SHA migration runner failed'
 
-# Read-only canonical complete verification after the transactional migration.
+# Read-only canonical verification of the authorized 019 boundary; later migrations remain pending.
 docker run --rm --network "$NETWORK" --env-file "$MIGRATION_DATABASE_ENV_FILE" \
   -e COCINACORE_SKIP_DOTENV=1 -e COCINACORE_SEPARATED_DB_LANES_ENABLED=true \
   -e MIGRATION_PG_LOCK_TIMEOUT_MS=5000 -e MIGRATION_PG_STATEMENT_TIMEOUT_MS=120000 \
-  -e MIGRATION_EXPECTED_PENDING= \
-  "$IMAGE" node scripts/run-migrations.js --lane migration --verify-complete >/dev/null 2>&1 || fail 'read-only schema verification failed'
+  "$IMAGE" node scripts/run-migrations.js --lane migration --verify-boundary 019 >/dev/null 2>&1 || fail 'read-only schema verification failed'
 # Verify runtime ACLs through the existing runtime identity, without exposing the migration URL.
 docker run --rm --network "$NETWORK" --env-file "$DATABASE_ENV_FILE" \
   -e COCINACORE_SKIP_DOTENV=1 \

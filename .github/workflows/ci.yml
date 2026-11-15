@@ -225,7 +225,7 @@ jobs:
 
           npm run db:provision
           npm run db:migrate -- --stop-after 019
-          MIGRATION_EXPECTED_PENDING=020_tenant_rls_hardening.sql,021_inventory_price_reference.sql npm run db:migrate -- --verify-boundary 019
+          MIGRATION_EXPECTED_PENDING=020_tenant_rls_hardening.sql,021_inventory_price_reference.sql,022_real_consumption_occurrences.sql npm run db:migrate -- --verify-boundary 019
 
           printf '\\set runtime_password %s\n\\i ../scripts/provision-runtime-role.sql\n' "$runtime_password" \
             | psql "$admin_url" -X -v ON_ERROR_STOP=1
@@ -253,7 +253,7 @@ jobs:
           NODE
           psql "$admin_url" -X -v ON_ERROR_STOP=1 -f ../scripts/rls-candidates/020e-a1-inert-capability-guard.sql
 
-          MIGRATION_EXPECTED_PENDING=020_tenant_rls_hardening.sql,021_inventory_price_reference.sql npm run db:migrate -- --stop-after 020
+          MIGRATION_EXPECTED_PENDING=020_tenant_rls_hardening.sql,021_inventory_price_reference.sql,022_real_consumption_occurrences.sql npm run db:migrate -- --stop-after 020
           node <<'NODE'
           const { Client } = require('pg');
           const { attestActivatedCapabilities } = require('./scripts/activated-capabilities-attestation');
@@ -286,7 +286,7 @@ jobs:
           verify_log=''
 
           COCINACORE_ACTIVATION_DATABASE_URL="$admin_url" node scripts/activate-020-capabilities.js
-          MIGRATION_EXPECTED_PENDING=021_inventory_price_reference.sql npm run db:migrate
+          MIGRATION_EXPECTED_PENDING=021_inventory_price_reference.sql,022_real_consumption_occurrences.sql npm run db:migrate
           npm run db:migrate:verify
           psql "$admin_url" -X -v ON_ERROR_STOP=1 -f ../scripts/tests/test-inventory-021-constraints.sql
 

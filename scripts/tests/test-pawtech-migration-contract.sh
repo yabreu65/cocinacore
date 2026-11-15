@@ -193,13 +193,13 @@ contains "$MIGRATION" 'DAILY_BACKUP_VERIFIED=$("$SOURCE"/scripts/verify-pawtech-
 contains "$MIGRATION" '[ "$DAILY_BACKUP_VERIFIED" = DAILY_BACKUP_VERIFIED ]' 'daily backup verifier evidence must be exact and fail closed'
 not_contains "$MIGRATION" 'pg_dump|rclone[[:space:]]+(copy|sync)|backup-pawtech-cocinacore-predeploy\.sh|BACKUP_ROOT|pg_restore' 'migration must not create/copy backups, use the old helper/manual root, or run pg_restore'
 verifier_line=$(grep -nF 'DAILY_BACKUP_VERIFIED=$("$SOURCE"/scripts/verify-pawtech-cocinacore-daily-backup.sh' "$MIGRATION" | cut -d: -f1)
-runner_line=$(grep -nF 'node scripts/run-migrations.js --lane migration >/dev/null' "$MIGRATION" | cut -d: -f1)
+runner_line=$(grep -nF 'node scripts/run-migrations.js --lane migration --stop-after 019 >/dev/null' "$MIGRATION" | cut -d: -f1)
 [ -n "$verifier_line" ] || fail 'daily backup verifier invocation not found'
 [ "$verifier_line" -lt "$runner_line" ] || fail 'daily backup verification must precede the mutating canonical runner'
-dry_run_line=$(grep -nF 'node scripts/run-migrations.js --lane migration --dry-run' "$MIGRATION" | cut -d: -f1)
+dry_run_line=$(grep -nF 'node scripts/run-migrations.js --lane migration --dry-run --stop-after 019' "$MIGRATION" | cut -d: -f1)
 [ "$dry_run_line" -lt "$verifier_line" ] || fail 'daily backup verification must follow the canonical dry-run'
-contains "$MIGRATION" 'node scripts/run-migrations.js --lane migration --dry-run' 'canonical exact-pending dry-run must precede daily backup verification'
-contains "$MIGRATION" 'node scripts/run-migrations.js --lane migration --verify-complete' 'post-migration verification must use read-only complete verification'
+contains "$MIGRATION" 'node scripts/run-migrations.js --lane migration --dry-run --stop-after 019' 'canonical exact-pending dry-run must precede daily backup verification'
+contains "$MIGRATION" 'node scripts/run-migrations.js --lane migration --verify-boundary 019' 'post-migration verification must use read-only 019 boundary verification'
 contains "$MIGRATION" 'log "MIGRATIONS_VERIFIED sha=$RELEASE_SHA migrations=$EXPECTED_PENDING"' 'migration evidence must identify the SHA and ordered 018/019 migrations'
 contains "$MIGRATION" 'RECEIPT secretless=true database_changed=018-019-only daily_backup=verified migration_role=verified runtime_acl=verified schema_verification=passed' 'final operator receipt must be secretless and include 018/019, backup, identities, runtime ACL, and verification outcomes'
 contains "$MIGRATION" 'RUNTIME_M5_ACL_VERIFICATION_FAILED' 'post-migration runtime ACL verification must fail closed'

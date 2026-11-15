@@ -189,9 +189,11 @@ const appliedFunctionNames = new Set(appliedManifestMigrations().flatMap((entry)
 ));
 const schemaOwner = 'cocinacore_schema_owner';
 const futureSql = Buffer.from('select 1;');
+const futureId = String(manifest.migrations.length + 1).padStart(3, '0');
+const futureFilename = futureId + '_future.sql';
 if (process.env.FUTURE_018 === 'yes') {
   manifest.migrations.push({
-    id: '021', filename: '021_future.sql', lane: 'migration',
+    id: futureId, filename: futureFilename, lane: 'migration',
     sha256: crypto.createHash('sha256').update(futureSql).digest('hex'),
     byteLength: futureSql.length, transactional: 'required', legacyChecksumBackfillAllowed: false,
   });
@@ -201,13 +203,13 @@ fs.readFileSync = (file, options) => {
     const contents = Buffer.from(JSON.stringify(manifest));
     return options && typeof options === 'object' && options.encoding ? contents.toString(options.encoding) : contents;
   }
-  if (String(file).endsWith('/021_future.sql')) return futureSql;
+  if (String(file).endsWith('/' + futureFilename)) return futureSql;
   return originalReadFileSync(file, options);
 };
 fs.readdirSync = (directory, options) => {
   const files = originalReaddirSync(directory, options);
   return process.env.FUTURE_018 === 'yes' && String(directory) === path.dirname(process.env.MANIFEST_PATH)
-    ? [...files, '021_future.sql']
+    ? [...files, futureFilename]
     : files;
 };
 const queries = [];
@@ -466,7 +468,7 @@ Module._load = function (request, parent, isMain) {
   return originalLoad.call(this, request, parent, isMain);
 };
 process.argv = ['node', process.env.RUNNER_PATH, '--lane', 'migration'];
-if (process.env.RUNNER_MODE && process.env.RUNNER_MODE !== '.') process.argv.push(process.env.RUNNER_MODE);
+if (process.env.RUNNER_MODE && process.env.RUNNER_MODE !== '.') process.argv.push(...process.env.RUNNER_MODE.split(' '));
 if (process.env.RUNNER_MODE === '') process.exit = (code) => { process.exitCode = code; };
 process.env.DATABASE_URL = 'postgresql://offline.invalid/test';
 require(process.env.RUNNER_PATH);
@@ -690,7 +692,7 @@ for (const [ledger, fixture, label] of [
   }
 }
 const futureResult = run('--verify-complete', 'pending-018', true);
-if (futureResult.status !== 1 || !`${futureResult.stdout}${futureResult.stderr}`.includes('Pending migration: 021_future.sql')) {
+if (futureResult.status !== 1 || !`${futureResult.stdout}${futureResult.stderr}`.includes('Pending migration: ' + String(migrations.length + 1).padStart(3, '0') + '_future.sql')) {
   console.error(`offline future migration contract failed: ${futureResult.stderr}`);
   process.exit(1);
 }
@@ -704,9 +706,29 @@ if (checksummedLedger.status !== 1 || !`${checksummedLedger.stdout}${checksummed
 const adopted017Ledger = run('--dry-run', 'adopted-017', false, true, 'valid', 'valid', 'valid', {
   MIGRATION_EXPECTED_PENDING: '018_cooking_sessions.sql,019_real_consumption_reconciliation.sql',
 });
-if (adopted017Ledger.status !== 0 || !`${adopted017Ledger.stdout}${adopted017Ledger.stderr}`.includes('018_cooking_sessions.sql')) {
+if (adopted017Ledger.status !== 0 || !adopted017Ledger.stdout.includes('018_cooking_sessions.sql') || !adopted017Ledger.stdout.includes('019_real_consumption_reconciliation.sql') || /^02[0-9]_.* migration /m.test(adopted017Ledger.stdout)) {
   console.error(`offline provenance ledger 017 baseline compatibility failed: status=${adopted017Ledger.status} stdout=${adopted017Ledger.stdout} stderr=${adopted017Ledger.stderr}`);
   process.exit(1);
+}
+const m5Expected = { MIGRATION_EXPECTED_PENDING: '018_cooking_sessions.sql,019_real_consumption_reconciliation.sql' };
+const explicitM5 = run('--dry-run --stop-after 019', 'adopted-017', false, true, 'valid', 'valid', 'valid', m5Expected);
+if (explicitM5.status !== 0 || !explicitM5.stdout.includes('019_real_consumption_reconciliation.sql') || /^02[0-9]_.* migration /m.test(explicitM5.stdout)) {
+  console.error('explicit M5 dry-run boundary failed: ' + explicitM5.stdout + explicitM5.stderr);
+  process.exit(1);
+}
+for (const [mode,ledger] of [['--dry-run --stop-after 020','adopted-017'],['--dry-run --stop-after 019','pending-019'],['--dry-run --stop-after 019','complete']]) {
+  const rejected = run(mode,ledger,false,true,'valid','valid','valid',m5Expected);
+  if (rejected.status === 0 || /^018_.* migration /m.test(rejected.stdout)) {
+    console.error('unsafe M5 boundary accepted: ' + rejected.stdout + rejected.stderr);
+    process.exit(1);
+  }
+}
+for (const mode of ['--stop-after 019 --verify-complete','--stop-after 020 --verify-complete','--verify-boundary 019 --verify-complete','--verify-boundary 019 --dry-run','--stop-after 019 --verify-boundary 019']) {
+  const invalid = run(mode,'complete',false,true,'valid','valid','valid');
+  if (invalid.status !== 1 || !invalid.stderr.includes('Boundary options cannot be combined') || invalid.stdout.includes('POOL_CONFIG=')) {
+    console.error('incompatible flags accepted: ' + invalid.stdout + invalid.stderr);
+    process.exit(1);
+  }
 }
 const alteredProvenanceConstraint = run('--verify-complete', 'complete', false, true, 'none', 'valid', 'valid', {
   PROVENANCE_CONSTRAINT: 'invalid',

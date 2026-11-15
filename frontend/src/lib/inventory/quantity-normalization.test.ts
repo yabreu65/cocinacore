@@ -3,9 +3,11 @@ import {
   canCompareUnits,
   compareInventoryToRequirement,
   convertQuantity,
+  convertExactQuantity,
   parseQuantity,
   parseExplicitQuantity,
 } from './quantity-normalization';
+import { parseExactQuantity, exactQuantityText } from './exact-quantity';
 
 describe('quantity-normalization', () => {
   it('parses common quantity formats', () => {
@@ -99,6 +101,35 @@ describe('quantity-normalization', () => {
     expect(convertQuantity(1, 'kg', 'g')).toBe(1000);
     expect(convertQuantity(500, 'ml', 'l')).toBe(0.5);
     expect(canCompareUnits('g', 'ml')).toBe(false);
+  });
+
+  it.each([
+    ['kg', 'g', '1', '1000'],
+    ['g', 'kg', '500', '0.5'],
+    ['l', 'ml', '1', '1000'],
+    ['ml', 'l', '250', '0.25'],
+    ['cucharada', 'cucharadita', '1', '3'],
+    ['cucharadita', 'cucharada', '3', '1'],
+    ['cucharadita', 'cucharada', '1', '1/3'],
+    ['unidad', 'unidad', '2', '2'],
+    ['paquete', 'paquete', '2', '2'],
+    ['taza', 'taza', '2', '2'],
+  ] as const)('converts %s to %s exactly (%s)', (from, to, amount, expected) => {
+    const converted = convertExactQuantity(parseExactQuantity(amount)!, from, to);
+    expect(converted && exactQuantityText(converted)).toBe(expected);
+  });
+  it.each([
+    ['g', 'ml'],
+    ['taza', 'ml'],
+    ['cucharada', 'ml'],
+    ['unidad', 'paquete'],
+    ['unknown', 'unknown'],
+  ] as const)('does not invent conversion between %s and %s', (from, to) => {
+    expect(convertExactQuantity(parseExactQuantity('1')!, from, to)).toBeNull();
+  });
+  it('keeps legacy numeric spoon conversion consistent with exact units', () => {
+    expect(convertQuantity(1, 'cucharada', 'cucharadita')).toBe(3);
+    expect(convertQuantity(3, 'cucharadita', 'cucharada')).toBe(1);
   });
 
   it('returns meaningful comparison status', () => {

@@ -10,17 +10,24 @@ const ACTIVATION_ATTESTATION_SHA256 =
 const INVENTORY_021_ATTESTATION_SHA256 =
   '637be0a5b5c875f1f74d9088843fe2442024984e8f8d24365997301575072631';
 
+const OCCURRENCE_022_ATTESTATION_SHA256 = '1e21e5bc69286f9b5230f0c323ad89dbbbf35c3c0bcac1d0f519f5776d34391f';
+
 function loadActivationAttestation(version = '020') {
-  if (version !== '020' && version !== '021') {
+  if (!['020','021','022'].includes(version)) {
     throw new Error('ACTIVATED_CAPABILITIES_ATTESTATION_MISMATCH: unsupported catalog version.');
   }
-  const filename = version === '021'
+  const filename = version !== '020'
     ? 'activated-capabilities-021-attestation.sql'
     : 'activated-capabilities-attestation.sql';
-  const expectedHash = version === '021' ? INVENTORY_021_ATTESTATION_SHA256 : ACTIVATION_ATTESTATION_SHA256;
+  const expectedHash = version !== '020' ? INVENTORY_021_ATTESTATION_SHA256 : ACTIVATION_ATTESTATION_SHA256;
   const sql = fs.readFileSync(path.join(__dirname, filename));
   if (crypto.createHash('sha256').update(sql).digest('hex') !== expectedHash) {
     throw new Error('ACTIVATED_CAPABILITIES_ATTESTATION_MISMATCH: untrusted attestation SQL.');
+  }
+  if (version === '022') {
+    const extra = fs.readFileSync(path.join(__dirname, 'activated-capabilities-022-occurrences.sql'));
+    if (crypto.createHash('sha256').update(extra).digest('hex') !== OCCURRENCE_022_ATTESTATION_SHA256) throw new Error('ACTIVATED_CAPABILITIES_ATTESTATION_MISMATCH: untrusted 022 attestation SQL.');
+    return extra.toString('utf8') + '\n' + sql.toString('utf8');
   }
   return sql.toString('utf8');
 }
@@ -39,8 +46,8 @@ async function attestActivatedCapabilities(client, version = '020') {
   if (state !== 'active' && state !== 'pending') {
     throw new Error('ACTIVATED_CAPABILITIES_MISMATCH: invalid activation state result.');
   }
-  if (version === '021' && state !== 'active') {
-    throw new Error('ACTIVATED_CAPABILITIES_MISMATCH: ACTIVATION_PENDING: 021 requires active 020 capabilities.');
+  if (version !== '020' && state !== 'active') {
+    throw new Error('ACTIVATED_CAPABILITIES_MISMATCH: ACTIVATION_PENDING: post-020 migrations require active 020 capabilities.');
   }
   return state;
 }

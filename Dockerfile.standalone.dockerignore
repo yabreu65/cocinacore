@@ -29,6 +29,7 @@ frontend/scripts/**
 !frontend/scripts/activated-capabilities-attestation.js
 !frontend/scripts/activated-capabilities-attestation.sql
 !frontend/scripts/activated-capabilities-021-attestation.sql
+!frontend/scripts/activated-capabilities-022-occurrences.sql
 !frontend/scripts/bootstrap-owner.js
 !frontend/scripts/legacy-017-attestation.js
 !frontend/scripts/legacy-017-database-attestation.js
