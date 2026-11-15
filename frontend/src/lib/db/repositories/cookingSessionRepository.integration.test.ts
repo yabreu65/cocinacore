@@ -83,7 +83,7 @@ suite('cookingSessionRepository PostgreSQL integration', () => {
     const payload = planPayload(recipeId, versionId);
     const plan = await admin.query<{ id: string; updated_at: string }>(
       `insert into public.user_meal_plans (id, tenant_id, user_id, people_count, period, mode, base_cuisine, calendar_payload)
-       values ($1, $2, $3, 2, 'week', 'menu_to_shopping', 'u3', $4::jsonb) returning id, updated_at`,
+       values ($1, $2, $3, 2, 'week', 'menu_to_shopping', 'u3', $4::jsonb) returning id, updated_at::text as updated_at`,
       [planId, tenantId, userId, JSON.stringify(payload)]
     );
     fixture = { tenantId, userId, recipeId, versionId, planId };

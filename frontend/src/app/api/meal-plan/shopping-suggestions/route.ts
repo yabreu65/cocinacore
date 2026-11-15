@@ -171,7 +171,8 @@ export async function POST(request: NextRequest) {
         if (
           proposal.status !== 'ready' ||
           !equalPostgresTimestamps(source.plan.updated_at, body.expectedUpdatedAt) ||
-          proposal.sourceFingerprint !== body.expectedFingerprint
+          (proposal.sourceFingerprint !== body.expectedFingerprint &&
+            source.legacyFingerprint !== body.expectedFingerprint)
         ) {
           return NextResponse.json(
             { error: 'La propuesta está desactualizada. Prepará una nueva propuesta.' },

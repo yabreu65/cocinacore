@@ -649,4 +649,26 @@ describe('POST /api/meal-plan/shopping-suggestions', () => {
     expect(write?.client).toBe(reads[0].client);
     expect(calls.indexOf(write!)).toBeLessThan(calls.indexOf(reads[1]));
   });
+  it('accepts a full legacy UTC fingerprint only when all current evidence matches', async () => {
+    const row = {
+      ...inventoryItem('Arroz', '500', 'g'),
+      expiration_date: '2026-11-20 00:00:00+00',
+      updated_at: '2026-10-27 12:00:00.123456+00',
+    };
+    listInventoryItemsByTenantMock.mockResolvedValue([row]);
+    const body = await confirmationBody();
+    const canonical = {
+      ...row,
+      expiration_date: '2026-11-20T00:00:00.000Z',
+      updated_at: '2026-10-27T12:00:00.123456Z',
+    };
+    listInventoryItemsByTenantMock.mockResolvedValue([canonical]);
+    expect((await POST(postRequest(body))).status).toBe(200);
+    addMealPlanShoppingItemsMock.mockClear();
+    listInventoryItemsByTenantMock.mockResolvedValue([
+      { ...canonical, updated_at: '2026-10-27T12:00:00.123457Z' },
+    ]);
+    expect((await POST(postRequest(body))).status).toBe(409);
+    expect(addMealPlanShoppingItemsMock).not.toHaveBeenCalled();
+  });
 });

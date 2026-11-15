@@ -5,6 +5,7 @@ import type { RecipeInventoryItemRow, ShoppingListItemRow, UserMealPlanRow } fro
 import { parseStructuredMealPlanValue } from '@/lib/meal-planner/structured-plan';
 import {
   buildPredictiveShoppingProposal,
+  createLegacyUtcShoppingFingerprint,
   type PredictiveShoppingProposal,
 } from '@/lib/meal-planner/predictive-shopping';
 
@@ -13,7 +14,12 @@ type Source =
   | { status: 'not_found' }
   | { status: 'invalid_plan' }
   | { status: 'truncated' }
-  | { status: 'loaded'; plan: UserMealPlanRow; proposal: PredictiveShoppingProposal };
+  | {
+      status: 'loaded';
+      plan: UserMealPlanRow;
+      proposal: PredictiveShoppingProposal;
+      legacyFingerprint: string | null;
+    };
 
 /** All participating writers acquire this tenant lock before reading or
  * modifying these sources. READ COMMITTED makes reads after a lock wait fresh.
@@ -50,17 +56,19 @@ export async function withShoppingProposalSource<T>(
         [scope.tenantId, scope.userId, MAX_SOURCE_ROWS + 1]
       );
       if (shopping.rows.length > MAX_SOURCE_ROWS) return callback(client, { status: 'truncated' });
+      const input = {
+        plan: parsed.plan,
+        consumptionPayload: plan.consumption_payload,
+        inventoryItems: inventory.rows,
+        shoppingItems: shopping.rows,
+        horizonDays,
+        now: new Date(),
+      };
       return callback(client, {
         status: 'loaded',
         plan,
-        proposal: buildPredictiveShoppingProposal({
-          plan: parsed.plan,
-          consumptionPayload: plan.consumption_payload,
-          inventoryItems: inventory.rows,
-          shoppingItems: shopping.rows,
-          horizonDays,
-          now: new Date(),
-        }),
+        proposal: buildPredictiveShoppingProposal(input),
+        legacyFingerprint: createLegacyUtcShoppingFingerprint(input),
       });
     },
     { isolationLevel: 'read committed' }

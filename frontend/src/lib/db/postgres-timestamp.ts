@@ -7,7 +7,7 @@ export function postgresTimestampToIso(value: string): string {
     /^(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(Z|[+-]\d{2}(?::?\d{2})?)?$/.exec(
       value
     );
-  if (!match) throw new Error('Unsupported PostgreSQL timestamp.');
+  if (!match || match[0] !== value) throw new Error('Unsupported PostgreSQL timestamp.');
   const [, day, hours, minutes, seconds, fraction = '', offset = 'Z'] = match;
   const calendar = new Date(day + 'T00:00:00.000Z');
   if (
@@ -29,7 +29,11 @@ export function postgresTimestampToIso(value: string): string {
 
 /** Display-only conversion; preserve full source timestamp for concurrency and expiry. */
 export function postgresTimestampDisplayDate(value: string): Date {
-  return new Date(value.replace(/(\.\d{3})\d+(?=Z$)/, '$1'));
+  try {
+    return new Date(postgresTimestampToIso(value).replace(/(\.\d{3})\d+(?=Z$)/, '$1'));
+  } catch {
+    return new Date(NaN);
+  }
 }
 
 /** Revision tokens are instants, not presentation strings. Reject ambiguous

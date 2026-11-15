@@ -14,7 +14,7 @@ describe('PostgreSQL timestamp contract', () => {
     ['2026-11-14 12:34:56.123', '2026-11-14T12:34:56.123Z'],
   ])('normalizes %s preserving exact precision', (raw, expected) => {
     expect(postgresTimestampToIso(raw)).toBe(expected);
-    expect(postgresTimestampDisplayDate(expected).getTime()).toBe(
+    expect(postgresTimestampDisplayDate(raw).getTime()).toBe(
       new Date(expected.replace(/(\.\d{3})\d+Z$/, '$1Z')).getTime()
     );
   });
@@ -39,10 +39,12 @@ describe('PostgreSQL timestamp contract', () => {
       normalizeExpirationDate(postgresTimestampToIso('2026-11-14 00:00:00+00'), 'America/Bogota')
     ).toBe('2026-11-14');
   });
-  it.each(['2026-02-30 12:00:00+00', '2026-11-14 24:00:00+00', 'infinity'])(
-    'rejects invalid or unsupported values: %s',
-    (raw) => {
-      expect(() => postgresTimestampToIso(raw)).toThrow();
-    }
-  );
+  it.each([
+    '2026-02-30 12:00:00+00',
+    '2026-11-14 24:00:00+00',
+    'infinity',
+    '2026-11-14T12:00:00Z\n',
+  ])('rejects invalid or unsupported values: %s', (raw) => {
+    expect(() => postgresTimestampToIso(raw)).toThrow();
+  });
 });

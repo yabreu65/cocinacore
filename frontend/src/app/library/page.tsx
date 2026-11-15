@@ -1,3 +1,4 @@
+import { postgresTimestampDisplayDate } from '@/lib/db/postgres-timestamp';
 import Link from 'next/link';
 import { getCurrentUser } from '@/lib/auth/server';
 import { scopedTransaction } from '@/lib/db';
@@ -44,35 +45,40 @@ export default async function LibraryPage() {
   }
 
   const tenantId = user.tenant.tenantId;
-  const { pdfsResult, booksResult } = await scopedTransaction(
-    { tenantId, userId: user.id },
-    async (client) => {
-      const [pdfs, books] = await Promise.all([
-        client.query<PdfRow>(
-          `select id, tenant_book_id, storage_path, created_at, processing_status, page_count, uploaded_by
-           from public.tenant_pdf_library
-           where tenant_id = $1
-           order by created_at desc
-           limit 50`,
-          [tenantId]
-        ),
-        client.query<BookRow>(
-          `select id, title, author
-           from public.tenant_books
-           where tenant_id = $1
-           order by created_at desc
-           limit 50`,
-          [tenantId]
-        ),
-      ]);
-      return { pdfsResult: pdfs, booksResult: books };
+  const result = await scopedTransaction({ tenantId, userId: user.id }, (client) =>
+    client.query<
+      PdfRow & {
+        book_id: string | null;
+        book_title: string | null;
+        book_author: string | null;
+      }
+    >(
+      `with visible_pdfs as (
+         select id, tenant_id, tenant_book_id, storage_path, created_at, processing_status, page_count, uploaded_by
+         from public.tenant_pdf_library
+         where tenant_id = $1
+         order by created_at desc, id desc
+         limit 50
+       )
+       select p.*, b.id as book_id, b.title as book_title, b.author as book_author
+       from visible_pdfs p
+       left join public.tenant_books b on b.id = p.tenant_book_id and b.tenant_id = $1
+       order by p.created_at desc, p.id desc`,
+      [tenantId]
+    )
+  );
+  const pdfs = result.rows;
+  const booksById = new Map<string, BookRow>();
+  for (const row of pdfs) {
+    if (row.book_id && row.book_title !== null) {
+      booksById.set(row.book_id, {
+        id: row.book_id,
+        title: row.book_title,
+        author: row.book_author,
+      });
     }
-  );
-
-  const pdfs = pdfsResult.rows;
-  const books = booksResult.rows.filter((book) =>
-    pdfs.some((pdf) => pdf.tenant_book_id === book.id)
-  );
+  }
+  const books = [...booksById.values()];
 
   return (
     <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 text-bistro-text-primary md:px-6">
@@ -122,7 +128,7 @@ export default async function LibraryPage() {
                     Estado: {pdf.processing_status} · Páginas: {pdf.page_count ?? '-'}
                   </p>
                   <p className="mt-2 text-xs text-bistro-text-secondary">
-                    {new Date(pdf.created_at).toLocaleString()}
+                    {postgresTimestampDisplayDate(pdf.created_at).toLocaleString()}
                   </p>
                 </li>
               ))}

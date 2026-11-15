@@ -3,6 +3,7 @@ import type { RecipeInventoryItemRow, ShoppingListItemRow } from '@/lib/db/types
 import {
   buildPredictiveShoppingProposal,
   createPredictiveShoppingFingerprint,
+  createLegacyUtcShoppingFingerprint,
 } from './predictive-shopping';
 import type { StructuredMealPlan } from './structured-plan';
 
@@ -262,5 +263,59 @@ describe('predictive shopping', () => {
       inventoryItems: [inventory('Arroz', '750', 'g')],
     });
     expect(original).not.toBe(changed);
+  });
+  it('reconstructs only the full legacy UTC fingerprint without losing microseconds', () => {
+    const input = {
+      plan: plan(),
+      consumptionPayload: {},
+      horizonDays: 7 as const,
+      now,
+      inventoryItems: [
+        inventory('Arroz', '500', 'g', {
+          expiration_date: '2026-11-20 00:00:00+00',
+          updated_at: '2026-10-27 12:00:00.123456+00',
+        }),
+      ],
+      shoppingItems: [
+        shopping('Sal', 'purchased', {
+          updated_at: '2026-10-27 12:00:00.1234+00',
+          transferred_at: '2026-10-27 12:00:00+00',
+        }),
+      ],
+    };
+    const legacy = createPredictiveShoppingFingerprint(input);
+    const canonical = {
+      ...input,
+      inventoryItems: [
+        {
+          ...input.inventoryItems[0],
+          expiration_date: '2026-11-20T00:00:00.000Z',
+          updated_at: '2026-10-27T12:00:00.123456Z',
+        },
+      ],
+      shoppingItems: [
+        {
+          ...input.shoppingItems[0],
+          updated_at: '2026-10-27T12:00:00.123400Z',
+          transferred_at: '2026-10-27T12:00:00.000Z',
+        },
+      ],
+    };
+    expect(createPredictiveShoppingFingerprint(canonical)).not.toBe(legacy);
+    expect(createLegacyUtcShoppingFingerprint(canonical)).toBe(legacy);
+    expect(
+      createLegacyUtcShoppingFingerprint({
+        ...canonical,
+        inventoryItems: [
+          { ...canonical.inventoryItems[0], updated_at: '2026-10-27T12:00:00.123457Z' },
+        ],
+      })
+    ).not.toBe(legacy);
+    expect(
+      createLegacyUtcShoppingFingerprint({
+        ...canonical,
+        inventoryItems: [{ ...canonical.inventoryItems[0], expiration_date: '2026-11-20' }],
+      })
+    ).toBeNull();
   });
 });

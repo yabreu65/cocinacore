@@ -1,3 +1,4 @@
+import { postgresLegacyUtcTimestamp } from '@/lib/db/postgres-timestamp';
 import { createHash } from 'node:crypto';
 import type { RecipeInventoryItemRow, ShoppingListItemRow } from '@/lib/db/types';
 import { buildMealPlanCoverageForecast, type MealPlanCoverageForecast } from './coverage-forecast';
@@ -158,6 +159,32 @@ export function createPredictiveShoppingFingerprint(
   return createHash('sha256')
     .update(JSON.stringify(stableValue(payload)))
     .digest('hex');
+}
+
+/** Compatibility for pre-ISO fingerprints issued by a PostgreSQL UTC
+ * session. Unreconstructable legacy representations require a fresh review. */
+export function createLegacyUtcShoppingFingerprint(
+  input: BuildPredictiveShoppingProposalInput
+): string | null {
+  try {
+    return createPredictiveShoppingFingerprint({
+      ...input,
+      inventoryItems: input.inventoryItems.map((item) => ({
+        ...item,
+        expiration_date:
+          item.expiration_date === null ? null : postgresLegacyUtcTimestamp(item.expiration_date),
+        updated_at: postgresLegacyUtcTimestamp(item.updated_at),
+      })),
+      shoppingItems: input.shoppingItems.map((item) => ({
+        ...item,
+        transferred_at:
+          item.transferred_at === null ? null : postgresLegacyUtcTimestamp(item.transferred_at),
+        updated_at: postgresLegacyUtcTimestamp(item.updated_at),
+      })),
+    });
+  } catch {
+    return null;
+  }
 }
 
 function unknownProposal(
