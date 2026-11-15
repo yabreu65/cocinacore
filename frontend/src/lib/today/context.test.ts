@@ -72,6 +72,23 @@ describe('buildTodayContext', () => {
     }
   });
 
+  it('preserves calendar expiry and uses local dates for legacy timestamps', () => {
+    const result = buildTodayContext({
+      ...base, asOf: '2025-04-10', timeZone: 'America/Bogota',
+      inventory: [
+        { ...inventory[0], ingredient_name: 'calendar', expiration_date: '2025-04-10T00:00:00.000Z' },
+        { ...inventory[0], ingredient_name: 'expired locally', expiration_date: '2025-04-10T03:00:00Z' },
+        { ...inventory[0], ingredient_name: 'valid locally', expiration_date: '2025-04-11T03:00:00Z' },
+      ],
+    });
+    expect(result.status).toBe('ready');
+    if (result.status !== 'ready') return;
+    expect(result.providerContext.inventory.map(({ name, expiresOn }) => ({ name, expiresOn }))).toEqual([
+      { name: 'calendar', expiresOn: '2025-04-10' },
+      { name: 'valid locally', expiresOn: '2025-04-10' },
+    ]);
+  });
+
   it('provides only unconsumed matching-slot saved-plan candidates and no snack candidates', () => {
     const result = buildTodayContext({ ...base, latestPlan: plan() });
     expect(result.status).toBe('ready');

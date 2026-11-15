@@ -75,20 +75,20 @@ describe('listTodayRecipeHistoryByUserAndTenant', () => {
 
   it('selects only history context columns with tenant, user, cutoff and parameterized capped limit', async () => {
     queryMock.mockResolvedValue({ rows: [] });
-    await listTodayRecipeHistoryByUserAndTenant('user-1', 'tenant-1', '2025-04-01T00:00:00Z', 90);
+    await listTodayRecipeHistoryByUserAndTenant('user-1', 'tenant-1', '2025-04-01', 90);
     const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
     expect(sql).toMatch(/select\s+source,\s*recipe_title,\s*recipe_payload,\s*created_at/i);
     expect(sql).toContain('user_id = $1');
     expect(sql).toContain('tenant_id = $2');
-    expect(sql).toContain('created_at >= $3');
+    expect(sql).toContain('(created_at at time zone $5)::date = $3::date');
     expect(sql).toMatch(/limit \$4/i);
     expect(sql).not.toMatch(/select\s+\*/i);
-    expect(params).toEqual(['user-1', 'tenant-1', '2025-04-01T00:00:00Z', 20]);
+    expect(params).toEqual(['user-1', 'tenant-1', '2025-04-01', 20, 'UTC']);
   });
 
   it('bounds a zero limit to a positive value', async () => {
     queryMock.mockResolvedValue({ rows: [] });
-    await listTodayRecipeHistoryByUserAndTenant('user-1', 'tenant-1', '2025-04-01T00:00:00Z', 0);
+    await listTodayRecipeHistoryByUserAndTenant('user-1', 'tenant-1', '2025-04-01', 0);
     expect((queryMock.mock.calls[0] as [string, unknown[]])[1][3]).toBe(1);
   });
 });

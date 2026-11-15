@@ -83,11 +83,11 @@ describe('listTodayInventoryContextByTenant', () => {
     expect(result).toEqual(rows);
     expect(result[0].tenant_id).toBe('00000000-0000-4000-8000-000000000001');
     expect(sql).toContain('tenant_id = $1');
-    expect(sql).toMatch(/expiration_date\s+is null\s+or\s+expiration_date\s*>=\s*\$2/i);
+    expect(sql).toContain('(expiration_date at time zone $4)::date end) >= $2::date');
     expect(sql).toMatch(/order by expiration_date asc nulls last/i);
     expect(sql).toMatch(/limit \$3/i);
     expect(sql).not.toMatch(/select\s+\*/i);
-    expect(params).toEqual(['00000000-0000-4000-8000-000000000001', '2025-04-10', 50]);
+    expect(params).toEqual(['00000000-0000-4000-8000-000000000001', '2025-04-10', 50, 'UTC']);
   });
 
   it('runs the same tenant-shared date-limited projection on the scoped client', async () => {
@@ -123,13 +123,12 @@ describe('listTodayInventoryContextByTenant', () => {
     expect(sql).toMatch(
       /select\s+tenant_id,\s*ingredient_name,\s*quantity,\s*unit,\s*expiration_date/i
     );
-    expect(sql).toMatch(
-      /tenant_id = \$1 and \(expiration_date is null or expiration_date >= \$2\)/i
-    );
+    expect(sql).toContain('tenant_id = $1 and (expiration_date is null or');
+    expect(sql).toContain('(expiration_date at time zone $4)::date end) >= $2::date');
     expect(sql).toMatch(/order by expiration_date asc nulls last/i);
     expect(sql).toMatch(/limit \$3/i);
     expect(sql).not.toMatch(/user_id\s*=/i);
-    expect(params).toEqual(['00000000-0000-4000-8000-000000000001', '2025-04-10', 50]);
+    expect(params).toEqual(['00000000-0000-4000-8000-000000000001', '2025-04-10', 50, 'UTC']);
     await expect(
       listTodayInventoryContextByTenant('other', '2025-04-10', 50, scope)
     ).rejects.toThrow('Inventory scope mismatch');

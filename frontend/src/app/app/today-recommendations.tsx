@@ -631,16 +631,14 @@ export default function TodayRecommendations({ onChoose }: TodayRecommendationsP
   const [error, setError] = useState<string | null>(null);
 
   const selectSlot = (nextSlot: TodaySlot) => {
-    if (nextSlot !== slot) {
-      // A response for the previous meal can no longer update this selection.
-      // Release the UI immediately rather than waiting for that request to settle.
-      requestGeneration.current += 1;
-      activeRequest.current += 1;
-      activeController.current?.abort();
-      activeController.current = null;
-      setLoading(false);
-      setLoadingSlot(null);
-    }
+    if (nextSlot === slot) return;
+    // A response for the previous meal can no longer update this selection.
+    requestGeneration.current += 1;
+    activeRequest.current += 1;
+    activeController.current?.abort();
+    activeController.current = null;
+    setLoading(false);
+    setLoadingSlot(null);
     setSlot(nextSlot);
     setResponse(null);
     setError(null);
@@ -663,7 +661,10 @@ export default function TodayRecommendations({ onChoose }: TodayRecommendationsP
         credentials: 'same-origin',
         signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ slot: requestedSlot }),
+        body: JSON.stringify({
+          slot: requestedSlot,
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        }),
       });
       if (!result.ok) throw new Error(result.error);
       if (generation === requestGeneration.current) setResponse(result.data);

@@ -70,17 +70,21 @@ export async function listTodayInventoryContextByTenant(
   tenantId: string,
   asOf: string,
   limit: number,
-  scope: AuthenticatedDbScope
+  scope: AuthenticatedDbScope,
+  timeZone: string = 'UTC'
 ): Promise<TodayInventoryContextRow[]> {
   const boundedLimit = Number.isFinite(limit)
     ? Math.min(MAX_TODAY_INVENTORY_LIMIT, Math.max(1, Math.floor(limit)))
     : MAX_TODAY_INVENTORY_LIMIT;
   const sql = `select tenant_id, ingredient_name, quantity, unit, expiration_date
      from public.recipe_inventory_items
-     where tenant_id = $1 and (expiration_date is null or expiration_date >= $2)
-     order by expiration_date asc nulls last
+     where tenant_id = $1 and (expiration_date is null or
+       (case when (expiration_date at time zone 'UTC')::time = time '00:00:00'
+         then (expiration_date at time zone 'UTC')::date
+         else (expiration_date at time zone $4)::date end) >= $2::date)
+     order by expiration_date asc nulls last, ingredient_name asc, id asc
      limit $3`;
-  const params = [tenantId, asOf, boundedLimit];
+  const params = [tenantId, asOf, boundedLimit, timeZone];
   requireInventoryScope(tenantId, scope);
   const result = await scopedTransaction(scope, (client) =>
     client.query<TodayInventoryContextRow>(sql, params)
