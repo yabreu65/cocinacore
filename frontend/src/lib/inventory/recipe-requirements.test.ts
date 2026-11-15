@@ -51,7 +51,7 @@ describe('recipe-requirements', () => {
     });
     expect(requirements[2]).toMatchObject({
       ingredientName: 'galletas',
-      requiredQuantity: 2,
+      requiredQuantity: null,
       requiredUnit: 'unknown',
     });
   });
@@ -278,4 +278,67 @@ describe('recipe-requirements', () => {
     });
     expect(requirements.map((item) => item.ingredientName)).toEqual(['tomates']);
   });
+  it.each([
+    ['1/3', '1/3', 'taza', 'sufficient', 0],
+    ['0.0001', '0.00005', 'kg', 'partial', 0.00005],
+    ['1/3', '1/6', 'taza', 'partial', 1 / 6],
+  ])('compares exact amount %s against %s %s', (required, available, unit, status, missingQuantity) => {
+    const requirements = extractRecipeRequirements([{ name: 'arroz', quantity: required, unit }]);
+    expect(compareRecipeRequirementsToInventory(requirements, [
+      { ingredient_name: 'arroz', quantity: available, unit },
+    ])[0]).toMatchObject({ status, missingQuantity });
+  });
+
+  it('does not infer shortages from ambiguous inventory lots', () => {
+    const requirements = extractRecipeRequirements([{ name: 'arroz', quantity: '1', unit: 'kg' }]);
+    expect(compareRecipeRequirementsToInventory(requirements, [
+      { ingredient_name: 'arroz', quantity: '0.5', unit: 'kg' },
+      { ingredient_name: 'arroz', quantity: null, unit: 'kg' },
+    ])[0]).toMatchObject({ status: 'unknown', missingQuantity: null });
+  });
+
+  it('compares a legacy text fraction with exact stock without rounding its basis', () => {
+    const requirements = extractRecipeRequirements({ ingredients: ['1/3 taza arroz'] });
+    expect(requirements[0].exactQuantityBasis).toEqual({ numerator: '1', denominator: '3' });
+    expect(compareRecipeRequirementsToInventory(requirements, [
+      { ingredient_name: 'arroz', quantity: '1/3', unit: 'taza' },
+    ])[0]).toMatchObject({ status: 'sufficient', missingQuantity: 0 });
+  });
+
+  it.each(['1 taza arroz al gusto', '1 taza arroz cantidad necesaria', '1 taza aceite para freír', '2 tomates al gusto', '0 g arroz'])(
+    'never upgrades an ambiguous or invalid strict amount through a fallback: %s', (line) => {
+      const requirements = extractRecipeRequirements({ ingredients: [line] });
+      expect(requirements).toHaveLength(1);
+      expect(requirements[0]).toMatchObject({ requiredQuantity: null, requiredUnit: 'unknown' });
+      expect(requirements[0].exactQuantityBasis).toBeUndefined();
+      expect(compareRecipeRequirementsToInventory(requirements, [])[0]).toMatchObject({ status: 'unknown', missingQuantity: null });
+    }
+  );
+
+  it('distinguishes an exact non-projectable fraction from a contradictory structured flag', () => {
+    const rows = extractRecipeRequirements([
+      { name: 'arroz', quantity: 1, unit: 'kg', exact_quantity_text: '1', structured: false },
+      { name: 'aceite', quantity: null, unit: 'taza', exact_quantity_text: '1/3', structured: false },
+      { name: 'leche', quantity: null, unit: 'taza', exact_quantity_text: '1/3', structured: true },
+      { name: 'pollo', quantity: 1, unit: 'kg', exact_quantity_text: '1', structured: true },
+    ]);
+    expect(rows[0]).toMatchObject({ requiredQuantity: null, requiredUnit: 'unknown' });
+    expect(rows[1]).toMatchObject({ requiredQuantity: 1 / 3, requiredUnit: 'taza', exactQuantityBasis: { numerator: '1', denominator: '3' } });
+    expect(rows[2]).toMatchObject({ requiredQuantity: null, requiredUnit: 'unknown' });
+    expect(rows[3]).toMatchObject({ requiredQuantity: 1, requiredUnit: 'kg' });
+  });
+
+  it.each([{ quantity: null, unit: 'kg' }, { quantity: '1', unit: 'taza' }])(
+    'keeps sufficient known stock but an unknown remainder when another lot is ambiguous (%j)', (other) => {
+      const requirements = extractRecipeRequirements([{ name: 'arroz', quantity: '1', unit: 'kg' }]);
+      expect(compareRecipeRequirementsToInventory(requirements, [
+        { ingredient_name: 'arroz', quantity: '2', unit: 'kg' },
+        { ingredient_name: 'arroz', ...other },
+      ])[0]).toMatchObject({ status: 'sufficient', availableQuantity: 2, missingQuantity: 0, remainingQuantity: null });
+      expect(compareRecipeRequirementsToInventory(requirements, [
+        { ingredient_name: 'arroz', quantity: '2', unit: 'kg' },
+      ])[0]).toMatchObject({ status: 'sufficient', remainingQuantity: 1 });
+    }
+  );
+
 });
