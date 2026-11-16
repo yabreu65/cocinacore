@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { parseInventoryPriceWrite } from './inventory-price';
 import {
   INVENTORY_CATEGORIES,
   INVENTORY_UNITS,
@@ -18,14 +19,19 @@ const unit = z.enum(
   ]
 );
 const reason = z.string().trim().min(1).max(300);
+export const inventoryRevisionSchema = z.string().min(1).max(100).regex(/^\d+:\d+(?:\.\d+)?$/);
 const identity = {
   id: z.string().uuid(),
-  revision: z
-    .string()
-    .min(1)
-    .max(100)
-    .regex(/^\d+:\d+(?:\.\d+)?$/),
+  revision: inventoryRevisionSchema,
 };
+const priceReference = z.unknown().transform((raw, context) => {
+  const result = parseInventoryPriceWrite(raw);
+  if (!result.ok || !result.price) {
+    context.addIssue({ code: 'custom', message: result.ok ? 'Precio incompleto.' : result.error });
+    return z.NEVER;
+  }
+  return result.price;
+});
 const stock = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('count'), quantity: decimal, reason }).strict(),
   z.object({ kind: z.literal('convert'), unit }).strict(),
@@ -57,5 +63,6 @@ const metadata = z
 export const inventoryManagementSchema = z.discriminatedUnion('action', [
   z.object({ ...identity, action: z.literal('stock'), command: stock }).strict(),
   z.object({ ...identity, action: z.literal('metadata'), changes: metadata }).strict(),
+  z.object({ ...identity, action: z.literal('price'), priceReference }).strict(),
 ]);
 export type InventoryManagementRequest = z.infer<typeof inventoryManagementSchema>;

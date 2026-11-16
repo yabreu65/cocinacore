@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/auth/server';
 import { parseInventoryPriceWrite } from '@/lib/inventory/inventory-price';
+import { inventoryRevisionSchema } from '@/lib/inventory/inventory-management';
+import { manageInventoryItem } from '@/lib/db/repositories/inventoryManagementRepository';
 import {
   INVENTORY_CATEGORIES,
   isValidInventoryExpirationDate,
@@ -9,7 +11,6 @@ import {
 import {
   listInventoryItemsScoped,
   createInventoryItem,
-  updateInventoryItem,
   deleteInventoryItem,
 } from '@/lib/db/repositories/inventoryRepository';
 import {
@@ -173,7 +174,6 @@ export async function PATCH(request: NextRequest) {
     !body ||
     typeof body !== 'object' ||
     Array.isArray(body) ||
-    Object.keys(body).length !== 2 ||
     !('id' in body) ||
     typeof body.id !== 'string' ||
     body.id.length !== 36 ||
@@ -182,6 +182,17 @@ export async function PATCH(request: NextRequest) {
   ) {
     return NextResponse.json({ error: 'Solicitud de precio inválida.' }, { status: 400 });
   }
+  // An already-open older client must refresh, never overwrite without a revision.
+  if (!('revision' in body) && Object.keys(body).length === 2)
+    return NextResponse.json(
+      { error: 'Actualiza la página antes de guardar el precio. Tu versión está desactualizada.', code: 'INVENTORY_REVISION_REQUIRED' },
+      { status: 409 }
+    );
+  if (Object.keys(body).length !== 3 || !('revision' in body))
+    return NextResponse.json({ error: 'Solicitud de precio inválida.' }, { status: 400 });
+  const revision = inventoryRevisionSchema.safeParse(body.revision);
+  if (!revision.success)
+    return NextResponse.json({ error: 'Revisión de inventario inválida.' }, { status: 400 });
   const price = parseInventoryPriceWrite(body.priceReference);
   if (!price.ok || !price.price)
     return NextResponse.json(
@@ -189,14 +200,25 @@ export async function PATCH(request: NextRequest) {
       { status: 400 }
     );
   const scope = { tenantId: user.tenant.tenantId, userId: user.id };
-  const item = await updateInventoryItem(
-    body.id,
-    scope.tenantId,
-    { priceReference: price.price },
-    scope
-  );
-  if (!item) return NextResponse.json({ error: 'Ingrediente no encontrado.' }, { status: 404 });
-  return NextResponse.json({ item });
+  const result = await manageInventoryItem(scope, {
+    action: 'price',
+    id: body.id,
+    revision: revision.data,
+    priceReference: price.price,
+  });
+  switch (result.status) {
+    case 'not_found':
+      return NextResponse.json({ error: 'Ingrediente no encontrado.' }, { status: 404 });
+    case 'conflict':
+      return NextResponse.json(
+        { error: 'El ingrediente cambió. Recarga y revisa el precio antes de guardarlo.' },
+        { status: 409 }
+      );
+    case 'invalid':
+      return NextResponse.json({ error: result.error }, { status: 400 });
+    case 'updated':
+      return NextResponse.json({ item: result.item });
+  }
 }
 
 export async function DELETE(request: NextRequest) {

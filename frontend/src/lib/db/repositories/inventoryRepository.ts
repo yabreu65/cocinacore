@@ -169,7 +169,7 @@ export async function updateInventoryItem(
   scope: AuthenticatedDbScope
 ): Promise<RecipeInventoryItemRow | null> {
   requireInventoryScope(tenantId, scope);
-  if ('quantity' in input || 'unit' in input || 'lowStockThreshold' in input)
+  if ('quantity' in input || 'unit' in input || 'lowStockThreshold' in input || 'priceReference' in input)
     throw new Error('Use the audited inventory management transaction.');
   const fields: string[] = [];
   const values: unknown[] = [];
@@ -186,20 +186,6 @@ export async function updateInventoryItem(
   if (input.expirationDate !== undefined) {
     fields.push(`expiration_date = $${paramIndex++}`);
     values.push(input.expirationDate);
-  }
-  if (input.priceReference !== undefined) {
-    const validated = validatePriceReference(input.priceReference);
-    if (!validated.ok) throw new Error(validated.error);
-    const price = validated.price;
-    for (const [column, value] of [
-      ['estimated_unit_price', price.amount],
-      ['price_currency', price.currency],
-      ['price_reference_quantity', price.referenceQuantity],
-      ['price_reference_unit', price.referenceUnit],
-    ]) {
-      fields.push(`${column} = $${paramIndex++}`);
-      values.push(value);
-    }
   }
   if (input.purchaseLocation !== undefined) {
     fields.push(`purchase_location = $${paramIndex++}`);

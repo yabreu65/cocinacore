@@ -73,3 +73,67 @@ test('protects visible and hidden movement history without granting extra privil
     await admin.query('delete from public.tenants where id = $1', [foreignTenant]);
   }
 });
+
+test('rejects a stale price from the same account and reloads the current price without changing stock', async ({ page }) => {
+  await assertE2EDisposableIsolation(admin);
+  await injectAuth(page);
+  const identity = await resolveRecipePersistentIdentity(await page.request.get('/api/profile'));
+  const id = randomUUID();
+  const name = 'Price revision fixture ' + id;
+  const reference = { amount: '1500', currency: 'COP', referenceQuantity: '1', referenceUnit: 'kg' };
+  const persisted = async () => {
+    const result = await admin.query<{ revision: string; estimated_unit_price: string; quantity: string; unit: string }>(
+      `select xmin::text || ':' || extract(epoch from updated_at)::text as revision,
+         estimated_unit_price::text, quantity::text, unit
+         from public.recipe_inventory_items where id=$1 and tenant_id=$2`,
+      [id, identity.tenantId]
+    );
+    return result.rows[0];
+  };
+  try {
+    await admin.query(
+      `insert into public.recipe_inventory_items
+        (id,tenant_id,user_id,ingredient_name,quantity,unit,estimated_unit_price,price_currency,price_reference_quantity,price_reference_unit)
+        values ($1,$2,$3,$4,'2','kg',1500,'COP',1,'kg')`,
+      [id, identity.tenantId, identity.userId, name]
+    );
+    const original = await persisted();
+    await page.goto('/recipes/inventory');
+    const item = page.getByRole('listitem').filter({ has: page.getByRole('heading', { name, exact: true }) });
+    await item.getByRole('button', { name: 'Actualizar precio' }).click();
+    await item.getByLabel('Importe', { exact: true }).fill('1800');
+    // Another tab of this same authenticated account updates the row first.
+    const first = await page.request.patch('/api/inventory', {
+      data: { id, revision: original.revision, priceReference: { ...reference, amount: '1700' } },
+    });
+    expect(first.status()).toBe(200);
+    const stale = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === '/api/inventory' && response.request().method() === 'PATCH'
+    );
+    await item.getByRole('button', { name: 'Guardar precio' }).click();
+    expect((await stale).status()).toBe(409);
+    await expect(item.getByRole('button', { name: 'Guardar precio' })).toBeDisabled();
+    expect(Number((await persisted()).estimated_unit_price)).toBe(1700);
+    await item.getByRole('button', { name: 'Recargar precio actual' }).click();
+    await expect(item.getByLabel('Importe', { exact: true })).toHaveValue('1800');
+    await expect(item.getByText('Tu borrador se conserva arriba. Revisa ambos valores.')).toBeVisible();
+    await expect(item.getByRole('button', { name: 'Guardar precio' })).toBeDisabled();
+    await item.getByRole('button', { name: 'Revisé el precio actual' }).click();
+    await item.getByRole('button', { name: 'Guardar precio' }).click();
+    await expect(item.getByRole('button', { name: 'Actualizar precio' })).toBeVisible();
+    const final = await persisted();
+    expect(Number(final.estimated_unit_price)).toBe(1800);
+    expect(Number(final.quantity)).toBe(2);
+    expect(final.unit).toBe('kg');
+    expect(final.revision).not.toBe(original.revision);
+    expect((await page.request.patch('/api/inventory', {
+      data: { id, priceReference: reference },
+    })).status()).toBe(409);
+    const movements = await admin.query<{ count: string }>(
+      'select count(*)::text as count from public.inventory_movements where inventory_item_id=$1', [id]
+    );
+    expect(movements.rows[0].count).toBe('0');
+  } finally {
+    await admin.query('delete from public.recipe_inventory_items where id=$1 and tenant_id=$2', [id, identity.tenantId]);
+  }
+});

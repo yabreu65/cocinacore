@@ -25,7 +25,7 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ error: 'Ingrediente no encontrado.' }, { status: 404 });
     case 'conflict':
       return NextResponse.json(
-        { error: 'Las existencias cambiaron. Recarga el inventario y revisa el ajuste.' },
+        { error: 'El ingrediente cambió. Recarga el inventario y revisa el cambio.' },
         { status: 409 }
       );
     case 'invalid':

@@ -303,6 +303,7 @@ test.describe('META 1 full family week', () => {
       await inventoryForm.getByLabel('Ingrediente', { exact: true }).fill(ingredientName);
       await inventoryForm.getByLabel('Cantidad disponible', { exact: true }).fill('0.7');
       await inventoryForm.getByLabel('Unidad', { exact: true }).selectOption('kg');
+      await inventoryForm.getByRole('checkbox', { name: /confirma que quieres conservar este ingrediente por separado/i }).check();
       await inventoryForm.getByRole('button', { name: /Detalles opcionales/ }).click();
       await inventoryForm.getByLabel('Fecha de vencimiento', { exact: true }).fill('2999-12-31');
       await inventoryForm.getByRole('button', { name: 'Guardar ingrediente', exact: true }).click();

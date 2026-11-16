@@ -15,7 +15,7 @@ export const SignupSchema = AuthEmailSchema.extend({
   termsAccepted: z.literal(true, {
     error: 'Debés aceptar términos y privacidad.',
   }),
-}).refine((value) => value.password === value.confirmPassword, {
+}).strict().refine((value) => value.password === value.confirmPassword, {
   path: ['confirmPassword'],
   message: 'Las contraseñas no coinciden.',
 });

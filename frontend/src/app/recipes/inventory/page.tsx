@@ -369,6 +369,8 @@ export default function RecipeInventoryPage() {
             amount: item.estimated_unit_price == null ? '' : String(item.estimated_unit_price),
           }
     );
+    setEditorRevision(item.revision);
+    setConflictPhase('idle');
     setEditingId(item.id);
     setInventoryEditor(null);
     setError(null);
@@ -414,6 +416,8 @@ export default function RecipeInventoryPage() {
       return;
     let body: Record<string, unknown>;
     if (inventoryEditor.kind === 'metadata' && metadata) {
+      // metadataPatch includes every changed field, including ingredientName.
+      // The final argument lists only fields that may be cleared to null.
       const changes = metadataBaseline
         ? metadataPatch(metadataBaseline, metadata, [
             'category',
@@ -532,7 +536,7 @@ export default function RecipeInventoryPage() {
 
   const saveItemPrice = async (event: FormEvent, id: string) => {
     event.preventDefault();
-    if (working || loading || loadError || editingId !== id) return;
+    if (working || loading || loadError || editingId !== id || !maySubmitConflict(conflictPhase)) return;
     const validated = validatePriceReference(editingPrice);
     if (!validated.ok) {
       setError(validated.error);
@@ -546,14 +550,41 @@ export default function RecipeInventoryPage() {
         method: 'PATCH',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, priceReference: validated.price }),
+        body: JSON.stringify({ id, revision: editorRevision, priceReference: validated.price }),
       });
-      if (!result.ok) throw new Error(result.error);
+      if (!result.ok) {
+        if (result.status === 409) setConflictPhase(conflictAfter409());
+        throw new Error(result.error);
+      }
       setRows((current) => current.map((item) => (item.id === id ? result.data.item : item)));
       setEditingId(null);
+      setConflictPhase('idle');
       setNotice('Precio de referencia guardado.');
     } catch (error) {
       setError(error instanceof Error ? error.message : 'No se pudo guardar el precio.');
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const reloadPrice = async (id: string) => {
+    setWorking(true);
+    setError(null);
+    try {
+      const result = await safeFetch<{ items: InventoryItem[] }>('/api/inventory', {
+        credentials: 'same-origin',
+      });
+      if (!result.ok) throw new Error(result.error);
+      const latest = result.data.items.find((row) => row.id === id);
+      if (!latest) throw new Error('El ingrediente ya no está disponible.');
+      setRows(result.data.items);
+      setEditorRevision(latest.revision);
+      // Keep the unsaved draft; the row shows the current persisted price.
+      setConflictPhase(conflictAfterReload(true));
+      setNotice('Precio actual recargado. Compara los valores antes de guardar.');
+    } catch (error) {
+      setConflictPhase(conflictAfterReload(false));
+      setError(error instanceof Error ? error.message : 'No se pudo recargar el precio.');
     } finally {
       setWorking(false);
     }
@@ -880,7 +911,7 @@ export default function RecipeInventoryPage() {
             </label>
             <label className="grid gap-1 text-sm font-semibold">
               Unidad
-              <select value={unit} onChange={(e) => setUnit(e.target.value)} className={fieldClass}>
+              <select aria-label="Unidad" value={unit} onChange={(e) => setUnit(e.target.value)} className={fieldClass}>
                 <option value="">Seleccionar</option>
                 {INVENTORY_UNITS.map((option) => (
                   <option key={option.value} value={option.value}>
@@ -940,6 +971,7 @@ export default function RecipeInventoryPage() {
                 <label className="grid gap-1 text-sm font-semibold">
                   Fecha de vencimiento
                   <input
+                    aria-label="Fecha de vencimiento"
                     type="date"
                     value={expirationDate}
                     onChange={(e) => setExpirationDate(e.target.value)}
@@ -1265,17 +1297,41 @@ export default function RecipeInventoryPage() {
                       <PriceFields
                         value={editingPrice}
                         onChange={setEditingPrice}
-                        disabled={working}
+                        disabled={working || !maySubmitConflict(conflictPhase)}
                       />
                       {error && (
                         <p role="alert" className="text-sm text-bistro-danger">
                           {error}
                         </p>
                       )}
+                      {conflictPhase === 'review-required' && (
+                        <div className="rounded-xl border border-bistro-border p-3 text-sm">
+                          <p>Precio actual: {priceDescription(item)}</p>
+                          <p>Tu borrador se conserva arriba. Revisa ambos valores.</p>
+                          <button
+                            type="button"
+                            disabled={working}
+                            onClick={() => setConflictPhase(conflictAfterReview(true))}
+                            className="mt-2 font-semibold text-bistro-action-primary"
+                          >
+                            Revisé el precio actual
+                          </button>
+                        </div>
+                      )}
+                      {conflictPhase === 'reload-required' && (
+                        <button
+                          type="button"
+                          disabled={working}
+                          onClick={() => void reloadPrice(item.id)}
+                          className="justify-self-start text-sm font-semibold text-bistro-action-primary"
+                        >
+                          Recargar precio actual
+                        </button>
+                      )}
                       <div className="flex flex-wrap gap-2">
                         <button
                           type="submit"
-                          disabled={working}
+                          disabled={working || !maySubmitConflict(conflictPhase)}
                           className="rounded-xl bg-bistro-action-primary px-4 py-2 font-semibold text-white disabled:opacity-60"
                         >
                           Guardar precio

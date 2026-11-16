@@ -405,7 +405,7 @@ export default function ProfilePage() {
               <div className="grid gap-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <h3 className="text-sm font-semibold text-bistro-text-secondary">
-                    Personas del hogar
+                    Comensales del hogar
                   </h3>
                   <button
                     type="button"
@@ -421,11 +421,11 @@ export default function ProfilePage() {
                     }
                     className="rounded-xl border border-bistro-border px-3 py-2 text-sm font-semibold text-bistro-text-secondary disabled:opacity-50"
                   >
-                    Añadir persona
+                    Añadir comensal
                   </button>
                 </div>
                 {detailedForm.householdMembers.length === 0 ? (
-                  <p className="text-sm text-bistro-text-secondary">Aún no has añadido personas.</p>
+                  <p className="text-sm text-bistro-text-secondary">Aún no has añadido comensales.</p>
                 ) : null}
                 <div className="grid gap-3 sm:grid-cols-2">
                   {detailedForm.householdMembers.map((member: CulinaryHouseholdMember, index) => (
@@ -486,14 +486,14 @@ export default function ProfilePage() {
                         }
                         className="justify-self-start text-sm font-semibold text-bistro-action-primary"
                       >
-                        Quitar persona
+                        Quitar comensal
                       </button>
                     </div>
                   ))}
                 </div>
                 <p className="text-xs text-bistro-text-secondary">
-                  Los nombres solo se guardan para organizar tu hogar; puedes añadir hasta 12
-                  personas.
+                  Los comensales no tienen cuenta ni acceso al sistema. Sus nombres solo se guardan
+                  para organizar tu hogar; puedes añadir hasta 12 comensales.
                 </p>
               </div>
             </section>

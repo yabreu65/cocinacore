@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth/server';
 import { scopedTransaction } from '@/lib/db';
 import type { InvitationStatus, TenantRole, UserRow } from '@/lib/db/types';
@@ -42,30 +43,28 @@ export default async function MembersPage() {
   }
 
   const tenantId = user.tenant.tenantId;
-  const [usersResult, invitationsResult] = await scopedTransaction(
+  const isHome = user.tenant.tenantType === 'home';
+  const { usersResult, invitations } = await scopedTransaction(
     { tenantId, userId: user.id },
-    async (client) =>
-      Promise.all([
-        client.query<Pick<UserRow, 'id' | 'full_name' | 'email' | 'role' | 'created_at'>>(
-          `select id, full_name, email, role, created_at
-       from public.users
-       where tenant_id = $1
-       order by created_at asc`,
-          [tenantId]
-        ),
-        client.query<InvitationRow>(
-          `select id, email, status, expires_at, created_at
-       from public.tenant_invitations
-       where tenant_id = $1
-       order by created_at desc
-       limit 40`,
-          [tenantId]
-        ),
-      ])
+    async (client) => {
+      const usersResult = await client.query<Pick<UserRow, 'id' | 'full_name' | 'email' | 'role' | 'created_at'>>(
+        `select id, full_name, email, role, created_at
+         from public.users where tenant_id = $1 order by created_at asc`,
+        [tenantId]
+      );
+      if (isHome) return { usersResult, invitations: [] as InvitationRow[] };
+      const result = await client.query<InvitationRow>(
+        `select id, email, status, expires_at, created_at
+         from public.tenant_invitations where tenant_id = $1
+         order by created_at desc limit 40`,
+        [tenantId]
+      );
+      return { usersResult, invitations: result.rows };
+    }
   );
-
   const users = usersResult.rows;
-  const invitations = invitationsResult.rows;
+  // Only redirect a confirmed single-account home. Legacy accesses remain visible.
+  if (isHome && users.length === 1 && users[0].id === user.id) redirect('/profile');
   const canManage = user.tenant.role === 'owner' || user.tenant.role === 'admin';
 
   return (
@@ -75,7 +74,7 @@ export default async function MembersPage() {
           <div>
             <h1 className="text-3xl font-semibold">Miembros</h1>
             <p className="text-bistro-text-secondary">
-              Vista migrada a PostgreSQL directo, en modo solo lectura.
+              {isHome ? 'Este hogar conserva accesos históricos. No se pueden añadir nuevas cuentas.' : 'Vista de miembros en modo solo lectura.'}
             </p>
           </div>
           <Link href="/app" className="text-sm font-semibold text-bistro-action-primary">
@@ -87,15 +86,15 @@ export default async function MembersPage() {
           <p className="text-sm font-semibold text-bistro-text-secondary">Tu rol actual</p>
           <p className="mt-1 text-lg font-semibold">{prettyRole(user.tenant.role)}</p>
           <p className="mt-2 text-sm text-bistro-text-secondary">
-            {canManage
-              ? 'Invitaciones y cambios de rol se están reconstruyendo.'
+            {isHome ? 'Bistró utiliza una cuenta por hogar. Revisa los accesos existentes antes de cualquier cambio; no se han eliminado cuentas.' : canManage
+              ? 'Invitaciones y cambios de rol no están disponibles.'
               : 'Solo owner/admin puede gestionar miembros.'}
           </p>
         </article>
 
         <div className="mt-4 grid gap-4 lg:grid-cols-2">
           <article className="rounded-2xl border border-bistro-border bg-white/70 p-4">
-            <h2 className="text-lg font-semibold">Equipo del tenant</h2>
+            <h2 className="text-lg font-semibold">{isHome ? 'Accesos existentes' : 'Equipo del tenant'}</h2>
             <ul className="mt-3 space-y-2">
               {users.map((member) => (
                 <li
@@ -117,7 +116,7 @@ export default async function MembersPage() {
             </ul>
           </article>
 
-          <article className="rounded-2xl border border-bistro-border bg-white/70 p-4">
+          {!isHome && <article className="rounded-2xl border border-bistro-border bg-white/70 p-4">
             <h2 className="text-lg font-semibold">Invitaciones</h2>
             <div className="mt-3 rounded-xl border border-bistro-border bg-white/80 p-3 text-sm text-bistro-text-secondary">
               Crear, revocar y aceptar invitaciones está en reconstrucción.
@@ -139,7 +138,7 @@ export default async function MembersPage() {
                 <li className="text-sm text-bistro-text-secondary">No hay invitaciones todavía.</li>
               ) : null}
             </ul>
-          </article>
+          </article>}
         </div>
       </section>
     </main>

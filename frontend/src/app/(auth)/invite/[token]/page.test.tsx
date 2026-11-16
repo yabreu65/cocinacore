@@ -6,7 +6,9 @@ describe('CocinaCore: invite placeholder token privacy', () => {
   it('does not disclose bearer invitation credentials in page content', () => {
     const html = renderToStaticMarkup(<InvitePage />);
     expect(html).toContain('Invitación a CocinaCore');
-    expect(html).toContain('Invitación pendiente');
+    expect(html).toContain('Invitaciones no disponibles');
+    expect(html).toContain('sin cuentas adicionales');
+    expect(html).not.toContain('href="/members"');
     expect(html).toContain('Por seguridad');
     expect(html).not.toContain('Token recibido');
     expect(html).not.toContain('break-all');

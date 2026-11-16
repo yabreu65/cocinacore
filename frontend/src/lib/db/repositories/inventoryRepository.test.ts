@@ -375,20 +375,10 @@ it('persists all price columns atomically and preserves omitted fields', async (
     '1',
     'kg',
   ]);
-  await updateInventoryItem('item-1', scope.tenantId, { priceReference }, scope);
-  expect(client.query.mock.calls[3][0]).toMatch(
-    /estimated_unit_price = \$1, price_currency = \$2, price_reference_quantity = \$3, price_reference_unit = \$4, updated_at = now\(\) where id = \$5 and tenant_id = \$6/
-  );
-  expect(client.query.mock.calls[3][1]).toEqual([
-    '4000',
-    'COP',
-    '1',
-    'kg',
-    'item-1',
-    '00000000-0000-4000-8000-000000000001',
-  ]);
+  await expect(updateInventoryItem('item-1', scope.tenantId, { priceReference }, scope))
+    .rejects.toThrow('audited inventory management');
   await updateInventoryItem('item-1', scope.tenantId, { ingredientName: 'Arroz' }, scope);
-  expect(client.query.mock.calls[5][0]).not.toMatch(
+  expect(client.query.mock.calls[3][0]).not.toMatch(
     /estimated_unit_price|price_currency|price_reference/
   );
   await expect(
@@ -406,8 +396,8 @@ it('persists all price columns atomically and preserves omitted fields', async (
   await expect(
     updateInventoryItem('item-1', scope.tenantId, { lowStockThreshold: 1 }, scope)
   ).rejects.toThrow('audited inventory management');
-  expect(client.query).toHaveBeenCalledTimes(6);
-  for (const n of [1, 3, 5]) expect(client.query).toHaveBeenNthCalledWith(n, lockSql, lockParams);
+  expect(client.query).toHaveBeenCalledTimes(4);
+  for (const n of [1, 3]) expect(client.query).toHaveBeenNthCalledWith(n, lockSql, lockParams);
 });
 
 it('rejects writes without authenticated scope before any database access', async () => {

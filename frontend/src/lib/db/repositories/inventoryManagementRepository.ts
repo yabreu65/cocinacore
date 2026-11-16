@@ -31,6 +31,16 @@ export async function manageInventoryItem(
     const row = locked.rows[0];
     if (!row) return { status: 'not_found' };
     if (row.revision !== request.revision) return { status: 'conflict' };
+    if (request.action === 'price') {
+      const price = request.priceReference;
+      const updated = await client.query<RecipeInventoryItemRow>(
+        `update public.recipe_inventory_items set estimated_unit_price=$1,price_currency=$2,price_reference_quantity=$3,price_reference_unit=$4,updated_at=now() where id=$5 and tenant_id=$6 returning *, ${INVENTORY_ROW_REVISION} as revision`,
+        [price.amount, price.currency, price.referenceQuantity, price.referenceUnit, request.id, scope.tenantId]
+      );
+      const item = updated.rows[0];
+      if (!item) throw new Error('Locked inventory price update failed');
+      return { status: 'updated', item };
+    }
     if (request.action === 'stock') {
       const plan = planInventoryStockChange(
         { quantity: row.quantity, unit: row.unit, lowStockThreshold: row.low_stock_threshold },

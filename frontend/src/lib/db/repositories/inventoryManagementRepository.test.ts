@@ -120,6 +120,23 @@ describe('audited inventory management', () => {
       ]
     );
   });
+  it('updates price only after the same tenant lock and revision check', async () => {
+    const priceReference = { amount: '1800', currency: 'COP', referenceQuantity: '1', referenceUnit: 'kg' } as const;
+    client.query.mockReset()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [row] })
+      .mockResolvedValueOnce({ rows: [{ ...row, estimated_unit_price: '1800', revision: '124:1794520001.000001' }] });
+    const request = { id, revision, action: 'price' as const, priceReference };
+    expect(await manageInventoryItem(scope, request)).toMatchObject({
+      status: 'updated', item: { estimated_unit_price: '1800', quantity: '500', unit: 'g' },
+    });
+    expect(client.query).toHaveBeenNthCalledWith(2, expect.stringContaining('for update'), [id, scope.tenantId]);
+    expect(client.query).toHaveBeenNthCalledWith(3, expect.stringContaining('set estimated_unit_price=$1,price_currency=$2,price_reference_quantity=$3,price_reference_unit=$4'), ['1800', 'COP', '1', 'kg', id, scope.tenantId]);
+    expect(client.query).toHaveBeenCalledTimes(3);
+    client.query.mockReset().mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [{ ...row, revision: '124:1794520001.000001' }] });
+    expect(await manageInventoryItem(scope, request)).toEqual({ status: 'conflict' });
+    expect(client.query).toHaveBeenCalledTimes(2);
+  });
   it('rejects stale revisions before writes', async () => {
     expect(
       await manageInventoryItem(scope, { ...count, revision: '122:1794520000.123456' })
