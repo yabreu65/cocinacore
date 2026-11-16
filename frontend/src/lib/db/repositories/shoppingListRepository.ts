@@ -1,3 +1,5 @@
+import type { DbTransactionClient } from '@/lib/db/transaction-client';
+import { lockInventorySourceTenant } from '@/lib/db/inventory-source-lock';
 import { mapSingleRow, query, scopedTransaction, type AuthenticatedDbScope } from '@/lib/db';
 import type {
   ShoppingItemStatus,
@@ -9,7 +11,7 @@ import {
   detectInventoryCategory,
   normalizeInventoryName,
 } from '@/lib/inventory/normalize-inventory';
-import { normalizeUnit, parseQuantity } from '@/lib/inventory/quantity-normalization';
+import { parseExplicitQuantity } from '@/lib/inventory/quantity-normalization';
 
 export interface CreateShoppingListItemInput {
   tenantId: string;
@@ -82,14 +84,16 @@ export async function createShoppingListItem(
 ): Promise<ShoppingListItemRow> {
   const result = await scopedTransaction(
     { tenantId: input.tenantId, userId: input.userId },
-    (client) =>
-      client.query<ShoppingListItemRow>(
+    async (client) => {
+      await lockInventorySourceTenant(client, input.tenantId);
+      return client.query<ShoppingListItemRow>(
         `insert into public.shopping_list_items
      (tenant_id, user_id, source, ingredient_name, quantity)
      values ($1, $2, $3, $4, $5)
      returning *`,
         [input.tenantId, input.userId, input.source, input.ingredientName, input.quantity ?? null]
-      )
+      );
+    }
   );
 
   const item = mapSingleRow(result);
@@ -100,52 +104,62 @@ export async function createShoppingListItem(
 export async function addMealPlanShoppingItems(
   input: AddMealPlanShoppingItemsInput
 ): Promise<AddMealPlanShoppingItemsResult> {
-  return scopedTransaction({ tenantId: input.tenantId, userId: input.userId }, async (client) => {
-    const dedupeScope = input.dedupeScope ?? 'source';
-    const lockKey = `${input.tenantId}:${input.userId}:${dedupeScope === 'user' ? 'shopping-list' : input.source}`;
-    await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [lockKey]);
-    const existingScope =
-      dedupeScope === 'user'
-        ? 'tenant_id = $1 and user_id = $2'
-        : 'tenant_id = $1 and user_id = $2 and source = $3';
-    const existingResult = await client.query<ShoppingListItemRow>(
-      `select * from public.shopping_list_items
-       where ${existingScope}`,
-      dedupeScope === 'user'
-        ? [input.tenantId, input.userId]
-        : [input.tenantId, input.userId, input.source]
-    );
-    const byIdentity = new Map(
-      existingResult.rows.map((row) => [normalizeInventoryName(row.ingredient_name), row])
-    );
-    const added: ShoppingListItemRow[] = [];
-    const alreadyPresent: ShoppingListItemRow[] = [];
-    const seen = new Set<string>();
+  return scopedTransaction({ tenantId: input.tenantId, userId: input.userId }, (client) =>
+    addMealPlanShoppingItemsInTransaction(client, input)
+  );
+}
 
-    for (const item of input.items) {
-      const identity = normalizeInventoryName(item.ingredientName);
-      if (seen.has(identity)) continue;
-      seen.add(identity);
-      const existing = byIdentity.get(identity);
-      if (existing) {
-        alreadyPresent.push(existing);
-        continue;
-      }
-      const result = await client.query<ShoppingListItemRow>(
-        `insert into public.shopping_list_items
+/** Caller supplies an authenticated transaction. Reacquiring the same tenant
+ * advisory lock is safe; it remains held until that transaction ends. */
+export async function addMealPlanShoppingItemsInTransaction(
+  client: DbTransactionClient,
+  input: AddMealPlanShoppingItemsInput
+): Promise<AddMealPlanShoppingItemsResult> {
+  await lockInventorySourceTenant(client, input.tenantId);
+  const dedupeScope = input.dedupeScope ?? 'source';
+  const lockKey = `${input.tenantId}:${input.userId}:${dedupeScope === 'user' ? 'shopping-list' : input.source}`;
+  await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [lockKey]);
+  const existingScope =
+    dedupeScope === 'user'
+      ? 'tenant_id = $1 and user_id = $2'
+      : 'tenant_id = $1 and user_id = $2 and source = $3';
+  const existingResult = await client.query<ShoppingListItemRow>(
+    `select * from public.shopping_list_items
+       where ${existingScope}`,
+    dedupeScope === 'user'
+      ? [input.tenantId, input.userId]
+      : [input.tenantId, input.userId, input.source]
+  );
+  const byIdentity = new Map(
+    existingResult.rows.map((row) => [normalizeInventoryName(row.ingredient_name), row])
+  );
+  const added: ShoppingListItemRow[] = [];
+  const alreadyPresent: ShoppingListItemRow[] = [];
+  const seen = new Set<string>();
+
+  for (const item of input.items) {
+    const identity = normalizeInventoryName(item.ingredientName);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    const existing = byIdentity.get(identity);
+    if (existing) {
+      alreadyPresent.push(existing);
+      continue;
+    }
+    const result = await client.query<ShoppingListItemRow>(
+      `insert into public.shopping_list_items
          (tenant_id, user_id, source, ingredient_name, quantity)
          values ($1, $2, $3, $4, $5)
          returning *`,
-        [input.tenantId, input.userId, input.source, item.ingredientName, item.quantity]
-      );
-      const inserted = result.rows[0];
-      if (!inserted) throw new Error('Failed to create meal-plan shopping item');
-      added.push(inserted);
-      byIdentity.set(identity, inserted);
-    }
+      [input.tenantId, input.userId, input.source, item.ingredientName, item.quantity]
+    );
+    const inserted = result.rows[0];
+    if (!inserted) throw new Error('Failed to create meal-plan shopping item');
+    added.push(inserted);
+    byIdentity.set(identity, inserted);
+  }
 
-    return { added, alreadyPresent };
-  });
+  return { added, alreadyPresent };
 }
 
 export async function transferPurchasedShoppingListItem(
@@ -154,6 +168,7 @@ export async function transferPurchasedShoppingListItem(
   userId: string
 ): Promise<ShoppingListTransferResult | null> {
   return scopedTransaction({ tenantId, userId }, async (client) => {
+    await lockInventorySourceTenant(client, tenantId);
     const itemResult = await client.query<ShoppingListItemRow>(
       `select * from public.shopping_list_items
        where id = $1 and tenant_id = $2 and user_id = $3
@@ -175,27 +190,18 @@ export async function transferPurchasedShoppingListItem(
     }
 
     if (item.status !== 'purchased') throw new ShoppingListTransferError('not_purchased');
-    const parsed = item.quantity === null ? null : parseQuantity(item.quantity);
-    const hasExplicitUnit = item.quantity !== null && item.quantity.trim().split(/\s+/).length > 1;
-    if (
-      !parsed?.structured ||
-      !hasExplicitUnit ||
-      parsed.value === null ||
-      parsed.value <= 0 ||
-      parsed.unit === 'unknown'
-    ) {
-      throw new ShoppingListTransferError('invalid_quantity');
-    }
+    const parsed = item.quantity === null ? null : parseExplicitQuantity(item.quantity);
+    if (!parsed) throw new ShoppingListTransferError('invalid_quantity');
 
     const normalizedName = normalizeInventoryName(item.ingredient_name);
-    const unit = normalizeUnit(parsed.unit);
-    if (!normalizedName || unit === 'unknown')
-      throw new ShoppingListTransferError('invalid_quantity');
+    const unit = parsed.unit;
+    const quantity = String(parsed.value);
+    if (!normalizedName) throw new ShoppingListTransferError('invalid_quantity');
     const inventoryItem = await createInventoryItemInTransaction(client, {
       tenantId,
       userId,
       ingredientName: item.ingredient_name,
-      quantity: String(parsed.value),
+      quantity,
       unit,
       category: detectInventoryCategory(item.ingredient_name),
       normalizedName,
@@ -205,7 +211,7 @@ export async function transferPurchasedShoppingListItem(
       `insert into public.inventory_movements
        (tenant_id, user_id, inventory_item_id, movement_type, quantity, unit, normalized_name, source)
        values ($1, $2, $3, 'purchase', $4, $5, $6, 'shopping_list')`,
-      [tenantId, userId, inventoryItem.id, parsed.value, unit, normalizedName]
+      [tenantId, userId, inventoryItem.id, quantity, unit, normalizedName]
     );
     const updatedResult = await client.query<ShoppingListItemRow>(
       `update public.shopping_list_items
@@ -226,15 +232,16 @@ export async function updateShoppingListItemStatus(
   userId: string,
   status: ShoppingItemStatus
 ): Promise<ShoppingListItemRow | null> {
-  const result = await scopedTransaction({ tenantId, userId }, (client) =>
-    client.query<ShoppingListItemRow>(
+  const result = await scopedTransaction({ tenantId, userId }, async (client) => {
+    await lockInventorySourceTenant(client, tenantId);
+    return client.query<ShoppingListItemRow>(
       `update public.shopping_list_items
      set status = $1, updated_at = now()
      where id = $2 and tenant_id = $3 and user_id = $4
      returning *`,
       [status, id, tenantId, userId]
-    )
-  );
+    );
+  });
   return mapSingleRow(result);
 }
 
@@ -243,13 +250,14 @@ export async function deleteShoppingListItem(
   tenantId: string,
   userId: string
 ): Promise<ShoppingListItemRow | null> {
-  const result = await scopedTransaction({ tenantId, userId }, (client) =>
-    client.query<ShoppingListItemRow>(
+  const result = await scopedTransaction({ tenantId, userId }, async (client) => {
+    await lockInventorySourceTenant(client, tenantId);
+    return client.query<ShoppingListItemRow>(
       `delete from public.shopping_list_items
      where id = $1 and tenant_id = $2 and user_id = $3
      returning *`,
       [id, tenantId, userId]
-    )
-  );
+    );
+  });
   return mapSingleRow(result);
 }

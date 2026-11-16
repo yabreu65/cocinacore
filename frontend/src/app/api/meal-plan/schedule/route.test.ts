@@ -26,7 +26,7 @@ function request(body: unknown): Request {
 
 function validPlanRow(overrides: Partial<UserMealPlanRow> = {}): UserMealPlanRow {
   return {
-    id: 'plan-1',
+    id: '00000000-0000-4000-8000-000000000001',
     tenant_id: 'tenant-1',
     user_id: 'user-1',
     people_count: 2,
@@ -92,7 +92,7 @@ describe('POST /api/meal-plan/schedule', () => {
   it('rejects requests without an explicit confirmation before reading or writing plan data', async () => {
     const response = await POST(
       request({
-        mealPlanId: 'plan-1',
+        mealPlanId: '00000000-0000-4000-8000-000000000001',
         startDate: '2026-10-26',
         timeZone: 'UTC',
         portionBasisConfirmed: true,
@@ -113,7 +113,7 @@ describe('POST /api/meal-plan/schedule', () => {
     async (scheduleInput) => {
       const response = await POST(
         request({
-          mealPlanId: 'plan-1',
+          mealPlanId: '00000000-0000-4000-8000-000000000001',
           ...scheduleInput,
           confirmed: true,
           portionBasisConfirmed: true,
@@ -128,7 +128,7 @@ describe('POST /api/meal-plan/schedule', () => {
   it('requires explicit portion-basis confirmation before reading or updating a plan', async () => {
     const response = await POST(
       request({
-        mealPlanId: 'plan-1',
+        mealPlanId: '00000000-0000-4000-8000-000000000001',
         startDate: '2026-10-26',
         timeZone: 'UTC',
         confirmed: true,
@@ -143,7 +143,7 @@ describe('POST /api/meal-plan/schedule', () => {
   it('scopes plan lookup and schedule write to the authenticated user and tenant', async () => {
     const response = await POST(
       request({
-        mealPlanId: 'plan-1',
+        mealPlanId: '00000000-0000-4000-8000-000000000001',
         startDate: '2026-10-26',
         timeZone: 'America/Argentina/Buenos_Aires',
         confirmed: true,
@@ -153,14 +153,18 @@ describe('POST /api/meal-plan/schedule', () => {
 
     expect(response.status).toBe(200);
     expect(mockFindMealPlanByIdForUserAndTenant).toHaveBeenCalledWith(
-      'plan-1',
+      '00000000-0000-4000-8000-000000000001',
       'user-1',
       'tenant-1'
     );
     expect(mockUpdateMealPlanScheduleForUserAndTenant).toHaveBeenCalledWith({
-      mealPlanId: 'plan-1',
+      mealPlanId: '00000000-0000-4000-8000-000000000001',
       userId: 'user-1',
       tenantId: 'tenant-1',
+      expectedUpdatedAt: validPlanRow().updated_at,
+      expectedCalendarPayload: validPlanRow().calendar_payload,
+      expectedPeopleCount: 2,
+      expectedPeriod: 'week',
       schedule: {
         startDate: '2026-10-26',
         timeZone: 'America/Argentina/Buenos_Aires',
@@ -189,7 +193,7 @@ describe('POST /api/meal-plan/schedule', () => {
 
     const response = await POST(
       request({
-        mealPlanId: 'other-tenant-plan',
+        mealPlanId: '00000000-0000-4000-8000-000000000002',
         startDate: '2026-10-26',
         timeZone: 'UTC',
         confirmed: true,
@@ -199,7 +203,7 @@ describe('POST /api/meal-plan/schedule', () => {
 
     expect(response.status).toBe(404);
     expect(mockFindMealPlanByIdForUserAndTenant).toHaveBeenCalledWith(
-      'other-tenant-plan',
+      '00000000-0000-4000-8000-000000000002',
       'user-1',
       'tenant-1'
     );
@@ -211,7 +215,7 @@ describe('POST /api/meal-plan/schedule', () => {
 
     const response = await POST(
       request({
-        mealPlanId: 'plan-1',
+        mealPlanId: '00000000-0000-4000-8000-000000000001',
         startDate: '2026-10-26',
         timeZone: 'UTC',
         confirmed: true,
@@ -228,7 +232,7 @@ describe('POST /api/meal-plan/schedule', () => {
 
     const response = await POST(
       request({
-        mealPlanId: 'plan-1',
+        mealPlanId: '00000000-0000-4000-8000-000000000001',
         startDate: '2026-10-26',
         timeZone: 'UTC',
         confirmed: true,
@@ -246,7 +250,7 @@ describe('POST /api/meal-plan/schedule', () => {
 
     const response = await POST(
       request({
-        mealPlanId: 'plan-1',
+        mealPlanId: '00000000-0000-4000-8000-000000000001',
         startDate: '2026-10-26',
         timeZone: 'UTC',
         confirmed: true,
@@ -268,7 +272,7 @@ describe('POST /api/meal-plan/schedule', () => {
 
     const response = await POST(
       request({
-        mealPlanId: 'plan-1',
+        mealPlanId: '00000000-0000-4000-8000-000000000001',
         startDate: '2026-10-26',
         timeZone: 'UTC',
         confirmed: true,
@@ -277,7 +281,9 @@ describe('POST /api/meal-plan/schedule', () => {
     );
 
     expect(response.status).toBe(409);
-    expect(await response.json()).toEqual({ error: 'El menú guardado no tiene un formato válido.' });
+    expect(await response.json()).toEqual({
+      error: 'El menú guardado no tiene un formato válido.',
+    });
     expect(mockUpdateMealPlanScheduleForUserAndTenant).not.toHaveBeenCalled();
   });
 
@@ -286,7 +292,7 @@ describe('POST /api/meal-plan/schedule', () => {
 
     const response = await POST(
       request({
-        mealPlanId: 'plan-1',
+        mealPlanId: '00000000-0000-4000-8000-000000000001',
         startDate: '2026-10-26',
         timeZone: 'UTC',
         confirmed: true,
@@ -296,7 +302,39 @@ describe('POST /api/meal-plan/schedule', () => {
 
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ error: 'No se pudo guardar la agenda.' });
-    expect(mockFindMealPlanByIdForUserAndTenant).toHaveBeenCalledWith('plan-1', 'user-1', 'tenant-1');
+    expect(mockFindMealPlanByIdForUserAndTenant).toHaveBeenCalledWith(
+      '00000000-0000-4000-8000-000000000001',
+      'user-1',
+      'tenant-1'
+    );
+  });
+
+  it('rejects malformed plan identifiers before accessing the database', async () => {
+    const response = await POST(
+      request({
+        mealPlanId: 'abc',
+        startDate: '2026-10-26',
+        timeZone: 'UTC',
+        confirmed: true,
+        portionBasisConfirmed: true,
+      }) as unknown as NextRequest
+    );
+    expect(response.status).toBe(400);
+    expect(mockFindMealPlanByIdForUserAndTenant).not.toHaveBeenCalled();
+  });
+  it('returns conflict when the plan changes after lookup', async () => {
+    mockUpdateMealPlanScheduleForUserAndTenant.mockResolvedValue(null);
+    const response = await POST(
+      request({
+        mealPlanId: '00000000-0000-4000-8000-000000000001',
+        startDate: '2026-10-26',
+        timeZone: 'UTC',
+        confirmed: true,
+        portionBasisConfirmed: true,
+      }) as unknown as NextRequest
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: 'MEAL_PLAN_SCHEDULE_CONFLICT' });
   });
 
   it('requires authentication and never reads or writes plan data for anonymous requests', async () => {
@@ -304,7 +342,7 @@ describe('POST /api/meal-plan/schedule', () => {
 
     const response = await POST(
       request({
-        mealPlanId: 'plan-1',
+        mealPlanId: '00000000-0000-4000-8000-000000000001',
         startDate: '2026-10-26',
         timeZone: 'UTC',
         confirmed: true,

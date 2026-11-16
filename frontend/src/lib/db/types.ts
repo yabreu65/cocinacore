@@ -180,6 +180,7 @@ export interface ShoppingListItemRow {
 }
 
 export interface RecipeInventoryItemRow {
+  revision?: string;
   id: string;
   tenant_id: string;
   user_id: string;
@@ -189,6 +190,10 @@ export interface RecipeInventoryItemRow {
   category: string | null;
   expiration_date: string | null;
   estimated_unit_price: number | null;
+  // Optional on historical 020 projections; new 021 rows carry these columns.
+  price_currency?: string | null;
+  price_reference_quantity?: string | number | null;
+  price_reference_unit?: string | null;
   purchase_location: string | null;
   low_stock_threshold: number | null;
   normalized_name: string | null;

@@ -1,12 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Pool, type PoolClient } from 'pg';
 import { randomUUID } from 'node:crypto';
-import {
-  createInventoryItem,
-  listInventoryItemsScoped,
-  updateInventoryItem,
-} from './inventoryRepository';
+import { createInventoryItem, deleteInventoryItem, listInventoryItemsScoped } from './inventoryRepository';
 import { getPool } from '@/lib/db';
+import { manageInventoryItem } from './inventoryManagementRepository';
 import { consumePlannedMeal } from './mealPlanConsumptionRepository';
 
 const enabled = process.env.COCINACORE_INVENTORY_RLS_TEST === '1';
@@ -140,10 +137,22 @@ describe.skipIf(!enabled)('candidate inventory RLS on disposable PostgreSQL', ()
       tenantId: a.tenantId,
       userId: a2.userId,
       ingredientName: 'Shared',
+      quantity: '3',
+      unit: 'kg',
     });
+    const shared = (await listInventoryItemsScoped(a)).find((row) => row.id === created.id);
+    if (!shared?.revision) throw new Error('Missing shared inventory revision');
     expect(
-      (await updateInventoryItem(created.id, a.tenantId, { quantity: '3' }, a))?.quantity
-    ).toBe('3');
+      await manageInventoryItem(a, {
+        id: created.id,
+        revision: shared.revision,
+        action: 'stock',
+        command: { kind: 'convert', unit: 'g' },
+      })
+    ).toMatchObject({
+      status: 'updated',
+      item: { quantity: '3000', unit: 'g', user_id: a2.userId },
+    });
     expect(
       (
         await scoped(a, (c) =>
@@ -177,13 +186,13 @@ describe.skipIf(!enabled)('candidate inventory RLS on disposable PostgreSQL', ()
       (await scoped(a, (c) => c.query('delete from recipe_inventory_items where id=$1', [itemB])))
         .rowCount
     ).toBe(0);
-    expect(
-      (
-        await scoped(a, (c) =>
-          c.query('delete from recipe_inventory_items where id=$1', [created.id])
-        )
-      ).rowCount
-    ).toBe(1);
+    expect(await deleteInventoryItem(itemB, a.tenantId, a)).toBe('not_found');
+    expect(await deleteInventoryItem(itemA, a.tenantId, a)).toBe('history_unavailable');
+    expect(await deleteInventoryItem(created.id, a.tenantId, a)).toBe('history_unavailable');
+    expect((await listInventoryItemsScoped(a)).some((item) => item.id === created.id)).toBe(true);
+    // This historical 020 fixture deliberately tests the old SQL ACL independently.
+    expect((await scoped(a, (c) => c.query('delete from recipe_inventory_items where id=$1', [created.id]))).rowCount).toBe(1);
+    expect((await admin.query('select id from public.inventory_movements where inventory_item_id = $1', [itemA])).rowCount).toBe(1);
   });
   it('enforces tenant parent references and append-only movements', async () => {
     const insert =

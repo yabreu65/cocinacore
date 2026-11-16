@@ -1,4 +1,9 @@
-import { DeleteObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import {
+  DeleteObjectCommand,
+  ListObjectsV2Command,
+  PutObjectCommand,
+  S3Client,
+} from '@aws-sdk/client-s3';
 import path from 'path';
 import type { SaveFileInput, StorageAdapter, StoredFile } from './types';
 
@@ -57,26 +62,27 @@ function sanitizeSegment(value: string): string {
 }
 
 function buildObjectKey(input: SaveFileInput): string {
-  const sanitizedNamespace = sanitizeSegment(input.namespace).replace(/^\/+|\/+$/g, '');
+  // Only the platform-owner global library currently has an S3 write lane.
+  if (input.namespace !== 'global-pdfs') throw new Error('Unsupported S3 storage namespace');
   const sanitizedName = sanitizeSegment(input.fileName).split('/').pop() || 'file.bin';
   return path.posix.join(
-    sanitizedNamespace,
+    'global-pdfs',
     `${Date.now()}-${Math.random().toString(36).slice(2, 10)}-${sanitizedName}`
   );
 }
 
 function normalizeObjectKey(storagePath: string): string {
-  const normalized = path.posix.normalize(storagePath).replace(/^\/+/, '');
-  if (normalized.startsWith('../') || normalized === '..') {
+  // Reject ambiguous keys instead of normalizing them into another namespace.
+  if (!/^global-pdfs\/[a-z0-9][a-z0-9._-]*$/.test(storagePath)) {
     throw new Error('Invalid storage path');
   }
-  return normalized;
+  return storagePath;
 }
 
 export const s3StorageAdapter: StorageAdapter = {
   async saveFile(input: SaveFileInput): Promise<StoredFile> {
-    const config = getS3Config();
     const storagePath = buildObjectKey(input);
+    const config = getS3Config();
 
     await getS3Client().send(
       new PutObjectCommand({
@@ -92,12 +98,22 @@ export const s3StorageAdapter: StorageAdapter = {
 
   async deleteFile(storagePath: string | null | undefined): Promise<void> {
     if (!storagePath) return;
+    const key = normalizeObjectKey(storagePath);
     const config = getS3Config();
     await getS3Client().send(
       new DeleteObjectCommand({
         Bucket: config.bucket,
-        Key: normalizeObjectKey(storagePath),
+        Key: key,
       })
     );
   },
 };
+
+/** Read-only readiness probe; uses the actual scoped application identity. */
+export async function checkS3StorageReadiness(signal: AbortSignal): Promise<void> {
+  const config = getS3Config();
+  await getS3Client().send(
+    new ListObjectsV2Command({ Bucket: config.bucket, Prefix: 'global-pdfs/', MaxKeys: 1 }),
+    { abortSignal: signal }
+  );
+}

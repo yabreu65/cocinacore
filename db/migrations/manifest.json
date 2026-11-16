@@ -1228,6 +1228,63 @@
       "transactional": "required",
       "legacyChecksumBackfillAllowed": false,
       "catalogAdditions": []
+    },
+    {
+      "id": "021",
+      "filename": "021_inventory_price_reference.sql",
+      "lane": "migration",
+      "sha256": "90f3f0c401f8383c1d073d6717fce46b1bf8cc4347216097c3c5ab653f904a19",
+      "byteLength": 2193,
+      "transactional": "required",
+      "legacyChecksumBackfillAllowed": false,
+      "catalogAdditions": [
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "tenants.tenants_currency_code_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "recipe_inventory_items.recipe_inventory_price_reference_check"
+        }
+      ]
+    },
+    {
+      "id": "022",
+      "filename": "022_real_consumption_occurrences.sql",
+      "lane": "migration",
+      "sha256": "371ad525d4081e801da81e9802a44af745b0091931be061af818f6ceabe073e3",
+      "byteLength": 710,
+      "transactional": "required",
+      "legacyChecksumBackfillAllowed": false,
+      "catalogAdditions": [
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_items.real_consumption_items_ingredient_index_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "real_consumption_items.real_consumption_items_occurrence_key"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "real_consumption_items.real_consumption_items_occurrence_key"
+        }
+      ]
+    },
+    {
+      "id": "023",
+      "filename": "023_inventory_movement_retention.sql",
+      "lane": "migration",
+      "sha256": "553a90822a22f0d46b1fdfa5bd9c97cf8129c9125c477c4af5fc0654497bebba",
+      "byteLength": 1835,
+      "transactional": "required",
+      "legacyChecksumBackfillAllowed": false,
+      "catalogAdditions": []
     }
   ],
   "baselineObjects": {

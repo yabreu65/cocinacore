@@ -29,6 +29,12 @@ const MIGRATION_ROLE = 'migration_admin';
 const SCHEMA_OWNER = 'cocinacore_schema_owner';
 const LOCK_NAMESPACE_PREFIX = 'cocinacore:database-change:v1:';
 const HISTORICAL_BASELINE_COUNT = 10;
+const INVENTORY_MIGRATION = '021_inventory_price_reference.sql';
+const OCCURRENCE_MIGRATION = '022_real_consumption_occurrences.sql';
+const RETENTION_MIGRATION = '023_inventory_movement_retention.sql';
+function capabilityVersion(applied) {
+  return applied.has(RETENTION_MIGRATION) ? '023' : applied.has(OCCURRENCE_MIGRATION) ? '022' : applied.has(INVENTORY_MIGRATION) ? '021' : '020';
+}
 const MIGRATION_NAME = /^(\d{3})_[a-z0-9]+(?:_[a-z0-9]+)*(\.bootstrap)?\.sql$/;
 const LANES = new Set(['migration', 'bootstrap']);
 const SHA256 = /^[0-9a-f]{64}$/;
@@ -60,9 +66,9 @@ function getOptions() {
   if (!LANES.has(lane)) throw new Error('--lane must be exactly migration or bootstrap.');
   const stopAfter = values.get('--stop-after');
   const verifyBoundary = values.get('--verify-boundary');
-  if ((stopAfter && stopAfter !== '019') || (verifyBoundary && verifyBoundary !== '019'))
-    throw new Error('The only supported migration boundary is 019.');
-  if ((stopAfter || verifyBoundary) && (lane !== 'migration' || flags.size || (stopAfter && verifyBoundary)))
+  if ((stopAfter && !['019', '020'].includes(stopAfter)) || (verifyBoundary && verifyBoundary !== '019'))
+    throw new Error('Supported stop boundaries are 019 and 020; verification boundary is 019.');
+  if ((stopAfter || verifyBoundary) && (lane !== 'migration' || flags.has('--verify-complete') || (verifyBoundary && (flags.size || stopAfter))))
     throw new Error('Boundary options cannot be combined with another mode or bootstrap lane.');
   return { lane, dryRun: flags.has('--dry-run'), verifyComplete: flags.has('--verify-complete'), stopAfter, verifyBoundary };
 }
@@ -995,11 +1001,15 @@ async function assertAndAssumeMigrationIdentity(client, manifest, migrations, se
     assertGlobalOrder(migrations, applied);
   }
 
+  if (applied && migrations.some((migration) => migration.prefix > 20 && ![INVENTORY_MIGRATION, OCCURRENCE_MIGRATION, RETENTION_MIGRATION].includes(migration.filename) && applied.has(migration.filename))) {
+    throw new Error('UNSUPPORTED_CAPABILITY_MIGRATION: no reviewed catalog attestation.');
+  }
+
   await assertSchemaOwnerDatabaseAuthority(client, manifest, applied);
   if (applied?.has('019_real_consumption_reconciliation.sql')) {
     const post020Applied = migrations.some((migration) => migration.prefix >= 20 && applied.has(migration.filename));
     if (post020Applied) {
-      const activationState = await attestActivatedCapabilities(client);
+      const activationState = await attestActivatedCapabilities(client, capabilityVersion(applied));
       if (activationState === 'pending') console.log('ACTIVATION PENDING: post-020 grants are incomplete.');
     } else await attestPreparedCapabilities(client);
   }
@@ -1036,7 +1046,7 @@ function parseExpectedPending(migrations) {
   return new Set(filenames);
 }
 
-function assertExpectedPending(migrations, applied, expected, separated = false) {
+function assertExpectedPending(migrations, applied, expected, separated = false, stopAfter) {
   if (expected === undefined) return;
   if (
     separated &&
@@ -1044,6 +1054,10 @@ function assertExpectedPending(migrations, applied, expected, separated = false)
       expected.has('019_real_consumption_reconciliation.sql'))
   ) {
     assertM5ExpectedPending(migrations, applied, expected);
+    if (stopAfter !== '019') throw new Error('MIGRATION_EXPECTED_PENDING_MISMATCH: M5 execution must stop at 019.');
+    // The exact 017 baseline and pending 018/019 are verified above. Later
+    // canonical migrations remain pending and are outside this authorization.
+    return;
   }
   const actual = migrations
     .filter((migration) => !applied.has(migration.filename))
@@ -1051,12 +1065,6 @@ function assertExpectedPending(migrations, applied, expected, separated = false)
   const expectedFilenames = migrations
     .filter((migration) => expected.has(migration.filename))
     .map((migration) => migration.filename);
-  const exactM5Pair = expectedFilenames.join(',') ===
-    '018_cooking_sessions.sql,019_real_consumption_reconciliation.sql';
-  if (exactM5Pair) {
-    const pending020 = migrations.find((migration) => migration.id === '020' && migration.filename === '020_tenant_rls_hardening.sql');
-    if (pending020 && !applied.has(pending020.filename)) expectedFilenames.push(pending020.filename);
-  }
   if (
     actual.length !== expectedFilenames.length ||
     actual.some((filename, index) => filename !== expectedFilenames[index])
@@ -1490,12 +1498,23 @@ async function runMigration(client, migration, ledgerMode, { post020Applied = fa
   try {
     if (migration.prefix >= 20) {
       if (!parseActivationGate()) throw new Error('PREPARED_CAPABILITIES_RESTRICTED_LANE_REQUIRED');
-      if (post020Applied) await attestActivatedCapabilities(client);
-      else await attestPreparedCapabilities(client, { required: true });
+      if (migration.id === '020' && !post020Applied) {
+        await attestPreparedCapabilities(client, { required: true });
+      } else if (migration.filename === INVENTORY_MIGRATION && post020Applied) {
+        if (await attestActivatedCapabilities(client, '020') !== 'active') {
+          throw new Error('ACTIVATION_PENDING: 021 requires active 020 capabilities.');
+        }
+      } else if (migration.filename === OCCURRENCE_MIGRATION && post020Applied) {
+        if (await attestActivatedCapabilities(client, '021') !== 'active') throw new Error('ACTIVATION_PENDING: 022 requires active 021 capabilities.');
+      } else if (migration.filename === RETENTION_MIGRATION && post020Applied) {
+        if (await attestActivatedCapabilities(client, '022') !== 'active') throw new Error('ACTIVATION_PENDING: 023 requires active 022 capabilities.');
+      } else {
+        throw new Error('UNSUPPORTED_CAPABILITY_MIGRATION: no reviewed catalog transition.');
+      }
     }
     await client.query(migration.sql);
     if (migration.prefix >= 20) {
-      const activationState = await attestActivatedCapabilities(client);
+      const activationState = await attestActivatedCapabilities(client, capabilityVersion(new Set([migration.filename])));
       if (activationState === 'pending') console.log('ACTIVATION PENDING: post-020 grants are incomplete.');
     }
     if (ledgerMode === 'provenance') {
@@ -1524,15 +1543,15 @@ function firstPendingMigration(migrations, applied) {
   return migrations.find((migration) => !applied.has(migration.filename));
 }
 
-function assertNoMigrationAfterBoundary(migrations, applied) {
-  if (migrations.some((migration) => migration.prefix > 19 && applied.has(migration.filename)))
-    throw new Error('BOUNDARY_PASSED: a migration after 019 is already applied.');
+function assertNoMigrationAfterBoundary(migrations, applied, boundary = '019') {
+  if (migrations.some((migration) => migration.prefix > Number(boundary) && applied.has(migration.filename)))
+    throw new Error(`BOUNDARY_PASSED: a migration after ${boundary} is already applied.`);
 }
 
-async function assertBoundaryLedger(client, migrations, complete = true) {
-  const expected = migrations.filter((migration) => migration.prefix <= 19);
-  if (expected.length !== 19 || expected[18].id !== '019') {
-    throw new Error('BOUNDARY_INVALID: canonical migrations 001–019 are required.');
+async function assertBoundaryLedger(client, migrations, complete = true, boundary = '019') {
+  const expected = migrations.filter((migration) => migration.prefix <= Number(boundary));
+  if (expected.length !== Number(boundary) || expected.at(-1)?.id !== boundary) {
+    throw new Error(`BOUNDARY_INVALID: canonical migrations 001–${boundary} are required.`);
   }
   const ledgerMode = await assertLedgerShape(client, true);
   const sourceColumn = ledgerMode === 'provenance' ? ', checksum_source' : '';
@@ -1557,7 +1576,7 @@ async function assertBoundaryLedger(client, migrations, complete = true) {
         (ledgerMode !== 'provenance' || row.checksum_source === 'migration_file'))
     )
   ) {
-    throw new Error('BOUNDARY_INVALID: ledger exceeds 019 or differs from the trusted ordered prefix.');
+    throw new Error(`BOUNDARY_INVALID: ledger exceeds ${boundary} or differs from the trusted ordered prefix.`);
   }
 }
 
@@ -1565,17 +1584,30 @@ async function main() {
   const options = getOptions();
   const { manifest, migrations, legacyLineage } = loadManifestAndMigrations();
   const separated = parseActivationGate();
-  if ((options.stopAfter || options.verifyBoundary) && !migrations.some((entry) => entry.id === '019'))
-    throw new Error('BOUNDARY_INVALID: migration 019 is missing from the trusted manifest.');
+  const boundary = options.stopAfter || options.verifyBoundary;
+  if (boundary && !migrations.some((entry) => entry.id === boundary))
+    throw new Error(`BOUNDARY_INVALID: migration ${boundary} is missing from the trusted manifest.`);
   if (options.verifyBoundary && !separated)
     throw new Error('BOUNDARY_UNVERIFIABLE: legacy migration ledger does not store checksums.');
   const expectedPending = parseExpectedPending(migrations);
+  const m5Pair = expectedPending && [...expectedPending].join(',') ===
+    '018_cooking_sessions.sql,019_real_consumption_reconciliation.sql';
+  if (m5Pair) {
+    if (!separated || options.verifyComplete || options.verifyBoundary ||
+        options.lane !== 'migration' || (options.stopAfter && options.stopAfter !== '019'))
+      throw new Error('MIGRATION_EXPECTED_PENDING_MISMATCH: M5 requires the separated migration lane and boundary 019.');
+    options.stopAfter = '019';
+  }
+
+  if (options.dryRun && options.stopAfter && expectedPending === undefined)
+    throw new Error('Bounded dry-run requires MIGRATION_EXPECTED_PENDING.');
   const pgLockTimeout = parseBoundedTimeout('MIGRATION_PG_LOCK_TIMEOUT_MS');
   const statementTimeout = parseBoundedTimeout('MIGRATION_PG_STATEMENT_TIMEOUT_MS');
 
   if (options.dryRun && expectedPending === undefined) {
     for (const migration of migrations) {
-      console.log(`${migration.filename} ${migration.lane} ${migration.sha256}`);
+      if (!options.stopAfter || migration.prefix <= Number(options.stopAfter))
+        console.log(`${migration.filename} ${migration.lane} ${migration.sha256}`);
     }
     return;
   }
@@ -1604,14 +1636,16 @@ async function main() {
         const ledgerMode = await assertLedgerShape(client, separated);
         const applied = await getAppliedMigrations(client, migrations, ledgerMode, legacyLineage);
         assertGlobalOrder(migrations, applied);
-        assertExpectedPending(migrations, applied, expectedPending, separated);
+        if (options.stopAfter) assertNoMigrationAfterBoundary(migrations, applied, options.stopAfter);
+        assertExpectedPending(migrations, applied, expectedPending, separated, options.stopAfter);
         await client.query('commit');
       } catch (error) {
         await client.query('rollback');
         throw error;
       }
       for (const migration of migrations) {
-        console.log(`${migration.filename} ${migration.lane} ${migration.sha256}`);
+        if (!options.stopAfter || migration.prefix <= Number(options.stopAfter))
+          console.log(`${migration.filename} ${migration.lane} ${migration.sha256}`);
       }
       return;
     }
@@ -1631,10 +1665,10 @@ async function main() {
         const ledgerMode = await assertLedgerShape(client, separated);
         const applied = await getAppliedMigrations(client, migrations, ledgerMode, legacyLineage);
         assertGlobalOrder(migrations, applied);
-        assertExpectedPending(migrations, applied, expectedPending, separated);
+        assertExpectedPending(migrations, applied, expectedPending, separated, options.stopAfter);
         if (options.verifyComplete) {
           const post020Applied = migrations.some((entry) => entry.prefix >= 20 && applied.has(entry.filename));
-          if (post020Applied && await attestActivatedCapabilities(client) !== 'active')
+          if (post020Applied && await attestActivatedCapabilities(client, capabilityVersion(applied)) !== 'active')
             throw new Error('ACTIVATION_PENDING: post-020 LOGIN grants are incomplete.');
           const pending = firstPendingMigration(migrations, applied);
           if (pending) throw new Error(`Pending migration: ${pending.filename} (${pending.lane} lane).`);
@@ -1658,8 +1692,8 @@ async function main() {
       const ledgerMode = await assertLedgerShape(client, separated);
       const boundaryApplied = await getAppliedMigrations(client, migrations, ledgerMode, legacyLineage);
       assertGlobalOrder(migrations, boundaryApplied);
-      assertNoMigrationAfterBoundary(migrations, boundaryApplied);
-      if (separated) await assertBoundaryLedger(client, migrations, false);
+      assertNoMigrationAfterBoundary(migrations, boundaryApplied, options.stopAfter);
+      if (separated) await assertBoundaryLedger(client, migrations, false, options.stopAfter);
     }
     if (expectedPending !== undefined) {
       if (hadLedger) {
@@ -1671,7 +1705,7 @@ async function main() {
           legacyLineage
         );
         assertGlobalOrder(migrations, baselineApplied);
-        assertExpectedPending(migrations, baselineApplied, expectedPending, separated);
+        assertExpectedPending(migrations, baselineApplied, expectedPending, separated, options.stopAfter);
       } else {
         throw new Error('MIGRATION_EXPECTED_PENDING requires an existing ledger.');
       }
@@ -1691,14 +1725,14 @@ async function main() {
       : await ensureLegacyLedger(client);
     const applied = await getAppliedMigrations(client, migrations, ledgerMode, legacyLineage);
     assertGlobalOrder(migrations, applied);
-    assertExpectedPending(migrations, applied, expectedPending, separated);
+    assertExpectedPending(migrations, applied, expectedPending, separated, options.stopAfter);
 
     for (const migration of migrations) {
       if (applied.has(migration.filename)) {
         console.log(`SKIP ${migration.filename}`);
-        if (options.stopAfter && migration.id === '019') {
-          if (separated) await assertBoundaryLedger(client, migrations);
-          console.log('BOUNDARY 019 reached; later migrations remain unverified.');
+        if (options.stopAfter && migration.id === options.stopAfter) {
+          if (separated) await assertBoundaryLedger(client, migrations, true, options.stopAfter);
+          console.log(`BOUNDARY ${options.stopAfter} reached; later migrations remain unverified.`);
           return;
         }
         continue;
@@ -1710,10 +1744,11 @@ async function main() {
       console.log(`APPLY ${migration.filename}`);
       const post020Applied = migrations.some((entry) => entry.prefix >= 20 && applied.has(entry.filename));
       await runMigration(client, migration, ledgerMode, { post020Applied });
+      applied.add(migration.filename);
       console.log(`DONE ${migration.filename}`);
-      if (options.stopAfter && migration.id === '019') {
-        if (separated) await assertBoundaryLedger(client, migrations);
-        console.log('BOUNDARY 019 reached; later migrations remain unverified.');
+      if (options.stopAfter && migration.id === options.stopAfter) {
+        if (separated) await assertBoundaryLedger(client, migrations, true, options.stopAfter);
+        console.log(`BOUNDARY ${options.stopAfter} reached; later migrations remain unverified.`);
         return;
       }
     }

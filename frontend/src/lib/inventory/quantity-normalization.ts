@@ -1,3 +1,12 @@
+import {
+  parseExactQuantity,
+  exactQuantityText,
+  multiplyQuantity,
+  rational,
+  type ExactQuantity,
+} from './exact-quantity';
+import { exactStorageQuantity } from './stock-precision';
+
 export type NormalizedUnit =
   | 'unidad'
   | 'g'
@@ -118,7 +127,84 @@ function parseNumericValue(raw: string): number | null {
 export function normalizeUnit(unit: string | null): NormalizedUnit {
   if (!unit) return 'unknown';
   const normalized = normalizeText(unit);
-  return UNIT_ALIASES[normalized] ?? 'unknown';
+  return Object.hasOwn(UNIT_ALIASES, normalized) ? UNIT_ALIASES[normalized] : 'unknown';
+}
+
+/** Strict unit evidence for persistence; do not infer count from ingredient names. */
+export function normalizeExplicitUnit(unit: string | null): NormalizedUnit {
+  if (!unit) return 'unknown';
+  const token = normalizeText(unit);
+  return token !== 'tomate' && token !== 'tomates' && Object.hasOwn(UNIT_ALIASES, token)
+    ? UNIT_ALIASES[token]
+    : 'unknown';
+}
+
+/** Strict complete amount and unit evidence, including compatible legacy embedded units. */
+export function parseExactStoredQuantity(item: {
+  quantity: string | null;
+  unit: string | null;
+}): { quantity: ExactQuantity; unit: Exclude<NormalizedUnit, 'unknown'> } | null {
+  const raw = normalizeText(item.quantity ?? '');
+  const columnUnit = normalizeExplicitUnit(item.unit);
+  if (item.unit?.trim() && columnUnit === 'unknown') return null;
+  const numeric = parseExactQuantity(raw);
+  if (numeric) return columnUnit === 'unknown' ? null : { quantity: numeric, unit: columnUnit };
+  const embedded = /^(.+?)\s+([a-z]+)$/.exec(raw);
+  if (!embedded) return null;
+  const quantity = parseExactQuantity(embedded[1]);
+  const unit = normalizeExplicitUnit(embedded[2]);
+  if (!quantity || unit === 'unknown' || (columnUnit !== 'unknown' && columnUnit !== unit))
+    return null;
+  return { quantity, unit };
+}
+
+/** Shared physical basis for quantities and monetary references. */
+export function quantityUnitFactor(unit: NormalizedUnit): bigint {
+  return BigInt(unit === 'kg' || unit === 'l' ? 1000 : unit === 'cucharada' ? 3 : 1);
+}
+
+export function quantityBaseUnit(unit: NormalizedUnit): NormalizedUnit {
+  return unit === 'kg' ? 'g' : unit === 'l' ? 'ml' : unit === 'cucharada' ? 'cucharadita' : unit;
+}
+
+export function convertExactQuantity(
+  value: ExactQuantity,
+  from: NormalizedUnit,
+  to: NormalizedUnit
+): ExactQuantity | null {
+  if (!canCompareUnits(from, to)) return null;
+  return multiplyQuantity(value, rational(quantityUnitFactor(from), quantityUnitFactor(to)));
+}
+
+/** Parse a recipe line only when a positive amount and a real unit are explicit.
+ * Keep its ingredient name even when quantity/unit are unknown.
+ */
+export function parseExplicitRecipeLine(input: string): {
+  name: string;
+  amount: ExactQuantity | null;
+  unit: NormalizedUnit;
+} {
+  const clean = input.replace(/^(?:-\s+|[*•]\s*)/, '').trim();
+  const prefix =
+    /^(\d+\s+\d+\s*\/\s*\d+|\d+\s*\/\s*\d+|\d+(?:[.,]\d+)?)(?:\s+|(?=[A-Za-z]))(.*)$/u.exec(clean);
+  if (!prefix) return { name: clean, amount: null, unit: 'unknown' };
+  const remainder = prefix[2].trim();
+  const token = remainder.split(/\s+/, 1)[0];
+  const unit = normalizeExplicitUnit(token);
+  const name =
+    (unit === 'unknown' ? remainder : remainder.replace(/^\S+\s*/, ''))
+      .replace(/^de\s+/i, '')
+      .trim() || clean;
+  const amount = parseExactQuantity(prefix[1]);
+  if (
+    !amount ||
+    amount.numerator <= BigInt(0) ||
+    unit === 'unknown' ||
+    name === clean ||
+    /\bal gusto\b|\bcantidad necesaria\b|\bpara fre[ií]r\b/i.test(clean)
+  )
+    return { name, amount: null, unit: 'unknown' };
+  return { name, amount, unit };
 }
 
 export function parseQuantity(input: string): ParsedQuantity {
@@ -174,6 +260,27 @@ export function parseQuantity(input: string): ParsedQuantity {
   };
 }
 
+/** Strict, exactly persistable quantity for stock transfers; never infer units or round. */
+export function parseExplicitQuantity(
+  input: string
+): { value: number; unit: Exclude<NormalizedUnit, 'unknown'> } | null {
+  if (input.length > 128) return null;
+  const normalized = normalizeText(input);
+  const match = /^(.+?)\s+([a-z]+)$/.exec(normalized);
+  if (!match) return null;
+  const [, amount, token] = match;
+  // Ingredient-name aliases are useful in recipes, but are not explicit units.
+  if (token === 'tomate' || token === 'tomates' || !Object.hasOwn(UNIT_ALIASES, token)) return null;
+  const unit = normalizeUnit(token);
+  const exact = parseExactQuantity(amount);
+  if (!exact) return null;
+  const value = exactStorageQuantity(exact);
+  if (unit === 'unknown' || value === null || value <= 0) return null;
+  // Verify the decimal representation used for both stock and audit is lossless.
+  if (String(value) !== exactQuantityText(exact)) return null;
+  return { value, unit };
+}
+
 export function formatQuantity(value: number | null, unit: NormalizedUnit): string {
   if (value === null || !Number.isFinite(value)) return '—';
   const safeUnit = unit === 'unknown' ? '' : ` ${unit}`;
@@ -198,6 +305,8 @@ export function convertQuantity(
   if (fromUnit === 'g' && toUnit === 'kg') return value / 1000;
   if (fromUnit === 'l' && toUnit === 'ml') return value * 1000;
   if (fromUnit === 'ml' && toUnit === 'l') return value / 1000;
+  if (fromUnit === 'cucharada' && toUnit === 'cucharadita') return value * 3;
+  if (fromUnit === 'cucharadita' && toUnit === 'cucharada') return value / 3;
 
   return null;
 }

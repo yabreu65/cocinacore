@@ -2,9 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   withSentryConfig: vi.fn((...args: unknown[]) => args[0]),
-  bundleAnalyzer: vi.fn(
-    (_options: { enabled: boolean }) => (config: unknown) => config,
-  ),
+  bundleAnalyzer: vi.fn((...options: [{ enabled: boolean }]) => {
+    void options;
+    return (config: unknown) => config;
+  }),
 }));
 
 vi.mock('@sentry/nextjs', () => ({

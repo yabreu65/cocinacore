@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NextRequest } from 'next/server';
-import type { UserMealPlanRow } from '@/lib/db/types';
+import type { UserMealPlanRow, ShoppingListItemRow } from '@/lib/db/types';
 
 const requireUserMock = vi.fn();
 const findMealPlanByIdForUserAndTenantMock = vi.fn();
@@ -8,16 +8,88 @@ const listInventoryItemsByTenantMock = vi.fn();
 const addMealPlanShoppingItemsMock = vi.fn();
 const listShoppingListItemsMock = vi.fn();
 
+const tenantId = '00000000-0000-4000-8000-000000000001';
+const userId = '00000000-0000-4000-8000-000000000002';
+const lockMock = vi.fn();
+const calls: Array<{ sql: string; params: unknown[]; client: unknown }> = [];
+const clients: unknown[] = [];
+const insertedRows: ShoppingListItemRow[] = [];
+let serializeTransactions = false;
+let transactionTail = Promise.resolve();
+
+const scopedMock = vi.fn(
+  async (
+    _scope: unknown,
+    callback: (client: {
+      query: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[] }>;
+    }) => Promise<unknown>,
+    options: unknown
+  ) => {
+    expect(options).toEqual({ isolationLevel: 'read committed' });
+    let release: (() => void) | undefined;
+    const client = {
+      query: async (sql: string, params: unknown[] = []): Promise<{ rows: unknown[] }> => {
+        calls.push({ sql, params, client });
+        if (sql.includes('pg_advisory_xact_lock')) {
+          if (
+            serializeTransactions &&
+            !release &&
+            String(params[0]).startsWith('cocinacore:inventory-source:v1:')
+          ) {
+            const previous = transactionTail;
+            transactionTail = new Promise<void>((resolve) => {
+              release = resolve;
+            });
+            await previous;
+          }
+          await lockMock();
+          return { rows: [] };
+        }
+        if (sql.includes('from public.user_meal_plans')) {
+          const plan: unknown = await findMealPlanByIdForUserAndTenantMock(...params);
+          return { rows: plan ? [plan] : [] };
+        }
+        if (sql.includes('from public.recipe_inventory_items'))
+          return { rows: (await listInventoryItemsByTenantMock(...params)) as unknown[] };
+        if (sql.includes('from public.shopping_list_items'))
+          return { rows: (await listShoppingListItemsMock(...params)) as unknown[] };
+        if (sql.includes('insert into public.shopping_list_items')) {
+          const row: ShoppingListItemRow = {
+            id: `inserted-${insertedRows.length + 1}`,
+            tenant_id: String(params[0]),
+            user_id: String(params[1]),
+            source: String(params[2]),
+            ingredient_name: String(params[3]),
+            quantity: params[4] === null ? null : String(params[4]),
+            status: 'pending',
+            premium_recipe_id: null,
+            transfer_inventory_item_id: null,
+            transferred_at: null,
+            created_at: '2026-10-27T16:00:00Z',
+            updated_at: '2026-10-27T16:00:00Z',
+          };
+          insertedRows.push(row);
+          return { rows: [row] };
+        }
+        throw new Error('Unexpected query: ' + sql);
+      },
+    };
+    clients.push(client);
+    try {
+      return await callback(client);
+    } finally {
+      release?.();
+    }
+  }
+);
 vi.mock('@/lib/auth/server', () => ({ requireUser: requireUserMock }));
-vi.mock('@/lib/db/repositories/mealPlanRepository', () => ({
-  findMealPlanByIdForUserAndTenant: findMealPlanByIdForUserAndTenantMock,
-}));
-vi.mock('@/lib/db/repositories/inventoryRepository', () => ({
-  listInventoryItemsByTenant: listInventoryItemsByTenantMock,
+vi.mock('@/lib/db', () => ({
+  scopedTransaction: scopedMock,
+  query: vi.fn(),
+  mapSingleRow: vi.fn(),
 }));
 vi.mock('@/lib/db/repositories/shoppingListRepository', () => ({
-  addMealPlanShoppingItems: addMealPlanShoppingItemsMock,
-  listShoppingListItems: listShoppingListItemsMock,
+  addMealPlanShoppingItemsInTransaction: addMealPlanShoppingItemsMock,
 }));
 
 const { GET, POST } = await import('./route');
@@ -32,8 +104,8 @@ afterEach(() => {
 function persistedPlan(overrides: Partial<UserMealPlanRow> = {}): UserMealPlanRow {
   return {
     id: planId,
-    tenant_id: 'tenant-1',
-    user_id: 'user-1',
+    tenant_id: tenantId,
+    user_id: userId,
     people_count: 50,
     period: 'week',
     mode: 'balanced_ai',
@@ -102,8 +174,8 @@ function persistedPlan(overrides: Partial<UserMealPlanRow> = {}): UserMealPlanRo
 function inventoryItem(ingredient_name: string, quantity: string, unit: string) {
   return {
     id: `inventory-${ingredient_name}`,
-    tenant_id: 'tenant-1',
-    user_id: 'user-1',
+    tenant_id: tenantId,
+    user_id: userId,
     ingredient_name,
     quantity,
     unit,
@@ -141,6 +213,14 @@ function consumedBreakfastPayload() {
 describe('GET /api/meal-plan/shopping-suggestions', () => {
   beforeEach(() => {
     vi.useFakeTimers({ now: fixtureNow });
+    calls.length = 0;
+    clients.length = 0;
+    insertedRows.length = 0;
+    serializeTransactions = false;
+    transactionTail = Promise.resolve();
+    scopedMock.mockClear();
+    lockMock.mockReset();
+    lockMock.mockResolvedValue(undefined);
     requireUserMock.mockReset();
     findMealPlanByIdForUserAndTenantMock.mockReset();
     listInventoryItemsByTenantMock.mockReset();
@@ -148,7 +228,7 @@ describe('GET /api/meal-plan/shopping-suggestions', () => {
     listShoppingListItemsMock.mockReset();
     listShoppingListItemsMock.mockResolvedValue([]);
     addMealPlanShoppingItemsMock.mockResolvedValue({ added: [], alreadyPresent: [] });
-    requireUserMock.mockResolvedValue({ id: 'user-1', tenant: { tenantId: 'tenant-1' } });
+    requireUserMock.mockResolvedValue({ id: userId, tenant: { tenantId: tenantId } });
     findMealPlanByIdForUserAndTenantMock.mockResolvedValue(persistedPlan());
     listInventoryItemsByTenantMock.mockResolvedValue([
       inventoryItem('Arroz', '500', 'g'),
@@ -160,23 +240,9 @@ describe('GET /api/meal-plan/shopping-suggestions', () => {
   it('returns actionable buy/review candidates from the current tenant inventory without ownership data', async () => {
     const response = await GET(request() as unknown as NextRequest);
     expect(response.status).toBe(200);
-    expect(findMealPlanByIdForUserAndTenantMock).toHaveBeenCalledWith(
-      planId,
-      'user-1',
-      'tenant-1',
-      { tenantId: 'tenant-1', userId: 'user-1' }
-    );
-    expect(listInventoryItemsByTenantMock).toHaveBeenCalledWith(
-      'tenant-1',
-      501,
-      undefined,
-      {},
-      { tenantId: 'tenant-1', userId: 'user-1' }
-    );
-    expect(listShoppingListItemsMock).toHaveBeenCalledWith('tenant-1', 'user-1', {}, 501, {
-      tenantId: 'tenant-1',
-      userId: 'user-1',
-    });
+    expect(findMealPlanByIdForUserAndTenantMock).toHaveBeenCalledWith(planId, tenantId, userId);
+    expect(listInventoryItemsByTenantMock).toHaveBeenCalledWith(tenantId, 501);
+    expect(listShoppingListItemsMock).toHaveBeenCalledWith(tenantId, userId, 501);
     const body = (await response.json()) as { items: Array<Record<string, unknown>> };
     expect(body.items).toEqual(
       expect.arrayContaining([
@@ -205,24 +271,24 @@ describe('GET /api/meal-plan/shopping-suggestions', () => {
     listShoppingListItemsMock.mockResolvedValue([
       {
         id: 'private-row',
-        tenant_id: 'tenant-1',
-        user_id: 'user-1',
+        tenant_id: tenantId,
+        user_id: userId,
         source: `meal-plan:${planId}`,
         ingredient_name: ' ARROZ ',
         status: 'pending',
       },
       {
         id: 'purchased-row',
-        tenant_id: 'tenant-1',
-        user_id: 'user-1',
+        tenant_id: tenantId,
+        user_id: userId,
         source: `meal-plan:${planId}`,
         ingredient_name: 'Sal',
         status: 'purchased',
       },
       {
         id: 'manual-row',
-        tenant_id: 'tenant-1',
-        user_id: 'user-1',
+        tenant_id: tenantId,
+        user_id: userId,
         source: 'manual',
         ingredient_name: 'Harina',
         status: 'pending',
@@ -353,13 +419,21 @@ async function confirmationBody(selectedItems: string[] = ['arroz']) {
 describe('POST /api/meal-plan/shopping-suggestions', () => {
   beforeEach(() => {
     vi.useFakeTimers({ now: fixtureNow });
+    calls.length = 0;
+    clients.length = 0;
+    insertedRows.length = 0;
+    serializeTransactions = false;
+    transactionTail = Promise.resolve();
+    scopedMock.mockClear();
+    lockMock.mockReset();
+    lockMock.mockResolvedValue(undefined);
     requireUserMock.mockReset();
     findMealPlanByIdForUserAndTenantMock.mockReset();
     listInventoryItemsByTenantMock.mockReset();
     addMealPlanShoppingItemsMock.mockReset();
     listShoppingListItemsMock.mockReset();
     listShoppingListItemsMock.mockResolvedValue([]);
-    requireUserMock.mockResolvedValue({ id: 'user-1', tenant: { tenantId: 'tenant-1' } });
+    requireUserMock.mockResolvedValue({ id: userId, tenant: { tenantId: tenantId } });
     findMealPlanByIdForUserAndTenantMock.mockResolvedValue(persistedPlan());
     listInventoryItemsByTenantMock.mockResolvedValue([
       inventoryItem('Arroz', '500', 'g'),
@@ -372,26 +446,12 @@ describe('POST /api/meal-plan/shopping-suggestions', () => {
   it('recomputes current candidates and persists only selected actionable keys with server-owned data', async () => {
     const response = await POST(postRequest(await confirmationBody(['arroz', 'sal', 'harina'])));
     expect(response.status).toBe(200);
-    expect(findMealPlanByIdForUserAndTenantMock).toHaveBeenLastCalledWith(
-      planId,
-      'user-1',
-      'tenant-1',
-      { tenantId: 'tenant-1', userId: 'user-1' }
-    );
-    expect(listShoppingListItemsMock).toHaveBeenLastCalledWith('tenant-1', 'user-1', {}, 501, {
-      tenantId: 'tenant-1',
-      userId: 'user-1',
-    });
-    expect(listInventoryItemsByTenantMock).toHaveBeenCalledWith(
-      'tenant-1',
-      501,
-      undefined,
-      {},
-      { tenantId: 'tenant-1', userId: 'user-1' }
-    );
-    expect(addMealPlanShoppingItemsMock).toHaveBeenCalledWith({
-      tenantId: 'tenant-1',
-      userId: 'user-1',
+    expect(findMealPlanByIdForUserAndTenantMock).toHaveBeenLastCalledWith(planId, tenantId, userId);
+    expect(listShoppingListItemsMock).toHaveBeenLastCalledWith(tenantId, userId, 501);
+    expect(listInventoryItemsByTenantMock).toHaveBeenCalledWith(tenantId, 501);
+    expect(addMealPlanShoppingItemsMock).toHaveBeenCalledWith(clients.at(-1), {
+      tenantId: tenantId,
+      userId: userId,
       source: `meal-plan:${planId}`,
       dedupeScope: 'user',
       items: [{ ingredientName: 'Arroz', quantity: '1.5 kg' }],
@@ -471,5 +531,144 @@ describe('POST /api/meal-plan/shopping-suggestions', () => {
     expect(response.status).toBe(200);
     expect(addMealPlanShoppingItemsMock).not.toHaveBeenCalled();
     expect(await response.json()).toEqual({ added: [], alreadyPresent: [], ignored: ['arroz'] });
+  });
+  it('uses one authenticated READ COMMITTED transaction and acquires tenant lock before all POST reads and writes', async () => {
+    const body = await confirmationBody();
+    calls.length = 0;
+    clients.length = 0;
+    scopedMock.mockClear();
+    expect((await POST(postRequest(body))).status).toBe(200);
+    expect(scopedMock).toHaveBeenCalledTimes(1);
+    expect(scopedMock).toHaveBeenCalledWith({ tenantId, userId }, expect.any(Function), {
+      isolationLevel: 'read committed',
+    });
+    expect(
+      calls.map((c) =>
+        c.sql.includes('pg_advisory') ? 'lock' : c.sql.match(/from public\.(\w+)/)?.[1]
+      )
+    ).toEqual(['lock', 'user_meal_plans', 'recipe_inventory_items', 'shopping_list_items']);
+    expect(calls.every((c) => c.client === clients[0])).toBe(true);
+    expect(calls[0].params).toEqual([`cocinacore:inventory-source:v1:${tenantId}`]);
+    expect(addMealPlanShoppingItemsMock).toHaveBeenCalledWith(
+      clients[0],
+      expect.objectContaining({ tenantId, userId })
+    );
+  });
+  it.each(['inventory', 'shopping', 'plan', 'consumption', 'date'] as const)(
+    'rejects source %s changed while waiting for the lock',
+    async (source) => {
+      const body = await confirmationBody();
+      lockMock.mockImplementationOnce(() => {
+        if (source === 'inventory')
+          listInventoryItemsByTenantMock.mockResolvedValue([inventoryItem('Arroz', '2', 'kg')]);
+        if (source === 'shopping')
+          listShoppingListItemsMock.mockResolvedValue([
+            {
+              id: 'new-row',
+              tenant_id: tenantId,
+              user_id: userId,
+              source: 'manual',
+              ingredient_name: 'Arroz',
+              status: 'pending',
+            },
+          ]);
+        if (source === 'plan')
+          findMealPlanByIdForUserAndTenantMock.mockResolvedValue(
+            persistedPlan({ updated_at: '2026-01-01T00:00:00.000001Z' })
+          );
+        if (source === 'consumption')
+          findMealPlanByIdForUserAndTenantMock.mockResolvedValue(
+            persistedPlan({ consumption_payload: consumedBreakfastPayload() })
+          );
+        if (source === 'date') vi.setSystemTime(new Date('2026-10-28T16:00:00Z'));
+      });
+      expect((await POST(postRequest(body))).status).toBe(409);
+      expect(addMealPlanShoppingItemsMock).not.toHaveBeenCalled();
+    }
+  );
+  it.each(['inventory', 'shopping'] as const)(
+    'rejects the 501-row %s sentinel without writes',
+    async (source) => {
+      const body = await confirmationBody();
+      if (source === 'inventory')
+        listInventoryItemsByTenantMock.mockResolvedValue(
+          Array(501).fill(inventoryItem('Arroz', '1', 'kg'))
+        );
+      else listShoppingListItemsMock.mockResolvedValue(Array(501).fill({ id: 'row' }));
+      expect((await POST(postRequest(body))).status).toBe(409);
+      expect(addMealPlanShoppingItemsMock).not.toHaveBeenCalled();
+    }
+  );
+  it('does not read or write if tenant lock acquisition fails', async () => {
+    const body = await confirmationBody();
+    calls.length = 0;
+    lockMock.mockRejectedValueOnce(new Error('lock failed'));
+    expect((await POST(postRequest(body))).status).toBe(500);
+    expect(calls).toHaveLength(1);
+    expect(addMealPlanShoppingItemsMock).not.toHaveBeenCalled();
+  });
+  it('accepts equivalent exact timestamp representations but rejects lost microseconds', async () => {
+    findMealPlanByIdForUserAndTenantMock.mockResolvedValue(
+      persistedPlan({ updated_at: '2026-01-01 00:00:00.123456+00' })
+    );
+    const body = await confirmationBody();
+    expect(
+      (await POST(postRequest({ ...body, expectedUpdatedAt: '2026-01-01T00:00:00.123456Z' })))
+        .status
+    ).toBe(200);
+    addMealPlanShoppingItemsMock.mockClear();
+    expect(
+      (await POST(postRequest({ ...body, expectedUpdatedAt: '2026-01-01T00:00:00.123Z' }))).status
+    ).toBe(409);
+    expect(addMealPlanShoppingItemsMock).not.toHaveBeenCalled();
+  });
+  it('serializes concurrent confirmations with the actual same-client writer: first inserts, second sees a stale fingerprint', async () => {
+    const actual = await vi.importActual<
+      typeof import('@/lib/db/repositories/shoppingListRepository')
+    >('@/lib/db/repositories/shoppingListRepository');
+    addMealPlanShoppingItemsMock.mockImplementation(actual.addMealPlanShoppingItemsInTransaction);
+    listShoppingListItemsMock.mockImplementation(() => Promise.resolve([...insertedRows]));
+    const body = await confirmationBody();
+    calls.length = 0;
+    clients.length = 0;
+    scopedMock.mockClear();
+    serializeTransactions = true;
+    const results = await Promise.all([POST(postRequest(body)), POST(postRequest(body))]);
+    expect(results.map((r) => r.status).sort()).toEqual([200, 409]);
+    expect(insertedRows).toHaveLength(1);
+    expect(insertedRows[0]).toMatchObject({
+      ingredient_name: 'Arroz',
+      quantity: '1.5 kg',
+      tenant_id: tenantId,
+      user_id: userId,
+    });
+    expect(scopedMock).toHaveBeenCalledTimes(2);
+    expect(addMealPlanShoppingItemsMock).toHaveBeenCalledOnce();
+    const write = calls.find((c) => c.sql.includes('insert into public.shopping_list_items'));
+    const reads = calls.filter((c) => c.sql.includes('from public.user_meal_plans'));
+    expect(write?.client).toBe(reads[0].client);
+    expect(calls.indexOf(write!)).toBeLessThan(calls.indexOf(reads[1]));
+  });
+  it('accepts a full legacy UTC fingerprint only when all current evidence matches', async () => {
+    const row = {
+      ...inventoryItem('Arroz', '500', 'g'),
+      expiration_date: '2026-11-20 00:00:00+00',
+      updated_at: '2026-10-27 12:00:00.123456+00',
+    };
+    listInventoryItemsByTenantMock.mockResolvedValue([row]);
+    const body = await confirmationBody();
+    const canonical = {
+      ...row,
+      expiration_date: '2026-11-20T00:00:00.000Z',
+      updated_at: '2026-10-27T12:00:00.123456Z',
+    };
+    listInventoryItemsByTenantMock.mockResolvedValue([canonical]);
+    expect((await POST(postRequest(body))).status).toBe(200);
+    addMealPlanShoppingItemsMock.mockClear();
+    listInventoryItemsByTenantMock.mockResolvedValue([
+      { ...canonical, updated_at: '2026-10-27T12:00:00.123457Z' },
+    ]);
+    expect((await POST(postRequest(body))).status).toBe(409);
+    expect(addMealPlanShoppingItemsMock).not.toHaveBeenCalled();
   });
 });

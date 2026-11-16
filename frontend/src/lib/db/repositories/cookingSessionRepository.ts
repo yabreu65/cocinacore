@@ -1,3 +1,5 @@
+import { equalPostgresTimestamps } from '@/lib/db/postgres-timestamp';
+import { lockInventorySourceTenant } from '@/lib/db/inventory-source-lock';
 import { createHash } from 'node:crypto';
 import { transaction, type DbOperationOptions } from '@/lib/db';
 import type { DbTransactionClient } from '@/lib/db/transaction-client';
@@ -105,7 +107,7 @@ async function validateSource(
   if (parsed.plan.schedule.portionConfirmation.peopleCount !== plan.people_count)
     return { status: 'source_conflict' };
   if (
-    plan.updated_at !== input.expectedUpdatedAt ||
+    !equalPostgresTimestamps(plan.updated_at, input.expectedUpdatedAt) ||
     stableJson(plan.calendar_payload) !== stableJson(input.expectedCalendarPayload)
   ) {
     return { status: 'source_conflict' };
@@ -170,61 +172,65 @@ export async function createCookingSession(
   input: CreateCookingSessionInput
 ): Promise<CookingSessionOperationResult> {
   const payloadHash = hashPayload({ operation: 'start', ...input });
-  return transaction(async (client): Promise<CookingSessionOperationResult> => {
-    await setRlsContext(client, input.tenantId, input.userId);
-    const prior = await existingIdempotentSession(
-      client,
-      input.tenantId,
-      input.userId,
-      input.idempotencyKey,
-      payloadHash
-    );
-    if (prior) return prior;
-    const plan = await lockPlan(client, input);
-    if (!plan) return { status: 'not_found' };
-    const source = await validateSource(client, input, plan);
-    if (source.status !== 'ok') return source;
-    const open = await client.query<CookingSessionRow>(
-      `select * from public.cooking_sessions
+  return transaction(
+    async (client): Promise<CookingSessionOperationResult> => {
+      await setRlsContext(client, input.tenantId, input.userId);
+      await lockInventorySourceTenant(client, input.tenantId);
+      const prior = await existingIdempotentSession(
+        client,
+        input.tenantId,
+        input.userId,
+        input.idempotencyKey,
+        payloadHash
+      );
+      if (prior) return prior;
+      const plan = await lockPlan(client, input);
+      if (!plan) return { status: 'not_found' };
+      const source = await validateSource(client, input, plan);
+      if (source.status !== 'ok') return source;
+      const open = await client.query<CookingSessionRow>(
+        `select * from public.cooking_sessions
        where tenant_id = $1 and user_id = $2 and meal_plan_id = $3 and day_index = $4 and meal_type = $5
          and status in ('active', 'paused')
        for update`,
-      [input.tenantId, input.userId, input.mealPlanId, input.dayIndex, input.mealType]
-    );
-    if (open.rows[0]) return { status: 'conflict' };
-    const sourceHash = hashPayload(plan.calendar_payload);
-    const inserted = await client.query<CookingSessionRow>(
-      `insert into public.cooking_sessions
+        [input.tenantId, input.userId, input.mealPlanId, input.dayIndex, input.mealType]
+      );
+      if (open.rows[0]) return { status: 'conflict' };
+      const sourceHash = hashPayload(plan.calendar_payload);
+      const inserted = await client.query<CookingSessionRow>(
+        `insert into public.cooking_sessions
        (tenant_id, user_id, meal_plan_id, day_index, meal_type, recipe_id, recipe_version_id,
         status, current_step, total_steps, instruction_snapshot, source_updated_at, source_calendar_payload_hash)
        values ($1, $2, $3, $4, $5, $6, $7, 'active', 1, $8, $9::jsonb, $10, $11)
        returning *`,
-      [
-        input.tenantId,
-        input.userId,
-        input.mealPlanId,
-        input.dayIndex,
-        input.mealType,
-        input.recipeId,
-        input.versionId,
-        source.snapshot.steps.length,
-        JSON.stringify(source.snapshot),
-        plan.updated_at,
-        sourceHash,
-      ]
-    );
-    const session = inserted.rows[0];
-    if (!session) return { status: 'conflict' };
-    const eventResult = await client.query<CookingSessionEventRow>(
-      `insert into public.cooking_session_events
+        [
+          input.tenantId,
+          input.userId,
+          input.mealPlanId,
+          input.dayIndex,
+          input.mealType,
+          input.recipeId,
+          input.versionId,
+          source.snapshot.steps.length,
+          JSON.stringify(source.snapshot),
+          plan.updated_at,
+          sourceHash,
+        ]
+      );
+      const session = inserted.rows[0];
+      if (!session) return { status: 'conflict' };
+      const eventResult = await client.query<CookingSessionEventRow>(
+        `insert into public.cooking_session_events
        (session_id, tenant_id, user_id, operation_type, previous_step, next_step,
         previous_status, next_status, idempotency_key, payload_hash)
        values ($1, $2, $3, 'start', 1, 1, 'active', 'active', $4, $5)
        returning *`,
-      [session.id, input.tenantId, input.userId, input.idempotencyKey, payloadHash]
-    );
-    return { status: 'applied', session, event: eventResult.rows[0] ?? null };
-  }).catch((error: unknown) => {
+        [session.id, input.tenantId, input.userId, input.idempotencyKey, payloadHash]
+      );
+      return { status: 'applied', session, event: eventResult.rows[0] ?? null };
+    },
+    { isolationLevel: 'read committed' }
+  ).catch((error: unknown) => {
     if (
       typeof error === 'object' &&
       error !== null &&
@@ -261,7 +267,8 @@ async function revalidateSessionSource(
     [session.meal_plan_id, session.tenant_id, session.user_id]
   );
   const currentPlan = plan.rows[0];
-  if (!currentPlan || currentPlan.updated_at !== session.source_updated_at) return false;
+  if (!currentPlan || !equalPostgresTimestamps(currentPlan.updated_at, session.source_updated_at))
+    return false;
   if (hashPayload(currentPlan.calendar_payload) !== session.source_calendar_payload_hash)
     return false;
   const parsed = parseStructuredMealPlanValue(currentPlan.calendar_payload, currentPlan.period);
@@ -326,6 +333,8 @@ export async function transitionCookingSessionInTransaction(
   client: DbTransactionClient,
   input: TransitionCookingSessionInput
 ): Promise<CookingSessionOperationResult> {
+  await setRlsContext(client, input.tenantId, input.userId);
+  await lockInventorySourceTenant(client, input.tenantId);
   const session = await loadSession(client, input.tenantId, input.userId, input.sessionId);
   if (!session) return { status: 'not_found' };
   const payloadHash = hashPayload({ action: input.action, expectedVersion: input.expectedVersion });
@@ -398,9 +407,8 @@ export async function transitionCookingSessionInTransaction(
 export async function transitionCookingSession(
   input: TransitionCookingSessionInput
 ): Promise<CookingSessionOperationResult> {
-  return transaction(async (client) => {
-    await setRlsContext(client, input.tenantId, input.userId);
-    return transitionCookingSessionInTransaction(client, input);
+  return transaction((client) => transitionCookingSessionInTransaction(client, input), {
+    isolationLevel: 'read committed',
   }).catch((error: unknown) => {
     if (
       typeof error === 'object' &&

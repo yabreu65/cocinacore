@@ -26,7 +26,10 @@ function mockClient(handler: (sql: string, params?: unknown[]) => QueryResultRow
   return { client: { query }, queries };
 }
 
-function plan(consumptionPayload: unknown = {}): UserMealPlanRow {
+function plan(
+  consumptionPayload: unknown = {},
+  firstIngredient = { name: 'Arroz', quantity: 1, unit: 'kg' }
+): UserMealPlanRow {
   return {
     id: PLAN_ID,
     tenant_id: TENANT_ID,
@@ -52,9 +55,7 @@ function plan(consumptionPayload: unknown = {}): UserMealPlanRow {
             title: 'Desayuno',
             description: null,
             ingredients:
-              index === 0
-                ? [{ name: 'Arroz', quantity: 1, unit: 'kg' }]
-                : [{ name: 'Avena', quantity: 1, unit: 'taza' }],
+              index === 0 ? [firstIngredient] : [{ name: 'Avena', quantity: 1, unit: 'taza' }],
           },
           {
             mealType: 'lunch',
@@ -104,6 +105,8 @@ describe('consumePlannedMeal', () => {
     const { client, queries } = mockClient((sql) => {
       if (sql.includes('select * from public.user_meal_plans')) return [plan()];
       if (sql.includes('select * from public.recipe_inventory_items')) return [row];
+      if (sql.includes('update public.recipe_inventory_items')) return [{ id: row.id }];
+      if (sql.includes('update public.user_meal_plans')) return [{ id: PLAN_ID }];
       return [];
     });
     const result = await consumePlannedMealInTransaction(client, {
@@ -143,6 +146,7 @@ describe('consumePlannedMeal', () => {
       if (sql.includes('select * from public.user_meal_plans')) {
         return [plan({ '1:breakfast': existing })];
       }
+      if (sql.includes('pg_advisory_xact_lock')) return [];
       throw new Error(`unexpected query: ${sql}`);
     });
     const result = await consumePlannedMealInTransaction(client, {
@@ -154,7 +158,8 @@ describe('consumePlannedMeal', () => {
     });
 
     expect(result).toEqual({ alreadyConsumed: true, record: existing });
-    expect(queries).toHaveLength(1);
+    expect(queries).toHaveLength(2);
+    expect(queries[0].params).toEqual(['cocinacore:inventory-source:v1:' + TENANT_ID]);
   });
 
   it('does not go negative and records the untracked shortfall', async () => {
@@ -162,6 +167,8 @@ describe('consumePlannedMeal', () => {
     const { client } = mockClient((sql) => {
       if (sql.includes('select * from public.user_meal_plans')) return [plan()];
       if (sql.includes('select * from public.recipe_inventory_items')) return [row];
+      if (sql.includes('update public.recipe_inventory_items')) return [{ id: row.id }];
+      if (sql.includes('update public.user_meal_plans')) return [{ id: PLAN_ID }];
       return [];
     });
     const result = await consumePlannedMealInTransaction(client, {
@@ -207,6 +214,159 @@ describe('consumePlannedMeal', () => {
     });
     expect(
       queries.some((entry) => entry.sql.includes('select * from public.recipe_inventory_items'))
+    ).toBe(false);
+  });
+  it.each([
+    ['1/3', 'kg'],
+    ['2 g', 'kg'],
+    ['2', ''],
+    ['0.00001', 'kg'],
+    ['999999999', 'kg'],
+    ['2 kg basura', 'kg'],
+  ])('does not deduct ambiguous or unrepresentable stock %s %s', async (quantity, unit) => {
+    const row = inventory(quantity, unit);
+    const { client, queries } = mockClient((sql) => {
+      if (sql.includes('select * from public.user_meal_plans')) return [plan()];
+      if (sql.includes('select * from public.recipe_inventory_items')) return [row];
+      if (sql.includes('update public.user_meal_plans')) return [{ id: PLAN_ID }];
+      return [];
+    });
+    const result = await consumePlannedMealInTransaction(client, {
+      mealPlanId: PLAN_ID,
+      tenantId: TENANT_ID,
+      userId: USER_ID,
+      dayIndex: 1,
+      mealType: 'breakfast',
+    });
+    expect(result.record.decrements).toEqual([]);
+    expect(result.record.skipped).toHaveLength(1);
+    expect(row.quantity).toBe(quantity);
+    expect(
+      queries.some(
+        (q) =>
+          q.sql.includes('update public.recipe_inventory_items') ||
+          q.sql.includes('insert into public.inventory_movements')
+      )
+    ).toBe(false);
+    expect(queries[0].params).toEqual(['cocinacore:inventory-source:v1:' + TENANT_ID]);
+  });
+  it('rejects malformed consumption evidence without overwriting it', async () => {
+    const { client, queries } = mockClient((sql) =>
+      sql.includes('select * from public.user_meal_plans')
+        ? [plan({ '1:lunch': { broken: true } })]
+        : []
+    );
+    await expect(
+      consumePlannedMealInTransaction(client, {
+        mealPlanId: PLAN_ID,
+        tenantId: TENANT_ID,
+        userId: USER_ID,
+        dayIndex: 1,
+        mealType: 'breakfast',
+      })
+    ).rejects.toMatchObject({ code: 'invalid_plan' });
+    expect(queries).toHaveLength(2);
+  });
+  it('stops before audit if the locked stock update affects no row', async () => {
+    const row = inventory();
+    const { client, queries } = mockClient((sql) =>
+      sql.includes('select * from public.user_meal_plans')
+        ? [plan()]
+        : sql.includes('select * from public.recipe_inventory_items')
+          ? [row]
+          : []
+    );
+    await expect(
+      consumePlannedMealInTransaction(client, {
+        mealPlanId: PLAN_ID,
+        tenantId: TENANT_ID,
+        userId: USER_ID,
+        dayIndex: 1,
+        mealType: 'breakfast',
+      })
+    ).rejects.toThrow('Locked inventory update failed');
+    expect(queries.some((q) => q.sql.includes('insert into public.inventory_movements'))).toBe(
+      false
+    );
+  });
+  it.each([
+    ['2000-01-01', 'expired_inventory'],
+    ['bad-date', 'invalid_expiration_date'],
+  ])('preserves stock with expiry %s', async (expiration_date, reason) => {
+    const row = { ...inventory(), expiration_date };
+    const { client, queries } = mockClient((sql) =>
+      sql.includes('select * from public.user_meal_plans')
+        ? [plan()]
+        : sql.includes('select * from public.recipe_inventory_items')
+          ? [row]
+          : sql.includes('update public.user_meal_plans')
+            ? [{ id: PLAN_ID }]
+            : []
+    );
+    const result = await consumePlannedMealInTransaction(client, {
+      mealPlanId: PLAN_ID,
+      tenantId: TENANT_ID,
+      userId: USER_ID,
+      dayIndex: 1,
+      mealType: 'breakfast',
+    });
+    expect(result.record.skipped[0].reason).toBe(reason);
+    expect(queries.some((q) => q.sql.includes('update public.recipe_inventory_items'))).toBe(false);
+  });
+  it('deducts three teaspoons for a tablespoon in planned consumption', async () => {
+    const row = inventory('4', 'cucharadita');
+    const { client, queries } = mockClient((sql) =>
+      sql.includes('select * from public.user_meal_plans')
+        ? [plan({}, { name: 'Arroz', quantity: 1, unit: 'cucharada' })]
+        : sql.includes('select * from public.recipe_inventory_items')
+          ? [row]
+          : sql.includes('update public.recipe_inventory_items')
+            ? [{ id: row.id }]
+            : sql.includes('update public.user_meal_plans')
+              ? [{ id: PLAN_ID }]
+              : []
+    );
+    const result = await consumePlannedMealInTransaction(client, {
+      mealPlanId: PLAN_ID,
+      tenantId: TENANT_ID,
+      userId: USER_ID,
+      dayIndex: 1,
+      mealType: 'breakfast',
+    });
+    expect(row.quantity).toBe('1');
+    expect(result.record.decrements).toEqual([
+      { inventoryItemId: row.id, ingredientName: 'Arroz', quantity: 3, unit: 'cucharadita' },
+    ]);
+    expect(
+      queries.find((q) => q.sql.includes('insert into public.inventory_movements'))?.params?.[3]
+    ).toBe(3);
+  });
+  it('does not round one third of a tablespoon when a teaspoon is requested', async () => {
+    const row = inventory('1', 'cucharada');
+    const { client, queries } = mockClient((sql) =>
+      sql.includes('select * from public.user_meal_plans')
+        ? [plan({}, { name: 'Arroz', quantity: 1, unit: 'cucharadita' })]
+        : sql.includes('select * from public.recipe_inventory_items')
+          ? [row]
+          : sql.includes('update public.user_meal_plans')
+            ? [{ id: PLAN_ID }]
+            : []
+    );
+    const result = await consumePlannedMealInTransaction(client, {
+      mealPlanId: PLAN_ID,
+      tenantId: TENANT_ID,
+      userId: USER_ID,
+      dayIndex: 1,
+      mealType: 'breakfast',
+    });
+    expect(row.quantity).toBe('1');
+    expect(result.record.skipped[0].reason).toBe('unrepresentable_inventory_quantity');
+    expect(
+      queries.some(
+        (q) =>
+          q.sql.includes('update public.recipe_inventory_items') ||
+          q.sql.includes('insert into public.inventory_movements')
+      )
     ).toBe(false);
   });
 });

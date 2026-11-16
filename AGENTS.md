@@ -23,6 +23,10 @@
 - Restrict operational actions to CocinaCore resources; never modify other hosted projects.
 - Before production migrations/deploy: validate VPS state, current recoverable backup, migration ledger and approval. Never put SSH keys/passwords/secrets into docs or logs.
 
-## GGA pre-commit checks
+## Native quality gate and code review
 
-For routine Guardian Angel pre-commit reviews, follow [docs/ops/gga-review-policy.md](docs/ops/gga-review-policy.md). This policy does not waive candidate-specific review, delivery, or production gates.
+The project-local pre-commit gate requires a successful, fresh Vitest report. GGA is retired from the mandatory CocinaCore workflow by the owner; no external AI reviewer is invoked by the hook. Review the exact diff against the approved scope and record evidence, including security and regression checks. CI, delivery and production gates remain mandatory. See [review policy](docs/ops/gga-review-policy.md).
+
+## Small work units
+
+Use [docs/ops/small-work-units.md](docs/ops/small-work-units.md) to define scope, triage findings, validate and close each unit. All existing review and delivery gates remain mandatory.

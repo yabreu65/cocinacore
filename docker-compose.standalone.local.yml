@@ -1,0 +1,5 @@
+# Local acceptance only; never use this cleartext ingress as a public VPS config.
+services:
+  nginx:
+    ports:
+      - '127.0.0.1:${CC_LOCAL_PORT:-4330}:8080'

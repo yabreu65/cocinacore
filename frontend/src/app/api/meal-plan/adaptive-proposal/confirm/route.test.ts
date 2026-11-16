@@ -7,17 +7,11 @@ const mockFindMealPlan = vi.fn();
 const mockReplaceMealPlan = vi.fn();
 const mockFingerprint = vi.fn();
 const mockValidateReplacement = vi.fn();
-const mockFindProfile = vi.fn();
-const mockFindTerms = vi.fn();
 
 vi.mock('@/lib/auth/server', () => ({ requireUser: mockRequireUser }));
 vi.mock('@/lib/db/repositories/mealPlanRepository', () => ({
   findMealPlanByIdForUserAndTenant: mockFindMealPlan,
   replaceMealPlanForAdaptiveProposal: mockReplaceMealPlan,
-}));
-vi.mock('@/lib/db/repositories/culinaryProfileRepository', () => ({
-  findCulinaryProfileByUserId: mockFindProfile,
-  findCulinaryProfileTermsByUserId: mockFindTerms,
 }));
 vi.mock('@/lib/meal-planner/adaptive-planning', () => ({
   structuredMealPlanFingerprint: mockFingerprint,
@@ -95,8 +89,6 @@ describe('POST /api/meal-plan/adaptive-proposal/confirm', () => {
       .mockResolvedValue({ ...row(), updated_at: '2026-10-27T00:01:00.000Z' });
     mockFingerprint.mockReset().mockReturnValue('source-fingerprint');
     mockValidateReplacement.mockReset().mockReturnValue({ valid: true });
-    mockFindProfile.mockReset().mockResolvedValue(null);
-    mockFindTerms.mockReset().mockResolvedValue([]);
   });
 
   it('rejects a stale proposal before persistence', async () => {
@@ -135,6 +127,47 @@ describe('POST /api/meal-plan/adaptive-proposal/confirm', () => {
         expectedUpdatedAt: '2026-10-27T00:00:00.000Z',
       })
     );
+  });
+
+  it('accepts equivalent legacy and canonical timestamp revisions without changing the DB parser', async () => {
+    mockFindMealPlan.mockResolvedValue({ ...row(), updated_at: '2026-10-27 00:00:00.123456+00' });
+    const response = await POST(
+      request({
+        mealPlanId: planId,
+        expectedUpdatedAt: '2026-10-26T19:00:00.123456-05:00',
+        sourceFingerprint: 'source-fingerprint',
+        proposedPlan: planPayload(),
+      }) as unknown as NextRequest
+    );
+    expect(response.status).toBe(200);
+    expect(mockReplaceMealPlan).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a one-microsecond revision change before persistence', async () => {
+    mockFindMealPlan.mockResolvedValue({ ...row(), updated_at: '2026-10-27 00:00:00.123456+00' });
+    const response = await POST(
+      request({
+        mealPlanId: planId,
+        expectedUpdatedAt: '2026-10-27T00:00:00.123455Z',
+        sourceFingerprint: 'source-fingerprint',
+        proposedPlan: planPayload(),
+      }) as unknown as NextRequest
+    );
+    expect(response.status).toBe(409);
+    expect(mockReplaceMealPlan).not.toHaveBeenCalled();
+  });
+
+  it('returns conflict when the transactional restriction check rejects the proposal', async () => {
+    mockReplaceMealPlan.mockResolvedValue(null);
+    const response = await POST(
+      request({
+        mealPlanId: planId,
+        expectedUpdatedAt: row().updated_at,
+        sourceFingerprint: 'source-fingerprint',
+        proposedPlan: planPayload(),
+      }) as unknown as NextRequest
+    );
+    expect(response.status).toBe(409);
   });
 
   it('rejects a malformed plan id before any persistence lookup', async () => {

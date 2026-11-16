@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   normalizeInventoryName,
   detectInventoryCategory,
@@ -69,9 +69,7 @@ describe('detectInventoryCategory', () => {
     expect(detectInventoryCategory('manzana')).toBe('Frutas');
     expect(detectInventoryCategory('banana')).toBe('Frutas');
     expect(detectInventoryCategory('plátano')).toBe('Frutas');
-    // NOTE: 'fresa' matches Proteínas because 'res' is a substring match.
-    // This is a known limitation — the regex lacks word boundaries.
-    // expect(detectInventoryCategory('fresa')).toBe('Frutas');
+    expect(detectInventoryCategory('fresa')).toBe('Frutas');
     expect(detectInventoryCategory('uva')).toBe('Frutas');
     expect(detectInventoryCategory('naranja')).toBe('Frutas');
     expect(detectInventoryCategory('limón')).toBe('Frutas');
@@ -114,9 +112,7 @@ describe('detectInventoryCategory', () => {
     expect(detectInventoryCategory('aceite')).toBe('Despensa');
     expect(detectInventoryCategory('vinagre')).toBe('Despensa');
     expect(detectInventoryCategory('azúcar')).toBe('Despensa');
-    // NOTE: 'salsa' matches Especias because 'sal' is a substring.
-    // This is a known limitation — the regex lacks word boundaries.
-    // expect(detectInventoryCategory('salsa')).toBe('Despensa');
+    expect(detectInventoryCategory('salsa')).toBe('Despensa');
     expect(detectInventoryCategory('caldo')).toBe('Despensa');
     expect(detectInventoryCategory('conserva')).toBe('Despensa');
   });
@@ -199,6 +195,20 @@ describe('getStockBadge', () => {
 // ---------------------------------------------------------------------------
 
 describe('isExpiringSoon', () => {
+  it('keeps date-only and stored UTC-midnight expiry on the intended calendar day', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 10, 12, 12));
+      expect(isExpiringSoon('2026-11-12')).toBe(true);
+      expect(isExpiringSoon('2026-11-12T00:00:00.000Z')).toBe(true);
+      expect(isExpiringSoon('2026-11-11')).toBe(false);
+      expect(isExpiringSoon('2026-11-17')).toBe(true);
+      expect(isExpiringSoon('2026-11-18')).toBe(false);
+      expect(isExpiringSoon('2026-02-30')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it('returns false for null date', () => {
     expect(isExpiringSoon(null)).toBe(false);
   });

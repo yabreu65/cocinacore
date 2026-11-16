@@ -6,12 +6,7 @@ import {
   replaceMealPlanForAdaptiveProposal,
 } from '@/lib/db/repositories/mealPlanRepository';
 import { serverLogger } from '@/lib/serverLogger';
-import {
-  findCulinaryProfileByUserId,
-  findCulinaryProfileTermsByUserId,
-} from '@/lib/db/repositories/culinaryProfileRepository';
-import { containsRestrictedIngredientName } from '@/lib/recipes/structured-ingredients';
-import { buildPersistedMealPlanProfileContext } from '@/lib/meal-planner/profile-context';
+import { equalPostgresTimestamps } from '@/lib/db/postgres-timestamp';
 import {
   structuredMealPlanFingerprint,
   validateAdaptivePlanReplacement,
@@ -83,7 +78,7 @@ export async function POST(request: NextRequest) {
     );
   }
   if (
-    current.updated_at !== body.expectedUpdatedAt ||
+    !equalPostgresTimestamps(current.updated_at, body.expectedUpdatedAt) ||
     structuredMealPlanFingerprint(sourceParsed.plan) !== body.sourceFingerprint
   ) {
     return NextResponse.json(
@@ -101,31 +96,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'La propuesta no es segura para guardar.' }, { status: 400 });
   }
 
-  const [profileRow, profileTerms] = await Promise.all([
-    findCulinaryProfileByUserId(user.id, user.tenant.tenantId),
-    findCulinaryProfileTermsByUserId(user.id, user.tenant.tenantId),
-  ]);
-  const profile = buildPersistedMealPlanProfileContext(
-    profileRow,
-    profileTerms,
-    user.id,
-    user.tenant.tenantId
-  );
-  const proposedIngredientNames = proposedParsed.plan.days.flatMap((day) =>
-    day.meals.flatMap((meal) => meal.ingredients.map((ingredient) => ingredient.name))
-  );
-  if (
-    containsRestrictedIngredientName(proposedIngredientNames, [
-      ...(profile?.allergies ?? []),
-      ...(profile?.avoid ?? []),
-    ])
-  ) {
-    return NextResponse.json(
-      { error: 'Las restricciones cambiaron. Prepará una nueva propuesta.' },
-      { status: 409 }
-    );
-  }
-
   const updated = await replaceMealPlanForAdaptiveProposal({
     mealPlanId: current.id,
     userId: user.id,
@@ -140,7 +110,10 @@ export async function POST(request: NextRequest) {
       mealPlanId: current.id,
     });
     return NextResponse.json(
-      { error: 'El menú cambió mientras confirmabas. Prepará una nueva propuesta.' },
+      {
+        error:
+          'El menú o las restricciones cambiaron mientras confirmabas. Prepará una nueva propuesta.',
+      },
       { status: 409 }
     );
   }

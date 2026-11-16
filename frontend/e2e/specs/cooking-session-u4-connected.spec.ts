@@ -322,7 +322,17 @@ test.describe('M5 U4 real consumption reconciliation', () => {
       const first = await page.request.post(endpoint, { data: body });
       const firstText = await first.text();
       expect(first.status(), firstText).toBe(201);
-      expect(JSON.parse(firstText) as { movementCount: number }).toMatchObject({
+      const firstReceipt: unknown = JSON.parse(firstText);
+      if (
+        typeof firstReceipt !== 'object' ||
+        firstReceipt === null ||
+        !('operationId' in firstReceipt) ||
+        typeof firstReceipt.operationId !== 'string' ||
+        firstReceipt.operationId.length === 0
+      ) {
+        throw new Error('Reconciliation response must contain an operationId.');
+      }
+      expect(firstReceipt).toMatchObject({
         movementCount: 1,
       });
 
@@ -358,8 +368,9 @@ test.describe('M5 U4 real consumption reconciliation', () => {
 
       const options = await page.request.get(endpoint);
       expect(options.status()).toBe(200);
-      expect((await options.json()) as { inventory: Array<{ id: string }> }).toMatchObject({
+      expect(await options.json()).toMatchObject({
         inventory: [{ id: fixture.inventoryId }],
+        receipt: { operationId: firstReceipt.operationId, movementCount: 1 },
       });
     } finally {
       await cleanupFixture(fixture);

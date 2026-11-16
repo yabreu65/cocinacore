@@ -363,7 +363,6 @@ printf '%s\n' 'integration stage: initialization' >&2
 printf '%s\n' 'integration check: initialization' >&2
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 [ "$(node -p 'process.version')" = 'v22.22.3' ] || { printf '%s\n' 'Node 22.22.3 is required for this integration harness' >&2; exit 1; }
-EXPECTED_MIGRATION_COUNT=$(manifest_migration_count "$ROOT/db/migrations/manifest.json")
 EXPECTED_PRE020_MIGRATION_COUNT=$(node - "$ROOT/db/migrations/manifest.json" <<'NODE'
 const fs = require('node:fs');
 const manifest = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
@@ -372,6 +371,21 @@ NODE
 )
 PREFIX="cocinacore-pr0a-cp21-$$"
 TMP_ROOT=$(mktemp -d)
+# This historical integration harness certifies 020, not later migrations.
+# Keep the exact prefix and its checksums, including all manifest metadata.
+R3_DIR="$TMP_ROOT/canonical-020-prefix"
+node - "$ROOT/db/migrations" "$R3_DIR" <<'NODE'
+const fs = require('node:fs');
+const path = require('node:path');
+const [source, target] = process.argv.slice(2);
+const manifest = JSON.parse(fs.readFileSync(path.join(source, 'manifest.json'), 'utf8'));
+const prefix = manifest.migrations.slice(0, 20);
+if (prefix.length !== 20 || prefix[19].filename !== '020_tenant_rls_hardening.sql') process.exit(1);
+fs.mkdirSync(target);
+for (const entry of prefix) fs.copyFileSync(path.join(source, entry.filename), path.join(target, entry.filename));
+fs.writeFileSync(path.join(target, 'manifest.json'), JSON.stringify({...manifest, migrations: prefix}, null, 2));
+NODE
+EXPECTED_MIGRATION_COUNT=$(manifest_migration_count "$R3_DIR/manifest.json")
 LOG="$TMP_ROOT/operation.log"
 MIGRATION_PASSWORD=$(openssl rand -hex 18)
 ADMIN_PASSWORD=$(openssl rand -hex 18)
@@ -438,7 +452,7 @@ migrate() {
 }
 
 migrate_m5_pending() {
-  MIGRATIONS_DIR="$ROOT/db/migrations" \
+  MIGRATIONS_DIR="$R3_DIR" \
   COCINACORE_SEPARATED_DB_LANES_ENABLED=true MIGRATION_DATABASE_URL="$MIGRATION_URL" \
   MIGRATION_EXPECTED_PENDING='018_cooking_sessions.sql,019_real_consumption_reconciliation.sql' \
   node "$ROOT/frontend/scripts/run-migrations.js" --lane migration --stop-after 019
@@ -1590,7 +1604,6 @@ printf '%s\n' 'PASS: synthetic 020 DDL and ledger roll back after injected failu
 printf '%s\n' 'PASS: incomplete synthetic 020 rolls back; successful post-020 transition is covered by the complete R3 fixture'
 
 STAGE=canonical-020-runner
-R3_DIR="$ROOT/db/migrations"
 R3_FILENAME=020_tenant_rls_hardening.sql
 R3_CHECKSUM=$(node - "$R3_DIR/manifest.json" "$R3_FILENAME" <<'NODE'
 const fs = require('node:fs');

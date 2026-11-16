@@ -1,15 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/auth/server';
+import { parseInventoryPriceWrite } from '@/lib/inventory/inventory-price';
+import { inventoryRevisionSchema } from '@/lib/inventory/inventory-management';
+import { manageInventoryItem } from '@/lib/db/repositories/inventoryManagementRepository';
+import {
+  INVENTORY_CATEGORIES,
+  isValidInventoryExpirationDate,
+  validateInventoryFields,
+} from '@/lib/inventory/inventory-input';
 import {
   listInventoryItemsScoped,
   createInventoryItem,
-  updateInventoryItem,
   deleteInventoryItem,
 } from '@/lib/db/repositories/inventoryRepository';
 import {
   detectInventoryCategory,
   normalizeInventoryName,
 } from '@/lib/inventory/normalize-inventory';
+
+const INVENTORY_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 interface InventoryItemBody {
   id?: string;
@@ -19,6 +28,7 @@ interface InventoryItemBody {
   category?: string;
   expirationDate?: string;
   estimatedUnitPrice?: string;
+  priceReference?: unknown;
   purchaseLocation?: string;
   lowStockThreshold?: string;
   notes?: string;
@@ -62,10 +72,17 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
-  const authUser = await requireUser();
+  let authUser: Awaited<ReturnType<typeof requireUser>>;
+  try {
+    authUser = await requireUser();
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Unauthorized') {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    throw error;
+  }
   if (!authUser.tenant) throw new Error('Tenant context required');
   const tenant = authUser.tenant;
-  const scope = { tenantId: tenant.tenantId, userId: authUser.id };
 
   const body: unknown = await request.json().catch(() => null);
   if (!isInventoryItemBody(body)) {
@@ -86,52 +103,54 @@ export async function POST(request: NextRequest) {
   } = body;
 
   const name = ingredientName?.trim();
-  const parsedEstimatedUnitPrice = estimatedUnitPrice?.trim() ? Number(estimatedUnitPrice) : null;
-  const parsedLowStockThreshold = lowStockThreshold?.trim() ? Number(lowStockThreshold) : null;
-
-  if (
-    (parsedEstimatedUnitPrice !== null && !Number.isFinite(parsedEstimatedUnitPrice)) ||
-    (parsedLowStockThreshold !== null && !Number.isFinite(parsedLowStockThreshold))
-  ) {
-    return NextResponse.json({ error: 'Invalid body' }, { status: 400 });
-  }
+  const validated = validateInventoryFields({
+    quantity,
+    unit,
+    estimatedUnitPrice,
+    lowStockThreshold,
+  });
+  if (!validated.ok) return NextResponse.json({ error: validated.error }, { status: 400 });
 
   if (!name) {
     return NextResponse.json({ error: 'Ingredient name is required' }, { status: 400 });
   }
-
-  if (id) {
-    const updated = await updateInventoryItem(
-      id,
-      tenant.tenantId,
-      {
-        ingredientName: name,
-        quantity: quantity?.trim() || null,
-        unit: unit?.trim() || null,
-        category: category?.trim() || detectInventoryCategory(name),
-        expirationDate: expirationDate || null,
-        estimatedUnitPrice: parsedEstimatedUnitPrice,
-        purchaseLocation: purchaseLocation?.trim() || null,
-        lowStockThreshold: parsedLowStockThreshold,
-        normalizedName: normalizeInventoryName(name),
-        notes: notes?.trim() || null,
-      },
-      scope
+  if (!isValidInventoryExpirationDate(expirationDate)) {
+    return NextResponse.json(
+      { error: 'Introduce una fecha de vencimiento válida.' },
+      { status: 400 }
     );
-    return NextResponse.json({ item: updated });
+  }
+  // Reject ambiguous legacy writes rather than silently assigning a currency or clearing a price.
+  if (estimatedUnitPrice?.trim())
+    return NextResponse.json(
+      { error: 'Usa una referencia de precio con moneda y unidad.' },
+      { status: 400 }
+    );
+  const price = parseInventoryPriceWrite(body.priceReference);
+  if (!price.ok) return NextResponse.json({ error: price.error }, { status: 400 });
+  const selectedCategory = category?.trim();
+  if (selectedCategory && !INVENTORY_CATEGORIES.some((option) => option === selectedCategory)) {
+    return NextResponse.json({ error: 'Selecciona una categoría válida.' }, { status: 400 });
+  }
+
+  if (id !== undefined) {
+    return NextResponse.json(
+      { error: 'Usa la edición de inventario con revisión de existencias.' },
+      { status: 409 }
+    );
   }
 
   const item = await createInventoryItem({
     tenantId: tenant.tenantId,
     userId: authUser.id,
     ingredientName: name,
-    quantity: quantity?.trim() || null,
-    unit: unit?.trim() || null,
-    category: category?.trim() || detectInventoryCategory(name),
+    quantity: validated.quantity,
+    unit: validated.unit,
+    category: selectedCategory || detectInventoryCategory(name),
     expirationDate: expirationDate || null,
-    estimatedUnitPrice: parsedEstimatedUnitPrice,
+    ...(price.price ? { priceReference: price.price } : {}),
     purchaseLocation: purchaseLocation?.trim() || null,
-    lowStockThreshold: parsedLowStockThreshold,
+    lowStockThreshold: validated.lowStockThreshold,
     normalizedName: normalizeInventoryName(name),
     notes: notes?.trim() || null,
   });
@@ -139,15 +158,103 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({ item }, { status: 201 });
 }
 
+// Price-only confirmation/update: never overwrite quantities, stock, or other fields.
+export async function PATCH(request: NextRequest) {
+  let user: Awaited<ReturnType<typeof requireUser>>;
+  try {
+    user = await requireUser();
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Unauthorized')
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    throw error;
+  }
+  if (!user.tenant) return NextResponse.json({ error: 'Tenant context required' }, { status: 403 });
+  const body: unknown = await request.json().catch(() => null);
+  if (
+    !body ||
+    typeof body !== 'object' ||
+    Array.isArray(body) ||
+    !('id' in body) ||
+    typeof body.id !== 'string' ||
+    body.id.length !== 36 ||
+    !INVENTORY_ID.test(body.id) ||
+    !('priceReference' in body)
+  ) {
+    return NextResponse.json({ error: 'Solicitud de precio inválida.' }, { status: 400 });
+  }
+  // An already-open older client must refresh, never overwrite without a revision.
+  if (!('revision' in body) && Object.keys(body).length === 2)
+    return NextResponse.json(
+      { error: 'Actualiza la página antes de guardar el precio. Tu versión está desactualizada.', code: 'INVENTORY_REVISION_REQUIRED' },
+      { status: 409 }
+    );
+  if (Object.keys(body).length !== 3 || !('revision' in body))
+    return NextResponse.json({ error: 'Solicitud de precio inválida.' }, { status: 400 });
+  const revision = inventoryRevisionSchema.safeParse(body.revision);
+  if (!revision.success)
+    return NextResponse.json({ error: 'Revisión de inventario inválida.' }, { status: 400 });
+  const price = parseInventoryPriceWrite(body.priceReference);
+  if (!price.ok || !price.price)
+    return NextResponse.json(
+      { error: price.ok ? 'Introduce una referencia de precio completa.' : price.error },
+      { status: 400 }
+    );
+  const scope = { tenantId: user.tenant.tenantId, userId: user.id };
+  const result = await manageInventoryItem(scope, {
+    action: 'price',
+    id: body.id,
+    revision: revision.data,
+    priceReference: price.price,
+  });
+  switch (result.status) {
+    case 'not_found':
+      return NextResponse.json({ error: 'Ingrediente no encontrado.' }, { status: 404 });
+    case 'conflict':
+      return NextResponse.json(
+        { error: 'El ingrediente cambió. Recarga y revisa el precio antes de guardarlo.' },
+        { status: 409 }
+      );
+    case 'invalid':
+      return NextResponse.json({ error: result.error }, { status: 400 });
+    case 'updated':
+      return NextResponse.json({ item: result.item });
+  }
+}
+
 export async function DELETE(request: NextRequest) {
-  const user = await requireUser();
-  if (!user.tenant) throw new Error('Tenant context required');
+  let user: Awaited<ReturnType<typeof requireUser>>;
+  try {
+    user = await requireUser();
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Unauthorized') {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    throw error;
+  }
+  if (!user.tenant) return NextResponse.json({ error: 'Tenant context required' }, { status: 403 });
   const tenant = user.tenant;
-  const id = request.nextUrl.searchParams.get('id');
-  if (!id) {
-    return NextResponse.json({ error: 'ID is required' }, { status: 400 });
+  const ids = request.nextUrl.searchParams.getAll('id');
+  const id = ids[0];
+  if (ids.length !== 1 || !id || id.length !== 36 || !INVENTORY_ID.test(id)) {
+    return NextResponse.json({ error: 'ID de inventario inválido.' }, { status: 400 });
   }
 
-  await deleteInventoryItem(id, tenant.tenantId, { tenantId: tenant.tenantId, userId: user.id });
+  const result = await deleteInventoryItem(id, tenant.tenantId, {
+    tenantId: tenant.tenantId,
+    userId: user.id,
+  });
+  if (result === 'has_history')
+    return NextResponse.json(
+      { error: 'No se puede eliminar un ingrediente con historial de movimientos.' },
+      { status: 409 }
+    );
+  if (result === 'history_unavailable')
+    return NextResponse.json(
+      { error: 'No se puede comprobar el historial de movimientos. No se eliminó el ingrediente.', code: 'INVENTORY_HISTORY_UNAVAILABLE' },
+      { status: 503 }
+    );
+  if (result === 'not_found')
+    return NextResponse.json({ error: 'Ingrediente no encontrado.' }, { status: 404 });
+  if (result !== 'deleted') throw new Error('Unexpected inventory deletion result');
   return NextResponse.json({ ok: true });
 }

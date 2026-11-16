@@ -1,3 +1,7 @@
+import {
+  getLocalDateInTimeZone,
+  parseStructuredMealPlanValue,
+} from '@/lib/meal-planner/structured-plan';
 import { randomUUID } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/auth/server';
@@ -69,13 +73,33 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function parseBody(value: unknown): TodaySlot | null {
-  if (!isRecord(value) || Object.keys(value).length !== 1 || !Object.hasOwn(value, 'slot'))
+function validTodayTimeZone(value: string): boolean {
+  return (
+    value.length <= 100 &&
+    /^[A-Za-z][A-Za-z0-9_+/-]*$/.test(value) &&
+    getLocalDateInTimeZone(new Date(0), value) !== null
+  );
+}
+
+function parseBody(value: unknown): { slot: TodaySlot; timeZone?: string } | null {
+  if (
+    !isRecord(value) ||
+    !Object.hasOwn(value, 'slot') ||
+    Object.keys(value).some((key) => key !== 'slot' && key !== 'timeZone') ||
+    typeof value.slot !== 'string' ||
+    !(TODAY_SLOT_VALUES as readonly string[]).includes(value.slot)
+  )
     return null;
-  return typeof value.slot === 'string' &&
-    (TODAY_SLOT_VALUES as readonly string[]).includes(value.slot)
-    ? (value.slot as TodaySlot)
-    : null;
+  if (Object.hasOwn(value, 'timeZone')) {
+    if (
+      typeof value.timeZone !== 'string' ||
+      value.timeZone.length > 100 ||
+      !validTodayTimeZone(value.timeZone)
+    )
+      return null;
+    return { slot: value.slot as TodaySlot, timeZone: value.timeZone };
+  }
+  return { slot: value.slot as TodaySlot };
 }
 
 function parseProviderOptions(payload: unknown, slot: TodaySlot): Candidate[] | null {
@@ -392,8 +416,9 @@ export async function POST(request: NextRequest) {
   } catch {
     return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
   }
-  const slot = parseBody(rawBody);
-  if (!slot) return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
+  const body = parseBody(rawBody);
+  if (!body) return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
+  const { slot } = body;
 
   const rateLimit = await checkRateLimit('today', tenantId, user.id, {
     requireSharedStore: true,
@@ -421,32 +446,45 @@ export async function POST(request: NextRequest) {
   }
 
   const now = new Date();
-  const asOf = now.toISOString().slice(0, 10);
-  const since = `${asOf}T00:00:00.000Z`;
-  let loaded: [
-    Awaited<ReturnType<typeof findCulinaryProfileByUserId>>,
-    Awaited<ReturnType<typeof findCulinaryProfileTermsByUserId>>,
-    Awaited<ReturnType<typeof listTodayInventoryContextByTenant>>,
-    Awaited<ReturnType<typeof listTodayRecipeHistoryByUserAndTenant>>,
-    Awaited<ReturnType<typeof findLatestMealPlanByUserAndTenant>>,
-  ];
+  let profile, terms, latestPlan, inventoryRows, history, asOf: string, timeZone: string;
   try {
-    loaded = await Promise.all([
+    [profile, terms, latestPlan] = await Promise.all([
       findCulinaryProfileByUserId(user.id, tenantId),
       findCulinaryProfileTermsByUserId(user.id, tenantId),
-      listTodayInventoryContextByTenant(tenantId, asOf, 50, { tenantId, userId: user.id }),
-      listTodayRecipeHistoryByUserAndTenant(user.id, tenantId, since, 20),
       findLatestMealPlanByUserAndTenant(user.id, tenantId),
+    ]);
+    if (latestPlan && (latestPlan.tenant_id !== tenantId || latestPlan.user_id !== user.id))
+      return NextResponse.json({ error: 'Today is temporarily unavailable' }, { status: 503 });
+    const parsed = latestPlan
+      ? parseStructuredMealPlanValue(latestPlan.calendar_payload, latestPlan.period)
+      : null;
+    timeZone =
+      body.timeZone ?? (parsed?.success ? parsed.plan.schedule?.timeZone : undefined) ?? 'UTC';
+    if (!validTodayTimeZone(timeZone))
+      return NextResponse.json({ error: 'Today is temporarily unavailable' }, { status: 503 });
+    const localDate = getLocalDateInTimeZone(now, timeZone);
+    if (!localDate)
+      return NextResponse.json({ error: 'Today is temporarily unavailable' }, { status: 503 });
+    asOf = localDate;
+    [inventoryRows, history] = await Promise.all([
+      listTodayInventoryContextByTenant(
+        tenantId,
+        asOf,
+        50,
+        { tenantId, userId: user.id },
+        timeZone
+      ),
+      listTodayRecipeHistoryByUserAndTenant(user.id, tenantId, asOf, 20, timeZone),
     ]);
   } catch {
     return NextResponse.json({ error: 'Today is temporarily unavailable' }, { status: 503 });
   }
-  const [profile, terms, inventoryRows, history, latestPlan] = loaded;
 
   const contextResult = buildTodayContext({
     userId: user.id,
     tenantId,
     asOf,
+    timeZone,
     slot,
     profile,
     terms,

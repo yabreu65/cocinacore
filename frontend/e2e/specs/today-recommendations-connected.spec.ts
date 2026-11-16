@@ -46,10 +46,10 @@ test('connects saved culinary context to safe Today recommendations and recipe h
   await page.getByLabel('Nombre completo').fill(profileFullName);
   await page.getByLabel('Tiempo disponible (minutos)').fill('240');
   await page.getByLabel('Alergias').fill('peanut');
-  await page.getByRole('button', { name: 'Añadir persona' }).click();
+  await page.getByRole('button', { name: 'Añadir comensal' }).click();
   await page.getByLabel('Nombre', { exact: true }).fill(memberName);
   await page.getByLabel('Grupo de edad').selectOption('child');
-  await page.getByRole('button', { name: 'Añadir persona' }).click();
+  await page.getByRole('button', { name: 'Añadir comensal' }).click();
   const householdNames = page.getByLabel('Nombre', { exact: true });
   await householdNames.nth(1).fill(adultMemberName);
   await page.getByLabel('Grupo de edad').nth(1).selectOption('adult');

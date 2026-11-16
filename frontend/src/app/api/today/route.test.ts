@@ -517,6 +517,8 @@ describe('POST /api/today', () => {
     { slot: 'lunch', tenantId: 'attacker' },
     { slot: 'lunch', profile: {} },
     { slot: 'lunch', extra: true },
+    { slot: 'lunch', timeZone: 'Invalid/Zone' },
+    { slot: 'lunch', timeZone: '+04:00' },
   ])('rejects malformed or non-allowlisted body %j before reads', async (body) => {
     const { POST } = await import('./route');
     expect((await POST(request(body))).status).toBe(400);
@@ -579,20 +581,51 @@ describe('POST /api/today', () => {
     expect((await POST(request({ slot: 'lunch' }))).status).toBe(503);
   });
 
+  it.each([
+    ['America/Caracas', '2026-10-28T01:00:00Z', '2026-10-27'],
+    ['Asia/Tokyo', '2026-10-27T17:00:00Z', '2026-10-28'],
+    ['America/New_York', '2026-11-01T05:30:00Z', '2026-11-01'],
+  ])('uses local calendar in %s at %s', async (timeZone, instant, expected) => {
+    vi.useFakeTimers({ now: new Date(instant) });
+    try {
+      const { POST } = await import('./route');
+      const response = await POST(request({ slot: 'lunch', timeZone }));
+      expect(response.status).toBe(200);
+      expect(inventoryMock).toHaveBeenCalledWith(
+        'tenant-1',
+        expected,
+        50,
+        { tenantId: 'tenant-1', userId: 'user-1' },
+        timeZone
+      );
+      expect(historyMock).toHaveBeenCalledWith('user-1', 'tenant-1', expected, 20, timeZone);
+      expect(fetchBody()).toContain(expected);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('scopes every repository read to authenticated user and tenant and keeps private context out of prompt', async () => {
     const { POST } = await import('./route');
     await POST(request({ slot: 'lunch' }));
     expect(profileMock).toHaveBeenCalledWith('user-1', 'tenant-1');
     expect(termsMock).toHaveBeenCalledWith('user-1', 'tenant-1');
-    expect(inventoryMock).toHaveBeenCalledWith('tenant-1', expect.any(String), 50, {
-      tenantId: 'tenant-1',
-      userId: 'user-1',
-    });
+    expect(inventoryMock).toHaveBeenCalledWith(
+      'tenant-1',
+      expect.any(String),
+      50,
+      {
+        tenantId: 'tenant-1',
+        userId: 'user-1',
+      },
+      'UTC'
+    );
     expect(historyMock).toHaveBeenCalledWith(
       'user-1',
       'tenant-1',
       expect.any(String),
-      expect.any(Number)
+      expect.any(Number),
+      'UTC'
     );
     expect(planMock).toHaveBeenCalledWith('user-1', 'tenant-1');
     expect(persistentRecipesMock).toHaveBeenCalledWith(
@@ -765,15 +798,22 @@ describe('POST /api/today', () => {
       expect(response.status).toBe(200);
       expect(profileMock).toHaveBeenCalledWith('user-2', tenantId);
       expect(termsMock).toHaveBeenCalledWith('user-2', tenantId);
-      expect(inventoryMock).toHaveBeenCalledWith(tenantId, expect.any(String), 50, {
+      expect(inventoryMock).toHaveBeenCalledWith(
         tenantId,
-        userId: 'user-2',
-      });
+        expect.any(String),
+        50,
+        {
+          tenantId,
+          userId: 'user-2',
+        },
+        'UTC'
+      );
       expect(historyMock).toHaveBeenCalledWith(
         'user-2',
         tenantId,
         expect.any(String),
-        expect.any(Number)
+        expect.any(Number),
+        'UTC'
       );
       expect(planMock).toHaveBeenCalledWith('user-2', tenantId);
       expect(ragMock).toHaveBeenCalledWith(expect.objectContaining({ tenantId, userId: 'user-2' }));

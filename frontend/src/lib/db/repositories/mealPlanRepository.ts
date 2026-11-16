@@ -1,4 +1,12 @@
+import { lockInventorySourceTenant } from '@/lib/db/inventory-source-lock';
+import { equalPostgresTimestamps } from '@/lib/db/postgres-timestamp';
 import { mapSingleRow, scopedTransaction, type AuthenticatedDbScope } from '@/lib/db';
+import {
+  lockCulinaryProfileUpdateInTransaction,
+  findCulinaryProfileByUserIdInTransaction,
+  findCulinaryProfileTermsByUserIdInTransaction,
+} from './culinaryProfileRepository';
+import { containsRestrictedIngredientName } from '@/lib/recipes/structured-ingredients';
 import type {
   FusionIntensity,
   MealPlanMode,
@@ -6,6 +14,8 @@ import type {
   UserMealPlanRow,
 } from '@/lib/db/types';
 import {
+  getLocalDateInTimeZone,
+  parseStructuredMealPlanSchedule,
   parseStructuredMealPlanValue,
   renderStructuredMealPlan,
   type StructuredMealPlan,
@@ -80,6 +90,7 @@ export async function attachRecipeToMealPlanSlot(
   input: AttachRecipeToMealPlanSlotInput
 ): Promise<AttachRecipeToMealPlanSlotResult> {
   return scopedTransaction({ tenantId: input.tenantId, userId: input.userId }, async (client) => {
+    await lockInventorySourceTenant(client, input.tenantId);
     const currentResult = await client.query<UserMealPlanRow>(
       `select * from public.user_meal_plans
        where id = $1 and tenant_id = $2 and user_id = $3
@@ -124,6 +135,8 @@ export async function attachRecipeToMealPlanSlot(
       };
     }
     if (currentRef) return { status: 'conflict' };
+    if (!equalPostgresTimestamps(input.expectedUpdatedAt, input.expectedUpdatedAt))
+      return { status: 'conflict' };
 
     const snapshotResult = await client.query<{ matches: boolean }>(
       `select updated_at = $4::timestamptz and calendar_payload = $5::jsonb as matches
@@ -190,8 +203,9 @@ export interface CreateMealPlanInput {
 export async function createMealPlan(input: CreateMealPlanInput): Promise<UserMealPlanRow> {
   const result = await scopedTransaction(
     { tenantId: input.tenantId, userId: input.userId },
-    (client) =>
-      client.query<UserMealPlanRow>(
+    async (client) => {
+      await lockInventorySourceTenant(client, input.tenantId);
+      return client.query<UserMealPlanRow>(
         `insert into public.user_meal_plans
      (tenant_id, user_id, people_count, period, mode, base_cuisine, fusion_cuisines,
       fusion_intensity, restrictions, inventory_snapshot, calendar_payload, ai_content)
@@ -211,7 +225,8 @@ export async function createMealPlan(input: CreateMealPlanInput): Promise<UserMe
           JSON.stringify(input.structuredPlan),
           renderStructuredMealPlan(input.structuredPlan),
         ]
-      )
+      );
+    }
   );
 
   const mealPlan = mapSingleRow(result);
@@ -244,6 +259,10 @@ export interface UpdateMealPlanScheduleInput {
   userId: string;
   tenantId: string;
   schedule: StructuredMealPlanSchedule;
+  expectedUpdatedAt: string;
+  expectedCalendarPayload: unknown;
+  expectedPeopleCount: number;
+  expectedPeriod: MealPlanPeriod;
 }
 
 export interface ReplaceMealPlanAdaptiveInput {
@@ -261,8 +280,79 @@ export async function replaceMealPlanForAdaptiveProposal(
 ): Promise<UserMealPlanRow | null> {
   const result = await scopedTransaction(
     { tenantId: input.tenantId, userId: input.userId },
-    (client) =>
-      client.query<UserMealPlanRow>(
+    async (client) => {
+      await lockInventorySourceTenant(client, input.tenantId);
+      if (!equalPostgresTimestamps(input.expectedUpdatedAt, input.expectedUpdatedAt))
+        return { rows: [] };
+      // The profile lock covers both existing and absent profiles, including all
+      // participating profile writers. Re-read under READ COMMITTED after waiting.
+      await lockCulinaryProfileUpdateInTransaction(client, input.userId, input.tenantId);
+      const current = (
+        await client.query<UserMealPlanRow>(
+          `select * from public.user_meal_plans
+           where id = $1 and tenant_id = $2 and user_id = $3
+             and updated_at = $4::timestamptz and calendar_payload = $5::jsonb
+           for update`,
+          [
+            input.mealPlanId,
+            input.tenantId,
+            input.userId,
+            input.expectedUpdatedAt,
+            JSON.stringify(input.expectedCalendarPayload),
+          ]
+        )
+      ).rows[0];
+      if (
+        !current ||
+        current.id !== input.mealPlanId ||
+        current.tenant_id !== input.tenantId ||
+        current.user_id !== input.userId ||
+        !Array.isArray(current.restrictions)
+      )
+        return { rows: [] };
+      const profile = await findCulinaryProfileByUserIdInTransaction(
+        client,
+        input.userId,
+        input.tenantId
+      );
+      const terms = await findCulinaryProfileTermsByUserIdInTransaction(
+        client,
+        input.userId,
+        input.tenantId
+      );
+      if (
+        (profile &&
+          (profile.user_id !== input.userId ||
+            profile.tenant_id !== input.tenantId ||
+            !Array.isArray(profile.allergies))) ||
+        (!profile && terms.length > 0) ||
+        terms.some(
+          (term) =>
+            term.user_id !== input.userId ||
+            !['identity', 'prefer', 'avoid', 'goal'].includes(term.preference_type) ||
+            typeof term.term_label !== 'string' ||
+            !term.term_label.trim()
+        )
+      )
+        return { rows: [] };
+      // Do not use the bounded prompt context as a safety decision: validate
+      // every persisted hard restriction against the proposed ingredients.
+      const restrictions = [
+        ...current.restrictions,
+        ...(profile?.allergies ?? []),
+        ...terms.filter((term) => term.preference_type === 'avoid').map((term) => term.term_label),
+      ];
+      if (
+        restrictions.some((term) => typeof term !== 'string' || !term.trim()) ||
+        containsRestrictedIngredientName(
+          input.structuredPlan.days.flatMap((day) =>
+            day.meals.flatMap((meal) => meal.ingredients.map((ingredient) => ingredient.name))
+          ),
+          restrictions
+        )
+      )
+        return { rows: [] };
+      return client.query<UserMealPlanRow>(
         `update public.user_meal_plans
         set calendar_payload = $1::jsonb,
             ai_content = $2,
@@ -280,27 +370,57 @@ export async function replaceMealPlanForAdaptiveProposal(
           input.expectedUpdatedAt,
           JSON.stringify(input.expectedCalendarPayload),
         ]
-      )
+      );
+    },
+    { isolationLevel: 'read committed' }
   );
-  return mapSingleRow(result);
+  return result.rows[0] ?? null;
 }
 
 export async function updateMealPlanScheduleForUserAndTenant(
   input: UpdateMealPlanScheduleInput
 ): Promise<UserMealPlanRow | null> {
-  const result = await scopedTransaction(
+  return scopedTransaction(
     { tenantId: input.tenantId, userId: input.userId },
-    (client) =>
-      client.query<UserMealPlanRow>(
+    async (client) => {
+      await lockInventorySourceTenant(client, input.tenantId);
+      const schedule = parseStructuredMealPlanSchedule(input.schedule);
+      if (
+        !schedule ||
+        schedule.portionConfirmation?.peopleCount !== input.expectedPeopleCount ||
+        !equalPostgresTimestamps(input.expectedUpdatedAt, input.expectedUpdatedAt)
+      )
+        return null;
+      const today = getLocalDateInTimeZone(new Date(), schedule.timeZone);
+      if (!today || schedule.startDate < today) return null;
+      const parsed = parseStructuredMealPlanValue(
+        input.expectedCalendarPayload,
+        input.expectedPeriod
+      );
+      if (!parsed.success) return null;
+      const updated = await client.query<UserMealPlanRow>(
         `update public.user_meal_plans
         set calendar_payload = jsonb_set(calendar_payload, '{schedule}', $1::jsonb, true),
             updated_at = now()
       where id = $2 and tenant_id = $3 and user_id = $4
+        and updated_at = $5::timestamptz and calendar_payload = $6::jsonb
+        and people_count = $7 and period = $8
       returning *`,
-        [JSON.stringify(input.schedule), input.mealPlanId, input.tenantId, input.userId]
-      )
+        [
+          JSON.stringify(schedule),
+          input.mealPlanId,
+          input.tenantId,
+          input.userId,
+          input.expectedUpdatedAt,
+          JSON.stringify(input.expectedCalendarPayload),
+          input.expectedPeopleCount,
+          input.expectedPeriod,
+        ]
+      );
+      return updated.rows[0] ?? null;
+    },
+    { isolationLevel: 'read committed' }
   );
-  return mapSingleRow(result);
 }
 
 export async function findLatestMealPlanByUserAndTenant(

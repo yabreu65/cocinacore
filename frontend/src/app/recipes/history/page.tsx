@@ -1,9 +1,11 @@
 'use client';
+import { postgresTimestampDisplayDate } from '@/lib/db/postgres-timestamp';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { humanCopy } from '@/lib/copy';
 import { safeFetch } from '@/lib/api';
+import { createHistoryOperationGate, type HistoryOperation } from './history-operation-gate';
 import { buildRecipeImportFromHistory } from '@/lib/recipes/recipe-history-import';
 
 type HistoryFilter = 'all' | 'saved';
@@ -67,31 +69,61 @@ export default function RecipeHistoryPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [openId, setOpenId] = useState<string | null>(null);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [feedbackWorkingId, setFeedbackWorkingId] = useState<string | null>(null);
-  const [savedWorkingId, setSavedWorkingId] = useState<string | null>(null);
-  const [importingId, setImportingId] = useState<string | null>(null);
-  const importLocks = useRef(new Set<string>());
+  const gate = useRef(createHistoryOperationGate());
+  const [pending, setPending] = useState(new Map<string, HistoryOperation>());
   const [importedRecipes, setImportedRecipes] = useState<Record<string, string>>({});
+  const importedIds = useRef(new Set<string>());
+  const filterRef = useRef<HistoryFilter>('all');
+  const loadingRef = useRef(true);
+  const loadEpoch = useRef(0);
+  const [reloadVersion, setReloadVersion] = useState(0);
+
+  const changeFilter = useCallback((next: HistoryFilter) => {
+    if (filterRef.current === next) return;
+    filterRef.current = next;
+    loadEpoch.current += 1;
+    loadingRef.current = true;
+    setLoading(true);
+    setRows([]);
+    setError(null);
+    setFilter(next);
+  }, []);
+
+  const beginOperation = (id: string, operation: HistoryOperation) => {
+    if (loadingRef.current || !gate.current.begin(id, operation)) return false;
+    setPending(gate.current.snapshot());
+    return true;
+  };
+
+  const finishOperation = (id: string, operation: HistoryOperation) => {
+    gate.current.finish(id, operation);
+    setPending(gate.current.snapshot());
+    if (gate.current.size === 0) {
+      loadingRef.current = true;
+      setLoading(true);
+      setReloadVersion((current) => current + 1);
+    }
+  };
 
   useEffect(() => {
     const readFilterFromUrl = () => {
       const isSaved = new URLSearchParams(window.location.search).get('saved') === 'true';
-      setFilter(isSaved ? 'saved' : 'all');
+      changeFilter(isSaved ? 'saved' : 'all');
       setFilterReady(true);
     };
     readFilterFromUrl();
     window.addEventListener('popstate', readFilterFromUrl);
     return () => window.removeEventListener('popstate', readFilterFromUrl);
-  }, []);
+  }, [changeFilter]);
 
   useEffect(() => {
-    if (!filterReady) return;
+    if (!filterReady || gate.current.size > 0) return;
     const controller = new AbortController();
+    const epoch = ++loadEpoch.current;
     let current = true;
+    const isCurrent = () => current && loadEpoch.current === epoch && filterRef.current === filter;
+    loadingRef.current = true;
     setLoading(true);
-    setRows([]);
-    setError(null);
     const load = async () => {
       try {
         const path = filter === 'saved' ? '/api/recipe-history?saved=true' : '/api/recipe-history';
@@ -99,14 +131,18 @@ export default function RecipeHistoryPage() {
           credentials: 'same-origin',
           signal: controller.signal,
         });
-        if (!current) return;
+        if (!isCurrent()) return;
         if (!result.ok) throw new Error(result.error);
         setRows(result.data.items);
       } catch (cause) {
-        if (!current || (cause instanceof Error && cause.name === 'AbortError')) return;
+        if (!isCurrent() || (cause instanceof Error && cause.name === 'AbortError')) return;
+        setRows([]);
         setError(cause instanceof Error ? cause.message : 'No se pudo cargar historial.');
       } finally {
-        if (current) setLoading(false);
+        if (isCurrent()) {
+          loadingRef.current = false;
+          setLoading(false);
+        }
       }
     };
 
@@ -115,7 +151,7 @@ export default function RecipeHistoryPage() {
       current = false;
       controller.abort();
     };
-  }, [filter, filterReady]);
+  }, [filter, filterReady, reloadVersion]);
 
   const updateFilter = (nextFilter: HistoryFilter) => {
     const url = new URL(window.location.href);
@@ -125,11 +161,11 @@ export default function RecipeHistoryPage() {
       url.searchParams.delete('saved');
     }
     window.history.replaceState(null, '', url);
-    setFilter(nextFilter);
+    changeFilter(nextFilter);
   };
 
   const deleteHistoryItem = async (id: string) => {
-    setDeletingId(id);
+    if (!beginOperation(id, 'delete')) return;
     setError(null);
     try {
       const result = await safeFetch<{ ok: true }>(
@@ -141,16 +177,16 @@ export default function RecipeHistoryPage() {
       );
       if (!result.ok) throw new Error(result.error);
       setRows((prev) => prev.filter((row) => row.id !== id));
-      if (openId === id) setOpenId(null);
+      setOpenId((current) => (current === id ? null : current));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo eliminar la receta.');
     } finally {
-      setDeletingId(null);
+      finishOperation(id, 'delete');
     }
   };
 
   const setFeedback = async (id: string, value: 'accepted' | 'discarded') => {
-    setFeedbackWorkingId(id);
+    if (!beginOperation(id, 'feedback')) return;
     setError(null);
     try {
       const result = await safeFetch<{ item: HistoryRow }>(
@@ -167,13 +203,13 @@ export default function RecipeHistoryPage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo guardar feedback.');
     } finally {
-      setFeedbackWorkingId(null);
+      finishOperation(id, 'feedback');
     }
   };
 
   const setSaved = async (entry: HistoryRow) => {
     const nextSaved = !entry.is_saved;
-    setSavedWorkingId(entry.id);
+    if (!beginOperation(entry.id, 'save')) return;
     setError(null);
     try {
       const result = await safeFetch<{ item: HistoryRow }>(
@@ -185,7 +221,7 @@ export default function RecipeHistoryPage() {
       );
       if (!result.ok) throw new Error(result.error);
       setRows((prev) => {
-        if (filter === 'saved' && !result.data.item.is_saved) {
+        if (filterRef.current === 'saved' && !result.data.item.is_saved) {
           return prev.filter((row) => row.id !== entry.id);
         }
         return prev.map((row) =>
@@ -195,12 +231,12 @@ export default function RecipeHistoryPage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo actualizar la receta guardada.');
     } finally {
-      setSavedWorkingId(null);
+      finishOperation(entry.id, 'save');
     }
   };
 
   const importToRecetario = async (entry: HistoryRow) => {
-    if (importLocks.current.has(entry.id) || importedRecipes[entry.id]) return;
+    if (importedIds.current.has(entry.id)) return;
     const body = buildRecipeImportFromHistory({
       id: entry.id,
       title: entry.recipe_title,
@@ -210,8 +246,7 @@ export default function RecipeHistoryPage() {
       setError('Esta sugerencia antigua no tiene un formato compatible para importarla.');
       return;
     }
-    importLocks.current.add(entry.id);
-    setImportingId(entry.id);
+    if (!beginOperation(entry.id, 'import')) return;
     setError(null);
     try {
       const result = await safeFetch<{ recipe: { id: string } }>('/api/recipes', {
@@ -223,12 +258,12 @@ export default function RecipeHistoryPage() {
       if (!result.ok || !result.data.recipe.id) {
         throw new Error('No se pudo importar la receta.');
       }
+      importedIds.current.add(entry.id);
       setImportedRecipes((current) => ({ ...current, [entry.id]: result.data.recipe.id }));
     } catch {
       setError('No pudimos llevar la receta a tu recetario. Podés intentarlo nuevamente.');
     } finally {
-      importLocks.current.delete(entry.id);
-      setImportingId(null);
+      finishOperation(entry.id, 'import');
     }
   };
 
@@ -272,6 +307,8 @@ export default function RecipeHistoryPage() {
         <ul className="mt-4 grid gap-3">
           {rows.map((entry) => {
             const isOpen = openId === entry.id;
+            const operation = pending.get(entry.id);
+            const busy = loading || operation !== undefined;
             return (
               <li
                 key={entry.id}
@@ -282,14 +319,14 @@ export default function RecipeHistoryPage() {
                     <span className="font-semibold">
                       {entry.recipe_title ?? humanCopy.suggestedRecipesForYou}
                     </span>{' '}
-                    — {new Date(entry.created_at).toLocaleString()}
+                    — {postgresTimestampDisplayDate(entry.created_at).toLocaleString()}
                   </p>
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
                       onClick={() => void setSaved(entry)}
                       aria-pressed={entry.is_saved}
-                      disabled={savedWorkingId === entry.id}
+                      disabled={busy}
                       className="rounded-xl border border-bistro-border bg-white px-3 py-1.5 text-sm font-semibold text-bistro-text-secondary disabled:opacity-70"
                     >
                       {entry.is_saved ? 'Quitar marca' : 'Marcar para consultar'}
@@ -309,16 +346,16 @@ export default function RecipeHistoryPage() {
                       <button
                         type="button"
                         onClick={() => void importToRecetario(entry)}
-                        disabled={importingId === entry.id}
+                        disabled={busy}
                         className="min-h-10 rounded-xl bg-bistro-action-primary px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
                       >
-                        {importingId === entry.id ? 'Importando…' : 'Importar a Mi recetario'}
+                        {operation === 'import' ? 'Importando…' : 'Importar a Mi recetario'}
                       </button>
                     ) : null}
                     <button
                       type="button"
                       onClick={() => void setFeedback(entry.id, 'accepted')}
-                      disabled={feedbackWorkingId === entry.id}
+                      disabled={busy}
                       className={`rounded-xl border px-3 py-1.5 text-xs font-semibold ${entry.user_feedback === 'accepted' ? 'border-bistro-action-secondary/40 bg-bistro-action-secondary/10 text-bistro-action-secondary' : 'border-bistro-border bg-white text-bistro-text-secondary'}`}
                     >
                       Me gustó
@@ -326,7 +363,7 @@ export default function RecipeHistoryPage() {
                     <button
                       type="button"
                       onClick={() => void setFeedback(entry.id, 'discarded')}
-                      disabled={feedbackWorkingId === entry.id}
+                      disabled={busy}
                       className={`rounded-xl border px-3 py-1.5 text-xs font-semibold ${entry.user_feedback === 'discarded' ? 'border-bistro-danger/30 bg-bistro-danger/10 text-bistro-danger' : 'border-bistro-border bg-white text-bistro-text-secondary'}`}
                     >
                       No me gustó
@@ -341,10 +378,10 @@ export default function RecipeHistoryPage() {
                     <button
                       type="button"
                       onClick={() => void deleteHistoryItem(entry.id)}
-                      disabled={deletingId === entry.id}
+                      disabled={busy}
                       className="rounded-xl border border-bistro-danger/30 bg-white px-3 py-1.5 text-sm font-semibold text-bistro-danger disabled:opacity-70"
                     >
-                      {deletingId === entry.id ? 'Eliminando...' : 'Eliminar'}
+                      {operation === 'delete' ? 'Eliminando...' : 'Eliminar'}
                     </button>
                   </div>
                 </div>

@@ -4,6 +4,10 @@ import { Pool } from 'pg';
 import { validateE2ETargets } from '../database-target';
 import { signupIsolatedE2EUser } from '../fixtures/auth';
 import {
+  evaluateFamilyWeekCleanup,
+  type CleanupCounts,
+} from '../fixtures/family-week-cleanup-contract';
+import {
   assertE2EDisposableIsolation,
   closeE2EDatabase,
   hasAppendOnlyE2EReferences,
@@ -22,7 +26,6 @@ type CleanupSeed = {
   planId: string | null;
   source: string | null;
 };
-type CleanupCounts = { movements: string; shopping: string; plans: string; inventory: string };
 
 const mealLabels = {
   breakfast: 'Desayuno',
@@ -86,7 +89,7 @@ function inventoryTotal(rows: Array<{ quantity: string | null }>): number {
   return Number(rows.reduce((sum, row) => sum + Number(row.quantity ?? 0), 0).toFixed(4));
 }
 
-async function cleanupTestData(seed: CleanupSeed): Promise<void> {
+async function cleanupTestData(seed: CleanupSeed, expectProtectedRetention = false): Promise<void> {
   const failures: unknown[] = [];
   const attempt = async (operation: () => Promise<unknown>) => {
     try {
@@ -110,39 +113,50 @@ async function cleanupTestData(seed: CleanupSeed): Promise<void> {
     }
   });
 
-  for (const planId of planIds) {
-    if (await hasAppendOnlyE2EReferences(database, tenantId, userId, [planId])) return;
-    await attempt(() =>
-      database.query(
-        `delete from public.inventory_movements
+  // Discover every plan and check the entire fixture before any existing cleanup
+  // operation. Failure to establish the boundary must never permit deletion.
+  if (failures.length)
+    throw new AggregateError(failures, 'Unable to establish family-week cleanup scope.');
+  const protectedReferences = await hasAppendOnlyE2EReferences(database, tenantId, userId, [
+    ...planIds,
+  ]);
+  // A completed consumption scenario intentionally retains its append-only graph
+  // until disposal of the isolated database. No row cleanup is attempted in that
+  // case, even if the expected references are unexpectedly absent.
+  if (!protectedReferences && !expectProtectedRetention) {
+    for (const planId of planIds) {
+      await attempt(() =>
+        database.query(
+          `delete from public.inventory_movements
         where tenant_id=$1 and user_id=$2 and source_meal_plan_id=$3`,
-        [tenantId, userId, planId]
-      )
-    );
-    await attempt(() =>
-      database.query(
-        `delete from public.user_meal_plans where id=$1 and tenant_id=$2 and user_id=$3`,
-        [planId, tenantId, userId]
-      )
-    );
-  }
-  for (const source of sources) {
-    await attempt(() =>
-      database.query(
-        `delete from public.shopping_list_items
+          [tenantId, userId, planId]
+        )
+      );
+      await attempt(() =>
+        database.query(
+          `delete from public.user_meal_plans where id=$1 and tenant_id=$2 and user_id=$3`,
+          [planId, tenantId, userId]
+        )
+      );
+    }
+    for (const source of sources) {
+      await attempt(() =>
+        database.query(
+          `delete from public.shopping_list_items
         where tenant_id=$1 and user_id=$2 and source=$3 and ingredient_name=$4`,
-        [tenantId, userId, source, seed.ingredientName]
-      )
-    );
-  }
-  await attempt(() =>
-    database.query(
-      `delete from public.recipe_inventory_items
+          [tenantId, userId, source, seed.ingredientName]
+        )
+      );
+    }
+    await attempt(() =>
+      database.query(
+        `delete from public.recipe_inventory_items
       where tenant_id=$1 and user_id=$2
         and (id=any($4::uuid[]) or ingredient_name=$3)`,
-      [tenantId, userId, seed.ingredientName, seed.inventoryIds]
-    )
-  );
+        [tenantId, userId, seed.ingredientName, seed.inventoryIds]
+      )
+    );
+  }
 
   let leftovers: CleanupCounts | null = null;
   await attempt(async () => {
@@ -155,7 +169,7 @@ async function cleanupTestData(seed: CleanupSeed): Promise<void> {
          (select count(*)::text from public.user_meal_plans
            where tenant_id=$1 and user_id=$2 and (id=any($3::uuid[]) or ai_content=$6)) as plans,
          (select count(*)::text from public.recipe_inventory_items
-           where tenant_id=$1 and user_id=$2 and ingredient_name=$5) as inventory`,
+           where tenant_id=$1 and user_id=$2 and (ingredient_name=$5 or id=any($7::uuid[]))) as inventory`,
       [
         tenantId,
         userId,
@@ -163,12 +177,23 @@ async function cleanupTestData(seed: CleanupSeed): Promise<void> {
         Array.from(sources),
         seed.ingredientName,
         seed.planMarker,
+        seed.inventoryIds,
       ]
     );
     leftovers = result.rows[0] ?? null;
   });
-  if (!leftovers || Object.values(leftovers).some((count) => count !== '0')) {
-    failures.push(new Error(`Test cleanup left scoped data behind: ${JSON.stringify(leftovers)}`));
+  const report = evaluateFamilyWeekCleanup({
+    protectedReferences,
+    expectProtectedRetention,
+    leftovers,
+  });
+  // Explicit evidence, including expected protected rows. No credentials or row contents.
+  await test.info().attach('family-week-cleanup-report', {
+    body: JSON.stringify(report),
+    contentType: 'application/json',
+  });
+  if (!report.verified) {
+    failures.push(new Error(`Family-week cleanup incomplete: ${JSON.stringify(report)}`));
   }
   if (failures.length)
     throw new AggregateError(failures, 'Failed to clean up family-week E2E data.');
@@ -198,6 +223,7 @@ test.describe('META 1 full family week', () => {
       source: null,
     };
     let operationError: unknown;
+    let completed = false;
 
     try {
       const inventory = await database.query<{ id: string }>(
@@ -272,11 +298,15 @@ test.describe('META 1 full family week', () => {
       await page.goto('/app');
       await page.getByRole('link', { name: 'Inventario', exact: true }).click();
       await expect(page).toHaveURL('/recipes/inventory');
-      await page.getByPlaceholder('Ingrediente').fill(ingredientName);
-      await page.getByPlaceholder('Cantidad').fill('0.7');
-      await page.getByPlaceholder('Unidad').fill('kg');
-      await page.locator('input[type="date"]').fill('2999-12-31');
-      await page.getByRole('button', { name: 'Agregar', exact: true }).click();
+      await page.getByRole('button', { name: 'Agregar ingrediente', exact: true }).click();
+      const inventoryForm = page.locator('#inventory-add-panel');
+      await inventoryForm.getByLabel('Ingrediente', { exact: true }).fill(ingredientName);
+      await inventoryForm.getByLabel('Cantidad disponible', { exact: true }).fill('0.7');
+      await inventoryForm.getByLabel('Unidad', { exact: true }).selectOption('kg');
+      await inventoryForm.getByRole('checkbox', { name: /confirma que quieres conservar este ingrediente por separado/i }).check();
+      await inventoryForm.getByRole('button', { name: /Detalles opcionales/ }).click();
+      await inventoryForm.getByLabel('Fecha de vencimiento', { exact: true }).fill('2999-12-31');
+      await inventoryForm.getByRole('button', { name: 'Guardar ingrediente', exact: true }).click();
       await expect(page.getByText(ingredientName, { exact: true })).toHaveCount(2);
 
       const stockedInventory = await ingredientInventory(identity, ingredientName);
@@ -367,12 +397,13 @@ test.describe('META 1 full family week', () => {
         [identity.tenantId, identity.userId, planId]
       );
       expect(replayMovementCount.rows[0]?.count).toBe('21');
+      completed = true;
     } catch (error) {
       operationError = error;
       throw error;
     } finally {
       try {
-        await cleanupTestData(seed);
+        await cleanupTestData(seed, completed);
       } catch (cleanupError) {
         if (operationError) {
           throw new AggregateError(
@@ -386,6 +417,7 @@ test.describe('META 1 full family week', () => {
   });
 
   test('cleans inventory when plan setup fails its database constraint', async ({ page }) => {
+    await assertE2EDisposableIsolation(database);
     const identity = await authenticatedIdentity(page);
     const unique = `e2e-m1-7-setup-failure-${randomUUID()}`;
     const ingredientName = `${unique} arroz familiar`;

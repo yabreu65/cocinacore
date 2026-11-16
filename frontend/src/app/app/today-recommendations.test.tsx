@@ -1081,6 +1081,20 @@ describe('TodayRecommendations', () => {
       expect(renderToStaticMarkup(tree)).toContain('Almuerzo actual');
       expect(textContent(tree)).not.toContain('No pudimos cargar');
 
+      (findButton(tree, 'Almuerzo').props.onClick as () => void)();
+      tree = render();
+      expect(renderToStaticMarkup(tree)).toContain('Almuerzo actual');
+      expect(safeFetch).toHaveBeenCalledTimes(1);
+      expect(safeFetch).toHaveBeenCalledWith(
+        '/api/today',
+        expect.objectContaining({
+          body: JSON.stringify({
+            slot: 'lunch',
+            timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          }),
+        })
+      );
+
       (findButton(tree, 'Ver opciones').props.onClick as () => void)();
       await Promise.resolve();
       failure.reject(new Error('Lunch request failed'));

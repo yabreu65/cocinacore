@@ -1,0 +1,109 @@
+# Dedicated stack; always use an explicit project name and private env files.
+services:
+  nginx:
+    image: nginx:stable-alpine@sha256:583b7f2fce1cdb8da5ad5c39ebd3c33b98b87d493190e548bdee1fa8c619c311
+    restart: unless-stopped
+    volumes:
+      - ./deploy/standalone/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks: [edge]
+    depends_on:
+      app: {condition: service_healthy}
+    healthcheck:
+      test: [CMD-SHELL, 'wget -q -T 4 -O /dev/null http://127.0.0.1:8080/api/health']
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    logging: &bounded_logs
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}
+  app:
+    image: ${CC_APP_IMAGE:?immutable application image required}
+    restart: unless-stopped
+    env_file: ${CC_APP_ENV:?private application env file required}
+    environment:
+      COCINACORE_TRUSTED_CLIENT_IDENTITY_HEADER: X-Cocina-Client-Id
+    networks: [edge, data]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      storage: {condition: service_healthy}
+    logging: *bounded_logs
+  postgres:
+    image: pgvector/pgvector:pg16@sha256:0dd3149a06e4579a0d70d8fef9945636cd514005e7237deb27f9b67886f8dc4f
+    restart: unless-stopped
+    env_file: ${CC_POSTGRES_ENV:?private postgres env file required}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks: [data]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    logging: *bounded_logs
+  redis:
+    image: redis:7-alpine@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
+    restart: unless-stopped
+    env_file: ${CC_REDIS_ENV:?private redis env file required}
+    command: [sh, -ec, 'test -n "$$REDIS_PASSWORD"; exec docker-entrypoint.sh redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"']
+    volumes:
+      - redis_data:/data
+    networks: [data]
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -qx PONG']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    logging: *bounded_logs
+  storage:
+    image: rustfs/rustfs:1.0.5@sha256:b81d16a90ee25bd9511280127ca1471788c6e874cf0f0da759645f46b2dc1d74
+    restart: unless-stopped
+    env_file: ${CC_STORAGE_ENV:?private storage env file required}
+    environment:
+      RUSTFS_ADDRESS: ':9000'
+      RUSTFS_CONSOLE_ENABLE: 'false'
+      RUSTFS_SFTP_ENABLE: 'false'
+      RUSTFS_FTP_ENABLE: 'false'
+      RUSTFS_WEBDAV_ENABLE: 'false'
+    command: [/data]
+    volumes:
+      - storage_data:/data
+    networks: [data]
+    healthcheck:
+      test: [CMD-SHELL, 'curl -fsS --max-time 3 http://127.0.0.1:9000/health >/dev/null']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    logging: *bounded_logs
+  storage-init:
+    image: rustfs/rc:v0.1.37@sha256:7e93fd410a8fe51514f89373e093392c92095b98dc6140335fcfe956810c4c80
+    profiles: [operations]
+    restart: 'no'
+    env_file: ${CC_STORAGE_INIT_ENV:?private storage initializer env file required}
+    entrypoint: [/bin/sh, /app/init-storage.sh]
+    volumes:
+      - ./scripts/standalone-init-storage.sh:/app/init-storage.sh:ro
+      - ./scripts/standalone-storage-policy.json:/app/storage-policy.json:ro
+    networks: [data]
+    depends_on:
+      storage: {condition: service_healthy}
+    logging: *bounded_logs
+  operations:
+    image: ${CC_OPERATIONS_IMAGE:?immutable operations image required}
+    profiles: [operations]
+    restart: 'no'
+    env_file: ${CC_OPERATIONS_ENV:?private operations env file required}
+    volumes:
+      - ./scripts/standalone-bootstrap-db.sh:/app/bootstrap-db.sh:ro
+    networks: [data]
+    depends_on:
+      postgres: {condition: service_healthy}
+    logging: *bounded_logs
+volumes:
+  postgres_data:
+  redis_data:
+  storage_data:
+networks:
+  edge:
+  data:
+    internal: true

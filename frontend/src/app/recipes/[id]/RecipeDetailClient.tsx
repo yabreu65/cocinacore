@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { safeFetch } from '@/lib/api';
-import { scaleIngredients, type Recipe, type RecipeVersion } from '../recipe-ui';
+import { recipePortionCost, scaleIngredients, type Recipe, type RecipeVersion } from '../recipe-ui';
+import type { InventoryCostLot } from '@/lib/inventory/inventory-costing';
+import { isInventoryCurrency, type InventoryCurrency } from '@/lib/inventory/inventory-price';
 import {
   draftFromRecipe,
   payloadFromDraft,
@@ -19,6 +21,40 @@ export default function RecipeDetailClient({ id }: { id: string }) {
   const [edit, setEdit] = useState(false);
   const [saving, setSaving] = useState(false);
   const [servings, setServings] = useState('');
+  const [costSource, setCostSource] = useState<{
+    recipeId: string;
+    lots: InventoryCostLot[];
+    currency: InventoryCurrency | null;
+  } | null>(null);
+  useEffect(() => {
+    let active = true;
+    setCostSource(null);
+    void Promise.all([
+      safeFetch<{ items: InventoryCostLot[] }>('/api/inventory', {
+        credentials: 'same-origin',
+        cache: 'no-store',
+      }),
+      safeFetch<{ currency: InventoryCurrency | null }>('/api/inventory/currency', {
+        credentials: 'same-origin',
+        cache: 'no-store',
+      }),
+    ])
+      .then(([inventory, settings]) => {
+        if (active && inventory.ok && settings.ok && Array.isArray(inventory.data.items)) {
+          setCostSource({
+            recipeId: id,
+            lots: inventory.data.items,
+            currency: isInventoryCurrency(settings.data.currency) ? settings.data.currency : null,
+          });
+        }
+      })
+      .catch(() => {
+        /* The recipe remains usable without cost information. */
+      });
+    return () => {
+      active = false;
+    };
+  }, [id]);
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -97,11 +133,19 @@ export default function RecipeDetailClient({ id }: { id: string }) {
     );
   const version = recipe.current_version;
   const baseServings = version.servings ?? 0;
-  const scaled = scaleIngredients(
-    version.ingredients,
-    baseServings,
-    Number(servings) || baseServings
-  );
+  const targetServings = Number(servings);
+  const scaled = scaleIngredients(version.ingredients, baseServings, targetServings);
+  const source = costSource?.recipeId === id ? costSource : null;
+  const cost =
+    source && version.ingredients.length > 0
+      ? recipePortionCost(
+          version.ingredients,
+          baseServings,
+          targetServings,
+          source.lots,
+          source.currency
+        )
+      : null;
   return (
     <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 text-bistro-text-primary md:px-6">
       <article className="mx-auto max-w-4xl rounded-3xl border border-bistro-border bg-white/85 p-5 premium-shadow">
@@ -165,6 +209,8 @@ export default function RecipeDetailClient({ id }: { id: string }) {
               aria-label="Porciones deseadas"
               type="number"
               min="1"
+              max="100"
+              step="1"
               className="w-24 rounded-lg border px-2 py-1"
               value={servings}
               onChange={(e) => setServings(e.target.value)}
@@ -172,8 +218,8 @@ export default function RecipeDetailClient({ id }: { id: string }) {
           </p>
           {scaled.partial && (
             <p className="mt-2 text-sm text-bistro-text-secondary">
-              Algunas cantidades no se ajustaron porque no son numéricas o usan una unidad no
-              reconocida.
+              Algunas cantidades conservan sus valores originales. Revisá las porciones y las
+              unidades antes de cocinar.
             </p>
           )}
           <ul className="mt-3 list-disc space-y-1 pl-5">
@@ -183,6 +229,12 @@ export default function RecipeDetailClient({ id }: { id: string }) {
               </li>
             ))}
           </ul>
+          <p className="mt-4 text-sm" role="status">
+            Costo estimado:{' '}
+            {cost && cost.amount !== null && cost.currency
+              ? `${cost.amount} ${cost.currency}${cost.status === 'partial' ? ' (parcial; faltan cantidades o precios)' : ''}`
+              : 'No disponible; revisá las porciones, los precios y la moneda del inventario.'}
+          </p>
         </section>
         <section className="mt-6">
           <h2 className="text-xl font-semibold">Pasos y notas</h2>

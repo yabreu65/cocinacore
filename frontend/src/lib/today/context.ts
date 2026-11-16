@@ -1,3 +1,4 @@
+import { normalizeExpirationDate } from '@/lib/meal-planner/expiration-date';
 import type {
   RecipeAiHistoryRow,
   RecipeInventoryItemRow,
@@ -66,6 +67,7 @@ export interface BuildTodayContextInput {
   userId: string;
   tenantId: string;
   asOf: string;
+  timeZone?: string;
   slot: TodaySlot;
   profile: UserCulinaryProfileRow | null;
   terms: readonly UserCulinaryProfileTermWithLabel[];
@@ -99,6 +101,7 @@ function buildInventory(
   rows: readonly Pick<RecipeInventoryItemRow, 'tenant_id' | 'ingredient_name' | 'quantity' | 'unit' | 'expiration_date'>[],
   tenantId: string,
   asOf: string,
+  timeZone: string,
 ): TodayProviderInventoryItem[] {
   const output: TodayProviderInventoryItem[] = [];
   for (const row of rows) {
@@ -106,14 +109,15 @@ function buildInventory(
     if (output.length >= MAX_INVENTORY_ITEMS) break;
     const name = cleanString(row.ingredient_name, 80);
     if (!name) continue;
-    if (row.expiration_date !== null && (!isIsoDate(row.expiration_date) || row.expiration_date < asOf)) continue;
+    const expiresOn = row.expiration_date === null ? null : normalizeExpirationDate(row.expiration_date, timeZone);
+    if (row.expiration_date !== null && (!expiresOn || expiresOn < asOf)) continue;
     const quantity = cleanString(row.quantity, 40);
     const unit = cleanString(row.unit, 24);
     output.push({
       name,
       ...(quantity ? { quantity } : {}),
       ...(unit ? { unit } : {}),
-      ...(row.expiration_date ? { expiresOn: row.expiration_date } : {}),
+      ...(expiresOn ? { expiresOn } : {}),
     });
   }
   return output;
@@ -200,7 +204,7 @@ export function buildTodayContext(input: BuildTodayContextInput): TodayContextRe
   const providerContext: TodayProviderContext = {
     asOf: input.asOf,
     slot: input.slot,
-    inventory: buildInventory(input.inventory, input.tenantId, input.asOf),
+    inventory: buildInventory(input.inventory, input.tenantId, input.asOf, input.timeZone ?? 'UTC'),
     allergies: boundedStrings(profile.allergies),
     hardAvoid: boundedStrings(profile.avoid),
     dislikedIngredients: boundedStrings(profile.dislikedIngredients),

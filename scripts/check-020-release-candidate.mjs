@@ -186,11 +186,51 @@ function checkCandidate({ candidateRoot, releaseSha }) {
     String(index + 1).padStart(3, "0"),
   );
   const entries = manifest.migrations;
+  // A historical release approval is still bound to exactly 001–020.
+  // Working-tree CI may validate the exact successor artifacts separately; it
+  // does not authorize a release or change the original 020 artifact checks.
+  const successor = !releaseSha && [21, 22, 23].includes(entries.length);
+  const occurrenceSuccessor = !releaseSha && [22, 23].includes(entries.length);
+  const retentionSuccessor = !releaseSha && entries.length === 23;
   if (
-    entries.length !== expectedIds.length ||
-    entries.some((entry, index) => entry.id !== expectedIds[index])
+    entries.length !== (retentionSuccessor ? 23 : occurrenceSuccessor ? 22 : successor ? 21 : expectedIds.length) ||
+    entries.slice(0, 20).some((entry, index) => entry.id !== expectedIds[index])
   )
-    fail("manifest migration sequence must contain exactly 001 through 020");
+    fail("manifest migration sequence must contain the exact 001 through 020 prefix");
+  if (successor) {
+    const entry = entries[20];
+    const relativePath = "db/migrations/021_inventory_price_reference.sql";
+    const file = readCandidate(relativePath, candidateRoot, releaseSha);
+    if (entry.id !== "021" || entry.filename !== "021_inventory_price_reference.sql" ||
+        entry.lane !== "migration" || entry.transactional !== "required" ||
+        entry.legacyChecksumBackfillAllowed !== false || entry.byteLength !== file.length ||
+        entry.sha256 !== "90f3f0c401f8383c1d073d6717fce46b1bf8cc4347216097c3c5ab653f904a19" ||
+        sha256(file) !== entry.sha256 ||
+        JSON.stringify(entry.catalogAdditions) !== JSON.stringify([
+          {kind: "constraint", schema: "public", identity: "tenants.tenants_currency_code_check"},
+          {kind: "constraint", schema: "public", identity: "recipe_inventory_items.recipe_inventory_price_reference_check"}
+        ]))
+      fail("unreviewed migration 021 successor");
+    console.log("PASS reviewed 021 successor present in working-tree artifact check only");
+  }
+
+  if (occurrenceSuccessor) {
+    const entry = entries[21];
+    const file = readCandidate("db/migrations/022_real_consumption_occurrences.sql", candidateRoot, releaseSha);
+    const expected = {"id": "022", "filename": "022_real_consumption_occurrences.sql", "lane": "migration", "sha256": "371ad525d4081e801da81e9802a44af745b0091931be061af818f6ceabe073e3", "byteLength": 710, "transactional": "required", "legacyChecksumBackfillAllowed": false, "catalogAdditions": [{"kind": "constraint", "schema": "public", "identity": "real_consumption_items.real_consumption_items_ingredient_index_check"}, {"kind": "constraint", "schema": "public", "identity": "real_consumption_items.real_consumption_items_occurrence_key"}, {"kind": "index", "schema": "public", "identity": "real_consumption_items.real_consumption_items_occurrence_key"}]};
+    if (JSON.stringify(entry) !== JSON.stringify(expected) || file.length !== expected.byteLength || sha256(file) !== expected.sha256)
+      fail("unreviewed migration 022 successor");
+    console.log("PASS exact 022 successor in working-tree artifact check only");
+  }
+
+  if (retentionSuccessor) {
+    const entry = entries[22];
+    const file = readCandidate("db/migrations/023_inventory_movement_retention.sql", candidateRoot, releaseSha);
+    const expected = {"id": "023", "filename": "023_inventory_movement_retention.sql", "lane": "migration", "sha256": "553a90822a22f0d46b1fdfa5bd9c97cf8129c9125c477c4af5fc0654497bebba", "byteLength": 1835, "transactional": "required", "legacyChecksumBackfillAllowed": false, "catalogAdditions": []};
+    if (JSON.stringify(entry) !== JSON.stringify(expected) || file.length !== expected.byteLength || sha256(file) !== expected.sha256)
+      fail("unreviewed migration 023 successor");
+    console.log("PASS exact 023 successor in working-tree artifact check only");
+  }
 
   for (const id of expectedIds.slice(0, 19)) {
     const entry = entries.find((candidate) => candidate.id === id);
@@ -218,12 +258,22 @@ function checkCandidate({ candidateRoot, releaseSha }) {
   for (const relativePath of LEGACY_016_017_FILES) {
     const candidate = readCandidate(relativePath, candidateRoot, releaseSha);
     const baseline = git(["show", `${PROTECTED_BASE}:${relativePath}`]);
+    // The historical release gate is unchanged. The 022 working-tree
+    // candidate alone needs an exact, bounded M5 script successor to avoid
+    // executing or verifying 020+ under the old 018/019 approval.
+    if (occurrenceSuccessor && relativePath === "scripts/migrate-pawtech-production.sh") {
+      if (sha256(baseline) !== "c5043b278998214b966a63c3933256b65a64d724f6c8a982107763bbf8382363" ||
+          sha256(candidate) !== "fba81447d8328b70bb84b8c58f1b89fb8dd20906bf74ee1051dbcdfe9593262b")
+        fail("unrecognized bounded M5 migration script successor");
+      console.log("PASS exact M5 script successor; approval remains limited to 018/019");
+      continue;
+    }
     if (!candidate.equals(baseline))
       fail(
         `historical 016/017 migration mechanism must remain unchanged: ${relativePath}`,
       );
   }
-  console.log("PASS historical 016/017 migration path remains unchanged");
+  console.log("PASS historical migration workflow and release-mode artifacts remain pinned");
 
   for (const relativePath of REQUIRED_FILES) {
     const file = readCandidate(relativePath, candidateRoot, releaseSha);

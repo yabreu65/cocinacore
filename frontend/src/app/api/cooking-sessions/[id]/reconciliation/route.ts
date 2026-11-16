@@ -4,33 +4,13 @@ import { requireUser } from '@/lib/auth/server';
 import { getCookingSession } from '@/lib/db/repositories/cookingSessionRepository';
 import {
   listReconciliationInventory,
+  findReconciliationReceipt,
   reconcileRealConsumption,
   type RealConsumptionOutcome,
 } from '@/lib/db/repositories/realConsumptionRepository';
 import { validateRequest } from '@/lib/validation';
+import { ReconciliationSchema } from '@/lib/inventory/reconciliation-request';
 import { serverLogger } from '@/lib/serverLogger';
-
-const ReconciliationItemSchema = z
-  .object({
-    originalIngredient: z.string().trim().min(1).max(200),
-    outcome: z.enum(['used', 'omitted', 'unknown', 'substituted']),
-    effectiveIngredient: z.string().trim().min(1).max(200).nullable(),
-    quantity: z.number().finite().positive().max(1_000_000).nullable(),
-    unit: z.string().trim().min(1).max(64).nullable(),
-    inventoryItemId: z.string().uuid().nullable(),
-    substituteIngredient: z.string().trim().min(1).max(200).nullable(),
-    substituteInventoryItemId: z.string().uuid().nullable(),
-  })
-  .strict();
-
-const ReconciliationSchema = z
-  .object({
-    expectedVersion: z.number().int().min(1),
-    idempotencyKey: z.string().trim().min(1).max(200),
-    confirmed: z.literal(true),
-    items: z.array(ReconciliationItemSchema).min(1).max(100),
-  })
-  .strict();
 
 async function authenticated(request: NextRequest) {
   try {
@@ -85,6 +65,11 @@ function resultError(status: string) {
         { error: 'El lote seleccionado no está disponible.' },
         { status: 409 }
       );
+    case 'unrepresentable_inventory_quantity':
+      return NextResponse.json(
+        { error: 'La cantidad no se puede registrar exactamente en la unidad del lote.' },
+        { status: 409 }
+      );
     case 'incompatible_units':
       return NextResponse.json({ error: 'La unidad del lote no es comparable.' }, { status: 409 });
     case 'invalid_items':
@@ -120,8 +105,20 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
   try {
     const session = await getCookingSession(id, user.tenant.tenantId, user.id);
     if (!session) return NextResponse.json({ error: 'Sesión no encontrada.' }, { status: 404 });
-    const inventory = await listReconciliationInventory(user.tenant.tenantId, user.id);
-    return NextResponse.json({ inventory: inventory.map(publicInventoryItem) });
+    // A confirmed receipt is authoritative even if the browser lost its
+    // request body or the current inventory is no longer available.
+    const receipt = await findReconciliationReceipt(id, user.tenant.tenantId, user.id);
+    // Retain the existing inventory field for clients that still use it.
+    const inventory = await listReconciliationInventory(user.tenant.tenantId, user.id).catch(
+      (error) => {
+        if (receipt) return [];
+        throw error;
+      }
+    );
+    return NextResponse.json(
+      { inventory: inventory.map(publicInventoryItem), receipt },
+      { headers: { 'Cache-Control': 'private, no-store' } }
+    );
   } catch {
     return NextResponse.json({ error: 'No se pudo recuperar el inventario.' }, { status: 500 });
   }

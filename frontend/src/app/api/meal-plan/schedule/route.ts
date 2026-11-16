@@ -18,7 +18,7 @@ import { validateOperationalMealPlanRequest } from '@/lib/operational-domain';
 
 const ScheduleRequestSchema = z
   .object({
-    mealPlanId: z.string().trim().min(1).max(100),
+    mealPlanId: z.string().uuid(),
     startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     timeZone: z.string().trim().min(1).max(100),
     confirmed: z.literal(true),
@@ -136,13 +136,23 @@ export async function POST(request: NextRequest) {
       userId: user.id,
       tenantId: user.tenant.tenantId,
       schedule: scheduledPlan.plan.schedule,
+      expectedUpdatedAt: persistedPlan.updated_at,
+      expectedCalendarPayload: persistedPlan.calendar_payload,
+      expectedPeopleCount: persistedPlan.people_count,
+      expectedPeriod: persistedPlan.period,
     });
   } catch {
     serverLogger.warn('meal_plan.schedule_update_failed', { requestId, mealPlanId });
     return NextResponse.json({ error: 'No se pudo guardar la agenda.' }, { status: 500 });
   }
   if (!updatedPlan) {
-    return NextResponse.json({ error: 'No se encontró un menú guardado.' }, { status: 404 });
+    return NextResponse.json(
+      {
+        error: 'El menú cambió. Revisa las cantidades actuales y confirma nuevamente.',
+        code: 'MEAL_PLAN_SCHEDULE_CONFLICT',
+      },
+      { status: 409 }
+    );
   }
 
   const confirmedPlan = parseStructuredMealPlanValue(

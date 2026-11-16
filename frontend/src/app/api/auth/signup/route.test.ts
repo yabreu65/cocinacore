@@ -82,6 +82,30 @@ describe('POST /api/auth/signup', () => {
     }
   );
 
+  it.each([
+    ['tenantId', 'existing-household'],
+    ['tenant_id', 'existing-household'],
+    ['role', 'member'],
+    ['invitationToken', 'synthetic-invite'],
+    ['tenantType', 'professional'],
+  ])('rejects caller-controlled household membership (%s)', async (key, value) => {
+    const response = await POST(
+      request({
+        email: 'owner@example.test',
+        password: 'SecurePassword123!',
+        confirmPassword: 'SecurePassword123!',
+        fullName: 'Owner',
+        termsAccepted: true,
+        [key]: value,
+      }) as unknown as NextRequest
+    );
+    expect(response.status).toBe(400);
+    expect(authTransactionMock).not.toHaveBeenCalled();
+    expect(createTenantMock).not.toHaveBeenCalled();
+    expect(createUserMock).not.toHaveBeenCalled();
+    expect(createSessionMock).not.toHaveBeenCalled();
+  });
+
   it('keeps signup enabled when the maintenance flag is unset', async () => {
     delete process.env.COCINACORE_SIGNUP_MAINTENANCE;
     try {

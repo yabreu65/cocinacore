@@ -17,6 +17,12 @@ vi.mock('@/lib/db', () => ({
   getPool: vi.fn(() => mockPool),
 }));
 
+const checkStorage = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/storage/s3StorageAdapter', () => ({
+  checkS3StorageReadiness: checkStorage,
+  s3StorageAdapter: {},
+}));
+
 // Must import AFTER mocks are set up.
 const { GET } = await import('./route');
 
@@ -31,6 +37,7 @@ interface HealthResponseBody {
   dependencies: {
     database: { status: string; latencyMs: number; error?: string };
     redis: { status: string; latencyMs: number; error?: string };
+    storage?: { status: string; latencyMs: number; error?: string };
   };
 }
 
@@ -47,6 +54,9 @@ function resetToHappyPath(): void {
 describe('GET /api/health', () => {
   beforeEach(() => {
     vi.stubEnv('REDIS_URL', '');
+    vi.stubEnv('STORAGE_DRIVER', 'local');
+    checkStorage.mockReset();
+    checkStorage.mockResolvedValue(undefined);
     vi.stubEnv('DATABASE_URL', 'postgresql://test');
     vi.stubEnv('NODE_ENV', 'test');
     vi.useFakeTimers();
@@ -126,6 +136,29 @@ describe('GET /api/health', () => {
     await GET();
 
     expect(mockPoolClient.release).toHaveBeenCalled();
+  });
+
+  it('checks the scoped S3 identity when S3 is configured', async () => {
+    vi.stubEnv('STORAGE_DRIVER', 's3');
+    const body = await getBody();
+    expect(checkStorage).toHaveBeenCalledTimes(1);
+    expect(body.dependencies.storage?.status).toBe('ok');
+  });
+
+  it('reports S3 failure without exposing its details', async () => {
+    vi.stubEnv('STORAGE_DRIVER', 's3');
+    checkStorage.mockRejectedValue(new Error('sensitive provider detail'));
+    const response = await GET();
+    const body = (await response.json()) as HealthResponseBody;
+    expect(response.status).toBe(503);
+    expect(body.dependencies.storage?.status).toBe('unavailable');
+    expect(body.dependencies.storage?.error).toBeUndefined();
+  });
+
+  it('does not contact S3 in local mode', async () => {
+    const body = await getBody();
+    expect(checkStorage).not.toHaveBeenCalled();
+    expect(body.dependencies.storage).toBeUndefined();
   });
 
   it('calls SELECT 1 on the database', async () => {

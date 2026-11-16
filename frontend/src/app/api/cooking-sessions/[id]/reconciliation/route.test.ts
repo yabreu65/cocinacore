@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   requireUser: vi.fn(),
   getCookingSession: vi.fn(),
   listReconciliationInventory: vi.fn(),
+  findReconciliationReceipt: vi.fn(),
   reconcileRealConsumption: vi.fn(),
 }));
 
@@ -14,6 +15,7 @@ vi.mock('@/lib/db/repositories/cookingSessionRepository', () => ({
 }));
 vi.mock('@/lib/db/repositories/realConsumptionRepository', () => ({
   listReconciliationInventory: mocks.listReconciliationInventory,
+  findReconciliationReceipt: mocks.findReconciliationReceipt,
   reconcileRealConsumption: mocks.reconcileRealConsumption,
 }));
 
@@ -97,6 +99,37 @@ describe('POST /api/cooking-sessions/[id]/reconciliation', () => {
     );
   });
 
+  it('passes distinct occurrence indices for repeated ingredients to the repository', async () => {
+    const body = validBody();
+    const items = [
+      { ...body.items[0], ingredientIndex: 0 },
+      { ...body.items[0], ingredientIndex: 1 },
+    ];
+    expect(
+      (await POST(request({ ...body, items }), { params: Promise.resolve({ id: sessionId }) }))
+        .status
+    ).toBe(201);
+    expect(mocks.reconcileRealConsumption).toHaveBeenCalledWith(expect.objectContaining({ items }));
+  });
+  it.each([-1, 100, 0.5, '0'])('rejects invalid occurrence index %s', async (ingredientIndex) => {
+    const body = validBody();
+    expect(
+      (
+        await POST(request({ ...body, items: [{ ...body.items[0], ingredientIndex }] }), {
+          params: Promise.resolve({ id: sessionId }),
+        })
+      ).status
+    ).toBe(400);
+    expect(mocks.reconcileRealConsumption).not.toHaveBeenCalled();
+  });
+  it('returns a controlled conflict for unrepresentable stock quantities', async () => {
+    mocks.reconcileRealConsumption.mockResolvedValue({
+      status: 'unrepresentable_inventory_quantity',
+    });
+    expect(
+      (await POST(request(validBody()), { params: Promise.resolve({ id: sessionId }) })).status
+    ).toBe(409);
+  });
   it('maps an already claimed slot without exposing private details', async () => {
     mocks.reconcileRealConsumption.mockResolvedValue({ status: 'legacy_already_claimed' });
     const response = await POST(request(validBody()), {
@@ -115,6 +148,7 @@ describe('GET /api/cooking-sessions/[id]/reconciliation', () => {
     vi.clearAllMocks();
     mocks.requireUser.mockResolvedValue(user);
     mocks.getCookingSession.mockResolvedValue({ id: sessionId });
+    mocks.findReconciliationReceipt.mockResolvedValue(null);
     mocks.listReconciliationInventory.mockResolvedValue([
       {
         id: 'inventory-1',
@@ -136,6 +170,7 @@ describe('GET /api/cooking-sessions/[id]/reconciliation', () => {
     );
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
+      receipt: null,
       inventory: [
         {
           id: 'inventory-1',
@@ -148,5 +183,31 @@ describe('GET /api/cooking-sessions/[id]/reconciliation', () => {
       ],
     });
     expect(mocks.listReconciliationInventory).toHaveBeenCalledWith('tenant-1', 'user-1');
+  });
+  it('recovers a committed receipt by authenticated session even when inventory is unavailable', async () => {
+    mocks.findReconciliationReceipt.mockResolvedValue({ operationId: 'op-1', movementCount: 2 });
+    mocks.listReconciliationInventory.mockRejectedValueOnce(new Error('inventory offline'));
+    const response = await GET(
+      new NextRequest(`https://app.example.test/api/cooking-sessions/${sessionId}/reconciliation`),
+      { params: Promise.resolve({ id: sessionId }) }
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(await response.json()).toEqual({
+      inventory: [],
+      receipt: { operationId: 'op-1', movementCount: 2 },
+    });
+    expect(mocks.findReconciliationReceipt).toHaveBeenCalledWith(sessionId, 'tenant-1', 'user-1');
+    expect(mocks.reconcileRealConsumption).not.toHaveBeenCalled();
+  });
+  it('does not reveal receipts for sessions outside the authenticated scope', async () => {
+    mocks.getCookingSession.mockResolvedValue(null);
+    const response = await GET(
+      new NextRequest(`https://app.example.test/api/cooking-sessions/${sessionId}/reconciliation`),
+      { params: Promise.resolve({ id: sessionId }) }
+    );
+    expect(response.status).toBe(404);
+    expect(mocks.findReconciliationReceipt).not.toHaveBeenCalled();
+    expect(mocks.listReconciliationInventory).not.toHaveBeenCalled();
   });
 });

@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   count: vi.fn(),
   removeBook: vi.fn(),
   deleteFile: vi.fn(),
+  driver: vi.fn(),
 }));
 vi.mock('@/lib/auth/server', () => ({ requireRole: mocks.role }));
 vi.mock('@/lib/db/repositories/pdfRepository', () => ({
@@ -15,7 +16,10 @@ vi.mock('@/lib/db/repositories/pdfRepository', () => ({
   countTenantPdfsByBookId: mocks.count,
   deleteTenantBookById: mocks.removeBook,
 }));
-vi.mock('@/lib/storage', () => ({ getStorageAdapter: () => ({ deleteFile: mocks.deleteFile }) }));
+vi.mock('@/lib/storage', () => ({
+  getStorageAdapter: () => ({ deleteFile: mocks.deleteFile }),
+  getStorageDriver: mocks.driver,
+}));
 const { DELETE } = await import('./route');
 const request = new Request('https://example.test') as unknown as NextRequest;
 const context = { params: Promise.resolve({ id: 'pdf-1' }) };
@@ -35,6 +39,7 @@ describe('private PDF deletion', () => {
     });
     mocks.count.mockResolvedValue(0);
     mocks.deleteFile.mockResolvedValue(undefined);
+    mocks.driver.mockReturnValue('local');
   });
   it.each(['member', 'owner', 'admin'])(
     'permits authorized %s and scopes all reads and writes',
@@ -65,6 +70,13 @@ describe('private PDF deletion', () => {
     mocks.find.mockResolvedValue(null);
     expect((await DELETE(request, context)).status).toBe(404);
     expect(mocks.remove).not.toHaveBeenCalled();
+  });
+  it('fails closed in S3 mode before deleting private metadata or objects', async () => {
+    mocks.driver.mockReturnValue('s3');
+    expect((await DELETE(request, context)).status).toBe(503);
+    expect(mocks.remove).not.toHaveBeenCalled();
+    expect(mocks.removeBook).not.toHaveBeenCalled();
+    expect(mocks.deleteFile).not.toHaveBeenCalled();
   });
   it('preserves a shared book when other PDFs remain', async () => {
     mocks.count.mockResolvedValue(1);

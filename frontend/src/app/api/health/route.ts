@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getPool } from '@/lib/db';
 import { serverLogger } from '@/lib/serverLogger';
+import { getStorageDriver } from '@/lib/storage';
+import { checkS3StorageReadiness } from '@/lib/storage/s3StorageAdapter';
 
 const DEPENDENCY_TIMEOUT_MS = 2_000;
 
@@ -24,6 +26,7 @@ interface HealthResponse {
   dependencies: {
     database: PublicDependencyStatus;
     redis: PublicDependencyStatus;
+    storage?: PublicDependencyStatus;
   };
 }
 
@@ -126,8 +129,20 @@ function getUptimeSeconds(): number {
 }
 
 export async function GET() {
-  const [database, redis] = await Promise.all([checkDatabase(), checkRedis()]);
-  const overallStatus = aggregateStatus([database, redis]);
+  // Preserve the legacy local-mode response; S3 must prove its scoped credentials.
+  const [database, redis, storage] = await Promise.all([
+    checkDatabase(),
+    checkRedis(),
+    checkDependency('storage', async () => {
+      if (getStorageDriver() === 's3') {
+        await checkS3StorageReadiness(AbortSignal.timeout(DEPENDENCY_TIMEOUT_MS));
+      }
+    }),
+  ]);
+  const storageConfigured =
+    process.env.STORAGE_DRIVER?.trim().toLowerCase() !== 'local' &&
+    Boolean(process.env.STORAGE_DRIVER?.trim());
+  const overallStatus = aggregateStatus([database, redis, storage]);
 
   if (overallStatus !== 'ok') {
     serverLogger.warn('health_check.degraded', {
@@ -136,6 +151,7 @@ export async function GET() {
       databaseError: database.error,
       redis: redis.status,
       redisError: redis.error,
+      storage: storage.status,
     });
   }
 
@@ -146,6 +162,7 @@ export async function GET() {
     dependencies: {
       database: toPublicDependency(database),
       redis: toPublicDependency(redis),
+      ...(storageConfigured ? { storage: toPublicDependency(storage) } : {}),
     },
   };
 
