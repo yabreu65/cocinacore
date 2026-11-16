@@ -132,13 +132,32 @@ export async function deleteRecipeHistory(
   id: string,
   tenantId: string,
   userId: string
-): Promise<void> {
-  await scopedTransaction({ tenantId, userId }, (client) =>
-    client.query(
-      'delete from public.recipe_ai_history where id = $1 and tenant_id = $2 and user_id = $3',
-      [id, tenantId, userId]
-    )
-  );
+): Promise<'deleted_or_missing' | 'linked'> {
+  try {
+    return await scopedTransaction({ tenantId, userId }, async (client) => {
+      // Keep the history that supplies provenance to immutable recipe versions.
+      // Scope the lookup as strictly as the deletion itself.
+      const linked = await client.query(
+        `select 1 from public.user_recipe_versions
+         where source_recipe_history_id = $1 and tenant_id = $2 and user_id = $3
+         limit 1`,
+        [id, tenantId, userId]
+      );
+      if (linked.rows.length > 0) return 'linked';
+      await client.query(
+        'delete from public.recipe_ai_history where id = $1 and tenant_id = $2 and user_id = $3',
+        [id, tenantId, userId]
+      );
+      return 'deleted_or_missing';
+    });
+  } catch (error) {
+    // A concurrent import can link the history after the lookup. PostgreSQL's
+    // immutable-version trigger rejects the FK's ON DELETE SET NULL update,
+    // rolling back the deletion. Translate only that precise database error.
+    if (getPgCode(error) === 'P0001' && error instanceof Error &&
+        error.message === 'USER_RECIPE_VERSION_IMMUTABLE') return 'linked';
+    throw error;
+  }
 }
 
 export async function updateRecipeFeedback(

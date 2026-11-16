@@ -51,7 +51,7 @@ describe('/api/recipe-history', () => {
     requireTenantMock.mockResolvedValue({ tenantId: 'tenant-1' });
     requireUserMock.mockResolvedValue({ id: 'user-1', tenant: { tenantId: 'tenant-1' } });
     listRecipeHistoryByTenantMock.mockResolvedValue([historyRow]);
-    deleteRecipeHistoryMock.mockResolvedValue(undefined);
+    deleteRecipeHistoryMock.mockResolvedValue('deleted_or_missing');
     toggleRecipeSavedMock.mockResolvedValue(historyRow);
     updateRecipeFeedbackMock.mockResolvedValue(historyRow);
   });
@@ -122,6 +122,20 @@ describe('/api/recipe-history', () => {
       'tenant-1',
       'user-1'
     );
+  });
+
+  it('returns a clear conflict when the history supplies immutable recipe provenance', async () => {
+    deleteRecipeHistoryMock.mockResolvedValueOnce('linked');
+    const response = await DELETE(request('/api/recipe-history?id=recipe-1'));
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: 'RECIPE_HISTORY_LINKED' });
+  });
+
+  it('does not leak unexpected database errors', async () => {
+    deleteRecipeHistoryMock.mockRejectedValueOnce(new Error('private SQL detail'));
+    const response = await DELETE(request('/api/recipe-history?id=recipe-1'));
+    expect(response.status).toBe(500);
+    expect(JSON.stringify(await response.json())).not.toContain('private SQL detail');
   });
 
   it('preserves feedback updates within the authenticated tenant and user scope', async () => {

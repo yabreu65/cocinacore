@@ -117,11 +117,30 @@ describe('history scoped operations', () => {
     const scope = { tenantId: 'tenant-1', userId: 'user-1' };
     await createRecipeHistory({ ...scope, source: 'manual', recipeTitle: null, recipePayload: {} });
     await updateRecipeFeedback('recipe-1', scope.tenantId, scope.userId, 'accepted');
-    await deleteRecipeHistory('recipe-1', scope.tenantId, scope.userId);
+    queryMock.mockResolvedValueOnce({ rows: [] });
+    await expect(deleteRecipeHistory('recipe-1', scope.tenantId, scope.userId)).resolves.toBe('deleted_or_missing');
     expect(scopedMock).toHaveBeenCalledTimes(3);
     for (const call of scopedMock.mock.calls) expect(call[0]).toEqual(scope);
     expect(queryMock.mock.calls[1][0]).toContain('tenant_id = $3 and user_id = $4');
     expect(queryMock.mock.calls[2][0]).toContain('tenant_id = $2 and user_id = $3');
+    expect(queryMock.mock.calls[3][0]).toContain('delete from public.recipe_ai_history');
+  });
+
+  it('keeps linked history without attempting a deletion', async () => {
+    queryMock.mockResolvedValueOnce({ rows: [{ '?column?': 1 }] });
+    await expect(deleteRecipeHistory('recipe-1', 'tenant-1', 'user-1')).resolves.toBe('linked');
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    expect(queryMock.mock.calls[0][0]).toContain('source_recipe_history_id = $1 and tenant_id = $2 and user_id = $3');
+    expect(queryMock.mock.calls[0][1]).toEqual(['recipe-1', 'tenant-1', 'user-1']);
+  });
+
+  it('maps only the immutable version trigger race to a linked history result', async () => {
+    const immutable = Object.assign(new Error('USER_RECIPE_VERSION_IMMUTABLE'), { code: 'P0001' });
+    queryMock.mockResolvedValueOnce({ rows: [] }).mockRejectedValueOnce(immutable);
+    await expect(deleteRecipeHistory('recipe-1', 'tenant-1', 'user-1')).resolves.toBe('linked');
+    const unrelated = Object.assign(new Error('OTHER_TRIGGER'), { code: 'P0001' });
+    queryMock.mockResolvedValueOnce({ rows: [] }).mockRejectedValueOnce(unrelated);
+    await expect(deleteRecipeHistory('recipe-1', 'tenant-1', 'user-1')).rejects.toBe(unrelated);
   });
 });
 

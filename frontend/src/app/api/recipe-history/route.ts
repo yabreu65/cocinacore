@@ -53,8 +53,18 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: 'ID is required' }, { status: 400 });
   }
 
-  await deleteRecipeHistory(id, tenant.tenantId, user.id);
-  return NextResponse.json({ ok: true });
+  try {
+    const result = await deleteRecipeHistory(id, tenant.tenantId, user.id);
+    if (result === 'linked') {
+      return NextResponse.json({
+        error: 'Esta propuesta está vinculada a una receta guardada. Conservamos el historial para mantener su procedencia.',
+        code: 'RECIPE_HISTORY_LINKED',
+      }, { status: 409 });
+    }
+    return NextResponse.json({ ok: true });
+  } catch {
+    return NextResponse.json({ error: 'No se pudo eliminar la propuesta del historial.' }, { status: 500 });
+  }
 }
 
 export async function PATCH(request: NextRequest) {
