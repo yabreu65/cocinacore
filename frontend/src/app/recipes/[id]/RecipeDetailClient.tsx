@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { safeFetch } from '@/lib/api';
 import { recipePortionCost, scaleIngredients, type Recipe, type RecipeVersion } from '../recipe-ui';
@@ -20,6 +20,7 @@ export default function RecipeDetailClient({ id }: { id: string }) {
   const [error, setError] = useState('');
   const [edit, setEdit] = useState(false);
   const [saving, setSaving] = useState(false);
+  const mutationLock = useRef(false);
   const [servings, setServings] = useState('');
   const [costSource, setCostSource] = useState<{
     recipeId: string;
@@ -83,28 +84,46 @@ export default function RecipeDetailClient({ id }: { id: string }) {
     void load();
   }, [load]);
   const mutate = async (url: string, method: string, body?: unknown) => {
+    if (mutationLock.current) return false;
+    mutationLock.current = true;
+    setSaving(true);
     setError('');
-    const result = await safeFetch<{ recipe: Recipe; version?: RecipeVersion }>(url, {
-      method,
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      ...(body ? { body: JSON.stringify(body) } : {}),
-    });
-    if (!result.ok) {
-      setError(result.error);
+    try {
+      const result = await safeFetch<{ recipe: Recipe; version?: RecipeVersion }>(url, {
+        method,
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+      if (!result.ok) {
+        setError(result.error);
+        return false;
+      }
+      // The successful write already returns the authoritative recipe. Keep
+      // it visible even when the subsequent history/detail refresh fails.
+      const updated = result.data.recipe;
+      setRecipe(updated);
+      setServings(String(updated.current_version.servings ?? ''));
+      setVersions((current) => [
+        updated.current_version,
+        ...current.filter((item) => item.id !== updated.current_version.id),
+      ]);
+      await load();
+      return true;
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'No se pudo actualizar la receta.');
       return false;
+    } finally {
+      mutationLock.current = false;
+      setSaving(false);
     }
-    await load();
-    return true;
   };
   const save = async (draft: Draft) => {
-    setSaving(true);
     const saved = await mutate(
       `/api/recipes/${encodeURIComponent(id)}`,
       'PATCH',
       payloadFromDraft(draft)
     );
-    setSaving(false);
     if (saved) setEdit(false);
   };
   if (loading)
@@ -170,10 +189,11 @@ export default function RecipeDetailClient({ id }: { id: string }) {
             </div>
           </div>
           <div className="flex gap-2">
-            <button onClick={() => setEdit(!edit)} className="rounded-xl border px-3 py-2">
+            <button disabled={saving} onClick={() => { if (!mutationLock.current) setEdit((current) => !current); }} className="rounded-xl border px-3 py-2">
               {edit ? 'Cerrar edición' : 'Editar'}
             </button>
             <button
+              disabled={saving || edit}
               onClick={() =>
                 void mutate(`/api/recipes/${encodeURIComponent(id)}/archive`, 'PATCH', {
                   archived: !recipe.archived_at,
@@ -187,7 +207,10 @@ export default function RecipeDetailClient({ id }: { id: string }) {
         </div>
         {error && (
           <p role="alert" className="mt-3 rounded-xl bg-bistro-danger/10 p-3 text-bistro-danger">
-            {error}
+            {error}{' '}
+            <button type="button" disabled={saving || edit} onClick={() => void load()} className="ml-2 underline">
+              Reintentar carga
+            </button>
           </p>
         )}
         {edit && (
@@ -196,7 +219,7 @@ export default function RecipeDetailClient({ id }: { id: string }) {
               key={version.id}
               initial={draftFromRecipe(recipe)}
               onSave={(draft) => void save(draft)}
-              onCancel={() => setEdit(false)}
+              onCancel={() => { if (!mutationLock.current) setEdit(false); }}
               saving={saving}
             />
           </section>
@@ -255,10 +278,18 @@ export default function RecipeDetailClient({ id }: { id: string }) {
                 >
                   <span>
                     Versión {item.version_number} · {item.title}
+                    {item.source_recipe_history_id ? (
+                      <span className="block text-xs text-bistro-text-secondary">
+                        Vinculada a una propuesta del historial.{' '}
+                        <Link href="/recipes/history" className="underline">Consultar historial original</Link>
+                      </span>
+                    ) : null}
                   </span>
                   {item.id !== version.id && (
                     <button
+                      disabled={saving || edit}
                       onClick={() => {
+                        if (mutationLock.current) return;
                         if (
                           window.confirm(
                             'Restaurar esta versión creará una nueva versión y no borrará las actuales. ¿Continuar?'

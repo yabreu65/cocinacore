@@ -112,6 +112,7 @@ test.describe('Connected recipe search', () => {
     expect(prompt).not.toContain(seed.tenantBBookTitle);
 
     await expect(page.getByRole('heading', { name: 'Fuentes del recetario' })).toBeVisible();
+    await expect(page.getByText('Propuesta elaborada a partir de las fuentes consultadas; puede incluir adaptaciones y no constituye una transcripción literal.')).toBeVisible();
     await expect(page.getByText(seed.globalBookTitle, { exact: true })).toBeVisible();
     await expect(page.getByText(seed.tenantBookTitle, { exact: true })).toBeVisible();
     await expect(page.getByText('Página 7', { exact: true })).toBeVisible();
@@ -152,6 +153,13 @@ test.describe('Connected recipe search', () => {
     ).toHaveAttribute('aria-pressed', 'false');
     await historyEntry.getByRole('button', { name: 'Ver detalle' }).click();
     await expect(historyEntry).toContainText('Cociná el arroz y reservá.');
+
+    const historySources = historyEntry.getByRole('region', { name: 'Fuentes del recetario' });
+    await expect(historySources).toContainText(seed.globalBookTitle);
+    await expect(historySources).toContainText(seed.tenantBookTitle);
+    await expect(historySources).not.toContainText(seed.tenantBBookTitle);
+    await expect(historySources).toContainText('Página 7');
+
 
     await historyEntry.getByRole('button', { name: 'Marcar para consultar' }).click();
     await expect.poll(async () => (await latestRecipeHistory(seed!.identity))?.is_saved).toBe(true);
@@ -227,4 +235,24 @@ test.describe('Connected recipe search', () => {
     expect(history?.recipe_payload.ragContextUsed).toBe(false);
     expect(history?.recipe_payload.sources).toEqual([]);
   });
+  test('keeps saved restrictions and rejects incompatible proposals in free and PDF modes', async ({ page }) => {
+    if (!seed) throw new Error('Connected recipe seed was not initialized.');
+    const originalCount = await recipeHistoryCount(seed.identity);
+    for (const mode of ['free', 'rag'] as const) {
+      await resetProvider(page);
+      const response = await page.request.post('/api/recipe-generate', {
+        data: { mode, ingredients: ['pollo'], culinaryProfile: { avoid: ['Vegano'] } },
+      });
+      expect(response.status()).toBe(422);
+      expect(await response.json()).toMatchObject({ code: 'RECIPE_RESTRICTION_CONFLICT' });
+      const inspection = await inspectProvider(page);
+      expect(inspection.generationCallCount).toBe(1);
+      const prompt = generationPrompt(inspection);
+      expect(prompt).toContain('Restricciones duras: peanut, Vegano');
+      expect(prompt).toContain('tienen prioridad sobre el contexto documental');
+      if (mode === 'rag') expect(prompt).toContain(seed.globalBookTitle);
+      expect(await recipeHistoryCount(seed.identity)).toBe(originalCount);
+    }
+  });
+
 });

@@ -6,6 +6,7 @@ import { Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import type { StructuredRecipeIngredient } from '@/components/recipe-view/types';
 import { safeFetch } from '@/lib/api';
+import { RecipeGenerateSchema } from '@/lib/validation';
 import { buildRecipeImportPayload } from '@/lib/recipes/recipe-import';
 import { getVisibleRecipeSources, type VisibleRecipeSource } from '@/lib/recipes/source-citations';
 import {
@@ -13,9 +14,11 @@ import {
   buildTodayRecipeRequestFields,
 } from '@/lib/recipes/today-handoff';
 import type { Citation } from '@/services/types';
+import { RecipeEditor, draftFromImport, payloadFromDraft, type Draft } from '../RecipeLibraryClient';
 
 type RecipeGenerationResponse = {
   recipe: string;
+  preparation?: string;
   title: string;
   structuredIngredients?: StructuredRecipeIngredient[];
   ragContextUsed?: boolean;
@@ -26,6 +29,7 @@ type RecipeGenerationResponse = {
 
 interface RecipeSearchResult {
   recipe: string;
+  preparation?: string;
   title: string;
   structuredIngredients: StructuredRecipeIngredient[];
   mode: 'free' | 'rag';
@@ -51,15 +55,24 @@ function RecipeSearchContent() {
     null
   );
   const importLock = useRef(false);
+  const generationLock = useRef(false);
+  const [reviewing, setReviewing] = useState(false);
 
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    if (loading) return;
+    if (generationLock.current || importLock.current || reviewing) return;
+    const payload = buildRecipeGenerationRequestPayload({
+      mode, ingredients, recipeName, restrictions, todayFields,
+    });
+    if (!RecipeGenerateSchema.safeParse(payload).success) {
+      setError('Revisa el nombre, los ingredientes y las restricciones: máximo 30 ingredientes de 200 caracteres y 10 restricciones de 100 caracteres.');
+      return;
+    }
+    generationLock.current = true;
     setLoading(true);
     setError(null);
     setImportError(null);
     setImportedRecipe(null);
-    importLock.current = false;
     setResult(null);
 
     try {
@@ -67,15 +80,7 @@ function RecipeSearchContent() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
-        body: JSON.stringify(
-          buildRecipeGenerationRequestPayload({
-            mode,
-            ingredients,
-            recipeName,
-            restrictions,
-            todayFields,
-          })
-        ),
+        body: JSON.stringify(payload),
       });
 
       if (!result.ok) {
@@ -88,6 +93,7 @@ function RecipeSearchContent() {
 
       setResult({
         recipe: data.recipe,
+        preparation: data.preparation,
         title: data.title,
         structuredIngredients: data.structuredIngredients ?? [],
         mode,
@@ -99,12 +105,13 @@ function RecipeSearchContent() {
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error desconocido.');
     } finally {
+      generationLock.current = false;
       setLoading(false);
     }
   };
 
-  const onImport = async () => {
-    if (!result?.recipeHistoryId || importLock.current || importedRecipe) return;
+  const onImport = async (draft: Draft) => {
+    if (!reviewing || !result?.recipeHistoryId || generationLock.current || importLock.current || importedRecipe) return;
     importLock.current = true;
     setImporting(true);
     setImportError(null);
@@ -118,25 +125,21 @@ function RecipeSearchContent() {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(
-          buildRecipeImportPayload({
-            title: result.title,
-            instructions: result.recipe,
-            servings: result.servings,
-            structuredIngredients: result.structuredIngredients,
-            recipeHistoryId: result.recipeHistoryId,
-          })
-        ),
+        body: JSON.stringify({
+          ...payloadFromDraft(draft),
+          sourceRecipeHistoryId: result.recipeHistoryId,
+        }),
       });
       if (!response.ok) throw new Error('No se pudo importar la receta al recetario.');
       setImportedRecipe({
         id: response.data.recipe.id,
         duplicates: response.data.warnings.duplicates.length,
       });
+      setReviewing(false);
     } catch {
-      importLock.current = false;
       setImportError('No se pudo importar la receta al recetario. Intentá nuevamente.');
     } finally {
+      importLock.current = false;
       setImporting(false);
     }
   };
@@ -157,17 +160,16 @@ function RecipeSearchContent() {
         </div>
 
         <form onSubmit={onSubmit} className="grid gap-3">
-          {todayFields ? (
-            <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
-              Nombre de receta (opcional)
-              <input
-                name="recipeName"
-                value={recipeName}
-                onChange={(e) => setRecipeName(e.target.value)}
-                className="h-11 rounded-xl border border-bistro-border bg-white px-3 outline-none"
-              />
-            </label>
-          ) : null}
+          <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
+            Nombre de receta (opcional)
+            <input
+              name="recipeName"
+              maxLength={200}
+              value={recipeName}
+              onChange={(e) => setRecipeName(e.target.value)}
+              className="h-11 rounded-xl border border-bistro-border bg-white px-3 outline-none"
+            />
+          </label>
 
           <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
             Quiero cocinar con (opcional; enfoca la solicitud, uno por línea)
@@ -188,10 +190,14 @@ function RecipeSearchContent() {
             Restricciones (separadas por comas)
             <input
               value={restrictions}
+              aria-describedby="recipe-restrictions-hint"
               onChange={(e) => setRestrictions(e.target.value)}
               className="h-11 rounded-xl border border-bistro-border bg-white px-3 outline-none"
             />
           </label>
+          <p id="recipe-restrictions-hint" className="text-xs text-bistro-text-secondary">
+            Escribe las restricciones en español (por ejemplo: huevo, leche, sin gluten).
+          </p>
 
           <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
             Modo
@@ -207,7 +213,7 @@ function RecipeSearchContent() {
 
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || importing || reviewing}
             className="h-11 rounded-xl bg-bistro-action-primary px-4 font-semibold text-white disabled:opacity-60"
           >
             {loading ? 'Generando...' : 'Generar receta'}
@@ -223,14 +229,30 @@ function RecipeSearchContent() {
         {result ? (
           <div className="mt-6 rounded-xl border border-bistro-border bg-bistro-page p-4">
             <h2 className="font-semibold">{result.title}</h2>
+            <p className="mt-2 text-xs text-bistro-text-secondary">
+              Propuesta generada por IA: revisa que todos los ingredientes de la preparación estén en la lista,
+              sus cantidades y las etiquetas antes de guardar o cocinar. No certifica ausencia de alérgenos ni de contaminación cruzada.
+            </p>
             <pre className="mt-2 whitespace-pre-wrap text-sm">{result.recipe}</pre>
 
             {result.recipeHistoryId ? (
               <div className="mt-4 grid gap-2">
-                {!importedRecipe ? (
+                {!importedRecipe && reviewing ? (
+                  <RecipeEditor
+                    key={result.recipeHistoryId}
+                    initial={draftFromImport(buildRecipeImportPayload({
+                      title: result.title, instructions: result.recipe, preparation: result.preparation, servings: result.servings,
+                      structuredIngredients: result.structuredIngredients, recipeHistoryId: result.recipeHistoryId,
+                    }))}
+                    saving={importing}
+                    saveLabel="Confirmar y guardar"
+                    onSave={(draft) => void onImport(draft)}
+                    onCancel={() => { if (!importLock.current) setReviewing(false); }}
+                  />
+                ) : !importedRecipe ? (
                   <button
                     type="button"
-                    onClick={onImport}
+                    onClick={() => setReviewing(true)}
                     disabled={importing}
                     className="h-11 w-fit rounded-xl bg-bistro-action-primary px-4 font-semibold text-white disabled:opacity-60"
                   >
@@ -266,6 +288,9 @@ function RecipeSearchContent() {
                 <h3 id="recipe-sources-heading" className="font-semibold">
                   Fuentes del recetario
                 </h3>
+                <p className="mt-1 text-sm text-bistro-text-secondary">
+                  Propuesta elaborada a partir de las fuentes consultadas; puede incluir adaptaciones y no constituye una transcripción literal.
+                </p>
                 <ul className="mt-2 grid gap-2">
                   {result.sources.map((source) => (
                     <li

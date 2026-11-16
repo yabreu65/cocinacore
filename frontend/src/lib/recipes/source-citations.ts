@@ -77,3 +77,29 @@ export function getVisibleRecipeSources(
 
   return [...sourcesByKey.values()];
 }
+
+
+// Historical payloads predate the current response contract. Only display
+// explicit documentary records, never guess a source from recipe prose.
+export function getHistoryRecipeSources(payload: unknown): VisibleRecipeSource[] {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return [];
+  const row = payload as Record<string, unknown>;
+  if (row.mode !== 'rag' || row.ragContextUsed !== true || !Array.isArray(row.sources)) return [];
+  const citations: Citation[] = [];
+  for (const raw of row.sources as unknown[]) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const item = raw as Record<string, unknown>;
+    const metadata = {
+      ...(typeof item.title === 'string' ? { title: item.title } : {}),
+      ...(typeof item.pageNumber === 'number' ? { pageNumber: item.pageNumber } : {}),
+      ...(typeof item.chunkId === 'string' ? { chunkId: item.chunkId } : {}),
+    };
+    if (item.sourceType === 'global_pdf' && typeof item.globalBookId === 'string' && item.globalBookId.trim()) {
+      citations.push({ sourceType: 'global_pdf', globalBookId: item.globalBookId, ...metadata });
+    } else if (item.sourceType === 'tenant_pdf' && typeof item.tenantBookId === 'string' && item.tenantBookId.trim() &&
+      typeof item.tenantId === 'string' && item.tenantId.trim()) {
+      citations.push({ sourceType: 'tenant_pdf', tenantBookId: item.tenantBookId, tenantId: item.tenantId, ...metadata });
+    }
+  }
+  return getVisibleRecipeSources('rag', true, citations);
+}

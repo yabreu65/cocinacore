@@ -678,6 +678,7 @@ describe('POST /api/today', () => {
 
   it('uses saved recipes as read-only offline recommendations and reports absent stock as unknown', async () => {
     const { POST } = await import('./route');
+    profileMock.mockResolvedValueOnce({ ...profile, allergies: [] });
     persistentRecipesMock.mockResolvedValueOnce([
       {
         id: 'recipe-42',
@@ -724,6 +725,7 @@ describe('POST /api/today', () => {
 
   it('keeps linked saved recipe quantities as AI estimates and does not claim sufficient inventory', async () => {
     const { POST } = await import('./route');
+    profileMock.mockResolvedValueOnce({ ...profile, allergies: [] });
     persistentRecipesMock.mockResolvedValueOnce([
       {
         id: 'recipe-43',
@@ -852,6 +854,8 @@ describe('POST /api/today', () => {
 
   it('ranks validated persisted fallback candidates and computes truthful source/reason/ingredient details', async () => {
     const { POST } = await import('./route');
+    profileMock.mockResolvedValueOnce({ ...profile, allergies: [] });
+    termsMock.mockResolvedValueOnce([{ user_id: 'user-1', term_id: 'avoid-cilantro', preference_type: 'avoid', term_label: 'cilantro', weight: 1, created_at: '' }]);
     historyMock.mockResolvedValueOnce([
       {
         recipe_title: 'Saved safe lunch',
@@ -866,7 +870,7 @@ describe('POST /api/today', () => {
       },
     ]);
     fetchMock.mockResolvedValueOnce(
-      providerResponse([...options.slice(0, 2), { ...options[2], ingredients: ['peanuts'] }])
+      providerResponse([...options.slice(0, 2), { ...options[2], ingredients: ['cilantro'] }])
     );
     const result = await readTodayPayload(await POST(request({ slot: 'lunch' })));
     expect(result.status).toBe('degraded');
@@ -883,7 +887,7 @@ describe('POST /api/today', () => {
     });
     expect(
       result.options.every(
-        (option: { ingredients: string[] }) => !option.ingredients.includes('peanuts')
+        (option: { ingredients: string[] }) => !option.ingredients.includes('cilantro')
       )
     ).toBe(true);
   });
@@ -1112,6 +1116,7 @@ describe('POST /api/today', () => {
     vi.useFakeTimers();
     try {
       const { POST } = await import('./route');
+    profileMock.mockResolvedValueOnce({ ...profile, allergies: [] });
       historyMock.mockResolvedValueOnce([
         {
           recipe_title: 'Safe timeout fallback',

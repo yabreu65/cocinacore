@@ -3,11 +3,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { QueryResultRow } from 'pg';
 import type { DbTransactionClient } from '@/lib/db/transaction-client';
 import type { CookingSessionRow } from '@/lib/db/types';
+import { renderRecipeDisplay } from '@/lib/recipes/recipe-import';
+import { parseStructuredMealPlanValue } from '@/lib/meal-planner/structured-plan';
 
 const mocks = vi.hoisted(() => ({ transaction: vi.fn() }));
 vi.mock('@/lib/db', () => ({ transaction: mocks.transaction }));
 import {
   createCookingSession,
+  findCookingSessionForSlot,
   transitionCookingSessionInTransaction,
   revalidateCookingSessionSourceInTransaction,
 } from './cookingSessionRepository';
@@ -90,7 +93,7 @@ const session: CookingSessionRow = {
   cancelled_at: null,
   retention_until: null,
 };
-function fixture(updatedAt = raw, priorHash?: string) {
+function fixture(updatedAt = raw, priorHash?: string, allergies: string[] = [], instructions = 'Cocinar el arroz.', evaluated: string[] = [], history?: Record<string, unknown>, planCalendar: unknown = calendar) {
   const queries: string[] = [];
   const params: unknown[][] = [];
   const query: DbTransactionClient['query'] = async <Row extends QueryResultRow>(
@@ -106,21 +109,25 @@ function fixture(updatedAt = raw, priorHash?: string) {
       rows = [
         {
           id: mealPlanId,
-          calendar_payload: calendar,
+          calendar_payload: planCalendar,
           period: 'week',
           people_count: 2,
+          restrictions: [], inventory_snapshot: { evaluatedHardRestrictions: evaluated },
           updated_at: updatedAt,
         },
       ];
+    else if (sql.includes('from public.user_culinary_profiles')) rows = [{ user_id: userId, tenant_id: tenantId, allergies }];
+    else if (sql.includes('from public.recipe_ai_history')) rows = history ? [history] : [];
     else if (sql.includes('from public.user_recipes')) rows = [{ id: recipeId }];
     else if (sql.includes('from public.user_recipe_versions'))
       rows = [
         {
           id: versionId,
           title: 'Arroz',
-          instructions: 'Cocinar el arroz.',
+          instructions,
           servings: 2,
-          ingredients: [{ name: 'Arroz', quantity: 1, unit: 'kg' }],
+          ingredients: [{ name: 'Arroz', quantity: '1', unit: 'kg' }],
+          source_recipe_history_id: history?.id ?? null,
         },
       ];
     else if (
@@ -128,6 +135,7 @@ function fixture(updatedAt = raw, priorHash?: string) {
       sql.includes('from public.cooking_sessions where id')
     )
       rows = [session];
+    else if (sql.includes('from public.cooking_sessions') && sql.includes('recipe_version_id = $7')) rows = [session];
     else if (sql.includes('update public.cooking_sessions'))
       rows = [{ ...session, status: 'paused', version: 2 }];
     else if (sql.includes('insert into public.cooking_session_events')) rows = [{ id: 'event-1' }];
@@ -169,14 +177,15 @@ describe('cooking session exact revision and lock ordering', () => {
     expect(await createCookingSession({ ...legacy, dayIndex: 2 })).toEqual({ status: 'conflict' });
     expect(f.queries.some((sql) => sql.includes('insert into'))).toBe(false);
   });
-  it('revalidates the exact session source without truncating microseconds', async () => {
+  it('accepts a changed row revision with unchanged calendar but rejects a changed source hash', async () => {
     expect(await revalidateCookingSessionSourceInTransaction(fixture().client, session)).toBe(true);
     expect(
       await revalidateCookingSessionSourceInTransaction(
         fixture('2026-11-14 12:00:00.123457+00').client,
         session
       )
-    ).toBe(false);
+    ).toBe(true);
+    expect(await revalidateCookingSessionSourceInTransaction(fixture(raw, undefined, [], undefined, [], undefined, { ...calendar, availableTimeMinutesSnapshot: 45 }).client, session)).toBe(false);
   });
   it('takes the tenant lock before session row lock on transitions', async () => {
     const f = fixture();
@@ -192,6 +201,98 @@ describe('cooking session exact revision and lock ordering', () => {
     ).toMatchObject({ status: 'applied' });
     expect(f.queries[0]).toContain('set_config');
     expect(f.queries[1]).toContain('pg_advisory_xact_lock');
-    expect(f.queries[2]).toContain('from public.cooking_sessions');
+    expect(f.params[2]).toEqual(['culinary-profile:' + tenantId + ':' + userId]);
+    expect(f.queries[3]).toContain('from public.cooking_sessions');
   });
+  it('blocks starting or resuming a session with a newly added unevaluated allergy', async () => {
+    const f = fixture(raw, undefined, ['new allergy']);
+    expect(await createCookingSession(input)).toEqual({ status: 'restrictions_changed' });
+    expect(f.queries.some((sql) => sql.includes('insert into public.cooking_sessions'))).toBe(false);
+    expect(await transitionCookingSessionInTransaction(f.client, {
+      tenantId, userId, sessionId, action: 'resume', expectedVersion: 1, idempotencyKey: 'resume',
+    })).toEqual({ status: 'restrictions_changed' });
+    expect(f.queries.some((sql) => sql.includes('update public.cooking_sessions'))).toBe(false);
+  });
+
+  it('blocks a conflict hidden in the pinned instructions even under an evaluated menu', async () => {
+    const f = fixture(raw, undefined, ['Maní'], 'Añadir maní.', ['Maní']);
+    expect(await createCookingSession(input)).toEqual({ status: 'restrictions_changed' });
+    expect(f.queries.some((sql) => sql.includes('insert into public.cooking_sessions'))).toBe(false);
+  });
+
+  it('allows pausing a session after a profile change', async () => {
+    const f = fixture(raw, undefined, ['new allergy']);
+    expect(await transitionCookingSessionInTransaction(f.client, {
+      tenantId, userId, sessionId, action: 'pause', expectedVersion: 1, idempotencyKey: 'pause',
+    })).toMatchObject({ status: 'applied' });
+  });
+
+  it('accepts only the unmodified generated version evaluated under all current restrictions', async () => {
+    const id = '88888888-8888-4888-8888-888888888888';
+    const preparation = 'Cocinar el arroz.';
+    const ingredients = [{ name: 'Arroz', quantity: '1', unit: 'kg' }];
+    const history = {
+      id, user_id: userId, tenant_id: tenantId, source: 'gemini', recipe_title: 'Arroz',
+      restrictions_snapshot: { allergies: ['Maní'], avoid: [] },
+      recipe_payload: { provider: 'gemini', recipeReviewRequired: true, preparation,
+        title: 'Arroz', peopleCount: 2, full_recipe: renderRecipeDisplay('Arroz', ingredients, preparation),
+        structuredIngredients: [{ name: 'Arroz', quantity: 1, unit: 'kg' }] },
+    };
+    fixture(raw, undefined, ['Maní'], preparation, ['Maní'], history);
+    expect(await createCookingSession(input)).toMatchObject({ status: 'applied' });
+    fixture(raw, undefined, ['Maní'], 'Añadir otra salsa.', ['Maní'], history);
+    expect(await createCookingSession(input)).toEqual({ status: 'restrictions_changed' });
+    fixture(raw, undefined, ['Maní'], preparation, ['Maní'], { ...history, restrictions_snapshot: { allergies: [], avoid: [] } });
+    expect(await createCookingSession(input)).toEqual({ status: 'restrictions_changed' });
+  });
+
+  it('scopes recovery by plan, day, meal, recipe and version, excluding cancelled sessions', async () => {
+    const f = fixture();
+    expect(await findCookingSessionForSlot({ ...input })).toEqual(session);
+    const index = f.queries.findIndex((sql) => sql.includes('recipe_version_id = $7'));
+    expect(f.params[index]).toEqual([tenantId, userId, mealPlanId, 1, 'lunch', recipeId, versionId]);
+    expect(f.queries[index]).toContain("status in ('active', 'paused', 'completed')");
+  });
+  it('allows explicit cancellation of a session even when its calendar has changed', async () => {
+    const f = fixture(raw, undefined, [], undefined, [], undefined, { ...calendar, availableTimeMinutesSnapshot: 45 });
+    expect(await transitionCookingSessionInTransaction(f.client, {
+      tenantId, userId, sessionId, action: 'cancel', expectedVersion: 1, idempotencyKey: 'cancel',
+    })).toMatchObject({ status: 'applied' });
+    expect(f.queries.some((sql) => sql.includes('from public.user_meal_plans'))).toBe(false);
+  });
+
+  it('starts from an unchanged historical calendar returned in canonical form by GET', async () => {
+    const historical = {
+      ...calendar,
+      days: calendar.days.map((day, index) => ({
+        ...Object.fromEntries(Object.entries(day).filter(([key]) => key !== 'label')),
+        meals: (index === 0 ? [...day.meals].reverse() : day.meals).map((meal) =>
+          Object.fromEntries(Object.entries(meal).filter(([key]) => key !== 'prepMinutes'))),
+      })),
+    };
+    const canonical = parseStructuredMealPlanValue(historical, 'week');
+    expect(canonical.success).toBe(true);
+    if (!canonical.success) throw new Error('Expected valid historical fixture');
+    expect(canonical.plan.days[0].meals[0].prepMinutes).toBeNull();
+    expect(canonical.plan).not.toEqual(historical);
+    const f = fixture(raw, undefined, [], undefined, [], undefined, historical);
+    expect(await createCookingSession({ ...input, expectedCalendarPayload: canonical.plan })).toMatchObject({ status: 'applied' });
+    const inserted = f.queries.findIndex((sql) => sql.includes('insert into public.cooking_sessions'));
+    expect(f.params[inserted]).toContain(hash(historical));
+    const stale = fixture('2026-11-14 12:00:00.123457+00', undefined, [], undefined, [], undefined, historical);
+    expect(await createCookingSession({ ...input, expectedCalendarPayload: canonical.plan })).toEqual({ status: 'source_conflict' });
+    expect(stale.queries.some((sql) => sql.includes('insert into public.cooking_sessions'))).toBe(false);
+  });
+  it('rejects modified or invalid client calendar evidence at the same revision', async () => {
+    const changed = {
+      ...calendar, days: calendar.days.map((day, index) => index === 0 ? {
+        ...day, meals: day.meals.map((meal) => meal.mealType === 'lunch' ? { ...meal, title: 'Different lunch' } : meal),
+      } : day),
+    };
+    const f = fixture();
+    expect(await createCookingSession({ ...input, expectedCalendarPayload: changed })).toEqual({ status: 'source_conflict' });
+    expect(await createCookingSession({ ...input, expectedCalendarPayload: { period: 'week', days: [] } })).toEqual({ status: 'source_conflict' });
+    expect(f.queries.some((sql) => sql.includes('insert into public.cooking_sessions'))).toBe(false);
+  });
+
 });

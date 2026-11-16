@@ -1,3 +1,5 @@
+import { readHardRestrictionList } from '@/lib/profile/culinary-profile-contract';
+import { containsRestrictedIngredientName } from '@/lib/recipes/structured-ingredients';
 import { z } from 'zod';
 import { getMealPlanCanonicalDayLabel, getMealPlanDayCount, type MealPlanPeriod } from './prompt';
 
@@ -23,6 +25,12 @@ export interface StructuredMeal {
   };
 }
 
+/** Reject known conflicts in visible meal text as well as unresolved ingredient evidence. */
+export function hasRestrictedMealContent(meal: StructuredMeal, restrictions: readonly string[]): boolean {
+  return containsRestrictedIngredientName(meal.ingredients.map(({ name }) => name), restrictions) ||
+    containsRestrictedIngredientName([meal.title, ...(meal.description ? [meal.description] : [])], restrictions);
+}
+
 export interface StructuredMealPlanDay {
   dayIndex: number;
   label: string;
@@ -45,6 +53,27 @@ export interface StructuredMealPlan {
   availableTimeMinutesSnapshot?: number | null;
   days: StructuredMealPlanDay[];
   schedule?: StructuredMealPlanSchedule;
+}
+
+export function hasRestrictedMealPlanContent(plan: StructuredMealPlan, restrictions: readonly string[]): boolean {
+  return plan.days.some((day) => day.meals.some((meal) => hasRestrictedMealContent(meal, restrictions)));
+}
+
+/** A new exclusion needs a fresh model proposal, not a local non-match.
+ * The server stores this generation evidence in the existing private context JSON.
+ */
+export function mealPlanRestrictionsChanged(
+  plan: { restrictions?: unknown; inventory_snapshot?: unknown },
+  current: readonly string[]
+): boolean {
+  const explicit = readHardRestrictionList(plan.restrictions ?? []);
+  const active = readHardRestrictionList(current);
+  if (!explicit || !active) return true;
+  const snapshot = plan.inventory_snapshot;
+  const evidence = isRecord(snapshot) && Object.hasOwn(snapshot, 'evaluatedHardRestrictions')
+    ? readHardRestrictionList(snapshot.evaluatedHardRestrictions)
+    : explicit;
+  return !evidence || [...explicit, ...active].some((restriction) => !evidence.includes(restriction));
 }
 
 export type StructuredMealPlanParseResult =

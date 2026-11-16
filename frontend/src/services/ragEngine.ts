@@ -268,7 +268,7 @@ export class RagEngine {
    * Pipeline 1: Cookbooks Processing, Chunking and Embedding Store
    * - Takes the extracted PDF text of a cookbook
    * - Splits it into semantically integral overlapping blocks
-   * - Generates vector embeddings for each block using text-embedding-004
+   * - Generates vector embeddings for each block using the configured document embedding model
    * - Bulk inserts chunks to the database, automatically constrained by tenant checks
    */
   public async ingestCookbookText(
@@ -339,7 +339,7 @@ export class RagEngine {
   /**
    * Pipeline 2: Ingredient-Based Semantic Search and Grounded Recipe Generation
    * - Formulates a cooking query based on active fridge ingredients
-   * - Generates query embedding using text-embedding-004
+   * - Generates query embedding using the configured document embedding model
    * - Conducts a semantic search against pgvector via database-side access controls
    * - Generates a premium, hallucination-free recipe with Gemini 1.5 Flash grounded on the matches
    */

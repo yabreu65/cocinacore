@@ -4,6 +4,7 @@ import { Suspense } from 'react';
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { safeFetch } from '@/lib/api';
+import CookingSessionPanel from '@/app/recipes/CookingSessionPanel';
 import type { CookingIntentPreview } from '@/lib/cooking-intent-preview';
 
 type PreviewResponse = { preview: CookingIntentPreview };
@@ -109,6 +110,11 @@ function CookingIntentPreviewContent() {
             <strong>Revisá las restricciones antes de cocinar.</strong>
             <p className="mt-1 text-sm">{preview.restrictions.reasons.join(', ')}</p>
           </div>
+        )}
+
+        {preview.source === 'confirmed_meal_slot' && preview.mealSlot && preview.recipeVersion.recipeId &&
+          preview.recipeVersion.versionId && !preview.recipeVersion.versionId.startsWith('meal-slot:') && (
+          <CookingSessionPanel key={JSON.stringify([preview.mealSlot, preview.recipeVersion])} recipeId={preview.recipeVersion.recipeId} versionId={preview.recipeVersion.versionId} pinnedSlot={preview.mealSlot} />
         )}
 
         <section className="mt-5" aria-labelledby="ingredients-heading">

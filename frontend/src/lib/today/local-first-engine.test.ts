@@ -79,9 +79,9 @@ describe('recommendLocalFirst', () => {
 
   it('hard-excludes unsafe, wrong-slot, invalid, and exactly planned candidates', () => {
     const result = recommendLocalFirst(baseInput({
-      allergies: ['peanut'],
+      hardAvoid: ['tomato'],
       candidates: [
-        baseCandidate({ id: 'unsafe', title: 'Peanut rice', ingredients: [{ name: 'peanut', quantity: 1, unit: 'kg' }] }),
+        baseCandidate({ id: 'unsafe', title: 'Tomato rice', ingredients: [{ name: 'tomato', quantity: 1, unit: 'kg' }] }),
         baseCandidate({ id: 'wrong-slot', slot: 'dinner' }),
         baseCandidate({ id: 'planned', title: 'Planned rice' }),
         baseCandidate({ id: 'safe', title: 'Safe rice' }),
@@ -221,4 +221,43 @@ describe('recommendLocalFirst', () => {
     }));
     expect(result.recommendations).toEqual([]);
   });
+  it('does not recommend local recipes under unassessed broad allergies but permits model proposals without known conflicts', () => {
+    const result = recommendLocalFirst(baseInput({
+      allergies: ['Leche'],
+      providerStatus: 'available',
+      candidates: [
+        baseCandidate({ id: 'local-rice' }),
+        baseCandidate({ id: 'provider-rice', source: 'provider' }),
+        baseCandidate({ id: 'provider-cheese', source: 'provider', ingredients: ['queso'] }),
+      ],
+    }));
+    expect(result.recommendations.map(({ id }) => id)).toEqual(['provider-rice']);
+  });
+
+  it('keeps unassessed peanut and custom allergy candidates out of local recommendations', () => {
+    for (const allergy of ['Maní', 'peanut', 'custom']) {
+      const result = recommendLocalFirst(baseInput({ allergies: [allergy] }));
+      expect(result.recommendations).toEqual([]);
+    }
+  });
+
+  it('rejects a literal exclusion hidden in a local candidate title', () => {
+    const result = recommendLocalFirst(baseInput({ hardAvoid: ['pollo'], candidates: [
+      baseCandidate({ title: 'Pollo con arroz', ingredients: ['arroz'] }),
+    ] }));
+    expect(result.recommendations).toEqual([]);
+  });
+
+  it.each([101, 120])('accepts a %s-character recent title throughout Today ranking', (length) => {
+    const title = 'x'.repeat(length);
+    const result = recommendLocalFirst(baseInput({ recentTitles: [title],
+      candidates: [baseCandidate({ title }), baseCandidate({ id: 'other', title: 'Another lunch' })] }));
+    expect(result.status).toBe('ready');
+    expect(result.recommendations.map(({ id }) => id)).toContain('other');
+    expect(result.recommendations.find(({ title: candidateTitle }) => candidateTitle === title)?.reason).toContain('recent-repeat');
+  });
+  it('still rejects a 121-character recent title', () => {
+    expect(recommendLocalFirst(baseInput({ recentTitles: ['x'.repeat(121)] })).status).toBe('invalid');
+  });
+
 });

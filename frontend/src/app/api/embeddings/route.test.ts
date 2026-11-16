@@ -9,7 +9,8 @@ const mocks = vi.hoisted(() => ({
   isPlatformOwner: vi.fn(),
 }));
 
-vi.mock('@/lib/ai/gemini-config', () => ({
+vi.mock('@/lib/ai/gemini-config', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/ai/gemini-config')>(),
   getGeminiApiKey: mocks.getGeminiApiKey,
   getGeminiEmbeddingModel: mocks.getGeminiEmbeddingModel,
 }));
@@ -103,6 +104,9 @@ describe('POST /api/embeddings error boundary', () => {
     { embeddings: [{ values: [1, '2'] }] },
     { embeddings: [{ values: [1, null] }] },
     { embeddings: [{ values: [1] }, { values: [2] }] },
+    { embeddings: [{ values: [0.25, 0.5] }] },
+    { embeddings: [{ values: Array(1536).fill(0) }] },
+    { embeddings: [{ values: Array(3072).fill(1) }] },
   ])('rejects malformed embedding payload %#', async (payload) => {
     const fetchMock = vi
       .fn()
@@ -111,27 +115,27 @@ describe('POST /api/embeddings error boundary', () => {
     try {
       const response = await POST(request());
       expect(response.status).toBe(502);
-      expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
     } finally {
       vi.unstubAllGlobals();
     }
   });
 
-  it('accepts valid nested vectors and normalizes their dimensions', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi
-        .fn()
-        .mockResolvedValue(
-          new Response(JSON.stringify({ embeddings: [{ embedding: { values: [0.25, 0.5] } }] }))
-        )
+  it('requests and accepts only the configured model and exact dimensions', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ embeddings: [{ embedding: { values: Array.from({ length: 1536 }, (_, i) => i === 0 ? 0.25 : 0.5) } }] }))
     );
+    vi.stubGlobal('fetch', fetchMock);
     try {
       const response = await POST(request());
       const body = (await response.json()) as { embeddings: number[][] };
       expect(response.status).toBe(200);
       expect(body.embeddings[0]).toHaveLength(1536);
-      expect(body.embeddings[0].slice(0, 3)).toEqual([0.25, 0.5, 0]);
+      expect(body.embeddings[0].slice(0, 3)).toEqual([0.25, 0.5, 0.5]);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, options] = fetchMock.mock.calls[0];
+      expect(String(url)).toContain('/models/test-model:batchEmbedContents');
+      expect(options?.body).toEqual(expect.stringContaining('"outputDimensionality":1536'));
     } finally {
       vi.unstubAllGlobals();
     }

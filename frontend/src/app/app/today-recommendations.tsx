@@ -602,6 +602,11 @@ export function TodayRecommendationResults({
           </ul>
         </>
       )}
+      {response.options.length > 0 ? (
+        <p className="mt-4 text-xs text-bistro-text-secondary">
+          Revisa los ingredientes y etiquetas antes de cocinar. Las sugerencias no certifican ausencia de alérgenos.
+        </p>
+      ) : null}
       {response.warnings?.includes('PROFILE_NOT_CONFIGURED') ? (
         <p
           role="alert"

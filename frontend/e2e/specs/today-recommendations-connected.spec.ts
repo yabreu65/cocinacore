@@ -45,7 +45,7 @@ test('connects saved culinary context to safe Today recommendations and recipe h
   await expect(page.getByRole('heading', { name: 'Perfil', exact: true })).toBeVisible();
   await page.getByLabel('Nombre completo').fill(profileFullName);
   await page.getByLabel('Tiempo disponible (minutos)').fill('240');
-  await page.getByLabel('Alergias').fill('peanut');
+  await page.getByLabel('Alergias adicionales').fill('peanut');
   await page.getByRole('button', { name: 'Añadir comensal' }).click();
   await page.getByLabel('Nombre', { exact: true }).fill(memberName);
   await page.getByLabel('Grupo de edad').selectOption('child');
@@ -61,7 +61,7 @@ test('connects saved culinary context to safe Today recommendations and recipe h
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Perfil', exact: true })).toBeVisible();
   await expect(page.getByLabel('Nombre completo')).toHaveValue(profileFullName);
-  await expect(page.getByLabel('Alergias')).toHaveValue('peanut');
+  await expect(page.getByLabel('Alergias adicionales')).toHaveValue('peanut');
   await expect(page.getByLabel('Tiempo disponible (minutos)')).toHaveValue('240');
   await expect(householdNames.nth(0)).toHaveValue(memberName);
   await expect(householdNames.nth(1)).toHaveValue(adultMemberName);
@@ -178,4 +178,19 @@ test('connects saved culinary context to safe Today recommendations and recipe h
   expect(afterHandoffResponse.ok).toBe(true);
   const afterHandoff = (await afterHandoffResponse.json()) as ProviderCapture;
   expect(afterHandoff.generationCallCount).toBe(1);
+
+  await page.getByLabel('Modo').selectOption('free');
+  await page.getByRole('button', { name: 'Generar receta' }).click();
+  await expect(page.getByRole('heading', { name: 'Pollo conectado determinista', exact: true })).toBeVisible();
+  const history = await page.evaluate(async () => {
+    const response = await fetch('/api/recipe-history', { credentials: 'same-origin' });
+    return { status: response.status, body: response.ok ? await response.json() as {
+      items: { recipe_payload: { slot?: string; peopleCount?: number } }[];
+    } : null };
+  });
+  expect(history.status).toBe(200);
+  const body = history.body!;
+  expect(body.items).toEqual(expect.arrayContaining([
+    expect.objectContaining({ recipe_payload: expect.objectContaining({ slot: 'lunch', peopleCount: 2 }) }),
+  ]));
 });

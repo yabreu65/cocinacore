@@ -111,12 +111,12 @@ describe('GET /api/waste-prevention', () => {
     mockFindProfile.mockReset().mockResolvedValue({
       user_id: 'user-1',
       tenant_id: 'tenant-1',
-      allergies: ['peanut'],
+      allergies: [],
       disliked_ingredients: [],
     });
     mockFindTerms.mockReset().mockResolvedValue([
-      { preference_type: 'avoid', term_label: 'coriander' },
-      { preference_type: 'prefer', term_label: 'tomato' },
+      { user_id: 'user-1', preference_type: 'avoid', term_label: 'coriander' },
+      { user_id: 'user-1', preference_type: 'prefer', term_label: 'tomato' },
     ]);
   });
 
@@ -203,6 +203,7 @@ describe('GET /api/waste-prevention', () => {
 
   it('keeps inventory visible but suppresses recipe suggestions without a culinary profile', async () => {
     mockFindProfile.mockResolvedValue(null);
+    mockFindTerms.mockResolvedValue([]);
 
     const response = await GET(request());
     const body = await readBody(response);

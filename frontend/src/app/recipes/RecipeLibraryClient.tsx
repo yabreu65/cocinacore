@@ -1,8 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { safeFetch } from '@/lib/api';
+import { CreatePersistentRecipeSchema } from '@/lib/validation';
+import type { RecipeImportPayload } from '@/lib/recipes/recipe-import';
 import {
   filterRecipes,
   ingredientSummary,
@@ -37,133 +39,167 @@ export function RecipeEditor({
   onSave,
   onCancel,
   saving = false,
+  saveLabel = 'Guardar',
 }: {
   initial?: Draft;
   onSave: (draft: Draft) => void;
   onCancel?: () => void;
   saving?: boolean;
+  saveLabel?: string;
 }) {
   const [draft, setDraft] = useState<Draft>(initial);
+  const [validationError, setValidationError] = useState<string | null>(null);
   const update = (key: keyof Draft, value: string) => setDraft((old) => ({ ...old, [key]: value }));
   return (
     <form
       className="grid gap-3"
       onSubmit={(event) => {
         event.preventDefault();
+        if (saving) return;
+        if (draft.ingredients.some((item) => !item.name.trim() && (item.quantity?.trim() || item.unit?.trim()))) {
+          setValidationError('Indica el nombre de cada ingrediente que tenga cantidad o unidad.');
+          return;
+        }
+        const parsed = CreatePersistentRecipeSchema.safeParse(payloadFromDraft(draft));
+        if (!parsed.success) {
+          setValidationError('Revisa el título, las porciones, los ingredientes, las notas y las etiquetas. Máximo 100 ingredientes y 20 etiquetas de 50 caracteres.');
+          return;
+        }
+        setValidationError(null);
         onSave(draft);
       }}
     >
-      <label className="grid gap-1 text-sm font-semibold">
-        Título
-        <input
-          required
-          aria-label="Título"
-          className={inputClass}
-          value={draft.title}
-          onChange={(e) => update('title', e.target.value)}
-        />
-      </label>
-      <label className="grid gap-1 text-sm font-semibold">
-        Categoría
-        <input
-          className={inputClass}
-          value={draft.category}
-          onChange={(e) => update('category', e.target.value)}
-        />
-      </label>
-      <label className="grid gap-1 text-sm font-semibold">
-        Etiquetas, separadas por comas
-        <input
-          className={inputClass}
-          value={draft.tags}
-          onChange={(e) => update('tags', e.target.value)}
-        />
-      </label>
-      <label className="grid gap-1 text-sm font-semibold">
-        Porciones
-        <input
-          type="number"
-          min="1"
-          className={inputClass}
-          value={draft.servings}
-          onChange={(e) => update('servings', e.target.value)}
-        />
-      </label>
-      <fieldset className="grid gap-2">
-        <legend className="text-sm font-semibold">Ingredientes</legend>
-        {draft.ingredients.map((item, index) => (
-          <div key={index} className="grid gap-2 sm:grid-cols-[2fr_1fr_1fr_auto]">
-            {(['name', 'quantity', 'unit'] as const).map((key) => (
-              <label key={key} className="grid gap-1 text-xs font-semibold">
-                {key === 'name' ? 'Nombre' : key === 'quantity' ? 'Cantidad' : 'Unidad'}
-                <input
-                  aria-label={`${key === 'name' ? 'Nombre' : key === 'quantity' ? 'Cantidad' : 'Unidad'} del ingrediente ${index + 1}`}
-                  className={inputClass}
-                  value={item[key] ?? ''}
-                  onChange={(e) =>
-                    setDraft((old) => ({
-                      ...old,
-                      ingredients: old.ingredients.map((row, i) =>
-                        i === index ? { ...row, [key]: e.target.value } : row
-                      ),
-                    }))
-                  }
-                />
-              </label>
-            ))}
-            <button
-              type="button"
-              aria-label={`Quitar ingrediente ${index + 1}`}
-              onClick={() =>
-                setDraft((old) => ({
-                  ...old,
-                  ingredients: old.ingredients.filter((_, i) => i !== index),
-                }))
-              }
-              className="self-end rounded-xl border px-3 py-2"
-            >
-              Quitar
-            </button>
-          </div>
-        ))}
-        <button
-          type="button"
-          onClick={() =>
-            setDraft((old) => ({
-              ...old,
-              ingredients: [...old.ingredients, { name: '', quantity: '', unit: '' }],
-            }))
-          }
-          className="w-fit rounded-xl border px-3 py-2"
-        >
-          Agregar ingrediente
-        </button>
-      </fieldset>
-      <label className="grid gap-1 text-sm font-semibold">
-        Pasos y notas
-        <textarea
-          aria-label="Pasos y notas"
-          rows={6}
-          className={inputClass}
-          value={draft.instructions}
-          onChange={(e) => update('instructions', e.target.value)}
-        />
-      </label>
-      <div className="flex gap-2">
-        <button
-          disabled={saving}
-          className="rounded-xl bg-bistro-action-primary px-4 py-2 font-semibold text-white"
-        >
-          Guardar
-        </button>
-        {onCancel && (
-          <button type="button" onClick={onCancel} className="rounded-xl border px-4 py-2">
-            Cancelar
+      <fieldset disabled={saving} className="contents">
+        <label className="grid gap-1 text-sm font-semibold">
+          Título
+          <input
+            required
+            maxLength={200}
+            aria-label="Título"
+            className={inputClass}
+            value={draft.title}
+            onChange={(e) => update('title', e.target.value)}
+          />
+        </label>
+        <label className="grid gap-1 text-sm font-semibold">
+          Categoría
+          <input
+            className={inputClass}
+            value={draft.category}
+            onChange={(e) => update('category', e.target.value)}
+          />
+        </label>
+        <label className="grid gap-1 text-sm font-semibold">
+          Etiquetas, separadas por comas
+          <input
+            className={inputClass}
+            value={draft.tags}
+            onChange={(e) => update('tags', e.target.value)}
+          />
+        </label>
+        <label className="grid gap-1 text-sm font-semibold">
+          Porciones
+          <input
+            type="number"
+            min="1"
+            max="100"
+            step="1"
+            className={inputClass}
+            value={draft.servings}
+            onChange={(e) => update('servings', e.target.value)}
+          />
+        </label>
+        <fieldset className="grid gap-2">
+          <legend className="text-sm font-semibold">Ingredientes</legend>
+          {draft.ingredients.map((item, index) => (
+            <div key={index} className="grid gap-2 sm:grid-cols-[2fr_1fr_1fr_auto]">
+              {(['name', 'quantity', 'unit'] as const).map((key) => (
+                <label key={key} className="grid gap-1 text-xs font-semibold">
+                  {key === 'name' ? 'Nombre' : key === 'quantity' ? 'Cantidad' : 'Unidad'}
+                  <input
+                    aria-label={`${key === 'name' ? 'Nombre' : key === 'quantity' ? 'Cantidad' : 'Unidad'} del ingrediente ${index + 1}`}
+                    className={inputClass}
+                    maxLength={key === 'name' ? 200 : key === 'quantity' ? 100 : 50}
+                    required={key === 'name' && Boolean(item.quantity?.trim() || item.unit?.trim())}
+                    value={item[key] ?? ''}
+                    onChange={(e) =>
+                      setDraft((old) => ({
+                        ...old,
+                        ingredients: old.ingredients.map((row, i) =>
+                          i === index ? { ...row, [key]: e.target.value } : row
+                        ),
+                      }))
+                    }
+                  />
+                </label>
+              ))}
+              <button
+                type="button"
+                aria-label={`Quitar ingrediente ${index + 1}`}
+                onClick={() =>
+                  setDraft((old) => ({
+                    ...old,
+                    ingredients: old.ingredients.filter((_, i) => i !== index),
+                  }))
+                }
+                className="self-end rounded-xl border px-3 py-2"
+              >
+                Quitar
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            disabled={saving || draft.ingredients.length >= 100}
+            onClick={() =>
+              setDraft((old) => old.ingredients.length >= 100 ? old : ({
+                ...old,
+                ingredients: [...old.ingredients, { name: '', quantity: '', unit: '' }],
+              }))
+            }
+            className="w-fit rounded-xl border px-3 py-2 disabled:opacity-60"
+          >
+            Agregar ingrediente
           </button>
-        )}
-      </div>
+        </fieldset>
+        <label className="grid gap-1 text-sm font-semibold">
+          Pasos y notas
+          <textarea
+            aria-label="Pasos y notas"
+            required
+            maxLength={20_000}
+            rows={6}
+            className={inputClass}
+            value={draft.instructions}
+            onChange={(e) => update('instructions', e.target.value)}
+          />
+        </label>
+        {validationError ? <p role="alert" className="text-sm text-bistro-danger">{validationError}</p> : null}
+        <div className="flex gap-2">
+          <button
+            disabled={saving}
+            className="rounded-xl bg-bistro-action-primary px-4 py-2 font-semibold text-white"
+          >
+            {saveLabel}
+          </button>
+          {onCancel && (
+            <button type="button" disabled={saving} onClick={onCancel} className="rounded-xl border px-4 py-2">
+              Cancelar
+            </button>
+          )}
+        </div>
+      </fieldset>
     </form>
   );
+}
+
+/** Reuse the normal recipe editor for generated proposals before persistence. */
+export function draftFromImport(input: RecipeImportPayload): Draft {
+  return {
+    title: input.title, category: '', tags: '', servings: String(input.servings),
+    instructions: input.instructions,
+    ingredients: input.ingredients.map((ingredient) => ({ ...ingredient })),
+  };
 }
 
 export function draftFromRecipe(recipe: Recipe): Draft {
@@ -208,25 +244,48 @@ export default function RecipeLibraryClient() {
   const [creating, setCreating] = useState(false);
   const [duplicates, setDuplicates] = useState<DuplicateRecipeCandidate[]>([]);
   const [saving, setSaving] = useState(false);
+  const saveLock = useRef(false);
+  const selectedArchive = useRef(archive);
+  const loadEpoch = useRef(0);
+  const mounted = useRef(true);
   const load = useCallback(async () => {
+    if (!mounted.current) return;
+    const currentArchive = selectedArchive.current;
+    const epoch = ++loadEpoch.current;
+    const isCurrent = () => mounted.current && loadEpoch.current === epoch;
     setLoading(true);
     setError('');
     try {
       const response = await safeFetch<{ items: Recipe[] }>(
-        `/api/recipes?archived=${archive}&limit=100&offset=0`,
+        `/api/recipes?archived=${currentArchive}&limit=100&offset=0`,
         { credentials: 'same-origin' }
       );
+      if (!isCurrent()) return;
       if (!response.ok) throw new Error(response.error);
       setRecipes(response.data.items);
+      setCategory((current) => current === 'all' || response.data.items.some((item) => item.category === current) ? current : 'all');
+      setTag((current) => current === 'all' || response.data.items.some((item) => item.tags.includes(current)) ? current : 'all');
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'No se pudo cargar la biblioteca.');
+      if (isCurrent()) setError(cause instanceof Error ? cause.message : 'No se pudo cargar la biblioteca.');
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, [archive]);
+  }, []);
   useEffect(() => {
+    mounted.current = true;
     void load();
+    return () => {
+      mounted.current = false;
+      loadEpoch.current += 1;
+    };
   }, [load]);
+  const changeArchive = (next: typeof archive) => {
+    if (selectedArchive.current === next) return;
+    selectedArchive.current = next;
+    setRecipes([]);
+    setArchive(next);
+    void load();
+  };
   const categories = useMemo(
     () => [...new Set(recipes.map((r) => r.category).filter((v): v is string => Boolean(v)))],
     [recipes]
@@ -234,7 +293,10 @@ export default function RecipeLibraryClient() {
   const tags = useMemo(() => [...new Set(recipes.flatMap((r) => r.tags))], [recipes]);
   const visible = filterRecipes(recipes, search, category, tag);
   const create = async (draft: Draft) => {
+    if (saveLock.current) return;
+    saveLock.current = true;
     setSaving(true);
+    setError('');
     try {
       const result = await safeFetch<{
         recipe: Recipe;
@@ -252,6 +314,7 @@ export default function RecipeLibraryClient() {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'No se pudo guardar la receta.');
     } finally {
+      saveLock.current = false;
       setSaving(false);
     }
   };
@@ -266,7 +329,8 @@ export default function RecipeLibraryClient() {
             </p>
           </div>
           <button
-            onClick={() => setCreating(!creating)}
+            disabled={saving}
+            onClick={() => { if (!saveLock.current) setCreating((current) => !current); }}
             className="rounded-full bg-bistro-action-primary px-5 py-2.5 font-bold text-white"
           >
             Crear receta
@@ -279,7 +343,7 @@ export default function RecipeLibraryClient() {
           >
             <RecipeEditor
               onSave={(draft) => void create(draft)}
-              onCancel={() => setCreating(false)}
+              onCancel={() => { if (!saveLock.current) setCreating(false); }}
               saving={saving}
             />
           </section>
@@ -309,7 +373,7 @@ export default function RecipeLibraryClient() {
               aria-label="Estado de recetas"
               className={inputClass}
               value={archive}
-              onChange={(e) => setArchive(e.target.value as typeof archive)}
+              onChange={(e) => changeArchive(e.target.value as typeof archive)}
             >
               <option value="active">Activas</option>
               <option value="archived">Archivadas</option>

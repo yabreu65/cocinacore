@@ -74,7 +74,7 @@ function payloadHash(value: unknown): string {
   return createHash('sha256').update(stableJson(value)).digest('hex');
 }
 
-function buildCalendarPayload(recipeId: string, versionId: string): Record<string, unknown> {
+function buildCalendarPayload(recipeId: string, versionId: string) {
   const labels = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
   return {
     period: 'week',
@@ -117,6 +117,11 @@ async function seedFixture(page: Page): Promise<Fixture> {
   const foreignPlanId = randomUUID();
   const foreignSessionId = randomUUID();
   const calendarPayload = buildCalendarPayload(recipeId, versionId);
+  // A valid historical stored calendar is normalized by the read endpoint.
+  const firstDay = calendarPayload.days[0];
+  firstDay.meals.reverse();
+  Reflect.deleteProperty(firstDay, 'label');
+  for (const meal of firstDay.meals) Reflect.deleteProperty(meal, 'prepMinutes');
 
   const client = await pool.connect();
   try {
@@ -313,6 +318,30 @@ test.describe('M5 U3 cooking sessions', () => {
     page,
   }) => {
     fixture = await seedFixture(page);
+    const historical = await page.request.get('/api/meal-plan?mealPlanId=' + fixture.planId);
+    expect(historical.status()).toBe(200);
+    const source = await historical.json() as { plan: Record<string, unknown>; updatedAt: string };
+    const attached = await page.request.post('/api/meal-plan/recipe-selection', {
+      data: { mealPlanId: fixture.planId, dayIndex: 7, mealType: 'dinner',
+        recipeId: fixture.recipeId, versionId: fixture.versionId,
+        expectedUpdatedAt: source.updatedAt, expectedCalendarPayload: source.plan, confirmed: true },
+    });
+    expect(attached.status(), await attached.text()).toBe(200);
+    const persistedAttachment = await pool.query<{ version: string }>(
+      "select calendar_payload #>> '{days,6,meals,2,recipeRef,versionId}' as version from public.user_meal_plans where id = $1",
+      [fixture.planId]);
+    expect(persistedAttachment.rows[0]?.version).toBe(fixture.versionId);
+    const preview = await page.request.get('/api/cooking-intent-preview?source=meal_slot&mealPlanId=' + fixture.planId + '&dayIndex=1&mealType=lunch');
+    expect(preview.status()).toBe(200);
+    expect(await preview.json()).toMatchObject({ preview: {
+      title, recipeVersion: { recipeId: fixture.recipeId, versionId: fixture.versionId },
+      ingredients: [{ name: 'Rice' }],
+    } });
+    const legacyConsumption = await page.request.post('/api/meal-plan/consumption', {
+      data: { mealPlanId: fixture.planId, dayIndex: 1, mealType: 'lunch' },
+    });
+    expect(legacyConsumption.status()).toBe(409);
+    expect(await legacyConsumption.json()).toMatchObject({ code: 'LINKED_RECIPE_REAL_CONSUMPTION_REQUIRED' });
     await page.goto('/recipes');
     const card = page.locator('li').filter({ hasText: title }).first();
     await expect(card).toBeVisible();
@@ -333,6 +362,24 @@ test.describe('M5 U3 cooking sessions', () => {
     const reloadedCard = page.locator('li').filter({ hasText: title }).first();
     await reloadedCard.getByRole('button', { name: 'Preparar esta receta' }).click();
     await expect(reloadedCard.getByRole('status')).toContainText('Paso 1 de 1 · Pausada');
+    const oldProfile = await pool.query<{ allergies: string[] }>(
+      'select allergies from public.user_culinary_profiles where user_id = $1 and tenant_id = $2',
+      [fixture.userId, fixture.tenantId]);
+    const oldAllergies = oldProfile.rows[0]?.allergies ?? [];
+    try {
+      await pool.query(
+        'insert into public.user_culinary_profiles (user_id, tenant_id, allergies) values ($1, $2, $3) on conflict (user_id) do update set allergies = excluded.allergies where user_culinary_profiles.tenant_id = $2',
+        [fixture.userId, fixture.tenantId, [...oldAllergies, 'Nueva restricción médica no evaluada']]);
+      expect((await page.request.get('/api/meal-plan')).status()).toBe(409);
+      const blocked = await page.request.patch('/api/cooking-sessions/' + await findSessionId(), {
+        data: { action: 'resume', expectedVersion: 2, idempotencyKey: 'blocked-resume-' + runId, confirmed: true },
+      });
+      expect(blocked.status()).toBe(409);
+      expect(await blocked.json()).toMatchObject({ code: 'COOKING_RESTRICTIONS_REVIEW_REQUIRED' });
+    } finally {
+      await pool.query('update public.user_culinary_profiles set allergies = $1 where user_id = $2 and tenant_id = $3',
+        [oldAllergies, fixture.userId, fixture.tenantId]);
+    }
     await reloadedCard.getByRole('button', { name: 'Reanudar' }).click();
     await reloadedCard.getByRole('button', { name: 'Finalizar' }).click();
     await expect(reloadedCard.getByRole('status')).toContainText('Terminada');
@@ -377,6 +424,50 @@ test.describe('M5 U3 cooking sessions', () => {
     );
     expect(businessCounts.rows[0]).toEqual({ inventory: '0', movements: '0' });
     expect(consumption.rows[0]?.consumption_payload).toEqual({});
+
+    // The same recipe/version is linked to three distinct slots. A more recent
+    // plan must not replace the explicitly selected older source.
+    const newer = await pool.query<{ id: string }>(
+      `insert into public.user_meal_plans (tenant_id, user_id, people_count, period, mode, base_cuisine, calendar_payload)
+        values ($1, $2, 2, 'week', 'menu_to_shopping', 'e2e newer', $3::jsonb) returning id`,
+      [fixture.tenantId, fixture.userId, JSON.stringify(fixture.calendarPayload)]);
+    const newerId = newer.rows[0].id;
+    try {
+      const latest = await page.request.get('/api/meal-plan');
+      expect(await latest.json()).toMatchObject({ id: newerId });
+      await page.goto('/app/cooking-intent?source=meal_slot&mealPlanId=' + fixture.planId + '&dayIndex=2&mealType=dinner');
+      await page.getByRole('button', { name: 'Preparar esta receta' }).click();
+      await expect(page.getByText('Día 2 · Cena', { exact: true })).toBeVisible();
+      await page.getByRole('button', { name: 'Iniciar preparación' }).click();
+      await expect(page.getByText('Paso 1 de 1 · En preparación')).toBeVisible();
+      const selected = await pool.query<{ id: string; status: string }>(
+        'select id, status from public.cooking_sessions where meal_plan_id = $1 and day_index = 2 and meal_type = $2 and status = $3',
+        [fixture.planId, 'dinner', 'active']);
+      expect(selected.rows).toHaveLength(1);
+      const other = await pool.query<{ count: string }>('select count(*)::text as count from public.cooking_sessions where meal_plan_id = $1', [newerId]);
+      expect(other.rows[0].count).toBe('0');
+
+      // A consumption write changes the row revision, not the calendar.
+      // Use synthetic legacy consumption evidence to avoid append-only claims in this fixture.
+      const unrelatedRecord = { consumedAt: new Date().toISOString(), dayIndex: 4, mealType: 'lunch',
+        mealTitle: 'Fixture lunch', decrements: [], skipped: [] };
+      await pool.query('update public.user_meal_plans set consumption_payload = $1::jsonb, updated_at = now() where id = $2 and tenant_id = $3 and user_id = $4',
+        [JSON.stringify({ '4:lunch': unrelatedRecord }), fixture.planId, fixture.tenantId, fixture.userId]);
+      await page.getByRole('button', { name: 'Pausar' }).click();
+      await expect(page.getByText('Paso 1 de 1 · Pausada')).toBeVisible();
+      await page.reload();
+      await page.getByRole('button', { name: 'Preparar esta receta' }).click();
+      await expect(page.getByText('Paso 1 de 1 · Pausada')).toBeVisible();
+      await page.getByRole('button', { name: 'Reanudar' }).click();
+      await expect(page.getByText('Paso 1 de 1 · En preparación')).toBeVisible();
+      await page.getByRole('button', { name: 'Cancelar' }).click();
+      await expect(page.getByRole('button', { name: 'Iniciar preparación' })).toBeVisible();
+      const cancelled = await pool.query<{ status: string }>('select status from public.cooking_sessions where id = $1', [selected.rows[0].id]);
+      expect(cancelled.rows[0].status).toBe('cancelled');
+    } finally {
+      await pool.query('delete from public.user_meal_plans where id = $1 and tenant_id = $2 and user_id = $3',
+        [newerId, fixture.tenantId, fixture.userId]);
+    }
   });
 
   test('rejects foreign access, cancellation, and a stale source conflict', async ({ page }) => {

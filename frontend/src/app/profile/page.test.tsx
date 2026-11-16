@@ -58,6 +58,20 @@ function findForm(node: ReactNode): ReactElement<{ onSubmit: (event: FormEvent) 
   return undefined;
 }
 
+function findAllergenButton(node: ReactNode, label: string): ReactElement<{ onClick: () => void; 'aria-pressed': boolean; disabled: boolean }> | undefined {
+  if (Array.isArray(node)) {
+    for (const child of node as ReactNode[]) {
+      const found = findAllergenButton(child, label);
+      if (found) return found;
+    }
+  }
+  if (!isValidElement<{ children?: ReactNode }>(node)) return undefined;
+  if (node.type === 'button' && node.props.children === label) {
+    return node as ReactElement<{ onClick: () => void; 'aria-pressed': boolean; disabled: boolean }>;
+  }
+  return findAllergenButton(node.props.children, label);
+}
+
 describe('ProfilePage', () => {
   it('disables all profile form controls during the initial loading render', () => {
     const markup = renderToStaticMarkup(<ProfilePage />);
@@ -246,6 +260,51 @@ describe('ProfilePage', () => {
       expect(init?.method).toBe('PUT');
       const body: unknown = typeof init?.body === 'string' ? JSON.parse(init.body) : null;
       expect(body).toMatchObject({ allergies: entries, dislikedIngredients: entries });
+    } finally {
+      hooks.active = false;
+    }
+  });
+
+  it('selects allergens independently, preserves custom entries, and reloads the saved choices', async () => {
+    hooks.active = true;
+    hooks.states = [];
+    vi.mocked(safeFetch).mockReset();
+    const user = { id: 'user-1', email: 'test@example.com', fullName: 'Ana', tenant: null };
+    const profile = {
+      level: 'Intermedio', availableTimeMinutes: 30,
+      dislikedIngredients: [], allergies: ['maní', 'alergia a la proteína de la leche'], householdMembers: [],
+    };
+    const saved = { ...profile, allergies: ['Frutos secos', 'Huevo', 'alergia a la proteína de la leche'] };
+    vi.mocked(safeFetch).mockResolvedValueOnce({
+      ok: true, data: { user, profile, taxonomy: { dimensions: [], terms: [] }, selections: EMPTY_CULINARY_SELECTIONS },
+    });
+    vi.mocked(safeFetch).mockResolvedValueOnce({
+      ok: true, data: { user, profile: saved, selections: EMPTY_CULINARY_SELECTIONS },
+    });
+    try {
+      renderProfile();
+      hooks.effect?.();
+      await vi.waitFor(() => expect(hooks.states[1]).toBe(false));
+      let page = renderProfile();
+      expect(findAllergenButton(page, 'Maní (cacahuate)')?.props['aria-pressed']).toBe(true);
+      expect(findAllergenButton(page, 'Frutos secos de árbol')?.props['aria-pressed']).toBe(false);
+      findAllergenButton(page, 'Frutos secos de árbol')?.props.onClick();
+      page = renderProfile();
+      expect(findAllergenButton(page, 'Maní (cacahuate)')?.props['aria-pressed']).toBe(true);
+      expect(findAllergenButton(page, 'Frutos secos de árbol')?.props['aria-pressed']).toBe(true);
+      findAllergenButton(page, 'Maní (cacahuate)')?.props.onClick();
+      findAllergenButton(renderProfile(), 'Huevo')?.props.onClick();
+      page = renderProfile();
+      await findForm(page)?.props.onSubmit({ preventDefault: vi.fn() } as unknown as FormEvent);
+      expect(safeFetch).toHaveBeenCalledTimes(2);
+      const [, init] = vi.mocked(safeFetch).mock.calls[1] ?? [];
+      expect(JSON.parse(String(init?.body))).toMatchObject({ allergies: saved.allergies });
+      page = renderProfile();
+      expect(findAllergenButton(page, 'Maní (cacahuate)')?.props['aria-pressed']).toBe(false);
+      expect(findAllergenButton(page, 'Huevo')?.props['aria-pressed']).toBe(true);
+      expect(findAllergenButton(page, 'Frutos secos de árbol')?.props['aria-pressed']).toBe(true);
+      hooks.active = false;
+      expect(renderToStaticMarkup(page)).toContain('alergia a la proteína de la leche');
     } finally {
       hooks.active = false;
     }

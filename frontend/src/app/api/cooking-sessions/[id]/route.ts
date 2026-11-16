@@ -90,6 +90,8 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
         { status: 409 }
       );
     }
+    if (result.status === 'restrictions_changed')
+      return NextResponse.json({ error: 'Las restricciones cambiaron o la receta requiere revisión. No continúes sin revisarla.', code: 'COOKING_RESTRICTIONS_REVIEW_REQUIRED' }, { status: 409 });
     if (result.status === 'source_conflict')
       return NextResponse.json(
         { error: 'El origen de la sesión cambió.', code: 'COOKING_SESSION_SOURCE_CONFLICT' },

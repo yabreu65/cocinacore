@@ -1,7 +1,13 @@
+import { profileAllergenIdsForRestriction, type ProfileAllergenOption } from '@/lib/profile/culinary-profile-contract';
+
+import { normalizeIngredientName, normalizeMarkdownLine } from './ingredient-name';
+export { normalizeIngredientName } from './ingredient-name';
+
 export type StructuredRecipeIngredient = {
   name: string;
   normalized_name: string;
   quantity: number | null;
+  exact_quantity_text?: string;
   unit: string | null;
   optional_quantity_text: string | null;
   category: string | null;
@@ -44,14 +50,6 @@ function normalizeFraction(value: string): number | null {
   return null;
 }
 
-function normalizeMarkdownLine(value: string): string {
-  return value
-    .replace(/^[\s>*-]+/, '')
-    .replace(/\*\*/g, '')
-    .replace(/__/g, '')
-    .trim();
-}
-
 function normalizeIngredientTokens(value: string): string[] {
   return normalizeIngredientName(value).match(/[\p{L}\p{N}]+/gu) ?? [];
 }
@@ -65,6 +63,7 @@ type DietaryCategory = 'vegan' | 'gluten-free' | 'lactose-free';
 const DIETARY_CATEGORY_ALIASES: Record<DietaryCategory, readonly string[]> = {
   vegan: ['vegano', 'vegana', 'veganos', 'veganas', 'vegan', 'dieta vegana', 'veganismo'],
   'gluten-free': [
+    'gluten',
     'sin tacc',
     'intolerancia al gluten',
     'sin gluten',
@@ -75,6 +74,7 @@ const DIETARY_CATEGORY_ALIASES: Record<DietaryCategory, readonly string[]> = {
     'celiaquia',
   ],
   'lactose-free': [
+    'lactosa',
     'sin lactosa', 'libre de lactosa', 'intolerancia a la lactosa',
     'lactose free', 'lactose-free',
   ],
@@ -88,7 +88,7 @@ const VEGAN_ANIMAL_INGREDIENTS = [
   'gelatina', 'gelatin',
 ] as const;
 const GLUTEN_CONTAINING_INGREDIENTS = [
-  'trigo', 'wheat', 'cebada', 'barley', 'centeno', 'rye', 'seitan', 'gluten', 'gluten vital',
+  'trigo', 'wheat', 'cebada', 'barley', 'centeno', 'rye', 'seitan', 'gluten', 'gluten vital', 'cuscus', 'couscous',
 ] as const;
 const LACTOSE_CONTAINING_INGREDIENTS = [
   'lactosa', 'lactose', 'leche', 'milk', 'crema de leche', 'nata', 'leche condensada',
@@ -143,7 +143,8 @@ function removeRecognizedPhrases(name: string, phrases: readonly string[]): stri
 
 function assessVeganIngredient(name: string): IngredientRestrictionAssessment['status'] {
   const remaining = removeRecognizedPhrases(name, RECOGNIZED_PLANT_BASED_ALTERNATIVES);
-  if (containsAnyPhrase(remaining, VEGAN_ANIMAL_INGREDIENTS)) return 'conflict';
+  if (containsAnyPhrase(remaining, VEGAN_ANIMAL_INGREDIENTS) ||
+      (['milk', 'egg', 'fish', 'crustaceans', 'molluscs'] as const).some((id) => profileAllergenConflict(remaining, id))) return 'conflict';
   if (containsAnyPhrase(remaining, ['caldo', 'stock', 'margarina', 'saborizante'])) return 'review';
   return 'clear';
 }
@@ -210,6 +211,35 @@ function assessDietaryCategory(
   return statuses.includes('review') ? 'review' : 'clear';
 }
 
+// Bounded examples for the fixed profile options. This is a conflict guard,
+// not a classifier of every food or its derivatives. Gemini interprets the
+// full culinary context; absence of a match is not allergen verification.
+const PROFILE_ALLERGEN_CONFLICTS: Record<ProfileAllergenOption['id'], readonly string[]> = {
+  peanut: ['maní'],
+  tree_nuts: ['nuez', 'almendra', 'avellana', 'pistacho', 'anacardo', 'cashew', 'walnut'],
+  milk: ['leche', 'milk', 'queso', 'cheese', 'parmesano', 'parmesan', 'mantequilla', 'butter', 'yogur', 'yogurt', 'nata', 'suero', 'whey', 'caseína'],
+  egg: ['huevo', 'egg', 'mayonesa', 'mayonnaise'],
+  fish: ['pescado', 'fish', 'atún', 'tuna', 'salmón', 'sardina', 'anchoa', 'merluza'],
+  crustaceans: ['crustáceo', 'camarón', 'gamba', 'langostino', 'cangrejo', 'langosta', 'shrimp', 'crab'],
+  molluscs: ['molusco', 'mejillón', 'almeja', 'ostra', 'calamar', 'pulpo', 'mussel'],
+  wheat: ['trigo', 'wheat', 'seitán'],
+  soy: ['soja', 'soya', 'soy', 'tofu', 'tempeh', 'miso'],
+  sesame: ['sésamo', 'sesame', 'ajonjolí', 'tahini'],
+  mustard: ['mostaza', 'mustard'],
+  celery: ['apio', 'celery'],
+};
+
+function profileAllergenConflict(name: string, id: ProfileAllergenOption['id']): boolean {
+  // Match only known tokens, including simple plural forms. Avoid interpreting
+  // negation, medical descriptions or an unknown product's composition.
+  const tokens = new Set(normalizeIngredientTokens(name));
+  return PROFILE_ALLERGEN_CONFLICTS[id].some((example) =>
+    normalizeIngredientTokens(example).some((token) =>
+      tokens.has(token) || tokens.has(token + 's') || tokens.has(token + 'es')
+    )
+  );
+}
+
 /** Classifies listed ingredient names only; `clear` is not a safety or contamination guarantee. */
 export function assessIngredientRestrictions(
   ingredientNames: readonly string[],
@@ -223,12 +253,22 @@ export function assessIngredientRestrictions(
     else explicitRestrictions.push(restriction);
   }
 
-  if (explicitRestrictions.some((restriction) =>
-    ingredientNames.some((ingredient) => containsTokenSequence(ingredient, restriction))
-  )) return { status: 'conflict' };
+  if (explicitRestrictions.some((restriction) => {
+    const ids = profileAllergenIdsForRestriction(restriction);
+    return ingredientNames.some((ingredient) =>
+      containsTokenSequence(ingredient, restriction) ||
+      ids.some((id) => profileAllergenConflict(ingredient, id)) ||
+      // Only a literal single ingredient gets simple inflection matching.
+      (normalizeIngredientTokens(restriction).length === 1 &&
+        normalizeIngredientTokens(ingredient).some((token) => {
+          const literal = normalizeIngredientTokens(restriction)[0];
+          return literal.length >= 3 && (token === literal + 's' || token === literal + 'es');
+        }))
+    );
+  })) return { status: 'conflict' };
 
   let needsReview =
-    categories.size > 0 &&
+    restrictions.some((restriction) => restriction.trim().length > 0) &&
     (ingredientNames.length === 0 || ingredientNames.some((name) => normalizeIngredientTokens(name).length === 0));
   for (const category of categories) {
     const status = assessDietaryCategory(category, ingredientNames);
@@ -236,6 +276,42 @@ export function assessIngredientRestrictions(
     if (status === 'review') needsReview = true;
   }
   return { status: needsReview ? 'review' : 'clear' };
+}
+
+/**
+ * Saved/local candidates have not been interpreted by Gemini for the current
+ * profile. Do not infer compatibility from a non-match for broad selections
+ * or free-form medical descriptions. Keep literal exclusions and the
+ * existing deterministic dietary rules unchanged.
+ */
+export function assessLocalIngredientRestrictions(
+  ingredientNames: readonly string[],
+  restrictions: readonly string[]
+): IngredientRestrictionAssessment {
+  const assessment = assessIngredientRestrictions(ingredientNames, restrictions);
+  if (assessment.status !== 'clear') return assessment;
+  const needsModel = restrictions.some((restriction) => {
+    const ids = profileAllergenIdsForRestriction(restriction);
+    return ids.length > 0 || normalizeIngredientName(restriction) === 'mani' ||
+      (!dietaryCategoryForRestriction(restriction) && (normalizeIngredientName(restriction) === 'keto' || normalizeIngredientTokens(restriction).length > 1));
+  });
+  return { status: needsModel ? 'review' : 'clear' };
+}
+
+/** Local recipes are not evaluated by Gemini for the current allergies. */
+export function assessLocalRecipeRestrictions(
+  ingredientNames: readonly string[],
+  visibleText: readonly string[],
+  allergies: readonly string[],
+  hardAvoid: readonly string[]
+): IngredientRestrictionAssessment {
+  const restrictions = [...allergies, ...hardAvoid];
+  const rows = assessLocalIngredientRestrictions(ingredientNames, restrictions);
+  const text = visibleText.filter((value) => value.trim());
+  const visible = text.length ? assessIngredientRestrictions(text, restrictions) : { status: 'clear' as const };
+  if (rows.status === 'conflict' || visible.status === 'conflict') return { status: 'conflict' };
+  if (rows.status === 'review' || visible.status === 'review' || allergies.length > 0) return { status: 'review' };
+  return { status: 'clear' };
 }
 
 /** Existing callers reject both known conflicts and names that require dietary review. */
@@ -246,21 +322,16 @@ export function containsRestrictedIngredientName(
   return assessIngredientRestrictions(ingredientNames, restrictions).status !== 'clear';
 }
 
-export function normalizeIngredientName(name: string): string {
-  return name
-    .normalize('NFD')
-    .replace(/\p{Diacritic}/gu, '')
-    .toLowerCase()
-    .replace(/[()]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/\b(tomates|jitomates)\b/g, 'tomate')
-    .replace(/\bcebollas\b/g, 'cebolla')
-    .replace(/\bajos\b/g, 'ajo')
-    .replace(/\b(almendra|almendras)\b/g, 'almendra')
-    .replace(/\b(huevo|huevos)\b/g, 'huevo')
-    .replace(/\b(nuez|nueces)\b/g, 'nuez')
-    .replace(/\b(manis?|cacahuates?|cacahuetes?|peanuts?|groundnuts?)\b/g, 'mani');
+/** Guard canonical recipe text as well as ingredient rows. The model must not
+ * insert undeclared ingredients in prose. This is intentionally conservative
+ * and does not attempt to interpret negated claims or medical descriptions. */
+export function containsRestrictedRecipeContent(
+  ingredientNames: readonly string[],
+  recipe: string,
+  restrictions: readonly string[]
+): boolean {
+  return containsRestrictedIngredientName(ingredientNames, restrictions) ||
+    containsRestrictedIngredientName([recipe], restrictions);
 }
 
 function normalizeUnit(rawUnit: string | null): string | null {

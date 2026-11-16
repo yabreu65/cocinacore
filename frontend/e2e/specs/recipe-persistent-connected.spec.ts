@@ -135,12 +135,12 @@ test.describe('Connected persistent recipe lifecycle', () => {
     await page.getByRole('button', { name: 'Archivar' }).click();
     await archiveResponse;
     await expect(page.getByRole('button', { name: 'Desarchivar' })).toBeVisible();
-    await page.goto('/recipes');
     const activeResponse = page.waitForResponse(
       (response) => response.url().includes('/api/recipes?archived=active') && response.ok()
     );
-    await page.getByLabel('Estado de recetas').selectOption('active');
+    await page.goto('/recipes');
     await activeResponse;
+    await expect(page.getByLabel('Estado de recetas')).toHaveValue('active');
     await expect(page.getByRole('link', { name: originalTitle, exact: true })).toHaveCount(0);
     const archivedResponse = page.waitForResponse(
       (response) => response.url().includes('/api/recipes?archived=archived') && response.ok()
@@ -155,16 +155,67 @@ test.describe('Connected persistent recipe lifecycle', () => {
     await page.getByRole('button', { name: 'Desarchivar' }).click();
     await unarchiveResponse;
     await expect(page.getByRole('button', { name: 'Archivar' })).toBeVisible();
-    await page.goto('/recipes');
     const activeAfterUnarchiveResponse = page.waitForResponse(
       (response) => response.url().includes('/api/recipes?archived=active') && response.ok()
     );
-    await page.getByLabel('Estado de recetas').selectOption('active');
+    await page.goto('/recipes');
     await activeAfterUnarchiveResponse;
+    await expect(page.getByLabel('Estado de recetas')).toHaveValue('active');
     await expect(page.getByRole('link', { name: originalTitle, exact: true })).toBeVisible();
 
     const detail = await page.request.get(`/api/recipes/${recipeId}`);
     expect(detail.ok()).toBeTruthy();
+  });
+
+  test('keeps the latest archive filter when a real earlier response arrives late', async ({ page }) => {
+    const suffix = randomUUID().slice(0, 8);
+    const activeTitle = `E2E Active ${suffix}`;
+    const archivedTitle = `E2E Archived ${suffix}`;
+    const activeId = await createRecipe(page, activeTitle, 'Cocinar.');
+    recipeIds.push(activeId);
+    const archivedId = await createRecipe(page, archivedTitle, 'Cocinar.');
+    recipeIds.push(archivedId);
+    const archived = await page.request.patch(`/api/recipes/${archivedId}/archive`, { data: { archived: true } });
+    expect(archived.ok()).toBeTruthy();
+
+    const first = page.waitForResponse((response) =>
+      response.url().includes('/api/recipes?archived=active') && response.ok());
+    await page.goto('/recipes');
+    await first;
+    const filter = page.getByLabel('Estado de recetas');
+    await expect(page.getByRole('link', { name: activeTitle, exact: true })).toBeVisible();
+    await filter.selectOption('archived');
+    await expect(page.getByRole('link', { name: archivedTitle, exact: true })).toBeVisible();
+
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let received!: () => void;
+    const activeFetched = new Promise<void>((resolve) => { received = resolve; });
+    const activePattern = '**/api/recipes?archived=active&limit=100&offset=0';
+    await page.route(activePattern, async (route) => {
+      const response = await route.fetch();
+      received();
+      await held;
+      await route.fulfill({ response });
+    });
+    try {
+      await filter.selectOption('active');
+      await activeFetched;
+      await filter.selectOption('archived');
+      await expect(page.getByRole('link', { name: archivedTitle, exact: true })).toBeVisible();
+      const late = page.waitForResponse((response) =>
+        response.url().includes('/api/recipes?archived=active') && response.ok());
+      release();
+      await (await late).finished();
+      await page.evaluate(() => new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      await expect(filter).toHaveValue('archived');
+      await expect(page.getByRole('link', { name: archivedTitle, exact: true })).toBeVisible();
+      await expect(page.getByRole('link', { name: activeTitle, exact: true })).toHaveCount(0);
+    } finally {
+      release();
+      await page.unroute(activePattern);
+    }
   });
 
   test('imports structured AI output and retains its source history', async ({ page }) => {
@@ -177,6 +228,11 @@ test.describe('Connected persistent recipe lifecycle', () => {
     expect(history!.recipe_payload.structuredIngredients ?? []).not.toHaveLength(0);
 
     await page.getByRole('button', { name: 'Importar al recetario' }).click();
+    await expect(page.getByRole('button', { name: 'Generar receta' })).toBeDisabled();
+    await expect(page.getByLabel('Cantidad del ingrediente 2')).toHaveValue('1');
+    await page.getByLabel('Cantidad del ingrediente 2').fill('1/3');
+    await expect(page.getByLabel('Pasos y notas')).not.toHaveValue(/INGREDIENTES/);
+    await page.getByRole('button', { name: 'Confirmar y guardar' }).click();
     await expect(page.getByRole('status')).toContainText('Receta importada.');
     const imported = await recipeImportLink(primaryIdentity!, historyId, GENERATED_TITLE);
     expect(imported).not.toBeNull();
@@ -193,6 +249,24 @@ test.describe('Connected persistent recipe lifecycle', () => {
         .first()
     ).toBeVisible();
     expect(await latestRecipeHistory(primaryIdentity!)).not.toBeNull();
+    const detail = await page.request.get(`/api/recipes/${imported!.recipe_id}`);
+    expect(detail.ok()).toBeTruthy();
+    expect(await detail.json()).toMatchObject({
+      recipe: { current_version: { source_recipe_history_id: historyId,
+        ingredients: expect.arrayContaining([{ name: 'arroz', quantity: '1/3', unit: 'taza' }]) } },
+    });
+    await expect(page.getByRole('link', { name: 'Consultar historial original' })).toBeVisible();
+    await page.getByRole('button', { name: 'Editar' }).click();
+    await page.getByLabel('Cantidad del ingrediente 2').fill('2/3');
+    await page.getByRole('button', { name: 'Guardar' }).click();
+    await expect(page.getByText(`Versión 2 · ${GENERATED_TITLE}`, { exact: true })).toBeVisible();
+    const versions = await page.request.get(`/api/recipes/${imported!.recipe_id}/versions`);
+    expect(versions.ok()).toBeTruthy();
+    expect(await versions.json()).toMatchObject({ versions: [
+      { version_number: 2, ingredients: expect.arrayContaining([{ name: 'arroz', quantity: '2/3', unit: 'taza' }]) },
+      { version_number: 1, source_recipe_history_id: historyId,
+        ingredients: expect.arrayContaining([{ name: 'arroz', quantity: '1/3', unit: 'taza' }]) },
+    ] });
   });
 
   test('warns when importing a duplicate title and keeps both recipes', async ({ page }) => {
@@ -213,6 +287,8 @@ test.describe('Connected persistent recipe lifecycle', () => {
     historyIds.push(history!.id);
 
     await page.getByRole('button', { name: 'Importar al recetario' }).click();
+    await expect(page.getByRole('button', { name: 'Generar receta' })).toBeDisabled();
+    await page.getByRole('button', { name: 'Confirmar y guardar' }).click();
     const importedLink = page.getByRole('link', { name: 'Ver en el recetario' });
     await expect(importedLink).toBeVisible();
     const importedHref = await importedLink.getAttribute('href');

@@ -126,6 +126,18 @@ describe('history scoped operations', () => {
     expect(queryMock.mock.calls[3][0]).toContain('delete from public.recipe_ai_history');
   });
 
+  it('rejects recipe history when a restriction was added while Gemini was generating', async () => {
+    queryMock.mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ user_id: 'user-1', tenant_id: 'tenant-1', allergies: ['Maní', 'new restriction'] }] })
+      .mockResolvedValueOnce({ rows: [] });
+    await expect(createRecipeHistory({ tenantId: 'tenant-1', userId: 'user-1', source: 'gemini',
+      recipeTitle: 'Rice', recipePayload: {}, expectedHardRestrictions: ['Maní'] })).resolves.toBeNull();
+    expect(queryMock.mock.calls[0][0]).toContain('pg_advisory_xact_lock');
+    expect(queryMock).toHaveBeenCalledTimes(3);
+    const queries = queryMock.mock.calls as [string, unknown[]][];
+    expect(queries.some(([sql]) => sql.includes('insert into public.recipe_ai_history'))).toBe(false);
+  });
+
   it('keeps linked history without attempting a deletion', async () => {
     queryMock.mockResolvedValueOnce({ rows: [{ '?column?': 1 }] });
     await expect(deleteRecipeHistory('recipe-1', 'tenant-1', 'user-1')).resolves.toBe('linked');

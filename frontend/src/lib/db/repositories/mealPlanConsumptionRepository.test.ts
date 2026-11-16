@@ -369,4 +369,18 @@ describe('consumePlannedMeal', () => {
       )
     ).toBe(false);
   });
+  it('never deducts the obsolete plan ingredients when an exact recipe version is linked', async () => {
+    const stored = plan();
+    const payload = stored.calendar_payload as { days: Array<{ meals: Array<Record<string, unknown>> }> };
+    payload.days[0].meals[0].recipeRef = { recipeId: '00000000-0000-4000-8000-000000000001', versionId: '00000000-0000-4000-8000-000000000002' };
+    const { client, queries } = mockClient((sql) => {
+      if (sql.includes('select * from public.user_meal_plans')) return [stored];
+      if (sql.includes('pg_advisory_xact_lock')) return [];
+      throw new Error('Unexpected write: ' + sql);
+    });
+    await expect(consumePlannedMealInTransaction(client, { mealPlanId: PLAN_ID, tenantId: TENANT_ID, userId: USER_ID,
+      dayIndex: 1, mealType: 'breakfast' })).rejects.toMatchObject({ code: 'linked_recipe' });
+    expect(queries.some(({ sql }) => /insert|update public/i.test(sql))).toBe(false);
+  });
+
 });

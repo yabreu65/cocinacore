@@ -1,6 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
 import { injectAuth } from '../fixtures/auth';
+import { Pool } from 'pg';
+import { validateE2ETargets } from '../database-target';
 import {
+  assertE2EDisposableIsolation,
   cleanupConnectedRecipeData,
   clearRecipeCache,
   closeE2EDatabase,
@@ -92,7 +95,7 @@ test.describe('Connected meal planner', () => {
     await page.getByLabel('Período').selectOption('fortnight');
     await page.getByLabel('Período').selectOption('week');
     await page.getByLabel('Cocina base').fill('Italiana');
-    await page.getByLabel('Restricciones (separadas por comas)').fill('Gluten, Lácteos');
+    await page.getByLabel('Restricciones (separadas por comas)').fill('Sésamo, Lácteos');
 
     releaseInitialGet();
     await initialGetResponse;
@@ -102,7 +105,7 @@ test.describe('Connected meal planner', () => {
     await expect(page.getByLabel('Período')).toHaveValue('week');
     await expect(page.getByLabel('Cocina base')).toHaveValue('Italiana');
     await expect(page.getByLabel('Restricciones (separadas por comas)')).toHaveValue(
-      'Gluten, Lácteos'
+      'Sésamo, Lácteos'
     );
 
     await page.getByRole('button', { name: 'Generar menú' }).click();
@@ -122,9 +125,10 @@ test.describe('Connected meal planner', () => {
       base_cuisine: 'Italiana',
       fusion_cuisines: [],
       fusion_intensity: 'media',
-      restrictions: ['Gluten', 'Lácteos'],
+      restrictions: ['Sésamo', 'Lácteos'],
       inventory_snapshot: {
         inventoryLines: ['- tomato: 2 units', '- rice: 1 cup', '- chicken: 200 g'],
+        evaluatedHardRestrictions: expect.arrayContaining(['Sésamo', 'Lácteos']),
       },
       calendar_payload: expect.objectContaining({ period: 'week', dayCount: 7 }),
     });
@@ -167,8 +171,65 @@ test.describe('Connected meal planner', () => {
     await expect(page.getByLabel('Período')).toHaveValue('week');
     await expect(page.getByLabel('Cocina base')).toHaveValue('Italiana');
     await expect(page.getByLabel('Restricciones (separadas por comas)')).toHaveValue(
-      'Gluten, Lácteos'
+      'Sésamo, Lácteos'
     );
     expect((await inspectProvider(page)).generationCallCount).toBe(0);
   });
+  test('rejects the deterministic oats fixture when gluten is excluded', async ({ page }) => {
+    if (!seed) throw new Error('Connected meal planner seed was not initialized.');
+    const before = await latestMealPlan(seed.identity);
+    const response = await page.request.post('/api/meal-plan', { data: {
+      mode: 'balanced_ai', period: 'week', restrictions: ['Gluten'],
+    } });
+    expect(response.status()).toBe(502);
+    expect(await latestMealPlan(seed.identity)).toEqual(before);
+  });
+
+  test('rejects a menu when a new restriction is committed during generation', async ({ page }) => {
+    if (!seed) throw new Error('Connected meal planner seed was not initialized.');
+    const { userId, tenantId } = seed.identity;
+    const before = await latestMealPlan(seed.identity);
+    const database = new Pool({ connectionString: validateE2ETargets(process.env).databaseUrl });
+    await assertE2EDisposableIsolation(database);
+    const client = await database.connect();
+    let pending: ReturnType<typeof page.request.post> | undefined;
+    let originalAllergies: string[] | undefined;
+    try {
+      await client.query('begin');
+      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+        `culinary-profile:${tenantId.toLowerCase()}:${userId.toLowerCase()}`,
+      ]);
+      const original = await client.query<{ allergies: string[] }>(
+        'select allergies from public.user_culinary_profiles where user_id = $1 and tenant_id = $2',
+        [userId, tenantId]
+      );
+      originalAllergies = original.rows[0]?.allergies;
+      if (!originalAllergies) throw new Error('Synthetic profile not found.');
+      pending = page.request.post('/api/meal-plan', { data: {
+        mode: 'balanced_ai', period: 'week', restrictions: [],
+      } });
+      await expect.poll(async () => (await inspectProvider(page)).generationCallCount).toBe(1);
+      // The provider has seen the old profile; the create transaction waits
+      // on this same advisory lock before it can persist the response.
+      await client.query(
+        'update public.user_culinary_profiles set allergies = $1 where user_id = $2 and tenant_id = $3',
+        [[...originalAllergies, 'alergia nueva desconocida'], userId, tenantId]
+      );
+      await client.query('commit');
+      const response = await pending;
+      expect(response.status()).toBe(409);
+      expect(await response.json()).toMatchObject({ code: 'MEAL_PLAN_RESTRICTIONS_CHANGED' });
+      expect(await latestMealPlan(seed.identity)).toEqual(before);
+    } finally {
+      await client.query('rollback');
+      if (pending) await pending.catch(() => undefined);
+      if (originalAllergies) await client.query(
+        'update public.user_culinary_profiles set allergies = $1 where user_id = $2 and tenant_id = $3',
+        [originalAllergies, userId, tenantId]
+      );
+      client.release();
+      await database.end();
+    }
+  });
+
 });

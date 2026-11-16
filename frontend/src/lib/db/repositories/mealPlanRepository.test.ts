@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UserMealPlanRow } from '@/lib/db/types';
-import type { StructuredMealPlan } from '@/lib/meal-planner/structured-plan';
+import { parseStructuredMealPlanValue, type StructuredMealPlan } from '@/lib/meal-planner/structured-plan';
 
 const queryMock = vi.fn();
 const transactionMock = vi.fn();
@@ -119,7 +119,11 @@ describe('mealPlanRepository', () => {
 
   it('inserts only the canonical structured plan as parameterized JSONB payload', async () => {
     const plan = structuredPlan();
-    queryMock.mockResolvedValue({ rows: [mealPlanRow({ calendar_payload: plan })] });
+    queryMock
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [mealPlanRow({ calendar_payload: plan })] });
 
     const created = await createMealPlan({
       tenantId: '00000000-0000-4000-8000-000000000001',
@@ -130,7 +134,8 @@ describe('mealPlanRepository', () => {
       baseCuisine: 'Latinoamericana',
       fusionCuisines: ['Japonesa'],
       fusionIntensity: 'media',
-      restrictions: ['Gluten'],
+      restrictions: ['Maní'],
+      expectedHardRestrictions: ['Maní'],
       inventorySnapshot: { inventoryLines: ['- arroz: 1 taza'] },
       structuredPlan: plan,
     });
@@ -145,8 +150,9 @@ describe('mealPlanRepository', () => {
       expect.any(Function)
     );
     expect(transactionMock).not.toHaveBeenCalled();
-    expect(queryMock).toHaveBeenCalledTimes(1);
-    const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
+    expect(queryMock).toHaveBeenCalledTimes(4);
+    expect(queryMock.mock.calls[0][1]).toEqual([`culinary-profile:${tenantId}:user-1`]);
+    const [sql, params] = queryMock.mock.calls[3] as [string, unknown[]];
     expect(sql).toContain('insert into public.user_meal_plans');
     expect(sql).toContain('restrictions');
     expect(sql).toContain('inventory_snapshot');
@@ -161,11 +167,26 @@ describe('mealPlanRepository', () => {
       'Latinoamericana',
       ['Japonesa'],
       'media',
-      ['Gluten'],
-      JSON.stringify({ inventoryLines: ['- arroz: 1 taza'] }),
+      ['Maní'],
+      JSON.stringify({ inventoryLines: ['- arroz: 1 taza'], evaluatedHardRestrictions: ['Maní'] }),
       JSON.stringify(plan),
       expectedStoredContent(plan),
     ]);
+  });
+
+  it.each(['Arroz', 'alergia nueva desconocida'])('re-reads the profile under lock and refuses a newly added restriction: %s', async (restriction) => {
+    queryMock.mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ user_id: 'user-1', tenant_id: tenantId, allergies: [restriction] }] })
+      .mockResolvedValueOnce({ rows: [] });
+    const result = await createMealPlan({
+      tenantId, userId: 'user-1', peopleCount: 4, period: 'week',
+      mode: 'balanced_ai', baseCuisine: 'home', fusionCuisines: [], fusionIntensity: 'media',
+      restrictions: [], expectedHardRestrictions: [], inventorySnapshot: { inventoryLines: [] }, structuredPlan: structuredPlan(),
+    });
+    expect(result).toBeNull();
+    expect(queryMock).toHaveBeenCalledTimes(3);
+    expect(queryMock.mock.calls[0][1]).toEqual([`culinary-profile:${tenantId}:user-1`]);
+    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes('insert into public.user_meal_plans'))).toBe(false);
   });
 
   it('looks up a plan using id, tenant and user ownership predicates', async () => {
@@ -247,6 +268,7 @@ describe('mealPlanRepository', () => {
         fusionCuisines: [],
         fusionIntensity: 'media',
         restrictions: [],
+        expectedHardRestrictions: [],
         inventorySnapshot: { inventoryLines: [] },
         structuredPlan: structuredPlan(),
       })
@@ -354,6 +376,20 @@ describe('mealPlanRepository', () => {
     expect(queryMock).toHaveBeenCalledTimes(4);
   });
 
+  it('rejects new unknown restrictions under the profile lock even without a literal conflict', async () => {
+    mockAdaptiveReads(mealPlanRow({ inventory_snapshot: { evaluatedHardRestrictions: [] } }), { ...profile, allergies: ['new medical restriction'] });
+    await expect(replaceMealPlanForAdaptiveProposal(adaptiveInput())).resolves.toBeNull();
+    expect(queryMock).toHaveBeenCalledTimes(4);
+  });
+
+  it('rejects an adaptive meal with a restricted title under the profile lock', async () => {
+    const plan = structuredPlan();
+    plan.days[0].meals[0].title = 'Arroz con maní';
+    mockAdaptiveReads(mealPlanRow(), { ...profile, allergies: ['Maní'] });
+    await expect(replaceMealPlanForAdaptiveProposal(adaptiveInput(plan))).resolves.toBeNull();
+    expect(queryMock).toHaveBeenCalledTimes(4);
+  });
+
   it('enforces persisted plan restrictions even when the profile is absent', async () => {
     mockAdaptiveReads(mealPlanRow({ restrictions: ['Arroz'] }), null);
     await expect(replaceMealPlanForAdaptiveProposal(adaptiveInput())).resolves.toBeNull();
@@ -416,7 +452,13 @@ describe('mealPlanRepository', () => {
         portionConfirmation: { peopleCount: 4, confirmedAt: '2026-10-27T12:00:00.000Z' },
       },
     };
-    const current = mealPlanRow({ calendar_payload: scheduledPlan });
+    const historical = { ...scheduledPlan, days: scheduledPlan.days.map((day) => ({
+      ...day, meals: [...day.meals].reverse(),
+    })) };
+    const current = mealPlanRow({ calendar_payload: historical });
+    const canonical = parseStructuredMealPlanValue(historical, 'week');
+    if (!canonical.success) throw new Error('Invalid historical fixture');
+    expect(canonical.plan).not.toEqual(historical);
     const updated = mealPlanRow({
       calendar_payload: {
         ...scheduledPlan,
@@ -456,7 +498,7 @@ describe('mealPlanRepository', () => {
         recipeId: 'recipe-1',
         versionId: 'version-1',
         expectedUpdatedAt: current.updated_at,
-        expectedCalendarPayload: current.calendar_payload,
+        expectedCalendarPayload: canonical.plan,
       })
     ).resolves.toMatchObject({ status: 'applied', recipeId: 'recipe-1', versionId: 'version-1' });
     expect(tenantLockMock.mock.invocationCallOrder[0]).toBeLessThan(
@@ -486,6 +528,7 @@ describe('mealPlanRepository', () => {
       current.updated_at,
       JSON.stringify(current.calendar_payload),
     ]);
+    expect(client.query.mock.calls[4][1]).toEqual([expect.any(String), current.id, tenantId, current.user_id, current.updated_at, JSON.stringify(current.calendar_payload)]);
   });
 
   it('returns a conflict and does not update when the plan snapshot is stale', async () => {
@@ -521,7 +564,7 @@ describe('mealPlanRepository', () => {
         recipeId: 'recipe-1',
         versionId: 'version-1',
         expectedUpdatedAt: '2026-01-01T00:00:00.000Z',
-        expectedCalendarPayload: structuredPlan(),
+        expectedCalendarPayload: current.calendar_payload,
       })
     ).resolves.toEqual({ status: 'conflict' });
     expect(client.query).toHaveBeenCalledTimes(4);
@@ -543,6 +586,7 @@ describe('mealPlanRepository', () => {
             fusionCuisines: [],
             fusionIntensity: 'media',
             restrictions: [],
+            expectedHardRestrictions: [],
             inventorySnapshot: { inventoryLines: [] },
             structuredPlan: structuredPlan(),
           }),
@@ -597,6 +641,25 @@ describe('mealPlanRepository', () => {
       expect(queryMock).toHaveBeenCalledTimes(kind === 'stale' ? 1 : 0);
     }
   );
+  it('rejects a changed canonical meal before attempting any write', async () => {
+    const current = mealPlanRow({ calendar_payload: {
+      ...structuredPlan(), schedule: { startDate: '2026-10-28', timeZone: 'UTC',
+        confirmedAt: '2026-10-27T12:00:00.000Z',
+        portionConfirmation: { peopleCount: 4, confirmedAt: '2026-10-27T12:00:00.000Z' } },
+    } });
+    const parsed = parseStructuredMealPlanValue(current.calendar_payload, 'week');
+    if (!parsed.success) throw new Error('Invalid fixture');
+    parsed.plan.days[0].meals[1].title = 'Different lunch';
+    queryMock.mockResolvedValueOnce({ rows: [current] })
+      .mockResolvedValueOnce({ rows: [{ id: 'recipe-1' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'version-1' }] });
+    expect(await attachRecipeToMealPlanSlot({
+      mealPlanId: current.id, tenantId, userId: 'user-1', dayIndex: 1, mealType: 'lunch',
+      recipeId: 'recipe-1', versionId: 'version-1', expectedUpdatedAt: current.updated_at,
+      expectedCalendarPayload: parsed.plan,
+    })).toEqual({ status: 'conflict' });
+    expect(queryMock).toHaveBeenCalledTimes(3);
+  });
 });
 
 it('executes scoped plan read on the supplied transaction client', async () => {
@@ -619,4 +682,6 @@ it('executes scoped plan read on the supplied transaction client', async () => {
   await expect(
     findMealPlanByIdForUserAndTenant('plan', 'other', scope.tenantId, scope)
   ).rejects.toThrow('scope mismatch');
+
+
 });

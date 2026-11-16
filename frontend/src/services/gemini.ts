@@ -4,7 +4,7 @@ import {
   isGeminiEmbedContentResponseDto,
 } from './apiDtos';
 import { getServerSecret } from './env';
-import { getGeminiBaseUrl } from '@/lib/ai/gemini-config';
+import { getGeminiBaseUrl, getGeminiEmbeddingModel, GEMINI_EMBEDDING_DIMENSIONS, isConfiguredEmbedding } from '@/lib/ai/gemini-config';
 import { serverLogger } from '@/lib/serverLogger';
 import {
   EmbeddingService,
@@ -17,15 +17,17 @@ import {
 export class GeminiEmbeddingService implements EmbeddingService {
   private apiKey: string;
   private baseUrl: string;
+  private model: string;
 
   constructor(apiKey?: string) {
     // Server-only API key. Do not fall back to NEXT_PUBLIC_* secrets.
     this.apiKey = apiKey ?? getServerSecret('GEMINI_API_KEY');
-    this.baseUrl = `${getGeminiBaseUrl()}/models/text-embedding-004`;
+    this.model = getGeminiEmbeddingModel();
+    this.baseUrl = `${getGeminiBaseUrl()}/models/${this.model}`;
   }
 
   /**
-   * Generates a single vector embedding for a chunk of text using text-embedding-004
+   * Generates a single vector embedding for a chunk of text using the configured document embedding model
    */
   public async generateEmbedding(text: string, signal?: AbortSignal): Promise<number[]> {
     if (!text || text.trim() === '') {
@@ -40,7 +42,8 @@ export class GeminiEmbeddingService implements EmbeddingService {
         },
         ...(signal ? { signal } : {}),
         body: JSON.stringify({
-          model: 'models/text-embedding-004',
+          model: `models/${this.model}`,
+          outputDimensionality: GEMINI_EMBEDDING_DIMENSIONS,
           content: {
             parts: [{ text }],
           },
@@ -52,7 +55,7 @@ export class GeminiEmbeddingService implements EmbeddingService {
       }
 
       const data: unknown = await response.json();
-      if (!isGeminiEmbedContentResponseDto(data)) {
+      if (!isGeminiEmbedContentResponseDto(data) || !isConfiguredEmbedding(data.embedding.values)) {
         throw new Error('Failed to parse embedding values from Gemini response');
       }
 
@@ -66,7 +69,7 @@ export class GeminiEmbeddingService implements EmbeddingService {
   }
 
   /**
-   * Generates multiple vector embeddings in a batch using text-embedding-004
+   * Generates multiple vector embeddings in a batch using the configured document embedding model
    */
   public async generateEmbeddings(texts: string[], signal?: AbortSignal): Promise<number[][]> {
     if (!texts || texts.length === 0) {
@@ -82,7 +85,8 @@ export class GeminiEmbeddingService implements EmbeddingService {
         ...(signal ? { signal } : {}),
         body: JSON.stringify({
           requests: texts.map((text) => ({
-            model: 'models/text-embedding-004',
+            model: `models/${this.model}`,
+            outputDimensionality: GEMINI_EMBEDDING_DIMENSIONS,
             content: {
               parts: [{ text }],
             },
@@ -95,7 +99,8 @@ export class GeminiEmbeddingService implements EmbeddingService {
       }
 
       const data: unknown = await response.json();
-      if (!isGeminiBatchEmbedContentsResponseDto(data)) {
+      if (!isGeminiBatchEmbedContentsResponseDto(data) || data.embeddings.length !== texts.length ||
+        !data.embeddings.every((embedding) => isConfiguredEmbedding(embedding.values))) {
         throw new Error('Failed to parse batch embeddings from Gemini response');
       }
 

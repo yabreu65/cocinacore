@@ -19,6 +19,7 @@ export type StructuredRecipeIngredient = {
   name: string;
   normalized_name: string;
   quantity: number | null;
+  exact_quantity_text?: string;
   unit: string | null;
   optional_quantity_text: string | null;
   category: string | null;

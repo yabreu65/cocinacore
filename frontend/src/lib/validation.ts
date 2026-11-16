@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { readExactRecipeAmount, recipeAmountForImport } from '@/lib/recipes/recipe-amount';
 
 // ---------------------------------------------------------------------------
 // Zod schemas for all AI API routes
@@ -6,8 +7,8 @@ import { z } from 'zod';
 
 /** Schema for POST /api/recipe-generate */
 export const RecipeGenerateSchema = z.object({
-  ingredients: z.array(z.string().min(1).max(100)).max(30).optional().default([]),
-  chunks: z.array(z.string().max(2000)).max(14).optional().default([]),
+  ingredients: z.array(z.string().min(1).max(200)).max(30).optional().default([]),
+  chunks: z.array(z.string().max(2000)).max(20).optional().default([]),
   mode: z.enum(['free', 'rag']).optional().default('free'),
   provider: z.enum(['auto', 'gemini']).optional().default('auto'),
   recipeName: z.string().max(200).optional(),
@@ -102,18 +103,23 @@ export const InventorySuggestionSchema = z.object({
 export type InventorySuggestionBody = z.infer<typeof InventorySuggestionSchema>;
 
 /** Schema for POST /api/meal-plan/warmup */
-const StructuredWarmupIngredientSchema = z
+export const StructuredWarmupIngredientSchema = z
   .object({
     name: z.string().trim().min(1).max(200),
     normalized_name: z.string().trim().min(1).max(200),
-    quantity: z.number().finite().nullable(),
+    quantity: z.number().finite().nonnegative().nullable(),
+    exact_quantity_text: z.string().max(100).optional(),
     unit: z.string().trim().max(50).nullable(),
     optional_quantity_text: z.string().trim().max(100).nullable(),
     category: z.string().trim().max(100).nullable(),
     estimated_cost_optional: z.number().finite().nullable(),
     structured: z.boolean(),
   })
-  .strict();
+  .strict()
+  .refine((item) => item.exact_quantity_text !== undefined
+    ? readExactRecipeAmount(item.exact_quantity_text, item.quantity, item.optional_quantity_text) !== null
+    : item.optional_quantity_text === null ||
+      (item.quantity === null && recipeAmountForImport(null, undefined, item.optional_quantity_text, item.name) !== null));
 
 const WarmupMealCardSchema = z
   .object({
@@ -126,6 +132,7 @@ const WarmupMealCardSchema = z
     aiScore: z.number().finite().min(0).max(100),
     structured_ingredients: z.array(StructuredWarmupIngredientSchema).max(100).optional(),
     recipe_content: z.string().max(20_000).nullable().optional(),
+    recipe_review_required: z.literal(true).optional(),
     rag_context: z.array(z.string().max(2_000)).max(20).optional(),
   })
   .strict();

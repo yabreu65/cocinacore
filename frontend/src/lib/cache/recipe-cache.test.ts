@@ -11,6 +11,11 @@ import {
 // Memory fallback tests (REDIS_URL unset → uses in-memory Map)
 // ---------------------------------------------------------------------------
 
+const cacheIngredient = {
+  name: 'arroz', normalized_name: 'arroz', quantity: 1, unit: 'taza',
+  optional_quantity_text: null, category: null, estimated_cost_optional: null, structured: true,
+};
+
 describe('recipe-cache (memory fallback)', () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -114,7 +119,7 @@ describe('recipe-cache (memory fallback)', () => {
       title: 'Pasta al pomodoro',
       provider: 'gemini',
       mode: 'free',
-      structuredIngredients: [],
+      structuredIngredients: [cacheIngredient],
       createdAt: Date.now(),
     });
 
@@ -122,6 +127,29 @@ describe('recipe-cache (memory fallback)', () => {
 
     vi.advanceTimersByTime(1000 * 60 * 60 * 6 + 1);
     expect(await getCachedRecipe(key)).toBeNull();
+  });
+
+  it('preserves exact recipe amounts in memory and rejects contradictory cached evidence', async () => {
+    vi.stubEnv('REDIS_URL', '');
+    const ingredient = {
+      name: 'Arroz', normalized_name: 'arroz', quantity: null, exact_quantity_text: '1/3',
+      unit: 'taza', optional_quantity_text: null, category: null,
+      estimated_cost_optional: null, structured: false,
+    };
+    const value: CachedRecipe = {
+      recipe: 'Arroz\n\nINGREDIENTES\n- 1/3 taza Arroz\n\nPREPARACIÓN\nCocinar.', preparation: 'Cocinar.', title: 'Arroz', provider: 'gemini', mode: 'free',
+      createdAt: Date.now(), structuredIngredients: [ingredient],
+    };
+    await setCachedRecipe('exact-amount-memory', value);
+    expect(await getCachedRecipe('exact-amount-memory')).toEqual(value);
+    await setCachedRecipe('exact-amount-invalid', {
+      ...value, structuredIngredients: [{ ...ingredient, quantity: 2 }],
+    });
+    expect(await getCachedRecipe('exact-amount-invalid')).toBeNull();
+    await setCachedRecipe('contradictory-preparation', { ...value, preparation: 'Agregar huevo.' });
+    expect(await getCachedRecipe('contradictory-preparation')).toBeNull();
+    await setCachedRecipe('contradictory-note', { ...value, preparation: undefined, structuredIngredients: [{ ...ingredient, exact_quantity_text: undefined, quantity: 1, optional_quantity_text: 'al gusto' }] });
+    expect(await getCachedRecipe('contradictory-note')).toBeNull();
   });
 
   it('returns null on cache miss', async () => {
@@ -147,7 +175,7 @@ describe('recipe-cache (memory fallback)', () => {
     vi.useFakeTimers();
     const data: CachedRecipe = {
       recipe: 'Arroz', title: 'Arroz', provider: 'gemini', mode: 'free',
-      structuredIngredients: [], createdAt: Date.now(),
+      structuredIngredients: [cacheIngredient], createdAt: Date.now(),
     };
     for (let index = 0; index < 129; index++) {
       await setCachedRecipe('bounded-' + index, data);
@@ -168,7 +196,7 @@ describe('recipe-cache (memory fallback)', () => {
     vi.useFakeTimers();
     const data: CachedRecipe = {
       recipe: 'Arroz', title: 'Arroz', provider: 'gemini', mode: 'free',
-      structuredIngredients: [], createdAt: Date.now(),
+      structuredIngredients: [cacheIngredient], createdAt: Date.now(),
     };
     await setCachedRecipe('oversized', data);
     await setCachedRecipe('oversized', { ...data, recipe: 'x'.repeat(256 * 1024) });
@@ -181,7 +209,7 @@ describe('recipe-cache (memory fallback)', () => {
     vi.stubEnv('REDIS_URL', '');
     const data: CachedRecipe = {
       recipe: 'Arroz', title: 'Arroz', provider: 'gemini', mode: 'free',
-      structuredIngredients: [], createdAt: Date.now(),
+      structuredIngredients: [cacheIngredient], createdAt: Date.now(),
     };
     vi.stubEnv('COCINACORE_E2E_CACHE_NAMESPACE', 'test-one');
     await setCachedRecipe('same-key', data);
@@ -245,7 +273,7 @@ describe('recipe-cache (Redis integration)', () => {
       title: 'Pizza Margherita',
       provider: 'gemini' as const,
       mode: 'free' as const,
-      structuredIngredients: [],
+      structuredIngredients: [cacheIngredient],
       createdAt: Date.now() - 1000, // 1 second ago — still valid
     };
 
@@ -304,7 +332,7 @@ describe('recipe-cache (Redis integration)', () => {
       title: 'Risotto ai funghi',
       provider: 'gemini',
       mode: 'free',
-      structuredIngredients: [],
+      structuredIngredients: [cacheIngredient],
       createdAt: Date.now(),
     });
 
@@ -345,7 +373,7 @@ describe('recipe-cache (Redis integration)', () => {
       title: 'Fallback',
       provider: 'gemini' as const,
       mode: 'rag' as const,
-      structuredIngredients: [],
+      structuredIngredients: [cacheIngredient],
       createdAt: Date.now(),
     };
 
@@ -361,7 +389,7 @@ describe('recipe-cache (Redis integration)', () => {
     const { getCachedRecipe, setCachedRecipe } = await import('./recipe-cache');
     const data: CachedRecipe = {
       recipe: 'Arroz', title: 'Arroz', provider: 'gemini', mode: 'free',
-      structuredIngredients: [], createdAt: Date.now(),
+      structuredIngredients: [cacheIngredient], createdAt: Date.now(),
     };
     mockSet.mockRejectedValueOnce(new Error('Connection opening'));
     await setCachedRecipe('reconnect-miss', data);
@@ -378,13 +406,15 @@ describe('recipe-cache (Redis integration)', () => {
     const { getCachedRecipe, setCachedRecipe } = await import('./recipe-cache');
     const data: CachedRecipe = {
       recipe: 'Arroz', title: 'Arroz', provider: 'gemini', mode: 'free',
-      structuredIngredients: [], createdAt: Date.now(),
+      structuredIngredients: [cacheIngredient], createdAt: Date.now(),
     };
     mockSet.mockRejectedValueOnce(new Error('Connection refused'));
     await setCachedRecipe('invalid-redis', data);
     for (const invalid of [
       'not json',
       JSON.stringify({ ...data, structuredIngredients: [null] }),
+      JSON.stringify({ ...data, structuredIngredients: [] }),
+      JSON.stringify({ ...data, structuredIngredients: [{ ...cacheIngredient, name: ' ' }] }),
       JSON.stringify({ ...data, createdAt: Date.now() - 21600 * 1000 }),
     ]) {
       mockGet.mockResolvedValueOnce(invalid);
@@ -400,7 +430,7 @@ describe('recipe-cache (Redis integration)', () => {
     const { getCachedRecipe, setCachedRecipe } = await import('./recipe-cache');
     const data: CachedRecipe = {
       recipe: 'Arroz', title: 'Receta local', provider: 'gemini', mode: 'free',
-      structuredIngredients: [], createdAt: Date.now(),
+      structuredIngredients: [cacheIngredient], createdAt: Date.now(),
     };
     mockSet.mockRejectedValueOnce(new Error('Connection refused'));
     await setCachedRecipe('newer-local', data);
@@ -411,6 +441,32 @@ describe('recipe-cache (Redis integration)', () => {
     const fresh = { ...data, title: 'Receta Redis' };
     mockGet.mockResolvedValueOnce(JSON.stringify(fresh));
     expect(await getCachedRecipe('newer-local')).toEqual(fresh);
+  });
+
+  it('preserves exact amounts on a Redis round trip and rejects contradictory evidence', async () => {
+    vi.resetModules();
+    const { getCachedRecipe, setCachedRecipe } = await import('./recipe-cache');
+    const ingredient = {
+      name: 'Arroz', normalized_name: 'arroz', quantity: null, exact_quantity_text: '1/3',
+      unit: 'taza', optional_quantity_text: null, category: null,
+      estimated_cost_optional: null, structured: false,
+    };
+    const value: CachedRecipe = {
+      recipe: 'Arroz\n\nINGREDIENTES\n- 1/3 taza Arroz\n\nPREPARACIÓN\nCocinar.', preparation: 'Cocinar.', title: 'Arroz', provider: 'gemini', mode: 'free',
+      createdAt: Date.now(), structuredIngredients: [ingredient],
+    };
+    mockSet.mockResolvedValue('OK');
+    await setCachedRecipe('exact-amount-redis', value);
+    const raw: unknown = mockSet.mock.calls[0]?.[1];
+    expect(typeof raw).toBe('string');
+    mockGet.mockResolvedValueOnce(raw);
+    expect(await getCachedRecipe('exact-amount-redis')).toEqual(value);
+    mockGet.mockResolvedValueOnce(JSON.stringify({
+      ...value, structuredIngredients: [{ ...ingredient, quantity: 1 }],
+    }));
+    expect(await getCachedRecipe('exact-amount-redis')).toBeNull();
+    mockGet.mockResolvedValueOnce(JSON.stringify({ ...value, preparation: 'Agregar huevo.' }));
+    expect(await getCachedRecipe('exact-amount-redis')).toBeNull();
   });
 
 });

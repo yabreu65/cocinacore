@@ -171,6 +171,41 @@ describe('cooking intent preview', () => {
     });
   });
 
+  it('reports a verified shortage when there is no matching lot', () => {
+    const result = preview({ inventoryItems: [] });
+    expect(result.status).toBe('partial');
+    expect(result.ingredients[0]).toMatchObject({ availability: 'missing', evidence: 'verified', availableQuantity: 0, missingQuantity: 600 });
+  });
+
+  it.each([
+    { quantity: '1 kg', unit: 'g' },
+    { quantity: '2', unit: null },
+  ])('does not compare contradictory or unlabelled inventory quantities: %j', (lot) => {
+    const result = preview({ inventoryItems: [inventory(lot)] });
+    expect(result.ingredients[0]).toMatchObject({ availability: 'unknown', evidence: 'unknown', missingQuantity: null });
+  });
+
+  it('rejects contradictory recipe quantity units', () => {
+    const result = preview({ recipe: recipe({ current_version: {
+      ...recipe().current_version, ingredients: [{ name: 'Tomato', quantity: '1 kg', unit: 'g' }],
+    } }) });
+    expect(result.ingredients[0]).toMatchObject({ requiredQuantity: null, availability: 'unknown' });
+  });
+
+  it('does not present unscaled quantities for unknown original portions', () => {
+    const result = preview({ recipe: recipe({ current_version: { ...recipe().current_version, servings: null } }), requestedPortions: 4 });
+    expect(result.status).toBe('unknown');
+    expect(result.ingredients.every((item) => item.requiredQuantity === null && item.missingQuantity === null && item.remainingQuantity === null)).toBe(true);
+  });
+
+  it('compares fractions without rounding a shortage into sufficiency', () => {
+    const result = preview({ recipe: recipe({ current_version: {
+      ...recipe().current_version, ingredients: [{ name: 'Tomato', quantity: '1/3', unit: 'kg' }],
+    } }), inventoryItems: [inventory({ quantity: '0.3333', unit: 'kg' })] });
+    expect(result.ingredients[0]).toMatchObject({ availability: 'partial', evidence: 'verified' });
+    expect(result.ingredients[0].missingQuantity).toBeGreaterThan(0);
+  });
+
   it('does not count expired lots as available', () => {
     const result = preview({ inventoryItems: [inventory({ expiration_date: '2026-10-27' })] });
     expect(result.ingredients.find((item) => item.name === 'Tomato')).toMatchObject({
@@ -198,6 +233,24 @@ describe('cooking intent preview', () => {
     });
   });
 
+  it.each([
+    { profileConfigured: false, reason: 'culinary_profile_unavailable', hardAvoid: [] },
+    { profileConfigured: true, reason: 'ingredient_restriction_requires_review', hardAvoid: ['Sin TACC'] },
+  ])('never reports ready with unresolved restrictions: $reason', ({ reason, profileConfigured, hardAvoid }) => {
+    const result = preview({
+      profileConfigured, hardAvoid,
+      recipe: recipe({ current_version: {
+        ...recipe().current_version,
+        servings: 2,
+        ingredients: [{ name: 'harina', quantity: '100', unit: 'g' }],
+      } }),
+      inventoryItems: [inventory({ ingredient_name: 'harina', quantity: '1', unit: 'kg' })],
+    });
+    expect(result.ingredients[0]).toMatchObject({ availability: 'sufficient', evidence: 'verified' });
+    expect(result.status).toBe('unknown');
+    expect(result.restrictions).toEqual({ status: 'unknown', reasons: [reason] });
+  });
+
   it('supports a confirmed plan slot without introducing a write', () => {
     const slot: CookingIntentMealSlot = {
       mealPlan: mealPlan(),
@@ -220,4 +273,49 @@ describe('cooking intent preview', () => {
     });
     expect(JSON.stringify(slot)).toBe(before);
   });
+  it('blocks a restriction hidden only in recipe instructions and requires review for unassessed allergies', () => {
+    const original = recipe();
+    const edited = { ...original, current_version: { ...original.current_version, instructions: 'Add pollo.' } };
+    expect(preview({ recipe: edited, hardAvoid: ['pollo'] }).restrictions.status).toBe('blocked');
+    expect(preview({ allergies: ['Maní'] }).restrictions.status).toBe('unknown');
+    expect(preview({ allergies: ['custom'] }).restrictions.status).toBe('unknown');
+  });
+
+  it('uses the exact linked version, including instructions and its own portion basis', () => {
+    const original = recipe();
+    const version = { ...original.current_version, title: 'Pollo con crema', servings: 4,
+      instructions: 'Añadir crema.', ingredients: [{ name: 'Crema', quantity: '200', unit: 'ml' }] };
+    const slot: CookingIntentMealSlot = { mealPlan: mealPlan(), dayIndex: 1, timeZone: 'UTC', linkedVersion: version,
+      meal: { mealType: 'lunch', title: 'Arroz', description: null, ingredients: [{ name: 'Arroz', quantity: 1, unit: 'kg' }],
+        recipeRef: { recipeId: version.recipe_id, versionId: version.id } } };
+    const result = preview({ source: 'confirmed_meal_slot', recipe: undefined, mealSlot: slot, hardAvoid: ['crema'] });
+    expect(result).toMatchObject({ title: version.title, recipeVersion: { recipeId: version.recipe_id, versionId: version.id },
+      portions: { original: 4, requested: 2, source: 'recipe' }, restrictions: { status: 'blocked' },
+      ingredients: [{ name: 'Crema', requiredQuantity: 100, requiredUnit: 'ml' }] });
+    expect(result.steps).not.toHaveLength(0);
+    const missing = preview({ source: 'confirmed_meal_slot', recipe: undefined, mealSlot: { ...slot, linkedVersion: undefined } });
+    expect(missing.status).toBe('unknown');
+    expect(missing.ingredients).toEqual([]);
+  });
+
+  it('blocks explicit plan conflicts even without a culinary profile, including linked versions', () => {
+    const version = recipe().current_version;
+    const slot: CookingIntentMealSlot = {
+      mealPlan: { ...mealPlan(), restrictions: ['Tomato'] },
+      dayIndex: 1, timeZone: 'UTC',
+      meal: { mealType: 'lunch', title: 'Rice', description: null,
+        ingredients: [{ name: 'Tomato', quantity: 600, unit: 'g' }] },
+    };
+    const direct = preview({ source: 'confirmed_meal_slot', recipe: undefined, mealSlot: slot, profileConfigured: false });
+    expect(direct).toMatchObject({ status: 'blocked', restrictions: { status: 'blocked', reasons: ['ingredient_restriction_conflict'] } });
+    const linked = preview({ source: 'confirmed_meal_slot', recipe: undefined, profileConfigured: false,
+      mealSlot: { ...slot, linkedVersion: version, meal: { ...slot.meal,
+        ingredients: [{ name: 'Rice', quantity: 1, unit: 'kg' }],
+        recipeRef: { recipeId: version.recipe_id, versionId: version.id } } } });
+    expect(linked).toMatchObject({ status: 'blocked', restrictions: { status: 'blocked', reasons: ['ingredient_restriction_conflict'] } });
+    const unknown = preview({ source: 'confirmed_meal_slot', recipe: undefined, profileConfigured: false,
+      mealSlot: { ...slot, mealPlan: { ...slot.mealPlan, restrictions: [] } } });
+    expect(unknown.restrictions).toEqual({ status: 'unknown', reasons: ['culinary_profile_unavailable'] });
+  });
+
 });

@@ -1,9 +1,15 @@
+import { isDeepStrictEqual } from 'node:util';
 import { equalPostgresTimestamps } from '@/lib/db/postgres-timestamp';
 import { lockInventorySourceTenant } from '@/lib/db/inventory-source-lock';
 import { createHash } from 'node:crypto';
+import { lockCulinaryProfileUpdateInTransaction, readHardRestrictionContextInTransaction } from './culinaryProfileRepository';
+import { readHardRestrictionList } from '@/lib/profile/culinary-profile-contract';
+import { assessLocalRecipeRestrictions, containsRestrictedRecipeContent } from '@/lib/recipes/structured-ingredients';
 import { transaction, type DbOperationOptions } from '@/lib/db';
 import type { DbTransactionClient } from '@/lib/db/transaction-client';
+import { buildRecipeImportFromHistory } from '@/lib/recipes/recipe-history-import';
 import type {
+  RecipeAiHistoryRow,
   CookingSessionEventRow,
   CookingSessionRow,
   UserMealPlanRow,
@@ -16,6 +22,7 @@ import {
   type CookingInstructionSnapshot,
 } from '@/lib/cooking-session';
 import {
+  mealPlanRestrictionsChanged,
   parseStructuredMealPlanValue,
   type StructuredMealType,
 } from '@/lib/meal-planner/structured-plan';
@@ -53,6 +60,7 @@ export type CookingSessionOperationResult =
         | 'not_found'
         | 'conflict'
         | 'source_conflict'
+        | 'restrictions_changed'
         | 'invalid_plan'
         | 'invalid_transition'
         | 'step_boundary';
@@ -106,9 +114,13 @@ async function validateSource(
     return { status: 'invalid_plan' };
   if (parsed.plan.schedule.portionConfirmation.peopleCount !== plan.people_count)
     return { status: 'source_conflict' };
+  // GET exposes the validated canonical plan, including defaults for historical
+  // calendars. Compare that same representation while retaining the exact revision CAS.
+  const expected = parseStructuredMealPlanValue(input.expectedCalendarPayload, plan.period);
   if (
     !equalPostgresTimestamps(plan.updated_at, input.expectedUpdatedAt) ||
-    stableJson(plan.calendar_payload) !== stableJson(input.expectedCalendarPayload)
+    !expected.success ||
+    !isDeepStrictEqual(parsed.plan, expected.plan)
   ) {
     return { status: 'source_conflict' };
   }
@@ -144,6 +156,45 @@ async function validateSource(
   );
   if (!snapshot) return { status: 'source_conflict' };
   return { status: 'ok', version: recipeVersion, snapshot };
+}
+
+async function cookingRestrictionsPermit(
+  client: DbTransactionClient,
+  plan: UserMealPlanRow,
+  userId: string,
+  tenantId: string,
+  recipe: UserRecipeVersionRow
+): Promise<boolean> {
+  const profile = await readHardRestrictionContextInTransaction(client, userId, tenantId);
+  const explicit = readHardRestrictionList(plan.restrictions ?? []);
+  if (!profile || !explicit || mealPlanRestrictionsChanged(plan, [...profile.allergies, ...profile.avoid])) return false;
+  if (!Array.isArray(recipe.ingredients) || !recipe.ingredients.every((ingredient) => typeof ingredient?.name === 'string') ||
+      typeof recipe.title !== 'string' || typeof recipe.instructions !== 'string') return false;
+  const names = recipe.ingredients.map(({ name }) => name);
+  const visible = [recipe.title, recipe.instructions];
+  const restrictions = [...explicit, ...profile.allergies, ...profile.avoid];
+  const local = assessLocalRecipeRestrictions(names, visible, profile.allergies, [...explicit, ...profile.avoid]);
+  if (local.status === 'clear') return true;
+  if (local.status === 'conflict' || !recipe.source_recipe_history_id) return false;
+  const history = (await client.query<RecipeAiHistoryRow>(
+    'select * from public.recipe_ai_history where id = $1 and tenant_id = $2 and user_id = $3',
+    [recipe.source_recipe_history_id, tenantId, userId])).rows[0];
+  if (!history || history.id !== recipe.source_recipe_history_id || history.user_id !== userId ||
+      history.tenant_id !== tenantId || history.source !== 'gemini') return false;
+  const payload = history.recipe_payload;
+  const snapshot = history.restrictions_snapshot;
+  if (!payload || typeof payload !== 'object' || !('provider' in payload) || payload.provider !== 'gemini' ||
+      !('recipeReviewRequired' in payload) || payload.recipeReviewRequired !== true ||
+      !('preparation' in payload) || typeof payload.preparation !== 'string' ||
+      !snapshot || typeof snapshot !== 'object' || !('allergies' in snapshot) || !('avoid' in snapshot)) return false;
+  const allergies = readHardRestrictionList(snapshot.allergies);
+  const avoid = readHardRestrictionList(snapshot.avoid);
+  if (!allergies || !avoid || restrictions.some((term) => ![...allergies, ...avoid].includes(term))) return false;
+  const original = buildRecipeImportFromHistory({ id: history.id, title: history.recipe_title, payload });
+  if (!original || original.title !== recipe.title || original.instructions !== recipe.instructions ||
+      original.servings !== recipe.servings ||
+      stableJson(original.ingredients) !== stableJson(recipe.ingredients.map(({ name, quantity = null, unit = null }) => ({ name, quantity, unit })))) return false;
+  return !containsRestrictedRecipeContent(names, visible.join('\n'), restrictions);
 }
 
 async function existingIdempotentSession(
@@ -184,10 +235,12 @@ export async function createCookingSession(
         payloadHash
       );
       if (prior) return prior;
+      await lockCulinaryProfileUpdateInTransaction(client, input.userId, input.tenantId);
       const plan = await lockPlan(client, input);
       if (!plan) return { status: 'not_found' };
       const source = await validateSource(client, input, plan);
       if (source.status !== 'ok') return source;
+      if (!(await cookingRestrictionsPermit(client, plan, input.userId, input.tenantId, source.version))) return { status: 'restrictions_changed' };
       const open = await client.query<CookingSessionRow>(
         `select * from public.cooking_sessions
        where tenant_id = $1 and user_id = $2 and meal_plan_id = $3 and day_index = $4 and meal_type = $5
@@ -267,8 +320,9 @@ async function revalidateSessionSource(
     [session.meal_plan_id, session.tenant_id, session.user_id]
   );
   const currentPlan = plan.rows[0];
-  if (!currentPlan || !equalPostgresTimestamps(currentPlan.updated_at, session.source_updated_at))
-    return false;
+  // Consumption of another meal changes updated_at but not the source calendar.
+  // Keep exact revision CAS for creation; revalidate the persisted calendar hash here.
+  if (!currentPlan) return false;
   if (hashPayload(currentPlan.calendar_payload) !== session.source_calendar_payload_hash)
     return false;
   const parsed = parseStructuredMealPlanValue(currentPlan.calendar_payload, currentPlan.period);
@@ -304,6 +358,24 @@ export async function revalidateCookingSessionSourceInTransaction(
   return revalidateSessionSource(client, session);
 }
 
+/** Recover only the selected slot and pinned version, using the authenticated scope. */
+export async function findCookingSessionForSlot(
+  input: Pick<CreateCookingSessionInput, 'tenantId' | 'userId' | 'mealPlanId' | 'dayIndex' | 'mealType' | 'recipeId' | 'versionId'>
+): Promise<CookingSessionRow | null> {
+  return transaction(async (client) => {
+    await setRlsContext(client, input.tenantId, input.userId);
+    const result = await client.query<CookingSessionRow>(
+      `select * from public.cooking_sessions
+       where tenant_id = $1 and user_id = $2 and meal_plan_id = $3 and day_index = $4
+         and meal_type = $5 and recipe_id = $6 and recipe_version_id = $7
+         and status in ('active', 'paused', 'completed')
+       order by case when status in ('active', 'paused') then 0 else 1 end, started_at desc, id desc limit 1`,
+      [input.tenantId, input.userId, input.mealPlanId, input.dayIndex, input.mealType, input.recipeId, input.versionId]
+    );
+    return result.rows[0] ?? null;
+  });
+}
+
 export async function getCookingSession(
   sessionId: string,
   tenantId: string,
@@ -335,6 +407,7 @@ export async function transitionCookingSessionInTransaction(
 ): Promise<CookingSessionOperationResult> {
   await setRlsContext(client, input.tenantId, input.userId);
   await lockInventorySourceTenant(client, input.tenantId);
+  await lockCulinaryProfileUpdateInTransaction(client, input.userId, input.tenantId);
   const session = await loadSession(client, input.tenantId, input.userId, input.sessionId);
   if (!session) return { status: 'not_found' };
   const payloadHash = hashPayload({ action: input.action, expectedVersion: input.expectedVersion });
@@ -347,7 +420,18 @@ export async function transitionCookingSessionInTransaction(
     return { status: 'already_applied', session, event: prior.rows[0] };
   }
   if (session.version !== input.expectedVersion) return { status: 'conflict' };
-  if (!(await revalidateSessionSource(client, session))) return { status: 'source_conflict' };
+  if (input.action !== 'cancel' && !(await revalidateSessionSource(client, session))) return { status: 'source_conflict' };
+  if (input.action === 'resume' || input.action === 'advance' || input.action === 'back') {
+    const plan = await client.query<UserMealPlanRow>(
+      'select * from public.user_meal_plans where id = $1 and tenant_id = $2 and user_id = $3',
+      [session.meal_plan_id, input.tenantId, input.userId]);
+    const version = await client.query<UserRecipeVersionRow>(
+      'select * from public.user_recipe_versions where id = $1 and recipe_id = $2 and tenant_id = $3 and user_id = $4',
+      [session.recipe_version_id, session.recipe_id, input.tenantId, input.userId]);
+    if (!plan.rows[0] || !version.rows[0] ||
+        !(await cookingRestrictionsPermit(client, plan.rows[0], input.userId, input.tenantId, version.rows[0])))
+      return { status: 'restrictions_changed' };
+  }
   const result = transitionCookingSessionState(
     {
       status: session.status,

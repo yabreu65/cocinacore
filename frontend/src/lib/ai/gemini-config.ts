@@ -28,3 +28,13 @@ export function getGeminiBaseUrl(): string {
     'https://generativelanguage.googleapis.com/v1beta'
   );
 }
+
+/** Matches the persisted pgvector(1536) document index. */
+export const GEMINI_EMBEDDING_DIMENSIONS = 1536;
+
+export function isConfiguredEmbedding(values: unknown): values is number[] {
+  return Array.isArray(values) &&
+    values.length === GEMINI_EMBEDDING_DIMENSIONS &&
+    values.every((value) => typeof value === 'number' && Number.isFinite(value)) &&
+    values.some((value) => value !== 0);
+}

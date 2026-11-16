@@ -1,4 +1,6 @@
 import type { StructuredRecipeIngredient } from '@/lib/recipes/structured-ingredients';
+import { StructuredWarmupIngredientSchema } from '@/lib/validation';
+import { recipeImportIngredients, renderRecipeDisplay } from '@/lib/recipes/recipe-import';
 import {
   createMealPlanWarmupCapability,
   hashCapabilityPayload,
@@ -17,6 +19,7 @@ export type WarmupMealCard = {
   aiScore: number;
   structured_ingredients?: StructuredRecipeIngredient[];
   recipe_content?: string | null;
+  recipe_review_required?: true;
   rag_context?: string[];
 };
 
@@ -51,27 +54,23 @@ export type WarmupMealPlanResult = {
 };
 
 function sanitizeStructuredIngredients(input: unknown): StructuredRecipeIngredient[] {
-  if (!Array.isArray(input)) return [];
-
-  return input
-    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
-    .map((item) => ({
-      name: typeof item.name === 'string' ? item.name : '',
-      normalized_name: typeof item.normalized_name === 'string' ? item.normalized_name : '',
-      quantity:
-        typeof item.quantity === 'number' && Number.isFinite(item.quantity) ? item.quantity : null,
-      unit: typeof item.unit === 'string' ? item.unit : null,
-      optional_quantity_text:
-        typeof item.optional_quantity_text === 'string' ? item.optional_quantity_text : null,
-      category: typeof item.category === 'string' ? item.category : null,
-      estimated_cost_optional:
-        typeof item.estimated_cost_optional === 'number' &&
-        Number.isFinite(item.estimated_cost_optional)
-          ? item.estimated_cost_optional
-          : null,
-      structured: item.structured === true,
-    }))
-    .filter((item) => item.name.length > 0 && item.normalized_name.length > 0);
+  if (!Array.isArray(input) || input.length === 0 || input.length > 100) return [];
+  // Older internal responses may omit nullable fields. Fill only absent
+  // values; reject malformed or contradictory evidence rather than erase it.
+  const rows = input.map((raw: unknown) => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+    return {
+      quantity: null,
+      unit: null,
+      optional_quantity_text: null,
+      category: null,
+      estimated_cost_optional: null,
+      structured: false,
+      ...raw,
+    };
+  });
+  const parsed = StructuredWarmupIngredientSchema.array().min(1).max(100).safeParse(rows);
+  return parsed.success ? parsed.data : [];
 }
 
 function buildRecipeGenerationUrl(origin: string): string {
@@ -115,7 +114,7 @@ export async function hydrateMealPlanWarmup(
         recipeName: cleanTitle,
         mealType,
         day: dayEntry.day,
-        ingredients: [cleanTitle, ...input.inventory.slice(0, 8)],
+        ingredients: [cleanTitle, ...input.inventory.slice(0, 8)].filter(Boolean),
         chunks: meal.rag_context ?? [],
         mode: meal.rag_context?.length ? 'rag' : 'free',
         provider: 'auto',
@@ -172,7 +171,15 @@ export async function hydrateMealPlanWarmup(
           continue;
         }
         const recipe = typeof payload.recipe === 'string' ? payload.recipe.trim() : '';
-        if (!recipe) {
+        const rawIngredients = 'structuredIngredients' in payload ? payload.structuredIngredients : undefined;
+        const ingredients = sanitizeStructuredIngredients(rawIngredients);
+        const preparation = 'preparation' in payload ? payload.preparation : undefined;
+        const title = 'title' in payload ? payload.title : undefined;
+        const consistent = preparation === undefined ||
+          (typeof preparation === 'string' && preparation.trim().length > 0 &&
+            typeof title === 'string' &&
+            renderRecipeDisplay(title, recipeImportIngredients(ingredients), preparation) === recipe);
+        if (!recipe || recipe.length > 20_000 || ingredients.length === 0 || !consistent) {
           failed += 1;
           continue;
         }
@@ -180,9 +187,8 @@ export async function hydrateMealPlanWarmup(
         hydratedMeals[mealType] = {
           ...meal,
           recipe_content: recipe,
-          structured_ingredients: sanitizeStructuredIngredients(
-            'structuredIngredients' in payload ? payload.structuredIngredients : undefined
-          ),
+          recipe_review_required: true,
+          structured_ingredients: ingredients,
         };
         warmedSlots += 1;
       } catch {

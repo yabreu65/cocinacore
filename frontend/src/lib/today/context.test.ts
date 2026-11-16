@@ -14,7 +14,7 @@ const inventory = [
   { tenant_id: 'tenant-1', ingredient_name: 'tomato', quantity: '4', unit: 'units', expiration_date: '2025-04-11', id: 'fresh-id' },
 ] as RecipeInventoryItemRow[];
 const terms = [
-  { user_id: 'user-1', term_id: 't1', preference_type: 'avoid', weight: 1, created_at: '', term_label: 'shellfish' },
+  { user_id: 'user-1', term_id: 't1', preference_type: 'avoid', weight: 1, created_at: '', term_label: 'cilantro' },
   { user_id: 'user-1', term_id: 't2', preference_type: 'prefer', weight: 1, created_at: '', term_label: 'Mexican' },
   { user_id: 'user-1', term_id: 't3', preference_type: 'goal', weight: 1, created_at: '', term_label: 'quick meals' },
 ] as const;
@@ -32,7 +32,7 @@ function plan(): UserMealPlanRow {
   return {
     id: 'plan-id', tenant_id: 'tenant-1', user_id: 'user-1', people_count: 2, period: 'week', mode: 'balanced_ai',
     base_cuisine: 'private', fusion_cuisines: [], fusion_intensity: 'sutil', goal: null, restrictions: [],
-    inventory_snapshot: {}, calendar_payload: { period: 'week', dayCount: 7, days: Array.from({ length: 7 }, (_, i) => meals(i + 1)) },
+    inventory_snapshot: { evaluatedHardRestrictions: ['cilantro'] }, calendar_payload: { period: 'week', dayCount: 7, days: Array.from({ length: 7 }, (_, i) => meals(i + 1)) },
     consumption_payload: { '1:lunch': { consumedAt: '2025-04-09T12:00:00Z', dayIndex: 1, mealType: 'lunch', mealTitle: 'Lunch 1', decrements: [], skipped: [] } },
     ai_content: 'do not expose', created_at: '', updated_at: '',
   };
@@ -59,7 +59,7 @@ describe('buildTodayContext', () => {
     expect(result.status).toBe('ready');
     if (result.status !== 'ready') return;
     expect(result.providerContext).toMatchObject({ slot: 'lunch', asOf: '2025-04-10', maxPrepMinutes: 25,
-      allergies: ['peanuts'], hardAvoid: ['shellfish'], dislikedIngredients: ['olives'], preferred: ['Mexican'], goals: ['quick meals'],
+      allergies: ['peanuts'], hardAvoid: ['cilantro'], dislikedIngredients: ['olives'], preferred: ['Mexican'], goals: ['quick meals'],
       householdCounts: { adult: 1, teen: 0, child: 1 } });
     expect(result.providerContext.inventory).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'rice', quantity: '2', unit: 'kg' }),
@@ -70,6 +70,19 @@ describe('buildTodayContext', () => {
     for (const forbidden of ['user-1', 'tenant-1', 'Private Name', 'Another Name', 'secret-id', 'private note', 'recipe_payload', 'do not expose']) {
       expect(serialized).not.toContain(forbidden);
     }
+  });
+
+  it('retains seeded nutritional restrictions as hard exclusions', () => {
+    const result = buildTodayContext({
+      ...base, terms: [...terms,
+        { ...terms[0], term_id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbf', term_label: 'Keto' },
+        { ...terms[0], term_id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbd', term_label: 'Bajo en sodio' },
+      ],
+    });
+    expect(result.status).toBe('ready');
+    if (result.status !== 'ready') return;
+    expect(result.providerContext.hardAvoid).toEqual(['cilantro', 'Keto', 'Bajo en sodio']);
+    expect(result.providerContext.goals).toEqual(['quick meals']);
   });
 
   it('preserves calendar expiry and uses local dates for legacy timestamps', () => {
@@ -90,7 +103,7 @@ describe('buildTodayContext', () => {
   });
 
   it('provides only unconsumed matching-slot saved-plan candidates and no snack candidates', () => {
-    const result = buildTodayContext({ ...base, latestPlan: plan() });
+    const result = buildTodayContext({ ...base, profile: { ...profile, allergies: [] }, latestPlan: plan() });
     expect(result.status).toBe('ready');
     if (result.status !== 'ready') return;
     expect(result.localSignals.savedPlanCandidates.map((candidate) => candidate.title)).toContain('Lunch 2');
@@ -105,7 +118,7 @@ describe('buildTodayContext', () => {
     expect(JSON.stringify(result.providerContext)).not.toContain('saved_plan');
     expect(result.localSignals.savedPlanCandidates.map((candidate) => candidate.title)).not.toContain('Lunch 1');
     expect(result.localSignals.savedPlanCandidates.every((candidate) => candidate.slot === 'lunch')).toBe(true);
-    const snack = buildTodayContext({ ...base, slot: 'snack', latestPlan: plan() });
+    const snack = buildTodayContext({ ...base, profile: { ...profile, allergies: [] }, slot: 'snack', latestPlan: plan() });
     expect(snack.status === 'ready' && snack.localSignals.savedPlanCandidates).toEqual([]);
   });
 
@@ -117,7 +130,7 @@ describe('buildTodayContext', () => {
       { recipe_title: 'No inferred slot', created_at: '2025-04-08T00:00:00Z', recipe_payload: { structuredIngredients: [{ name: 'beans', normalized_name: 'beans', quantity: 1, unit: 'cup', structured: true }] } },
       ...Array.from({ length: 40 }, (_, i) => ({ recipe_title: `Recent ${i}`, created_at: '2025-04-07T00:00:00Z', recipe_payload: {} })),
     ] as RecipeAiHistoryRow[];
-    const result = buildTodayContext({ ...base, history });
+    const result = buildTodayContext({ ...base, profile: { ...profile, allergies: [] }, history });
     expect(result.status).toBe('ready');
     if (result.status !== 'ready') return;
     expect(result.localSignals.recentTitles).toContain('Explicit lunch');
@@ -128,9 +141,9 @@ describe('buildTodayContext', () => {
     expect(result.localSignals.recentTitles.length).toBeLessThanOrEqual(20);
     expect(JSON.stringify(result.providerContext)).not.toContain('Explicit lunch');
     expect(JSON.stringify(result.providerContext)).not.toContain('recipe_payload');
-    const wrongSlot = buildTodayContext({ ...base, slot: 'dinner', history });
+    const wrongSlot = buildTodayContext({ ...base, profile: { ...profile, allergies: [] }, slot: 'dinner', history });
     expect(wrongSlot.status === 'ready' && wrongSlot.localSignals.historyCandidates).toEqual([]);
-    const explicitSnack = buildTodayContext({ ...base, slot: 'snack', history: [
+    const explicitSnack = buildTodayContext({ ...base, profile: { ...profile, allergies: [] }, slot: 'snack', history: [
       { recipe_title: 'Snack', created_at: '2025-04-09T00:00:00Z', recipe_payload: { slot: 'snack', structuredIngredients: [{ name: 'apple', normalized_name: 'apple', quantity: null, unit: null, structured: true }] } },
     ] as RecipeAiHistoryRow[] });
     expect(explicitSnack.status === 'ready' && explicitSnack.localSignals.historyCandidates.map((item) => item.title)).toEqual(['Snack']);
@@ -139,16 +152,16 @@ describe('buildTodayContext', () => {
 
   it('omits history and saved-plan candidates that conflict with active restrictions while retaining safe candidates', () => {
     const history = [
-      { recipe_title: 'Unsafe history', created_at: '2025-04-09', recipe_payload: { slot: 'lunch', structuredIngredients: [{ name: 'cacahuate tostado', normalized_name: 'cacahuate', quantity: 1, unit: 'cup', structured: true }] } },
+      { recipe_title: 'Unsafe history', created_at: '2025-04-09', recipe_payload: { slot: 'lunch', structuredIngredients: [{ name: 'cilantro', normalized_name: 'cilantro', quantity: 1, unit: 'cup', structured: true }] } },
       { recipe_title: 'Safe history', created_at: '2025-04-09', recipe_payload: { slot: 'lunch', structuredIngredients: [{ name: 'rice', normalized_name: 'rice', quantity: 1, unit: 'cup', structured: true }] } },
     ] as RecipeAiHistoryRow[];
     const restrictedPlan = plan();
     const days = restrictedPlan.calendar_payload as { days: Array<{ meals: Array<{ title: string; ingredients: Array<{ name: string }> }> }> };
-    days.days[1].meals[1].ingredients = [{ ...days.days[1].meals[1].ingredients[0], name: 'maní' }];
-    days.days[2].meals[1].ingredients = [{ ...days.days[2].meals[1].ingredients[0], name: 'shellfish' }];
+    days.days[1].meals[1].ingredients = [{ ...days.days[1].meals[1].ingredients[0], name: 'cilantro' }];
+    days.days[2].meals[1].ingredients = [{ ...days.days[2].meals[1].ingredients[0], name: 'cilantro' }];
     days.days[3].meals[1].title = 'Safe plan lunch';
 
-    const result = buildTodayContext({ ...base, history, latestPlan: restrictedPlan });
+    const result = buildTodayContext({ ...base, profile: { ...profile, allergies: [] }, history, latestPlan: restrictedPlan });
     expect(result.status).toBe('ready');
     if (result.status !== 'ready') return;
     expect(result.localSignals.historyCandidates.map(({ title }) => title)).toEqual(['Safe history']);
@@ -165,14 +178,14 @@ describe('buildTodayContext', () => {
       { recipe_title: 'Empty', created_at: '2025-04-09', recipe_payload: { slot: 'lunch', structuredIngredients: [] } },
       { recipe_title: 'Safe', created_at: '2025-04-09', recipe_payload: { slot: 'lunch', structuredIngredients: [{ name: 'rice', normalized_name: 'rice', quantity: 1, unit: 'cup', structured: true }] } },
     ] as RecipeAiHistoryRow[];
-    const result = buildTodayContext({ ...base, history });
+    const result = buildTodayContext({ ...base, profile: { ...profile, allergies: [] }, history });
     expect(result.status).toBe('ready');
     if (result.status !== 'ready') return;
     expect(result.localSignals.historyCandidates.map(({ title }) => title)).toEqual(['Safe']);
   });
 
   it('retains structured history quantities as explicit AI estimates', () => {
-    const result = buildTodayContext({ ...base, history: [{
+    const result = buildTodayContext({ ...base, profile: { ...profile, allergies: [] }, history: [{
       recipe_title: 'Estimated rice',
       source: 'gemini',
       created_at: '2025-04-09T00:00:00Z',
@@ -199,4 +212,63 @@ describe('buildTodayContext', () => {
     expect(result.providerContext.inventory.length).toBeLessThanOrEqual(50);
     expect(result.providerContext.inventory.every((item) => item.quantity === undefined || item.quantity.length <= 40)).toBe(true);
   });
+  it('defers saved recommendations under broad legacy categories without erasing the provider restriction', () => {
+    const result = buildTodayContext({
+      ...base,
+      terms: [{ ...terms[0], term_label: 'shellfish' }],
+      latestPlan: plan(),
+      history: [{
+        recipe_title: 'Rice proposal', created_at: '2025-04-09', recipe_payload: {
+          slot: 'lunch', structuredIngredients: [{ name: 'rice', normalized_name: 'rice', quantity: 1, unit: 'cup', structured: true }],
+        },
+      }] as RecipeAiHistoryRow[],
+    });
+    expect(result.status).toBe('ready');
+    if (result.status !== 'ready') return;
+    expect(result.providerContext.hardAvoid).toEqual(['shellfish']);
+    expect(result.localSignals.historyCandidates).toEqual([]);
+    expect(result.localSignals.savedPlanCandidates).toEqual([]);
+  });
+
+  it('passes all hard restrictions to the model and omits unassessed allergy candidates', () => {
+    const allergies = [...Array.from({ length: 20 }, (_, i) => 'allergy ' + i), 'x'.repeat(160)];
+    const avoids = [...Array.from({ length: 20 }, (_, i) => ({ ...terms[0], term_id: 'term-' + i, term_label: 'avoid ' + i })), { ...terms[0], term_id: 'long', term_label: 'y'.repeat(180) }];
+    const result = buildTodayContext({ ...base, profile: { ...profile, allergies }, terms: avoids, latestPlan: plan() });
+    expect(result.status).toBe('ready');
+    if (result.status !== 'ready') return;
+    expect(result.providerContext.allergies).toEqual(allergies);
+    expect(result.providerContext.hardAvoid).toEqual(avoids.map(({ term_label }) => term_label));
+    expect(result.localSignals.savedPlanCandidates).toEqual([]);
+  });
+
+  it('rejects a history candidate with a conflict only in the full recipe text', () => {
+    const result = buildTodayContext({ ...base, profile: { ...profile, allergies: [] }, history: [{
+      recipe_title: 'Rice', source: 'gemini', created_at: '2025-04-09',
+      recipe_payload: { slot: 'lunch', full_recipe: 'Add cilantro', structuredIngredients: [{ name: 'rice', normalized_name: 'rice', quantity: 1, unit: 'cup', structured: true }] },
+    }] as RecipeAiHistoryRow[] });
+    expect(result.status === 'ready' && result.localSignals.historyCandidates).toEqual([]);
+  });
+
+  it('keeps a saved plan one-off exclusion when suggesting a previously planned meal', () => {
+    const stored = plan();
+    stored.restrictions = ['rice'];
+    const result = buildTodayContext({ ...base, profile: { ...profile, allergies: [] }, latestPlan: stored });
+    expect(result.status === 'ready' && result.localSignals.savedPlanCandidates).toEqual([]);
+  });
+
+  it('omits a linked meal rather than recommending its obsolete ingredients', () => {
+    const saved = plan();
+    const payload = saved.calendar_payload as { days: Array<{ meals: Array<Record<string, unknown>> }> };
+    payload.days[1].meals[1].recipeRef = { recipeId: '00000000-0000-4000-8000-000000000001', versionId: '00000000-0000-4000-8000-000000000002' };
+    const result = buildTodayContext({ ...base, profile: { ...profile, allergies: [] }, latestPlan: saved });
+    expect(result.status === 'ready' && result.localSignals.savedPlanCandidates.map(({ title }) => title)).not.toContain('Lunch 2');
+  });
+
+  it('does not reuse a saved menu under an unevaluated new exclusion', () => {
+    const saved = plan();
+    const result = buildTodayContext({ ...base, profile: { ...profile, allergies: [] }, latestPlan: saved,
+      terms: [...terms, { ...terms[0], term_id: 'new', term_label: 'ingredient not listed anywhere' }] });
+    expect(result.status === 'ready' && result.localSignals.savedPlanCandidates).toEqual([]);
+  });
+
 });

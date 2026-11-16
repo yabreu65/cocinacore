@@ -45,6 +45,12 @@ describe('RecipeGenerateSchema', () => {
     expect(result.success).toBe(true);
   });
 
+  it('aligns generation limits with the warmup contract', () => {
+    expect(RecipeGenerateSchema.safeParse({ ingredients: ['a'.repeat(200)], chunks: Array.from({ length: 20 }, () => 'contexto') }).success).toBe(true);
+    expect(RecipeGenerateSchema.safeParse({ ingredients: ['a'.repeat(201)] }).success).toBe(false);
+    expect(RecipeGenerateSchema.safeParse({ chunks: Array.from({ length: 21 }, () => 'contexto') }).success).toBe(false);
+  });
+
   it('rejects mode that is not free/rag', () => {
     const result = RecipeGenerateSchema.safeParse({ mode: 'invalid' });
     expect(result.success).toBe(false);

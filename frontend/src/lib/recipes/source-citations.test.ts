@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Citation } from '@/services/types';
-import { getVisibleRecipeSources } from './source-citations';
+import { getVisibleRecipeSources, getHistoryRecipeSources } from './source-citations';
 
 const globalCitation: Citation = {
   sourceType: 'global_pdf',
@@ -95,5 +95,23 @@ describe('getVisibleRecipeSources', () => {
     ]);
 
     expect(sources[0]?.title).toBe('Cocina regional');
+  });
+});
+
+
+describe('getHistoryRecipeSources', () => {
+  it('preserves documentary source labels, pages and deduplication from saved history', () => {
+    expect(getHistoryRecipeSources({
+      mode: 'rag', ragContextUsed: true, sources: [globalCitation, tenantCitation, globalCitation],
+    })).toEqual(getVisibleRecipeSources('rag', true, [globalCitation, tenantCitation]));
+  });
+
+  it('does not invent citations from legacy text or malformed historical data', () => {
+    expect(getHistoryRecipeSources({ full_recipe: 'FUENTE: Libro inventado' })).toEqual([]);
+    expect(getHistoryRecipeSources({ mode: 'free', ragContextUsed: true, sources: [globalCitation] })).toEqual([]);
+    expect(getHistoryRecipeSources({ mode: 'rag', ragContextUsed: true, sources: [
+      null, { sourceType: 'global_pdf', title: 'No ID' }, { sourceType: 'ai_generated' },
+      { ...globalCitation, title: 42, pageNumber: '12' },
+    ] })).toEqual([{ sourceType: 'global_pdf', sourceId: 'global-book-1', label: 'Recetario global', chunkId: 'chunk-1' }]);
   });
 });

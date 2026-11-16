@@ -18,6 +18,7 @@ const findCulinaryProfileByUserIdMock = vi.fn();
 const findCulinaryProfileTermsByUserIdMock = vi.fn();
 const createMealPlanMock = vi.fn();
 const findLatestMealPlanByUserAndTenantMock = vi.fn();
+const findMealPlanByIdForUserAndTenantMock = vi.fn();
 const checkRateLimitMock = vi.fn();
 const fetchMock = vi.fn();
 
@@ -37,6 +38,7 @@ vi.mock('@/lib/db/repositories/culinaryProfileRepository', () => ({
 vi.mock('@/lib/db/repositories/mealPlanRepository', () => ({
   createMealPlan: createMealPlanMock,
   findLatestMealPlanByUserAndTenant: findLatestMealPlanByUserAndTenantMock,
+  findMealPlanByIdForUserAndTenant: findMealPlanByIdForUserAndTenantMock,
 }));
 
 vi.mock('@/lib/rate-limit', () => ({
@@ -513,6 +515,7 @@ describe('POST /api/meal-plan', () => {
       fusionCuisines: ['Japonesa'],
       fusionIntensity: 'alta',
       restrictions: [],
+      expectedHardRestrictions: [],
       inventorySnapshot: { inventoryLines: ['- arroz real: 2 kg'] },
       structuredPlan: { ...canonicalStructuredPlan(), availableTimeMinutesSnapshot: null },
     });
@@ -521,6 +524,24 @@ describe('POST /api/meal-plan', () => {
   it('keeps explicit request restrictions separate from persisted profile avoidance and snapshots trusted inventory', async () => {
     findCulinaryProfileByUserIdMock.mockResolvedValue(profile());
     findCulinaryProfileTermsByUserIdMock.mockResolvedValue([profileTerm('avoid', 'Maní')]);
+
+    const compatiblePlan = canonicalStructuredPlan();
+    for (const day of compatiblePlan.days) {
+      for (const meal of day.meals) {
+        if (meal.mealType === 'breakfast') {
+          meal.title = 'Arroz con fruta';
+          meal.ingredients = [{ name: 'Arroz', quantity: 1, unit: 'taza' }];
+        }
+      }
+    }
+    const candidate = {
+      period: compatiblePlan.period,
+      dayCount: compatiblePlan.dayCount,
+      days: compatiblePlan.days.map(({ dayIndex, meals }) => ({ dayIndex, meals })),
+    };
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      candidates: [{ content: { parts: [{ text: JSON.stringify(candidate) }] } }],
+    }), { status: 200 }));
 
     const response = await POST(
       request({
@@ -538,12 +559,20 @@ describe('POST /api/meal-plan', () => {
       expect.objectContaining({
         restrictions: ['Gluten', 'Lácteos'],
         inventorySnapshot: { inventoryLines: ['- arroz real: 2 kg'] },
-        structuredPlan: { ...canonicalStructuredPlan(), availableTimeMinutesSnapshot: null },
+        structuredPlan: { ...compatiblePlan, availableTimeMinutesSnapshot: null },
       })
     );
   });
 
-  it('excludes another user profile and terms while allowing a missing profile to generate normally', async () => {
+  it('rejects unqualified oats in a plan with the bare Gluten exclusion', async () => {
+    const response = await POST(request({
+      mode: 'balanced_ai', restrictions: ['Gluten'],
+    }) as unknown as NextRequest);
+    expect(response.status).toBe(502);
+    expect(createMealPlanMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects another user profile and terms while allowing a missing profile to generate normally', async () => {
     findCulinaryProfileByUserIdMock.mockResolvedValue(profile({ user_id: 'user-2' }));
     findCulinaryProfileTermsByUserIdMock.mockResolvedValue([
       profileTerm('avoid', 'Término de otro usuario', { user_id: 'user-2' }),
@@ -551,7 +580,11 @@ describe('POST /api/meal-plan', () => {
 
     const response = await POST(request({ mode: 'balanced_ai' }) as unknown as NextRequest);
 
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(409);
+    expect(createMealPlanMock).not.toHaveBeenCalled();
+    findCulinaryProfileByUserIdMock.mockResolvedValue(null);
+    findCulinaryProfileTermsByUserIdMock.mockResolvedValue([]);
+    expect((await POST(request({ mode: 'balanced_ai' }) as unknown as NextRequest)).status).toBe(200);
     expect(geminiPrompt()).toContain(
       'Perfil culinario persistido del usuario autenticado:\nSin perfil culinario configurado.'
     );
@@ -700,6 +733,20 @@ describe('POST /api/meal-plan', () => {
       expect(createMealPlanMock).not.toHaveBeenCalled();
     }
   );
+
+  it.each(['title', 'description'] as const)('rejects a restricted ingredient in generated meal %s even if omitted from ingredients', async (field) => {
+    findCulinaryProfileByUserIdMock.mockResolvedValue(profile({ allergies: ['Maní'] }));
+    const plan = canonicalStructuredPlan();
+    plan.days[0].meals[0][field] = 'Arroz con maní';
+    const candidate = { period: plan.period, dayCount: plan.dayCount,
+      days: plan.days.map(({ dayIndex, meals }) => ({ dayIndex, meals })) };
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      candidates: [{ content: { parts: [{ text: JSON.stringify(candidate) }] } }],
+    }), { status: 200 }));
+    const response = await POST(request({ mode: 'balanced_ai' }) as unknown as NextRequest);
+    expect(response.status).toBe(502);
+    expect(createMealPlanMock).not.toHaveBeenCalled();
+  });
 
   it('does not treat disliked ingredients as hard restrictions', async () => {
     findCulinaryProfileByUserIdMock.mockResolvedValue(
@@ -927,6 +974,21 @@ describe('POST /api/meal-plan', () => {
     expect(createMealPlanMock).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
+  it('returns conflict if restrictions change before the locked insert', async () => {
+    createMealPlanMock.mockResolvedValueOnce(null);
+    const response = await POST(request({ mode: 'balanced_ai' }) as unknown as NextRequest);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: 'MEAL_PLAN_RESTRICTIONS_CHANGED' });
+  });
+
+  it('handles a failed profile read before calling the provider', async () => {
+    findCulinaryProfileByUserIdMock.mockRejectedValueOnce(new Error('database unavailable'));
+    const response = await POST(request({ mode: 'balanced_ai' }) as unknown as NextRequest);
+    expect(response.status).toBe(500);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(createMealPlanMock).not.toHaveBeenCalled();
+  });
+
 });
 
 describe('GET /api/meal-plan', () => {
@@ -1010,6 +1072,7 @@ describe('GET /api/meal-plan', () => {
   it('does not invalidate a saved plan when only taste preferences change', async () => {
     const storedPlan = canonicalStructuredPlan();
     const saved = mealPlanRow({ calendar_payload: storedPlan });
+    findCulinaryProfileByUserIdMock.mockResolvedValue(profile());
     findCulinaryProfileTermsByUserIdMock.mockResolvedValue([profileTerm('prefer', 'Picante')]);
     findLatestMealPlanByUserAndTenantMock.mockResolvedValue(saved);
 
@@ -1119,12 +1182,22 @@ describe('GET /api/meal-plan', () => {
     }
   );
 
+  it.each(['title', 'description'] as const)('rejects a stored plan with a restricted meal %s', async (field) => {
+    findCulinaryProfileByUserIdMock.mockResolvedValue(profile({ allergies: ['Maní'] }));
+    const storedPlan = canonicalStructuredPlan();
+    storedPlan.days[0].meals[0][field] = 'Arroz con cacahuate';
+    findLatestMealPlanByUserAndTenantMock.mockResolvedValue(mealPlanRow({ calendar_payload: storedPlan }));
+    const response = await GET(getRequest() as unknown as NextRequest);
+    expect(response.status).toBe(409);
+    expect(createMealPlanMock).not.toHaveBeenCalled();
+  });
+
   it('returns a saved plan that does not conflict with current profile restrictions', async () => {
     const storedPlan = canonicalStructuredPlan();
     findCulinaryProfileByUserIdMock.mockResolvedValue(profile({ allergies: ['Maní'] }));
     findCulinaryProfileTermsByUserIdMock.mockResolvedValue([profileTerm('avoid', 'Sésamo')]);
     findLatestMealPlanByUserAndTenantMock.mockResolvedValue(
-      mealPlanRow({ calendar_payload: storedPlan })
+      mealPlanRow({ calendar_payload: storedPlan, inventory_snapshot: { evaluatedHardRestrictions: ['Maní', 'Sésamo'] } })
     );
 
     const response = await GET(getRequest() as unknown as NextRequest);
@@ -1205,4 +1278,27 @@ describe('GET /api/meal-plan', () => {
     expect(findLatestMealPlanByUserAndTenantMock).toHaveBeenCalledWith('user-1', 'tenant-2');
     expect(await response.json()).toEqual({ plan: null, content: null });
   });
+
+  it('requires a fresh menu when an unknown new restriction was not evaluated even without a literal conflict', async () => {
+    findCulinaryProfileByUserIdMock.mockResolvedValue(profile({ allergies: ['new medical restriction'] }));
+    findLatestMealPlanByUserAndTenantMock.mockResolvedValue(mealPlanRow({
+      calendar_payload: canonicalStructuredPlan(), inventory_snapshot: { evaluatedHardRestrictions: [] },
+    }));
+    expect((await GET(getRequest() as unknown as NextRequest)).status).toBe(409);
+    expect(createMealPlanMock).not.toHaveBeenCalled();
+  });
+
+  it('loads only the requested scoped plan, never the latest as fallback', async () => {
+    const id = '00000000-0000-4000-8000-000000000010';
+    const request = new Request('https://app.example.test/api/meal-plan?mealPlanId=' + id);
+    findMealPlanByIdForUserAndTenantMock.mockResolvedValue(mealPlanRow({ id, calendar_payload: canonicalStructuredPlan() }));
+    const response = await GET(request as unknown as NextRequest);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ id });
+    expect(findMealPlanByIdForUserAndTenantMock).toHaveBeenCalledWith(id, 'user-1', 'tenant-1');
+    expect(findLatestMealPlanByUserAndTenantMock).not.toHaveBeenCalled();
+    findMealPlanByIdForUserAndTenantMock.mockResolvedValue(null);
+    expect((await GET(request as unknown as NextRequest)).status).toBe(404);
+  });
+
 });
