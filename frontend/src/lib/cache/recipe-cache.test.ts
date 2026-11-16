@@ -4,6 +4,7 @@ import {
   getCachedRecipe,
   setCachedRecipe,
   type RecipeCacheKeyInput,
+  type CachedRecipe,
 } from './recipe-cache';
 
 // ---------------------------------------------------------------------------
@@ -16,7 +17,7 @@ describe('recipe-cache (memory fallback)', () => {
     vi.unstubAllEnvs();
   });
 
-  it('builds a stable cache key regardless of ingredient ordering', () => {
+  it('preserves ingredient order while ignoring deprecated profile fields', () => {
     const input: RecipeCacheKeyInput = {
       mode: 'rag',
       requestedRecipeName: 'Arepas',
@@ -39,7 +40,19 @@ describe('recipe-cache (memory fallback)', () => {
       avoid: ['Keto', 'Mariscos'],
     };
 
-    expect(buildRecipeCacheKey(input)).toBe(buildRecipeCacheKey(reordered));
+    expect(buildRecipeCacheKey(input)).not.toBe(buildRecipeCacheKey(reordered));
+    expect(buildRecipeCacheKey(input)).toBe(buildRecipeCacheKey({
+      ...reordered,
+      ingredients: input.ingredients,
+    }));
+    const unnamed = { ...input, requestedRecipeName: '' };
+    expect(buildRecipeCacheKey(unnamed)).not.toBe(buildRecipeCacheKey({
+      ...unnamed,
+      ingredients: reordered.ingredients,
+    }));
+    expect(input.ingredients).toEqual(['tomate', 'pollo', 'arroz']);
+    expect(buildRecipeCacheKey(input)).toContain('"cacheKeyVersion":2');
+
   });
 
   it('separates scope and hashed persisted context without serializing private values', () => {
@@ -70,6 +83,7 @@ describe('recipe-cache (memory fallback)', () => {
     );
     expect(buildRecipeCacheKey({ ...input, inventoryContextHash: 'inventory-hash-b' })).not.toBe(key);
     expect(buildRecipeCacheKey({ ...input, profileContextHash: 'profile-hash-b' })).not.toBe(key);
+    expect(buildRecipeCacheKey({ ...input, contextVersion: 'recipe-persisted-context-v3' })).not.toBe(key);
     expect(buildRecipeCacheKey({ ...input, goals: ['Otro objetivo'] })).not.toBe(key);
     expect(key).not.toContain('Comidas rápidas');
     expect(key).not.toContain('private profile identity');
@@ -128,6 +142,55 @@ describe('recipe-cache (memory fallback)', () => {
 
     expect(await getCachedRecipe(key)).toBeNull();
   });
+  it('bounds the local fallback to 128 entries, evicting the oldest insertion', async () => {
+    vi.stubEnv('REDIS_URL', '');
+    vi.useFakeTimers();
+    const data: CachedRecipe = {
+      recipe: 'Arroz', title: 'Arroz', provider: 'gemini', mode: 'free',
+      structuredIngredients: [], createdAt: Date.now(),
+    };
+    for (let index = 0; index < 129; index++) {
+      await setCachedRecipe('bounded-' + index, data);
+    }
+    expect(await getCachedRecipe('bounded-0')).toBeNull();
+    expect(await getCachedRecipe('bounded-1')).toEqual(data);
+    expect(await getCachedRecipe('bounded-128')).toEqual(data);
+    vi.advanceTimersByTime(21600 * 1000);
+    expect(await getCachedRecipe('bounded-128')).toBeNull();
+    const fresh = { ...data, createdAt: Date.now() };
+    await setCachedRecipe('bounded-fresh', fresh);
+    expect(await getCachedRecipe('bounded-1')).toBeNull();
+    expect(await getCachedRecipe('bounded-fresh')).toEqual(fresh);
+  });
+
+  it('does not retain oversized or already expired local entries', async () => {
+    vi.stubEnv('REDIS_URL', '');
+    vi.useFakeTimers();
+    const data: CachedRecipe = {
+      recipe: 'Arroz', title: 'Arroz', provider: 'gemini', mode: 'free',
+      structuredIngredients: [], createdAt: Date.now(),
+    };
+    await setCachedRecipe('oversized', data);
+    await setCachedRecipe('oversized', { ...data, recipe: 'x'.repeat(256 * 1024) });
+    expect(await getCachedRecipe('oversized')).toBeNull();
+    await setCachedRecipe('expired', { ...data, createdAt: Date.now() - 21600 * 1000 });
+    expect(await getCachedRecipe('expired')).toBeNull();
+  });
+
+  it('isolates local fallback keys by the existing E2E namespace', async () => {
+    vi.stubEnv('REDIS_URL', '');
+    const data: CachedRecipe = {
+      recipe: 'Arroz', title: 'Arroz', provider: 'gemini', mode: 'free',
+      structuredIngredients: [], createdAt: Date.now(),
+    };
+    vi.stubEnv('COCINACORE_E2E_CACHE_NAMESPACE', 'test-one');
+    await setCachedRecipe('same-key', data);
+    vi.stubEnv('COCINACORE_E2E_CACHE_NAMESPACE', 'test-two');
+    expect(await getCachedRecipe('same-key')).toBeNull();
+    vi.stubEnv('COCINACORE_E2E_CACHE_NAMESPACE', 'test-one');
+    expect(await getCachedRecipe('same-key')).toEqual(data);
+  });
+
 });
 
 // ---------------------------------------------------------------------------
@@ -293,4 +356,61 @@ describe('recipe-cache (Redis integration)', () => {
     const result = await getCachedRecipe(key);
     expect(result?.title).toBe('Fallback');
   });
+  it('recovers a local write after Redis reconnects but misses the key', async () => {
+    vi.resetModules();
+    const { getCachedRecipe, setCachedRecipe } = await import('./recipe-cache');
+    const data: CachedRecipe = {
+      recipe: 'Arroz', title: 'Arroz', provider: 'gemini', mode: 'free',
+      structuredIngredients: [], createdAt: Date.now(),
+    };
+    mockSet.mockRejectedValueOnce(new Error('Connection opening'));
+    await setCachedRecipe('reconnect-miss', data);
+    mockGet.mockResolvedValue(null);
+    expect(await getCachedRecipe('reconnect-miss')).toEqual(data);
+    // A successful replacement supersedes the local fallback.
+    mockSet.mockResolvedValue('OK');
+    await setCachedRecipe('reconnect-miss', { ...data, title: 'Nueva receta' });
+    expect(await getCachedRecipe('reconnect-miss')).toBeNull();
+  });
+
+  it('uses the local fallback when Redis contains invalid or expired data', async () => {
+    vi.resetModules();
+    const { getCachedRecipe, setCachedRecipe } = await import('./recipe-cache');
+    const data: CachedRecipe = {
+      recipe: 'Arroz', title: 'Arroz', provider: 'gemini', mode: 'free',
+      structuredIngredients: [], createdAt: Date.now(),
+    };
+    mockSet.mockRejectedValueOnce(new Error('Connection refused'));
+    await setCachedRecipe('invalid-redis', data);
+    for (const invalid of [
+      'not json',
+      JSON.stringify({ ...data, structuredIngredients: [null] }),
+      JSON.stringify({ ...data, createdAt: Date.now() - 21600 * 1000 }),
+    ]) {
+      mockGet.mockResolvedValueOnce(invalid);
+      expect(await getCachedRecipe('invalid-redis')).toEqual(data);
+    }
+    expect(mockDel).not.toHaveBeenCalled();
+    mockGet.mockResolvedValueOnce('not json');
+    expect(await getCachedRecipe('no-local')).toBeNull();
+  });
+
+  it('prefers a newer valid local recipe over an older Redis hit', async () => {
+    vi.resetModules();
+    const { getCachedRecipe, setCachedRecipe } = await import('./recipe-cache');
+    const data: CachedRecipe = {
+      recipe: 'Arroz', title: 'Receta local', provider: 'gemini', mode: 'free',
+      structuredIngredients: [], createdAt: Date.now(),
+    };
+    mockSet.mockRejectedValueOnce(new Error('Connection refused'));
+    await setCachedRecipe('newer-local', data);
+    mockGet.mockResolvedValueOnce(JSON.stringify({
+      ...data, title: 'Receta anterior', createdAt: data.createdAt - 1000,
+    }));
+    expect(await getCachedRecipe('newer-local')).toEqual(data);
+    const fresh = { ...data, title: 'Receta Redis' };
+    mockGet.mockResolvedValueOnce(JSON.stringify(fresh));
+    expect(await getCachedRecipe('newer-local')).toEqual(fresh);
+  });
+
 });
