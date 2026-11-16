@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Pool, type PoolClient } from 'pg';
 import { randomUUID } from 'node:crypto';
-import { createInventoryItem, listInventoryItemsScoped } from './inventoryRepository';
+import { createInventoryItem, deleteInventoryItem, listInventoryItemsScoped } from './inventoryRepository';
 import { getPool } from '@/lib/db';
 import { manageInventoryItem } from './inventoryManagementRepository';
 import { consumePlannedMeal } from './mealPlanConsumptionRepository';
@@ -186,13 +186,13 @@ describe.skipIf(!enabled)('candidate inventory RLS on disposable PostgreSQL', ()
       (await scoped(a, (c) => c.query('delete from recipe_inventory_items where id=$1', [itemB])))
         .rowCount
     ).toBe(0);
-    expect(
-      (
-        await scoped(a, (c) =>
-          c.query('delete from recipe_inventory_items where id=$1', [created.id])
-        )
-      ).rowCount
-    ).toBe(1);
+    expect(await deleteInventoryItem(itemB, a.tenantId, a)).toBe('not_found');
+    expect(await deleteInventoryItem(itemA, a.tenantId, a)).toBe('history_unavailable');
+    expect(await deleteInventoryItem(created.id, a.tenantId, a)).toBe('history_unavailable');
+    expect((await listInventoryItemsScoped(a)).some((item) => item.id === created.id)).toBe(true);
+    // This historical 020 fixture deliberately tests the old SQL ACL independently.
+    expect((await scoped(a, (c) => c.query('delete from recipe_inventory_items where id=$1', [created.id]))).rowCount).toBe(1);
+    expect((await admin.query('select id from public.inventory_movements where inventory_item_id = $1', [itemA])).rowCount).toBe(1);
   });
   it('enforces tenant parent references and append-only movements', async () => {
     const insert =

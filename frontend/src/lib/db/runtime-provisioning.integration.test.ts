@@ -177,8 +177,29 @@ describe.skipIf(!enabled)('provisioned runtime PostgreSQL access', () => {
         command: { kind: 'convert', unit: 'g' },
       })
     ).toMatchObject({ status: 'updated', item: { quantity: '2000', unit: 'g' } });
-    expect(await deleteInventoryItem(inventory.id, tenantId, scope)).toBe('deleted');
-    expect(await findInventoryItemById(inventory.id, tenantId, scope)).toBeNull();
+    // Legacy 017/019 grants INSERT, not SELECT, on the movement ledger.
+    // Verify fail-closed deletion here; active RLS CRUD is exercised separately.
+    expect(await deleteInventoryItem(inventory.id, tenantId, scope)).toBe('history_unavailable');
+    expect((await findInventoryItemById(inventory.id, tenantId, scope))?.id).toBe(inventory.id);
+    const permissions = await query<{ can_read: boolean; can_update: boolean; can_delete: boolean }>(
+      `select has_table_privilege(current_user, 'public.inventory_movements', 'SELECT') as can_read,
+              has_table_privilege(current_user, 'public.inventory_movements', 'UPDATE') as can_update,
+              has_table_privilege(current_user, 'public.inventory_movements', 'DELETE') as can_delete`
+    );
+    expect(permissions.rows[0]).toEqual({ can_read: false, can_update: false, can_delete: false });
+    await query(
+      `insert into public.inventory_movements
+        (tenant_id, user_id, inventory_item_id, movement_type, quantity, unit, normalized_name)
+       values ($1, $2, $3, 'purchase', 1, 'g', 'acl smoke rice')`,
+      [tenantId, userId, inventory.id]
+    );
+    expect(await deleteInventoryItem(inventory.id, tenantId, scope)).toBe('history_unavailable');
+    expect((await findInventoryItemById(inventory.id, tenantId, scope))?.id).toBe(inventory.id);
+    const history = await admin!.query<{ count: string }>(
+      'select count(*)::text as count from public.inventory_movements where inventory_item_id = $1 and tenant_id = $2',
+      [inventory.id, tenantId]
+    );
+    expect(history.rows[0]?.count).toBe('1');
 
     const shoppingItem = await createShoppingListItem({
       tenantId,

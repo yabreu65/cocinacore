@@ -189,10 +189,11 @@ function checkCandidate({ candidateRoot, releaseSha }) {
   // A historical release approval is still bound to exactly 001–020.
   // Working-tree CI may validate the exact successor artifacts separately; it
   // does not authorize a release or change the original 020 artifact checks.
-  const successor = !releaseSha && (entries.length === 21 || entries.length === 22);
-  const occurrenceSuccessor = !releaseSha && entries.length === 22;
+  const successor = !releaseSha && [21, 22, 23].includes(entries.length);
+  const occurrenceSuccessor = !releaseSha && [22, 23].includes(entries.length);
+  const retentionSuccessor = !releaseSha && entries.length === 23;
   if (
-    entries.length !== (occurrenceSuccessor ? 22 : successor ? 21 : expectedIds.length) ||
+    entries.length !== (retentionSuccessor ? 23 : occurrenceSuccessor ? 22 : successor ? 21 : expectedIds.length) ||
     entries.slice(0, 20).some((entry, index) => entry.id !== expectedIds[index])
   )
     fail("manifest migration sequence must contain the exact 001 through 020 prefix");
@@ -220,6 +221,15 @@ function checkCandidate({ candidateRoot, releaseSha }) {
     if (JSON.stringify(entry) !== JSON.stringify(expected) || file.length !== expected.byteLength || sha256(file) !== expected.sha256)
       fail("unreviewed migration 022 successor");
     console.log("PASS exact 022 successor in working-tree artifact check only");
+  }
+
+  if (retentionSuccessor) {
+    const entry = entries[22];
+    const file = readCandidate("db/migrations/023_inventory_movement_retention.sql", candidateRoot, releaseSha);
+    const expected = {"id": "023", "filename": "023_inventory_movement_retention.sql", "lane": "migration", "sha256": "553a90822a22f0d46b1fdfa5bd9c97cf8129c9125c477c4af5fc0654497bebba", "byteLength": 1835, "transactional": "required", "legacyChecksumBackfillAllowed": false, "catalogAdditions": []};
+    if (JSON.stringify(entry) !== JSON.stringify(expected) || file.length !== expected.byteLength || sha256(file) !== expected.sha256)
+      fail("unreviewed migration 023 successor");
+    console.log("PASS exact 023 successor in working-tree artifact check only");
   }
 
   for (const id of expectedIds.slice(0, 19)) {

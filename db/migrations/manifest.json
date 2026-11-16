@@ -1275,6 +1275,16 @@
           "identity": "real_consumption_items.real_consumption_items_occurrence_key"
         }
       ]
+    },
+    {
+      "id": "023",
+      "filename": "023_inventory_movement_retention.sql",
+      "lane": "migration",
+      "sha256": "553a90822a22f0d46b1fdfa5bd9c97cf8129c9125c477c4af5fc0654497bebba",
+      "byteLength": 1835,
+      "transactional": "required",
+      "legacyChecksumBackfillAllowed": false,
+      "catalogAdditions": []
     }
   ],
   "baselineObjects": {

@@ -43,7 +43,7 @@ make_fixture "$FIXTURE"
 node "$CHECKER" --root "$FIXTURE" >/dev/null || fail 'copied candidate fixture did not validate'
 printf 'PASS: copied candidate fixture validated\n'
 
-for scenario in migration manifest legacy migration_script workflow occurrence_migration; do
+for scenario in migration manifest legacy migration_script workflow occurrence_migration retention_migration; do
   case_root="$TMP/$scenario"
   cp -R "$FIXTURE" "$case_root"
   case "$scenario" in
@@ -65,6 +65,9 @@ for scenario in migration manifest legacy migration_script workflow occurrence_m
       ;;
     occurrence_migration)
       printf '\n-- injected 022 migration drift\n' >>"$case_root/db/migrations/022_real_consumption_occurrences.sql"
+      ;;
+    retention_migration)
+      printf '\n-- injected 023 migration drift\n' >>"$case_root/db/migrations/023_inventory_movement_retention.sql"
       ;;
   esac
   before=$(snapshot "$case_root")

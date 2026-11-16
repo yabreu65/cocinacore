@@ -226,6 +226,11 @@ export async function DELETE(request: NextRequest) {
       { error: 'No se puede eliminar un ingrediente con historial de movimientos.' },
       { status: 409 }
     );
+  if (result === 'history_unavailable')
+    return NextResponse.json(
+      { error: 'No se puede comprobar el historial de movimientos. No se eliminó el ingrediente.', code: 'INVENTORY_HISTORY_UNAVAILABLE' },
+      { status: 503 }
+    );
   if (result === 'not_found')
     return NextResponse.json({ error: 'Ingrediente no encontrado.' }, { status: 404 });
   if (result !== 'deleted') throw new Error('Unexpected inventory deletion result');

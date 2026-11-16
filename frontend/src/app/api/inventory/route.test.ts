@@ -269,6 +269,7 @@ describe('authenticated inventory scope', () => {
   });
   it.each([
     ['has_history', 409],
+    ['history_unavailable', 503],
     ['not_found', 404],
   ] as const)('DELETE maps repository outcome %s to %s', async (outcome, status) => {
     deleteInventoryItemMock.mockResolvedValue(outcome);

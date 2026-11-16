@@ -54,7 +54,7 @@ describe('activated PostgreSQL state attestation', () => {
   it('requires active 020 capabilities for 021', async () => {
     await assert.rejects(attestActivatedCapabilities(mockClient('pending'), '021'), /ACTIVATION_PENDING/);
     const client = mockClient('active');
-    await assert.rejects(attestActivatedCapabilities(client, '023'), /unsupported catalog version/);
+    await assert.rejects(attestActivatedCapabilities(client, '024'), /unsupported catalog version/);
     assert.equal(client.queries.length, 0);
   });
 
@@ -66,6 +66,15 @@ describe('activated PostgreSQL state attestation', () => {
     assert.ok(client.queries[0].endsWith(loadActivationAttestation('021')));
     await assert.rejects(attestActivatedCapabilities(mockClient('pending'), '022'), /ACTIVATION_PENDING/);
     await assert.rejects(attestActivatedCapabilities(mockClient(undefined,'CONSUMPTION_022_UNIQUE_MISMATCH'), '022'), /CONSUMPTION_022_UNIQUE_MISMATCH/);
+  });
+
+  it('requires the prior 022 contracts and the non-cascading 023 movement FK', async () => {
+    const client = mockClient('active');
+    assert.equal(await attestActivatedCapabilities(client, '023'), 'active');
+    assert.match(client.queries[0], /INVENTORY_023_RETENTION_FK_MISMATCH/);
+    assert.ok(client.queries[0].endsWith(loadActivationAttestation('022')));
+    await assert.rejects(attestActivatedCapabilities(mockClient('pending'), '023'), /ACTIVATION_PENDING/);
+    await assert.rejects(attestActivatedCapabilities(mockClient(undefined, 'INVENTORY_023_RETENTION_FK_MISMATCH'), '023'), /INVENTORY_023_RETENTION_FK_MISMATCH/);
   });
 
   it('pins the 021 catalog bytes independently of the 020 contract', () => {

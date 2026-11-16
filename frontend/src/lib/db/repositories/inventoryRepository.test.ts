@@ -426,45 +426,37 @@ it('rejects writes without authenticated scope before any database access', asyn
 });
 
 it.each([true, false])(
-  'preserves audit history (%s) under the tenant and row locks',
+  'preserves audit history (%s) using the non-cascading FK under tenant and row locks',
   async (hasHistory) => {
     const { deleteInventoryItem } = await import('./inventoryRepository');
     const scope = { tenantId: '00000000-0000-4000-8000-000000000001', userId: 'user-1' };
     const client = {
-      query: vi
-        .fn()
-        .mockResolvedValueOnce({ rows: [] })
-        .mockResolvedValueOnce({ rows: [{ id: 'item-1' }] })
-        .mockResolvedValueOnce({ rows: hasHistory ? [{ id: 'movement-1' }] : [] })
-        .mockResolvedValueOnce({ rows: [{ id: 'item-1' }] }),
+      query: vi.fn().mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [{ id: 'item-1', history_protected: true }] }),
     };
-    scopedTransactionMock
-      .mockReset()
-      .mockImplementation(
-        async (_scope: unknown, callback: (connection: typeof client) => Promise<unknown>) =>
-          callback(client)
-      );
-    expect(await deleteInventoryItem('item-1', scope.tenantId, scope)).toBe(
-      hasHistory ? 'has_history' : 'deleted'
+    if (hasHistory) client.query.mockRejectedValueOnce(Object.assign(new Error('FK violation'), { code: '23503' }));
+    else client.query.mockResolvedValueOnce({ rows: [{ id: 'item-1' }] });
+    scopedTransactionMock.mockReset().mockImplementation(
+      async (_scope: unknown, callback: (connection: typeof client) => Promise<unknown>) => callback(client)
     );
+    expect(await deleteInventoryItem('item-1', scope.tenantId, scope)).toBe(hasHistory ? 'has_history' : 'deleted');
     expect(client.query).toHaveBeenNthCalledWith(1, lockSql, lockParams);
-    expect(client.query).toHaveBeenNthCalledWith(2, expect.stringContaining('for update'), [
-      'item-1',
-      scope.tenantId,
-    ]);
-    expect(client.query).toHaveBeenNthCalledWith(
-      3,
-      expect.stringContaining('inventory_movements'),
-      ['item-1', scope.tenantId]
-    );
-    if (hasHistory) expect(client.query).toHaveBeenCalledTimes(3);
-    else
-      expect(client.query).toHaveBeenNthCalledWith(4, expect.stringContaining('and not exists'), [
-        'item-1',
-        scope.tenantId,
-      ]);
+    expect(client.query).toHaveBeenNthCalledWith(2, expect.stringContaining('for update'), ['item-1', scope.tenantId]);
+    expect(client.query).toHaveBeenNthCalledWith(3, expect.stringContaining('delete from public.recipe_inventory_items'), ['item-1', scope.tenantId]);
+    expect(client.query).toHaveBeenCalledTimes(3);
   }
 );
+
+it('fails closed when the scoped movement history is unavailable', async () => {
+  const { deleteInventoryItem } = await import('./inventoryRepository');
+  const scope = { tenantId: '00000000-0000-4000-8000-000000000001', userId: 'user-1' };
+  const client = { query: vi.fn().mockResolvedValueOnce({ rows: [] })
+    .mockResolvedValueOnce({ rows: [{ id: 'item-1', history_protected: false }] }) };
+  scopedTransactionMock.mockImplementation(async (_scope: unknown, callback: (connection: typeof client) => Promise<unknown>) => callback(client));
+  expect(await deleteInventoryItem('item-1', scope.tenantId, scope)).toBe('history_unavailable');
+  expect(client.query).toHaveBeenCalledTimes(2);
+  expect(client.query).toHaveBeenNthCalledWith(2, expect.stringContaining('c.confdeltype'), ['item-1', scope.tenantId]);
+});
 
 it.each(['create', 'update', 'delete'] as const)(
   'fails closed when the %s lock cannot be acquired',

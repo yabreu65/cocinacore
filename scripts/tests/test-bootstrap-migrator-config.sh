@@ -128,7 +128,7 @@ const fs = require('fs');
 const path = require('path');
 const [manifestPath, directory, base] = process.argv.slice(2);
 const HISTORICAL_BASELINE_COUNT = 10;
-const CURRENT_MIGRATION_COUNT = 22;
+const CURRENT_MIGRATION_COUNT = 23;
 const manifestBytes = fs.readFileSync(manifestPath);
 const manifest = JSON.parse(manifestBytes.toString('utf8'));
 if (manifest.manifestVersion !== 1 || manifest.trustedBaseCommit !== base) process.exit(1);
@@ -146,7 +146,9 @@ if (manifest.migrations[17]?.filename !== '018_cooking_sessions.sql' ||
     manifest.migrations[20]?.filename !== '021_inventory_price_reference.sql' ||
     manifest.migrations[20]?.sha256 !== '90f3f0c401f8383c1d073d6717fce46b1bf8cc4347216097c3c5ab653f904a19' ||
     manifest.migrations[21]?.filename !== '022_real_consumption_occurrences.sql' ||
-    manifest.migrations[21]?.sha256 !== '371ad525d4081e801da81e9802a44af745b0091931be061af818f6ceabe073e3') process.exit(1);
+    manifest.migrations[21]?.sha256 !== '371ad525d4081e801da81e9802a44af745b0091931be061af818f6ceabe073e3' ||
+    manifest.migrations[22]?.filename !== '023_inventory_movement_retention.sql' ||
+    manifest.migrations[22]?.sha256 !== '553a90822a22f0d46b1fdfa5bd9c97cf8129c9125c477c4af5fc0654497bebba') process.exit(1);
 if (manifest.baselineObjects?.transferable?.length !== 38) process.exit(1);
 const kinds = manifest.baselineObjects.transferable.reduce((counts, object) => {
   counts[object.kind] = (counts[object.kind] || 0) + 1;

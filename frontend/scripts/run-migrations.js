@@ -31,7 +31,10 @@ const LOCK_NAMESPACE_PREFIX = 'cocinacore:database-change:v1:';
 const HISTORICAL_BASELINE_COUNT = 10;
 const INVENTORY_MIGRATION = '021_inventory_price_reference.sql';
 const OCCURRENCE_MIGRATION = '022_real_consumption_occurrences.sql';
-function capabilityVersion(applied) { return applied.has(OCCURRENCE_MIGRATION) ? '022' : applied.has(INVENTORY_MIGRATION) ? '021' : '020'; }
+const RETENTION_MIGRATION = '023_inventory_movement_retention.sql';
+function capabilityVersion(applied) {
+  return applied.has(RETENTION_MIGRATION) ? '023' : applied.has(OCCURRENCE_MIGRATION) ? '022' : applied.has(INVENTORY_MIGRATION) ? '021' : '020';
+}
 const MIGRATION_NAME = /^(\d{3})_[a-z0-9]+(?:_[a-z0-9]+)*(\.bootstrap)?\.sql$/;
 const LANES = new Set(['migration', 'bootstrap']);
 const SHA256 = /^[0-9a-f]{64}$/;
@@ -998,7 +1001,7 @@ async function assertAndAssumeMigrationIdentity(client, manifest, migrations, se
     assertGlobalOrder(migrations, applied);
   }
 
-  if (applied && migrations.some((migration) => migration.prefix > 20 && ![INVENTORY_MIGRATION, OCCURRENCE_MIGRATION].includes(migration.filename) && applied.has(migration.filename))) {
+  if (applied && migrations.some((migration) => migration.prefix > 20 && ![INVENTORY_MIGRATION, OCCURRENCE_MIGRATION, RETENTION_MIGRATION].includes(migration.filename) && applied.has(migration.filename))) {
     throw new Error('UNSUPPORTED_CAPABILITY_MIGRATION: no reviewed catalog attestation.');
   }
 
@@ -1503,13 +1506,15 @@ async function runMigration(client, migration, ledgerMode, { post020Applied = fa
         }
       } else if (migration.filename === OCCURRENCE_MIGRATION && post020Applied) {
         if (await attestActivatedCapabilities(client, '021') !== 'active') throw new Error('ACTIVATION_PENDING: 022 requires active 021 capabilities.');
+      } else if (migration.filename === RETENTION_MIGRATION && post020Applied) {
+        if (await attestActivatedCapabilities(client, '022') !== 'active') throw new Error('ACTIVATION_PENDING: 023 requires active 022 capabilities.');
       } else {
         throw new Error('UNSUPPORTED_CAPABILITY_MIGRATION: no reviewed catalog transition.');
       }
     }
     await client.query(migration.sql);
     if (migration.prefix >= 20) {
-      const activationState = await attestActivatedCapabilities(client, migration.filename === OCCURRENCE_MIGRATION ? '022' : migration.filename === INVENTORY_MIGRATION ? '021' : '020');
+      const activationState = await attestActivatedCapabilities(client, capabilityVersion(new Set([migration.filename])));
       if (activationState === 'pending') console.log('ACTIVATION PENDING: post-020 grants are incomplete.');
     }
     if (ledgerMode === 'provenance') {

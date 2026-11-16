@@ -232,28 +232,40 @@ export async function deleteInventoryItem(
   id: string,
   tenantId: string,
   scope: AuthenticatedDbScope
-): Promise<'deleted' | 'not_found' | 'has_history'> {
+): Promise<'deleted' | 'not_found' | 'has_history' | 'history_unavailable'> {
   requireInventoryScope(tenantId, scope);
   try {
     return await scopedTransaction(
       scope,
       async (client) => {
         await lockInventorySourceTenant(client, tenantId);
-        const locked = await client.query<{ id: string }>(
-          'select id from public.recipe_inventory_items where id = $1 and tenant_id = $2 for update',
+        const locked = await client.query<{ id: string; history_protected: boolean }>(
+          `select id, exists (
+      select 1 from pg_catalog.pg_constraint c
+      where c.conrelid = 'public.inventory_movements'::pg_catalog.regclass
+        and c.confrelid = 'public.recipe_inventory_items'::pg_catalog.regclass
+        and c.conname = 'inventory_movements_inventory_item_id_fkey'
+        and c.contype = 'f' and c.convalidated and not c.condeferrable
+        and c.confdeltype = 'a' and c.confupdtype = 'a'
+        and c.conkey = array[(select attnum from pg_catalog.pg_attribute
+          where attrelid = c.conrelid and attname = 'inventory_item_id' and not attisdropped)]
+        and c.confkey = array[(select attnum from pg_catalog.pg_attribute
+          where attrelid = c.confrelid and attname = 'id' and not attisdropped)]
+        and (select count(*) from pg_catalog.pg_trigger t
+          where t.tgconstraint = c.oid and t.tgisinternal and t.tgenabled in ('O','A')) = 4
+        and not exists (select 1 from pg_catalog.pg_constraint other
+          where other.conrelid = c.conrelid and other.confrelid = c.confrelid
+            and other.contype = 'f' and other.oid <> c.oid and other.confdeltype = 'c')
+    ) as history_protected
+           from public.recipe_inventory_items where id = $1 and tenant_id = $2 for update`,
           [id, tenantId]
         );
         if (!locked.rows.length) return 'not_found';
-        // The inventory movement FK cascades on deletion. Preserve existing audit history.
-        const history = await client.query<{ id: string }>(
-          'select id from public.inventory_movements where inventory_item_id = $1 and tenant_id = $2 limit 1',
-          [id, tenantId]
-        );
-        if (history.rows.length) return 'has_history';
+        // Before migration 023, the FK cascades and can erase hidden audit rows.
+        // Never permit deletion without the database-enforced non-cascading FK.
+        if (locked.rows[0].history_protected !== true) return 'history_unavailable';
         const deleted = await client.query<{ id: string }>(
-          `delete from public.recipe_inventory_items where id = $1 and tenant_id = $2
-         and not exists (select 1 from public.inventory_movements m where m.inventory_item_id = $1 and m.tenant_id = $2)
-         returning id`,
+          'delete from public.recipe_inventory_items where id = $1 and tenant_id = $2 returning id',
           [id, tenantId]
         );
         return deleted.rows.length === 1 ? 'deleted' : 'not_found';
