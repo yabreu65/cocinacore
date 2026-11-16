@@ -9,13 +9,12 @@ import {
   findCulinaryProfileTermsByUserId,
 } from '@/lib/db/repositories/culinaryProfileRepository';
 import { serverLogger } from '@/lib/serverLogger';
-import { containsRestrictedIngredientName } from '@/lib/recipes/structured-ingredients';
 import {
   buildAdaptiveMealPlanProposal,
   structuredMealPlanFingerprint,
 } from '@/lib/meal-planner/adaptive-planning';
 import { buildPersistedMealPlanProfileContext } from '@/lib/meal-planner/profile-context';
-import { parseStructuredMealPlanValue } from '@/lib/meal-planner/structured-plan';
+import { hasRestrictedMealPlanContent, mealPlanRestrictionsChanged, parseStructuredMealPlanValue } from '@/lib/meal-planner/structured-plan';
 import { ShoppingListIdSchema } from '@/lib/validation';
 
 function unauthorized() {
@@ -94,11 +93,10 @@ export async function POST(request: NextRequest) {
       user.id,
       user.tenant.tenantId
     );
-    const hardRestrictions = [...(profile?.allergies ?? []), ...(profile?.avoid ?? [])];
-    const storedIngredientNames = parsedPlan.plan.days.flatMap((day) =>
-      day.meals.flatMap((meal) => meal.ingredients.map((ingredient) => ingredient.name))
-    );
-    if (containsRestrictedIngredientName(storedIngredientNames, hardRestrictions)) {
+    if ((profileRow || profileTerms.length > 0) && !profile)
+      return NextResponse.json({ error: 'No se pudo recuperar el contexto culinario.' }, { status: 409 });
+    const hardRestrictions = [...(persistedPlan.restrictions ?? []), ...(profile?.allergies ?? []), ...(profile?.avoid ?? [])];
+    if (mealPlanRestrictionsChanged(persistedPlan, hardRestrictions) || hasRestrictedMealPlanContent(parsedPlan.plan, hardRestrictions)) {
       return NextResponse.json(
         {
           error: 'El menú ya no cumple las restricciones persistidas. Generá un menú nuevo.',

@@ -8,9 +8,10 @@ import type {
 import type { UserCulinaryProfileTermWithLabel } from '@/lib/db/repositories/culinaryProfileRepository';
 import { buildPersistedMealPlanProfileContext } from '@/lib/meal-planner/profile-context';
 import { parseMealConsumptionPayload, mealConsumptionKey } from '@/lib/meal-planner/consumption';
-import { parseStructuredMealPlanValue, type StructuredMealType } from '@/lib/meal-planner/structured-plan';
-import { containsRestrictedIngredientName } from '@/lib/recipes/structured-ingredients';
-import type { TodayOptionSource, TodaySlot } from './one-slot';
+import { mealPlanRestrictionsChanged, parseStructuredMealPlanValue, type StructuredMealType } from '@/lib/meal-planner/structured-plan';
+import { readHardRestrictionList } from '@/lib/profile/culinary-profile-contract';
+import { assessLocalRecipeRestrictions } from '@/lib/recipes/structured-ingredients';
+import { MAX_TODAY_TITLE_LENGTH, type TodayOptionSource, type TodaySlot } from './one-slot';
 import type { LocalFirstIngredient } from './local-first-engine';
 
 const MAX_INVENTORY_ITEMS = 50;
@@ -73,7 +74,7 @@ export interface BuildTodayContextInput {
   terms: readonly UserCulinaryProfileTermWithLabel[];
   inventory: readonly Pick<RecipeInventoryItemRow, 'tenant_id' | 'ingredient_name' | 'quantity' | 'unit' | 'expiration_date'>[];
   history: readonly Pick<RecipeAiHistoryRow, 'source' | 'recipe_title' | 'recipe_payload' | 'created_at'>[];
-  latestPlan?: Pick<UserMealPlanRow, 'period' | 'calendar_payload' | 'consumption_payload'> | null;
+  latestPlan?: (Pick<UserMealPlanRow, 'period' | 'calendar_payload' | 'consumption_payload'> & Partial<Pick<UserMealPlanRow, 'restrictions' | 'inventory_snapshot'>>) | null;
   consumption?: unknown;
 }
 
@@ -130,7 +131,7 @@ function parseHistoryCandidate(
 ): TodayLocalCandidate | null {
   if (!isRecord(raw)) return null;
   const slot = raw.slot;
-  const title = cleanString(raw.title ?? defaultTitle, 120);
+  const title = cleanString(raw.title ?? defaultTitle, MAX_TODAY_TITLE_LENGTH);
   const rawIngredients = raw.structuredIngredients;
   const prepMinutes = raw.prepMinutes;
   if (prepMinutes !== undefined && (typeof prepMinutes !== 'number' || !Number.isInteger(prepMinutes) || prepMinutes < 1 || prepMinutes > 240)) return null;
@@ -157,23 +158,25 @@ function parseHistoryCandidate(
   };
 }
 
-function conflictsWithRestrictions(ingredients: readonly LocalFirstIngredient[], restrictions: readonly string[]): boolean {
+function conflictsWithRestrictions(ingredients: readonly LocalFirstIngredient[], visible: readonly string[], allergies: readonly string[], hardAvoid: readonly string[]): boolean {
   const names = ingredients.map((ingredient) => typeof ingredient === 'string' ? ingredient : ingredient.name);
-  return names.length === 0 || containsRestrictedIngredientName(names, restrictions);
+  return names.length === 0 || assessLocalRecipeRestrictions(names, visible, allergies, hardAvoid).status !== 'clear';
 }
 
-function savedPlanCandidates(input: BuildTodayContextInput, restrictions: readonly string[]): TodayLocalCandidate[] {
+function savedPlanCandidates(input: BuildTodayContextInput, allergies: readonly string[], hardAvoid: readonly string[]): TodayLocalCandidate[] {
   const plan = input.latestPlan;
   if (!plan || !PLANNED_SLOT_VALUES.has(input.slot as StructuredMealType)) return [];
+  const planRestrictions = readHardRestrictionList(plan.restrictions ?? []);
+  if (!planRestrictions || mealPlanRestrictionsChanged(plan, [...allergies, ...hardAvoid])) return [];
   const parsed = parseStructuredMealPlanValue(plan.calendar_payload, plan.period);
   if (!parsed.success) return [];
   const consumption = parseMealConsumptionPayload(input.consumption ?? plan.consumption_payload);
   const candidates: TodayLocalCandidate[] = [];
   for (const day of parsed.plan.days) {
     for (const meal of day.meals) {
-      if (meal.mealType !== input.slot || consumption[mealConsumptionKey(day.dayIndex, meal.mealType)]) continue;
+      if (meal.mealType !== input.slot || meal.recipeRef || consumption[mealConsumptionKey(day.dayIndex, meal.mealType)]) continue;
       const ingredients: LocalFirstIngredient[] = meal.ingredients.map(({ name, quantity, unit }) => ({ name, quantity, unit }));
-      if (conflictsWithRestrictions(ingredients, restrictions)) continue;
+      if (conflictsWithRestrictions(ingredients, [meal.title, meal.description ?? ''], allergies, [...hardAvoid, ...planRestrictions])) continue;
       candidates.push({
         title: meal.title,
         slot: meal.mealType,
@@ -205,8 +208,8 @@ export function buildTodayContext(input: BuildTodayContextInput): TodayContextRe
     asOf: input.asOf,
     slot: input.slot,
     inventory: buildInventory(input.inventory, input.tenantId, input.asOf, input.timeZone ?? 'UTC'),
-    allergies: boundedStrings(profile.allergies),
-    hardAvoid: boundedStrings(profile.avoid),
+    allergies: profile.allergies ?? [],
+    hardAvoid: profile.avoid,
     dislikedIngredients: boundedStrings(profile.dislikedIngredients),
     preferred: boundedStrings(profile.preferred),
     goals: boundedStrings(profile.goals),
@@ -215,11 +218,10 @@ export function buildTodayContext(input: BuildTodayContextInput): TodayContextRe
     ...(profile.householdCounts ? { householdCounts: { ...profile.householdCounts } } : {}),
   };
 
-  const restrictions = [...providerContext.allergies, ...providerContext.hardAvoid];
   const recentTitles: string[] = [];
   const historyCandidates: TodayLocalCandidate[] = [];
   for (const row of input.history) {
-    const title = cleanString(row.recipe_title, 120);
+    const title = cleanString(row.recipe_title, MAX_TODAY_TITLE_LENGTH);
     if (title && recentTitles.length < MAX_HISTORY_TITLES && !recentTitles.includes(title)) recentTitles.push(title);
     if (historyCandidates.length >= MAX_HISTORY_CANDIDATES) continue;
     const candidate = parseHistoryCandidate(
@@ -227,12 +229,15 @@ export function buildTodayContext(input: BuildTodayContextInput): TodayContextRe
       row.recipe_title,
       row.source === 'gemini' ? 'ai_estimate' : 'unknown',
     );
-    if (candidate?.slot === input.slot && !conflictsWithRestrictions(candidate.ingredients, restrictions)) historyCandidates.push(candidate);
+    const payload = isRecord(row.recipe_payload) ? row.recipe_payload : {};
+    const visible = [candidate?.title, row.recipe_title, payload.full_recipe, payload.preparation, payload.recipe, payload.instructions]
+      .filter((value): value is string => typeof value === 'string');
+    if (candidate?.slot === input.slot && !conflictsWithRestrictions(candidate.ingredients, visible, providerContext.allergies, providerContext.hardAvoid)) historyCandidates.push(candidate);
   }
 
   return {
     status: 'ready',
     providerContext,
-    localSignals: { recentTitles, historyCandidates, savedPlanCandidates: savedPlanCandidates(input, restrictions) },
+    localSignals: { recentTitles, historyCandidates, savedPlanCandidates: savedPlanCandidates(input, providerContext.allergies, providerContext.hardAvoid) },
   };
 }

@@ -1,4 +1,5 @@
-import { containsRestrictedIngredientName } from '../recipes/structured-ingredients';
+import { readHardRestrictionList } from '@/lib/profile/culinary-profile-contract';
+import { assessLocalRecipeRestrictions, containsRestrictedIngredientName } from '../recipes/structured-ingredients';
 import {
   compareRecipeRequirementsToInventory,
   normalizeRecipeIngredient,
@@ -7,7 +8,7 @@ import {
 } from '../inventory/recipe-requirements';
 import { normalizeInventoryName } from '../inventory/normalize-inventory';
 import type { NormalizedUnit } from '../inventory/quantity-normalization';
-import { rankOneSlotOptions, TODAY_SLOT_VALUES, type TodayOptionSource, type TodaySlot } from './one-slot';
+import { rankOneSlotOptions, TODAY_SLOT_VALUES, MAX_TODAY_TITLE_LENGTH, type TodayOptionSource, type TodaySlot } from './one-slot';
 
 export type LocalFirstSource = TodayOptionSource | 'saved_recipe';
 export type LocalFirstAvailability = 'sufficient' | 'partial' | 'missing' | 'unknown';
@@ -124,9 +125,9 @@ function isIsoDate(value: unknown): value is string {
   return Number.isFinite(timestamp) && new Date(timestamp).toISOString().slice(0, 10) === value;
 }
 
-function isStringList(value: unknown, maxItems: number): value is readonly string[] {
+function isStringList(value: unknown, maxItems: number, maxLength = 100): value is readonly string[] {
   return Array.isArray(value) && value.length <= maxItems && value.every(
-    (item) => typeof item === 'string' && item.trim().length > 0 && item.length <= 100
+    (item) => typeof item === 'string' && item.trim().length > 0 && item.length <= maxLength
   );
 }
 
@@ -171,7 +172,7 @@ function cloneIngredient(ingredient: LocalFirstIngredient): LocalFirstIngredient
 
 function parseCandidate(value: unknown, input: LocalFirstInput): LocalFirstCandidate | null {
   if (!isRecord(value) || typeof value.id !== 'string' || !value.id.trim() || value.id.length > 160 ||
-    typeof value.title !== 'string' || !value.title.trim() || value.title.length > 120 ||
+    typeof value.title !== 'string' || !value.title.trim() || value.title.length > MAX_TODAY_TITLE_LENGTH ||
     !isSlot(value.slot) || !isSource(value.source) || value.slot !== input.slot ||
     !validIdentity(value.identity, input, value.source) || !Array.isArray(value.ingredients) ||
     value.ingredients.length === 0 || value.ingredients.length > MAX_INGREDIENTS ||
@@ -204,11 +205,11 @@ function validInput(value: unknown): value is LocalFirstInput {
     value.maxPrepMinutes < 1 || value.maxPrepMinutes > 240 ||
     typeof value.userId !== 'string' || !value.userId.trim() ||
     typeof value.tenantId !== 'string' || !value.tenantId.trim() ||
-    !isStringList(value.allergies, MAX_RESTRICTIONS) ||
-    !isStringList(value.hardAvoid, MAX_RESTRICTIONS) ||
+    !readHardRestrictionList(value.allergies) ||
+    !readHardRestrictionList(value.hardAvoid) ||
     !isStringList(value.dislikedIngredients, MAX_RESTRICTIONS) ||
     !isStringList(value.preferred, MAX_RESTRICTIONS) ||
-    !isStringList(value.recentTitles, MAX_RESTRICTIONS) ||
+    !isStringList(value.recentTitles, MAX_RESTRICTIONS, MAX_TODAY_TITLE_LENGTH) ||
     !Array.isArray(value.inventory) || value.inventory.length > MAX_INVENTORY ||
     !Array.isArray(value.candidates) || value.candidates.length > MAX_CANDIDATES ||
     !Array.isArray(value.plannedMeals) || value.plannedMeals.length > MAX_CANDIDATES ||
@@ -322,6 +323,8 @@ function rankCandidate(candidate: LocalFirstCandidate, input: LocalFirstInput, i
   if (candidate.source === 'provider' && input.providerStatus === 'unavailable') return null;
   if (isAlreadyPlanned(candidate, input)) return null;
   const ingredients = candidate.ingredients.map(ingredientName);
+  if (candidate.source !== 'provider' &&
+      assessLocalRecipeRestrictions(ingredients, [candidate.title], input.allergies, input.hardAvoid).status !== 'clear') return null;
   const ranked = rankOneSlotOptions([{
     title: candidate.title,
     slot: candidate.slot,

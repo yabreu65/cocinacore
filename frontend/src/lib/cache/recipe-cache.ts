@@ -3,9 +3,12 @@ import type { StructuredRecipeIngredient } from '@/lib/recipes/structured-ingred
 import { serverLogger } from '@/lib/serverLogger';
 import Redis from 'ioredis';
 import { z } from 'zod';
+import { StructuredWarmupIngredientSchema } from '@/lib/validation';
+import { recipeImportIngredients, renderRecipeDisplay } from '@/lib/recipes/recipe-import';
 
 export type CachedRecipe = {
   recipe: string;
+  preparation?: string;
   title: string;
   provider: 'gemini';
   model?: string;
@@ -118,23 +121,16 @@ function getRedisClient(): Redis | null {
 // ---------------------------------------------------------------------------
 
 const cachedRecipeSchema = z.object({
-  recipe: z.string().min(1),
-  title: z.string(),
+  recipe: z.string().min(1).max(20_000),
+  preparation: z.string().min(1).max(20_000).optional(),
+  title: z.string().trim().min(1).max(200),
   provider: z.literal('gemini'),
   model: z.string().optional(),
   mode: z.enum(['free', 'rag']),
-  structuredIngredients: z.array(z.object({
-    name: z.string(),
-    normalized_name: z.string(),
-    quantity: z.number().nullable(),
-    unit: z.string().nullable(),
-    optional_quantity_text: z.string().nullable(),
-    category: z.string().nullable(),
-    estimated_cost_optional: z.number().nullable(),
-    structured: z.boolean(),
-  })),
+  structuredIngredients: z.array(StructuredWarmupIngredientSchema).min(1).max(100),
   createdAt: z.number().finite(),
-});
+}).refine((item) => item.preparation === undefined ||
+  renderRecipeDisplay(item.title, recipeImportIngredients(item.structuredIngredients), item.preparation) === item.recipe);
 
 function isFresh(createdAt: number, now: number): boolean {
   return Number.isFinite(createdAt) && createdAt <= now && now - createdAt < RECIPE_CACHE_TTL_MS;

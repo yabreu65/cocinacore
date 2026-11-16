@@ -86,6 +86,17 @@ describe('persisted meal planner profile context', () => {
     });
   });
 
+  it('never truncates saved hard exclusions to the soft prompt preference limit', () => {
+    const avoid = [...Array.from({ length: 12 }, (_, index) => `Exclusion ${index}`), 'Keto', 'Bajo en sodio'];
+    const context = buildPersistedMealPlanProfileContext(
+      profile(), [...avoid.map((label) => term('avoid', label)), term('avoid', 'Other user', { user_id: 'user-2' })],
+      'user-1', 'tenant-1'
+    );
+    expect(context?.avoid).toEqual(avoid);
+    expect(context?.goals).toEqual([]);
+    expect(formatPersistedMealPlanProfileContext(context)).toContain('Bajo en sodio');
+  });
+
   it('formats bounded safety and household context without exposing member names', () => {
     const context = buildPersistedMealPlanProfileContext(
       profile({
@@ -159,4 +170,11 @@ describe('persisted meal planner profile context', () => {
       )
     ).toBe('Sin perfil culinario configurado.');
   });
+  it('preserves every legacy allergy, including the 21st and long labels', () => {
+    const allergies = [...Array.from({ length: 20 }, (_, i) => 'allergy ' + i), 'x'.repeat(160)];
+    const context = buildPersistedMealPlanProfileContext(profile({ allergies }), [], 'user-1', 'tenant-1');
+    expect(context?.allergies).toEqual(allergies);
+    expect(buildPersistedMealPlanProfileContext(profile({ allergies: [''] }), [], 'user-1', 'tenant-1')).toBeNull();
+  });
+
 });

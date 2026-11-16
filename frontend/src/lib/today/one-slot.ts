@@ -1,4 +1,5 @@
-import { containsRestrictedIngredientName, normalizeIngredientName } from '../recipes/structured-ingredients';
+import { readHardRestrictionList } from '@/lib/profile/culinary-profile-contract';
+import { assessLocalRecipeRestrictions, containsRestrictedIngredientName, normalizeIngredientName } from '../recipes/structured-ingredients';
 
 export const TODAY_SLOT_VALUES = ['breakfast', 'lunch', 'snack', 'dinner'] as const;
 export type TodaySlot = (typeof TODAY_SLOT_VALUES)[number];
@@ -38,7 +39,7 @@ export type OneSlotResult =
 
 const SLOT_SET = new Set<TodaySlot>(TODAY_SLOT_VALUES);
 const MAX_OPTIONS = 30;
-const MAX_TITLE_LENGTH = 120;
+export const MAX_TODAY_TITLE_LENGTH = 120;
 const MAX_STRING_LENGTH = 80;
 const MAX_INGREDIENTS = 30;
 const MAX_RESTRICTIONS = 20;
@@ -63,9 +64,9 @@ function parseDate(value: unknown): number | null {
   return Number.isFinite(parsed) && new Date(parsed).toISOString().slice(0, 10) === value ? parsed : null;
 }
 
-function parseStringArray(value: unknown, maxItems: number): string[] | null {
+function parseStringArray(value: unknown, maxItems: number, maxLength = MAX_STRING_LENGTH): string[] | null {
   if (!Array.isArray(value) || value.length > maxItems) return null;
-  if (!value.every((item) => boundedString(item, MAX_STRING_LENGTH))) return null;
+  if (!value.every((item) => boundedString(item, maxLength))) return null;
   return value.map((item) => (item as string).trim());
 }
 
@@ -73,10 +74,10 @@ function parseContext(value: unknown): TodaySlotContext | null {
   if (!isRecord(value) || parseDate(value.asOf) === null || !isSlot(value.slot)) return null;
   if (typeof value.maxPrepMinutes !== 'number' || !Number.isInteger(value.maxPrepMinutes) || value.maxPrepMinutes < 1 || value.maxPrepMinutes > MAX_CONTEXT_PREP_MINUTES) return null;
 
-  const allergies = parseStringArray(value.allergies, MAX_RESTRICTIONS);
-  const hardAvoid = parseStringArray(value.hardAvoid, MAX_RESTRICTIONS);
+  const allergies = readHardRestrictionList(value.allergies);
+  const hardAvoid = readHardRestrictionList(value.hardAvoid);
   const dislikedIngredients = parseStringArray(value.dislikedIngredients, MAX_RESTRICTIONS);
-  const recentTitles = parseStringArray(value.recentTitles, MAX_RESTRICTIONS);
+  const recentTitles = parseStringArray(value.recentTitles, MAX_RESTRICTIONS, MAX_TODAY_TITLE_LENGTH);
   if (!allergies || !hardAvoid || !dislikedIngredients || !recentTitles) return null;
   if (!Array.isArray(value.inventory) || value.inventory.length > MAX_INVENTORY) return null;
 
@@ -103,7 +104,7 @@ function parseContext(value: unknown): TodaySlotContext | null {
 }
 
 function parseOption(value: unknown): RankedTodayOption | null {
-  if (!isRecord(value) || !boundedString(value.title, MAX_TITLE_LENGTH) || !isSlot(value.slot)) return null;
+  if (!isRecord(value) || !boundedString(value.title, MAX_TODAY_TITLE_LENGTH) || !isSlot(value.slot)) return null;
   if (!Object.prototype.hasOwnProperty.call(value, 'prepMinutes')) return null;
   if (value.prepMinutes !== null && (typeof value.prepMinutes !== 'number' || !Number.isInteger(value.prepMinutes) || value.prepMinutes < 1 || value.prepMinutes > 240)) return null;
   const validSources: TodayOptionSource[] = ['provider', 'history', 'saved_plan', 'saved_recipe'];
@@ -150,7 +151,9 @@ export function rankOneSlotOptions(rawOptions: unknown, rawContext: unknown): On
     const option = parseOption(rawOption);
     if (!option || option.slot !== context.slot) return;
     if (restrictions.length > 0 && option.ingredients.length === 0) return;
-    if (restrictions.length > 0 && containsRestrictedIngredientName(option.ingredients, restrictions)) return;
+    if (option.source === 'provider'
+      ? containsRestrictedIngredientName(option.ingredients, restrictions) || containsRestrictedIngredientName([option.title], restrictions)
+      : assessLocalRecipeRestrictions(option.ingredients, [option.title], context.allergies, context.hardAvoid).status !== 'clear') return;
 
     const usableInventory = context.inventory.filter((item) => {
       const expiry = item.expiresOn === undefined ? null : parseDate(item.expiresOn);

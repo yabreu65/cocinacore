@@ -4,6 +4,7 @@ import { requireUser } from '@/lib/auth/server';
 import type { AuthUser } from '@/lib/auth/types';
 import {
   createCookingSession,
+  findCookingSessionForSlot,
   type CreateCookingSessionInput,
 } from '@/lib/db/repositories/cookingSessionRepository';
 import type { CookingSessionRow } from '@/lib/db/types';
@@ -56,6 +57,8 @@ function resultResponse(result: Awaited<ReturnType<typeof createCookingSession>>
   }
   if (result.status === 'not_found')
     return NextResponse.json({ error: 'No se encontró el origen solicitado.' }, { status: 404 });
+  if (result.status === 'restrictions_changed')
+    return NextResponse.json({ error: 'Las restricciones cambiaron o la receta requiere revisión. No se inició la preparación.', code: 'COOKING_RESTRICTIONS_REVIEW_REQUIRED' }, { status: 409 });
   if (result.status === 'invalid_plan')
     return NextResponse.json(
       { error: 'El menú no está listo para iniciar la sesión.' },
@@ -73,6 +76,23 @@ async function authenticatedUser(request: NextRequest): Promise<AuthUser | NextR
     return user.tenant ? user : NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   } catch {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+}
+
+const CookingSessionSlotSchema = CookingSessionCreateSchema.pick({
+  mealPlanId: true, dayIndex: true, mealType: true, recipeId: true, versionId: true,
+}).extend({ dayIndex: z.coerce.number().int().min(1).max(30) });
+
+export async function GET(request: NextRequest) {
+  const user = await authenticatedUser(request);
+  if (user instanceof NextResponse) return user;
+  const parsed = CookingSessionSlotSchema.safeParse(Object.fromEntries(new URL(request.url).searchParams));
+  if (!parsed.success) return NextResponse.json({ error: 'Comida no válida.' }, { status: 400 });
+  try {
+    const session = await findCookingSessionForSlot({ ...parsed.data, userId: user.id, tenantId: user.tenant!.tenantId });
+    return NextResponse.json({ session: session ? publicSession(session) : null });
+  } catch {
+    return NextResponse.json({ error: 'No se pudo recuperar la sesión.' }, { status: 500 });
   }
 }
 

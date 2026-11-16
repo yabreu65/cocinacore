@@ -522,4 +522,12 @@ describe('buildWastePreventionReport', () => {
     expect(report).toMatchObject({ status: 'unknown', reason: 'invalid_now', suggestions: [] });
     expect(report.lots[0]?.status).toBe('unknown');
   });
+  it('does not suggest a recipe with a hidden exclusion or unresolved allergy', () => {
+    const input = { ...baseInput, inventoryItems: [lot({ ingredient_name: 'Tomato' })], recipes: [
+      recipe({ title: 'Tomato rice', instructions: 'Add pollo', ingredients: [{ name: 'Tomato', quantity: '1', unit: 'unidad' }] }),
+    ] };
+    expect(buildWastePreventionReport({ ...input, hardAvoid: ['pollo'] }).suggestions).toEqual([]);
+    expect(buildWastePreventionReport({ ...input, allergies: ['Maní'] }).suggestions).toEqual([]);
+  });
+
 });

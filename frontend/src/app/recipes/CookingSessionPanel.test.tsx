@@ -4,6 +4,7 @@ import {
   executeCookingSessionRequest,
   initialReconciliationItems,
   stableIngredientRows,
+  startIdempotencyKey,
 } from './CookingSessionPanel';
 
 describe('executeCookingSessionRequest', () => {
@@ -94,4 +95,13 @@ describe('reconciliation occurrence contract', () => {
       { key: 'occurrence:1', ingredientIndex: 1, originalIngredient: ' ARROZ ' },
     ]);
   });
+  it('scopes the start retry key to the exact plan, slot and revision', () => {
+    const slot = { mealPlanId: 'plan1', dayIndex: 1, mealType: 'lunch' as const };
+    const first = startIdempotencyKey('r', 'v', slot, 'revision1');
+    expect(startIdempotencyKey('r', 'v', slot, 'revision1')).toBe(first);
+    for (const changed of [{ ...slot, dayIndex: 2 }, { ...slot, mealType: 'dinner' as const }, { ...slot, mealPlanId: 'plan2' }])
+      expect(startIdempotencyKey('r', 'v', changed, 'revision1')).not.toBe(first);
+    expect(startIdempotencyKey('r', 'v', slot, 'revision2')).not.toBe(first);
+  });
+
 });

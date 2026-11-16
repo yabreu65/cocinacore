@@ -6,6 +6,12 @@ import {
   type DbOperationOptions,
 } from '@/lib/db';
 import type { PoolClient } from 'pg';
+import { readHardRestrictionList } from '@/lib/profile/culinary-profile-contract';
+import {
+  lockCulinaryProfileUpdateInTransaction,
+  findCulinaryProfileByUserIdInTransaction,
+  findCulinaryProfileTermsByUserIdInTransaction,
+} from './culinaryProfileRepository';
 import type {
   ManualRecipeIngredient,
   RecipeAiHistoryRow,
@@ -53,6 +59,7 @@ export interface CreateRecipeHistoryInput {
   recipeTitle: string | null;
   recipePayload: unknown;
   restrictionsSnapshot?: unknown;
+  expectedHardRestrictions?: readonly string[];
   inventorySnapshot?: unknown;
 }
 
@@ -100,13 +107,31 @@ export async function findRecipeHistoryById(
   return mapSingleRow(result);
 }
 
+export function createRecipeHistory(
+  input: CreateRecipeHistoryInput & { expectedHardRestrictions?: undefined }
+): Promise<RecipeAiHistoryRow>;
+export function createRecipeHistory(
+  input: CreateRecipeHistoryInput
+): Promise<RecipeAiHistoryRow | null>;
 export async function createRecipeHistory(
   input: CreateRecipeHistoryInput
-): Promise<RecipeAiHistoryRow> {
+): Promise<RecipeAiHistoryRow | null> {
   const result = await scopedTransaction(
     { tenantId: input.tenantId, userId: input.userId },
-    (client) =>
-      client.query<RecipeAiHistoryRow>(
+    async (client) => {
+      if (input.expectedHardRestrictions !== undefined) {
+        await lockCulinaryProfileUpdateInTransaction(client, input.userId, input.tenantId);
+        const profile = await findCulinaryProfileByUserIdInTransaction(client, input.userId, input.tenantId);
+        const terms = await findCulinaryProfileTermsByUserIdInTransaction(client, input.userId, input.tenantId);
+        if ((profile && (profile.user_id !== input.userId || profile.tenant_id !== input.tenantId)) ||
+          (!profile && terms.length > 0) || terms.some((term) => term.user_id !== input.userId ||
+            !['identity', 'prefer', 'avoid', 'goal'].includes(term.preference_type))) return null;
+        const allergies = readHardRestrictionList(profile ? profile.allergies : []);
+        const avoid = readHardRestrictionList(terms.filter((term) => term.preference_type === 'avoid').map((term) => term.term_label));
+        const expected = readHardRestrictionList(input.expectedHardRestrictions);
+        if (!allergies || !avoid || !expected || [...allergies, ...avoid].some((term) => !expected.includes(term))) return null;
+      }
+      return client.query<RecipeAiHistoryRow>(
         `insert into public.recipe_ai_history
      (tenant_id, user_id, source, recipe_title, recipe_payload, restrictions_snapshot, inventory_snapshot)
      values ($1, $2, $3, $4, $5, $6, $7)
@@ -120,9 +145,11 @@ export async function createRecipeHistory(
           JSON.stringify(input.restrictionsSnapshot ?? {}),
           JSON.stringify(input.inventorySnapshot ?? {}),
         ]
-      )
+      );
+    }
   );
 
+  if (result === null) return null;
   const recipe = mapSingleRow(result);
   if (!recipe) throw new Error('Failed to create recipe history');
   return recipe;

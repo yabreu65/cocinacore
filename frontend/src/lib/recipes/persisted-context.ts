@@ -59,6 +59,8 @@ export async function loadPersistedRecipeContext(
   const inventoryLines = boundInventoryLines(buildMealPlanInventoryContext(items, tenantId));
   const persistedProfile = buildPersistedMealPlanProfileContext(profile, terms, userId, tenantId);
 
+  if ((profile || terms.length > 0) && !persistedProfile) throw new Error('Invalid persisted culinary profile');
+
   return {
     inventoryLines,
     inventoryContext: inventoryLines.join('\n') || EMPTY_PERSISTED_INVENTORY_MARKER,

@@ -58,8 +58,8 @@ describe('rankOneSlotOptions', () => {
     expect(rankOneSlotOptions(candidates(3), context({ slot: 'brunch' })).status).toBe('invalid');
     expect(rankOneSlotOptions(candidates(3), context({ maxPrepMinutes: 0 })).status).toBe('invalid');
     expect(rankOneSlotOptions(candidates(3), context({ asOf: '2025-02-30' })).status).toBe('invalid');
-    expect(rankOneSlotOptions(candidates(3), context({ allergies: Array(21).fill('x') })).status).toBe('invalid');
-    expect(rankOneSlotOptions(candidates(3), context({ hardAvoid: ['x'.repeat(81)] })).status).toBe('invalid');
+    expect(rankOneSlotOptions(candidates(3), context({ allergies: [''] })).status).toBe('invalid');
+    expect(rankOneSlotOptions(candidates(3), context({ hardAvoid: [null] })).status).toBe('invalid');
   });
 
   it('hard-rejects allergy and hard-avoid matches including aliases', () => {
@@ -207,4 +207,23 @@ describe('rankOneSlotOptions', () => {
     expect(two).toMatchObject({ status: 'degraded', reason: 'fewer-than-three-safe-options' });
     expect(two.options.map(({ title }) => title)).toEqual(['Meal 1', 'Meal 2']);
   });
+  it('keeps legacy restrictions through ranking and checks the provider title', () => {
+    const hardAvoid = [...Array.from({ length: 20 }, (_, i) => 'excluded ' + i), 'tomato', 'x'.repeat(160)];
+    const result = rankOneSlotOptions([
+      { ...candidates(1)[0], title: 'Tomato rice', ingredients: ['rice'] },
+      { ...candidates(1)[0], title: 'Rice', ingredients: ['rice'] },
+    ], context({ hardAvoid }));
+    expect(result.options.map(({ title }) => title)).toEqual(['Rice']);
+  });
+
+  it.each([81, 120])('accepts a recent history title of %s characters without invalidating ranking', (length) => {
+    const title = 'x'.repeat(length);
+    const options = [...candidates(3), { ...candidates(1)[0], title }];
+    expect(rankOneSlotOptions(options, context({ recentTitles: [title] })).status).toBe('success');
+  });
+  it('does not extend the bounds of other ranking fields or accept overlong history titles', () => {
+    expect(rankOneSlotOptions(candidates(3), context({ recentTitles: ['x'.repeat(121)] })).status).toBe('invalid');
+    expect(rankOneSlotOptions(candidates(3), context({ dislikedIngredients: ['x'.repeat(81)] })).status).toBe('invalid');
+  });
+
 });

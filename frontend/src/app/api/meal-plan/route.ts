@@ -14,9 +14,9 @@ import {
 import {
   createMealPlan,
   findLatestMealPlanByUserAndTenant,
+  findMealPlanByIdForUserAndTenant,
 } from '@/lib/db/repositories/mealPlanRepository';
 import { buildMealPlanInventoryContext } from '@/lib/meal-planner/inventory-context';
-import { containsRestrictedIngredientName } from '@/lib/recipes/structured-ingredients';
 import {
   buildPersistedMealPlanProfileContext,
   formatPersistedMealPlanProfileContext,
@@ -24,11 +24,14 @@ import {
 import { getMealPlanPeriodLabel } from '@/lib/meal-planner/prompt';
 import {
   buildStructuredMealPlanInstructions,
+  hasRestrictedMealPlanContent,
+  mealPlanRestrictionsChanged,
   parseStructuredMealPlanResponse,
   parseStructuredMealPlanValue,
   renderStructuredMealPlan,
   structuredMealPlanResponseJsonSchema,
 } from '@/lib/meal-planner/structured-plan';
+import { z } from 'zod';
 import { validateOperationalMealPlanRequest } from '@/lib/operational-domain';
 import { getRetryAfterSeconds } from '@/lib/rate-limit-identity';
 
@@ -193,11 +196,19 @@ export async function POST(request: NextRequest) {
     .slice(0, 2);
   const fusionIntensity = body.fusionIntensity ?? 'media';
   const restrictions = normalizeRestrictions(body.restrictions);
-  const [inventoryItems, persistedProfile, persistedProfileTerms] = await Promise.all([
-    listInventoryItemsByTenant(tenantId, undefined, undefined, {}, { tenantId, userId: user.id }),
-    findCulinaryProfileByUserId(user.id, tenantId),
-    findCulinaryProfileTermsByUserId(user.id, tenantId),
-  ]);
+  let inventoryItems: Awaited<ReturnType<typeof listInventoryItemsByTenant>>;
+  let persistedProfile: Awaited<ReturnType<typeof findCulinaryProfileByUserId>>;
+  let persistedProfileTerms: Awaited<ReturnType<typeof findCulinaryProfileTermsByUserId>>;
+  try {
+    [inventoryItems, persistedProfile, persistedProfileTerms] = await Promise.all([
+      listInventoryItemsByTenant(tenantId, undefined, undefined, {}, { tenantId, userId: user.id }),
+      findCulinaryProfileByUserId(user.id, tenantId),
+      findCulinaryProfileTermsByUserId(user.id, tenantId),
+    ]);
+  } catch {
+    serverLogger.warn('meal_plan.profile_retrieval_failed', { requestId });
+    return NextResponse.json({ error: 'No se pudo recuperar el contexto culinario.' }, { status: 500 });
+  }
   const inventoryLines = buildMealPlanInventoryContext(inventoryItems, tenantId);
   const inventoryContext =
     inventoryLines.join('\n') || 'Sin inventario persistido para este hogar.';
@@ -207,6 +218,8 @@ export async function POST(request: NextRequest) {
     user.id,
     tenantId
   );
+  if ((persistedProfile || persistedProfileTerms.length > 0) && !persistedProfileContextData)
+    return NextResponse.json({ error: 'No se pudo recuperar el contexto culinario.' }, { status: 409 });
   const persistedProfileContext = formatPersistedMealPlanProfileContext(
     persistedProfileContextData
   );
@@ -268,7 +281,7 @@ Reglas:
 - Usa solo ingredientes disponibles en el inventario real.
 - No inventes cantidades de inventario; cuando diga "cantidad no especificada", no la supongas.
 - Si falta algo crítico, marcar como "pendiente de compra".
-- Respeta estrictamente "Evitar" y las restricciones explícitas de esta solicitud.
+- Respeta estrictamente "Evitar", las alergias del perfil (incluidos derivados) y las restricciones explícitas de esta solicitud. Prevalecen sobre el PDF y el inventario; los objetivos nutricionales orientan la propuesta. No afirmes ausencia garantizada de alérgenos.
 - Integra técnicas/sabores de fusión si se especifican culturas de fusión.
 - Si intensidad es sutil: prioriza cocina base y toques menores de fusión.
 - Si intensidad es media: balancea cocina base y fusión.
@@ -293,7 +306,7 @@ Reglas:
 - ${structuredOutputInstructions}
 - Usa primero el inventario real antes de proponer comidas y no supongas cantidades no especificadas.
 - No incluyas una lista de compras: esta respuesta solo contiene el menú estructurado.
-- Respeta estrictamente "Evitar" y las restricciones explícitas de esta solicitud.
+- Respeta estrictamente "Evitar", las alergias del perfil (incluidos derivados) y las restricciones explícitas de esta solicitud. Prevalecen sobre el PDF y el inventario; los objetivos nutricionales orientan la propuesta. No afirmes ausencia garantizada de alérgenos.
 - Integra técnicas/sabores de fusión si se especifican culturas de fusión.
 - Si intensidad es sutil: prioriza cocina base y toques menores de fusión.
 - Si intensidad es media: balancea cocina base y fusión.
@@ -405,10 +418,7 @@ Reglas:
       ...(persistedProfileContextData?.avoid ?? []),
       ...restrictions,
     ];
-    const generatedIngredientNames = parsedPlan.plan.days.flatMap((day) =>
-      day.meals.flatMap((meal) => meal.ingredients.map((ingredient) => ingredient.name))
-    );
-    if (containsRestrictedIngredientName(generatedIngredientNames, hardRestrictions)) {
+    if (hasRestrictedMealPlanContent(parsedPlan.plan, hardRestrictions)) {
       serverLogger.warn('meal_plan.invalid_provider_response', {
         requestId,
         model,
@@ -433,6 +443,7 @@ Reglas:
         fusionCuisines,
         fusionIntensity,
         restrictions,
+        expectedHardRestrictions: hardRestrictions,
         inventorySnapshot: { inventoryLines },
         structuredPlan: parsedPlan.plan,
       });
@@ -445,6 +456,9 @@ Reglas:
       return NextResponse.json({ error: 'No se pudo guardar el menú generado.' }, { status: 500 });
     }
 
+    if (!persistedPlan) {
+      return NextResponse.json({ error: 'El perfil culinario cambió. Generá un menú nuevo.', code: 'MEAL_PLAN_RESTRICTIONS_CHANGED' }, { status: 409 });
+    }
     const content = renderStructuredMealPlan(parsedPlan.plan);
     serverLogger.info('meal_plan.success', {
       requestId,
@@ -483,16 +497,22 @@ export async function GET(request: NextRequest) {
   }
 
   const tenantId = user.tenant.tenantId;
+  const mealPlanId = new URL(request.url).searchParams.get('mealPlanId');
+  if (mealPlanId !== null && !z.string().uuid().safeParse(mealPlanId).success)
+    return NextResponse.json({ error: 'Identificador de menú inválido.' }, { status: 400 });
   let persistedPlan: Awaited<ReturnType<typeof findLatestMealPlanByUserAndTenant>>;
   try {
-    persistedPlan = await findLatestMealPlanByUserAndTenant(user.id, tenantId);
+    persistedPlan = mealPlanId
+      ? await findMealPlanByIdForUserAndTenant(mealPlanId, user.id, tenantId)
+      : await findLatestMealPlanByUserAndTenant(user.id, tenantId);
   } catch {
     serverLogger.warn('meal_plan.retrieval_failed', { requestId });
     return NextResponse.json({ error: 'No se pudo recuperar el menú guardado.' }, { status: 500 });
   }
 
   if (!persistedPlan) {
-    return NextResponse.json({ plan: null, content: null });
+    return mealPlanId ? NextResponse.json({ error: 'Menú no encontrado.' }, { status: 404 })
+      : NextResponse.json({ plan: null, content: null });
   }
 
   const settings = getPublicMealPlanSettings(persistedPlan);
@@ -537,14 +557,14 @@ export async function GET(request: NextRequest) {
     user.id,
     tenantId
   );
+  if ((currentProfile || currentProfileTerms.length > 0) && !profileContext)
+    return NextResponse.json({ error: 'No se pudo recuperar el contexto culinario.' }, { status: 409 });
   const currentHardRestrictions = [
     ...(profileContext?.allergies ?? []),
     ...(profileContext?.avoid ?? []),
   ];
-  const storedIngredientNames = parsedPlan.plan.days.flatMap((day) =>
-    day.meals.flatMap((meal) => meal.ingredients.map((ingredient) => ingredient.name))
-  );
-  if (containsRestrictedIngredientName(storedIngredientNames, currentHardRestrictions)) {
+  if (mealPlanRestrictionsChanged(persistedPlan, currentHardRestrictions) ||
+      hasRestrictedMealPlanContent(parsedPlan.plan, [...(persistedPlan.restrictions ?? []), ...currentHardRestrictions])) {
     serverLogger.warn('meal_plan.stale_restrictions', {
       requestId,
       mealPlanId: persistedPlan.id,

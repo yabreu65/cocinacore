@@ -1,3 +1,4 @@
+import { readHardRestrictionList } from '@/lib/profile/culinary-profile-contract';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/auth/server';
 import type { AuthUser } from '@/lib/auth/types';
@@ -83,6 +84,10 @@ export async function GET(request: NextRequest) {
       serverLogger.warn('waste_prevention.profile_scope_mismatch', { requestId });
       return NextResponse.json({ error: 'Unable to load waste prevention data' }, { status: 409 });
     }
+    const allergies = readHardRestrictionList(profile ? profile.allergies : []);
+    const hardAvoid = readHardRestrictionList(terms.filter((term) => term.preference_type === 'avoid').map((term) => term.term_label));
+    if (!allergies || !hardAvoid || (!profile && terms.length > 0) || terms.some((term) => term.user_id !== user.id))
+      return NextResponse.json({ error: 'Unable to load waste prevention data' }, { status: 409 });
     const report = buildWastePreventionReport({
       now: new Date(),
       timeZone,
@@ -102,13 +107,12 @@ export async function GET(request: NextRequest) {
         .map((recipe) => ({
           id: recipe.id,
           title: recipe.current_version.title,
+          instructions: recipe.current_version.instructions,
           ingredients: recipe.current_version.ingredients,
           archived_at: recipe.archived_at,
         })),
-      allergies: profile?.allergies ?? [],
-      hardAvoid: terms
-        .filter((term) => term.preference_type === 'avoid')
-        .map((term) => term.term_label),
+      allergies,
+      hardAvoid,
       dislikedIngredients: profile?.disliked_ingredients ?? [],
     });
 

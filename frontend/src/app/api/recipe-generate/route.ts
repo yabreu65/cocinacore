@@ -1,3 +1,7 @@
+import { todaySlotForMealType } from '@/lib/recipes/today-handoff';
+import { profileAllergyContext, readHardRestrictionList } from '@/lib/profile/culinary-profile-contract';
+import { assessIngredientRestrictions } from '@/lib/recipes/structured-ingredients';
+import { buildGeneratedRecipeInstructions, generatedRecipeResponseJsonSchema, parseGeneratedRecipeResponse } from '@/lib/recipes/generated-recipe-contract';
 import { NextRequest, NextResponse } from 'next/server';
 import { serverLogger } from '@/lib/serverLogger';
 import { extractGeminiTextResponse } from '@/services/apiDtos';
@@ -10,8 +14,6 @@ import {
   type RecipeCacheKeyInput,
 } from '@/lib/cache/recipe-cache';
 import {
-  containsRestrictedIngredientName,
-  extractStructuredIngredients,
   validateStructuredIngredients,
   type StructuredRecipeIngredient,
 } from '@/lib/recipes/structured-ingredients';
@@ -30,7 +32,7 @@ import {
 } from '@/lib/auth/internal-capability';
 
 const AI_REQUEST_TIMEOUT_MS = 60_000;
-const RECIPE_PROMPT_CONTEXT_VERSION = 'recipe-persisted-context-v1';
+const RECIPE_PROMPT_CONTEXT_VERSION = 'recipe-structured-v9';
 
 type RequestProfile = NonNullable<RecipeGenerateBody['culinaryProfile']>;
 
@@ -41,27 +43,6 @@ interface RecipeProfileFields {
   goals: string[];
   level: string;
   allergies: string[];
-}
-
-function inferTitleFromRecipe(recipe: string): string {
-  const clean = recipe
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .find(
-      (line) =>
-        line !== '[TITULO]' &&
-        line !== 'TITULO' &&
-        !line.toLowerCase().startsWith('ingredientes') &&
-        !line.toLowerCase().startsWith('preparación') &&
-        !line.toLowerCase().startsWith('preparacion')
-    );
-
-  if (!clean) return 'Receta generada';
-  return clean
-    .replace(/^#+\s*/, '')
-    .replace(/^\d+[\.)-]\s*/, '')
-    .trim();
 }
 
 function normalizeRequestValues(values: readonly string[] | undefined, maxItems: number): string[] {
@@ -82,26 +63,6 @@ function buildRequestProfile(profile: RequestProfile | undefined): RecipeProfile
   };
 }
 
-function normalizeHardAllergies(values: readonly string[]): string[] {
-  const allergies: string[] = [];
-  const seen = new Set<string>();
-  for (const value of values) {
-    const normalized = value
-      .replace(/[\u0000-\u001f\u007f]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 100);
-    const key = normalized
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toLowerCase();
-    if (!normalized || seen.has(key) || allergies.length >= 32) continue;
-    seen.add(key);
-    allergies.push(normalized);
-  }
-  return allergies;
-}
-
 function formatRequestProfile(profile: RecipeProfileFields): string {
   return [
     `- Identidad de cocina: ${profile.identity.join(', ') || 'No especificado'}`,
@@ -114,11 +75,39 @@ function formatRequestProfile(profile: RecipeProfileFields): string {
 
 interface CanonicalRecipeResult {
   recipe: string;
+  preparation?: string;
   title: string;
   provider: 'gemini';
   model?: string;
   mode: 'free' | 'rag';
   structuredIngredients: StructuredRecipeIngredient[];
+}
+
+// Only fixed, non-sensitive diagnostic codes reach the server log.
+class RecipeGenerationFailure extends Error {
+  constructor(readonly code: string, readonly upstreamStatus?: number) {
+    super('Recipe generation failed');
+    this.name = 'RecipeGenerationFailure';
+  }
+}
+
+function restrictionRejection(
+  result: Pick<CanonicalRecipeResult, 'title' | 'recipe' | 'preparation' | 'structuredIngredients'>,
+  restrictions: readonly string[],
+  requestId: string
+): NextResponse | null {
+  const rows = assessIngredientRestrictions(result.structuredIngredients.map(i => i.name), restrictions);
+  const prose = assessIngredientRestrictions([[result.title, result.recipe, result.preparation ?? ''].join('\n')], restrictions);
+  if (rows.status === 'clear' && prose.status === 'clear') return null;
+  const conflict = rows.status === 'conflict' || prose.status === 'conflict';
+  const code = conflict ? 'RECIPE_RESTRICTION_CONFLICT' : 'RECIPE_RESTRICTION_REVIEW';
+  serverLogger.info('recipe_generate.restriction_rejected', { requestId, code });
+  return NextResponse.json({
+    error: conflict
+      ? 'La propuesta contiene un ingrediente incompatible con tus restricciones. Solicita otra receta.'
+      : 'No se pudo confirmar la composición de un ingrediente. Solicita una alternativa de composición identificable.',
+    code,
+  }, { status: 422 });
 }
 
 async function requestGeminiRecipe(
@@ -134,23 +123,23 @@ async function requestGeminiRecipe(
   let onAbort: (() => void) | undefined;
   try {
     const aborted = new Promise<never>((_, reject) => {
-      onAbort = () => reject(new Error('Gemini provider request aborted'));
+      onAbort = () => reject(new RecipeGenerationFailure('provider_aborted'));
       if (controller.signal.aborted) onAbort();
       else controller.signal.addEventListener('abort', onAbort, { once: true });
     });
     const request = async () => {
-      if (controller.signal.aborted) throw new Error('Gemini provider request aborted');
+      if (controller.signal.aborted) throw new RecipeGenerationFailure('provider_aborted');
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: 'application/json', responseJsonSchema: generatedRecipeResponseJsonSchema } }),
         signal: controller.signal,
       });
-      if (controller.signal.aborted) throw new Error('Gemini provider request aborted');
-      if (!response.ok) throw new Error('Gemini provider request failed');
+      if (controller.signal.aborted) throw new RecipeGenerationFailure('provider_aborted');
+      if (!response.ok) throw new RecipeGenerationFailure('provider_http_error', response.status);
       const payload: unknown = await response.json();
       const recipe = extractGeminiTextResponse(payload);
-      if (!recipe) throw new Error('Gemini no devolvió contenido de receta.');
+      if (!recipe) throw new RecipeGenerationFailure('provider_text_missing');
       return recipe;
     };
     return await Promise.race([request(), aborted]);
@@ -161,22 +150,29 @@ async function requestGeminiRecipe(
   }
 }
 
+class RecipeProfileChangedError extends Error {}
+
 async function persistAuthenticatedRecipeHistory({
   user,
   result,
   requestedIngredients,
+  requestedMealType,
   peopleCount,
   persistedContext,
+  profileFields,
   ragContext,
 }: {
   user: AuthUser | null;
   result: CanonicalRecipeResult;
   requestedIngredients: string[];
+  requestedMealType: string;
   peopleCount: number;
   persistedContext: Awaited<ReturnType<typeof loadPersistedRecipeContext>> | null;
+  profileFields: RecipeProfileFields;
   ragContext: { citations: Citation[]; ragContextUsed: boolean };
 }): Promise<string | null> {
   if (!user?.tenant) return null;
+  const slot = todaySlotForMealType(requestedMealType);
 
   const history = await createRecipeHistory({
     tenantId: user.tenant.tenantId,
@@ -185,20 +181,25 @@ async function persistAuthenticatedRecipeHistory({
     recipeTitle: result.title,
     recipePayload: {
       full_recipe: result.recipe,
+      ...(result.preparation !== undefined ? { preparation: result.preparation } : {}),
+      recipeReviewRequired: true,
       title: result.title,
       provider: result.provider,
       model: result.model,
       mode: result.mode,
       structuredIngredients: result.structuredIngredients,
       requestedIngredients,
+      ...(slot ? { slot } : {}),
       peopleCount,
       ragContextUsed: ragContext.ragContextUsed,
       sources: ragContext.citations,
     },
+    expectedHardRestrictions: [...new Set([...profileFields.allergies, ...profileFields.avoid])],
     restrictionsSnapshot: {
       identity: persistedContext?.profile?.identity ?? [],
       preferred: persistedContext?.profile?.preferred ?? [],
-      avoid: persistedContext?.profile?.avoid ?? [],
+      avoid: profileFields.avoid,
+      allergies: profileFields.allergies,
       goals: persistedContext?.profile?.goals ?? [],
       level: persistedContext?.profile?.level ?? 'No especificado',
     },
@@ -208,6 +209,7 @@ async function persistAuthenticatedRecipeHistory({
         persistedContext?.inventoryContext ?? 'Sin inventario persistido para este hogar.',
     },
   });
+  if (!history) throw new RecipeProfileChangedError();
   return history.id;
 }
 
@@ -314,16 +316,21 @@ export async function POST(request: NextRequest) {
       ? Math.floor(body.peopleCount)
       : 4;
   const requestProfile = buildRequestProfile(body.culinaryProfile);
+  const avoid = readHardRestrictionList([...(persistedContext?.profile?.avoid ?? []), ...requestProfile.avoid]);
+  const allergies = readHardRestrictionList(persistedContext?.profile?.allergies ?? []);
+  if (!avoid || !allergies)
+    return NextResponse.json({ error: 'No se pudo recuperar el contexto culinario.' }, { status: 409 });
   const profileFields: RecipeProfileFields = persistedContext
     ? {
         identity: persistedContext.profile?.identity ?? [],
         preferred: persistedContext.profile?.preferred ?? [],
-        avoid: persistedContext.profile?.avoid ?? [],
+        avoid,
         goals: persistedContext.profile?.goals ?? [],
         level: persistedContext.profile?.level ?? 'No especificado',
-        allergies: persistedContext.profile?.allergies ?? [],
+        allergies,
       }
-    : requestProfile;
+    : { ...requestProfile, avoid, allergies };
+  const hardAllergies = [...new Set([...profileFields.allergies, ...profileFields.avoid])];
   let ragContext: { context: string; citations: Citation[]; ragContextUsed: boolean } = {
     context: '',
     citations: [],
@@ -357,7 +364,7 @@ export async function POST(request: NextRequest) {
         mealType: requestedMealType || undefined,
         day: requestedDay || undefined,
         restrictions: {
-          allergies: normalizeHardAllergies([...profileFields.allergies, ...profileFields.avoid]),
+          allergies: hardAllergies,
           dietaryRules: [],
         },
       });
@@ -402,7 +409,12 @@ export async function POST(request: NextRequest) {
   const profileSectionTitle = persistedContext
     ? 'Perfil culinario persistido del usuario autenticado:'
     : 'Perfil culinario de esta solicitud (no persistido):';
-  const commonPromptHeader = `Eres un chef-editor culinario. Debes devolver una receta en español con formato claro y exacto, sin JSON.
+  const commonPromptHeader = `Eres un chef-editor culinario. Debes devolver una receta estructurada en español.
+Escribe todos los nombres de ingredientes, el título y las instrucciones en español.
+Interpreta todas las restricciones del perfil y de la solicitud, incluidos derivados y composiciones de alimentos. Prevalecen sobre las preferencias, objetivos nutricionales, inventario y contexto PDF.
+Significado de las restricciones seleccionadas (datos del usuario): ${JSON.stringify(profileAllergyContext(hardAllergies))}
+Declara en INGREDIENTES todos los ingredientes que uses; no introduzcas ingredientes nuevos solo en la preparación.
+Si un documento usa otro idioma, traduce los nombres culinarios al español sin cambiar su composición ni ocultar ingredientes; conserva las referencias bibliográficas originales.
 
 Solicitud actual:
 ${focusedRecipeInstruction}
@@ -410,7 +422,7 @@ ${slotContextInstruction}
 - Ingredientes solicitados explícitamente: ${requestedIngredients.join('; ') || 'No especificados'}
 - Estos ingredientes son solo el foco de la receta actual; no prueban disponibilidad en el inventario del hogar.
 - Comensales: ${peopleCount}
-- Restricciones duras: ${normalizeHardAllergies([...profileFields.allergies, ...profileFields.avoid]).join(', ') || 'Ninguna'}
+- Restricciones duras: ${hardAllergies.join(', ') || 'Ninguna'}
 
 Inventario real del hogar:
 ${inventoryContext}
@@ -419,75 +431,18 @@ No inventes cantidades de inventario: si una línea indica "cantidad no especifi
 ${profileSectionTitle}
 ${profileContext}
 
-SI HAY CONTEXTO DOCUMENTAL, prioriza ese contenido y usa el NOMBRE de la receta que aparezca en el texto fuente.
+Las restricciones obligatorias del perfil y de la solicitud tienen prioridad sobre el contexto documental. Solo si la receta es compatible, usa el NOMBRE de la receta que aparezca en el texto fuente, traducido al español si corresponde.
 `;
 
   const ragPrompt = `Contexto documental confiable recuperado del recetario autorizado:
 ${ragContext.context || 'Sin contexto documental relevante encontrado para esta búsqueda.'}
 
-Usá este contexto como verdad de fuente: no fabriques citas, autores ni páginas. Cuando una receta sea una síntesis propia a partir del contexto, distinguí explícitamente esa síntesis de las técnicas o datos documentados.
-
-Formato de salida OBLIGATORIO:
-[TITULO]
-
-INGREDIENTES
-- 2 unidades tomate
-- 1 taza arroz
-- 200 g pollo
-
-FUENTE
-- [autor/libro si está disponible en el contexto]
-- [página si está disponible]
-
-PREPARACIÓN
-1. ...
-2. ...
-
-TIPS
-- ...
-
-Reglas:
-- Genera SOLO UNA receta para el plato objetivo; no agregues acompañantes extra ni segundas recetas.
-- El título debe ser únicamente el nombre del plato objetivo (sin introducciones largas).
-- No inventes fuentes.
-- Si el contexto no trae autor/página, indícalo como "No especificado en contexto".
-- Ajusta cantidades explícitamente para ${peopleCount} comensales.
-- Si el PDF no trae cantidades base claras, estima cantidades y acláralo en una línea final: "Cantidades estimadas para ${peopleCount} personas".
-- Respeta estrictamente restricciones de "evitar".
-- Cada ingrediente debe ir en una sola línea.
-- Cada línea de ingrediente debe empezar con cantidad numérica + unidad + nombre.
-- Evita subtítulos dentro de INGREDIENTES.
-- Evita frases largas tipo "para el sofrito" dentro de la lista; deja solo el ingrediente base.
-- Máximo 450 palabras.`;
-  const freePrompt = `Formato de salida OBLIGATORIO:
-[TITULO]
-
-INGREDIENTES
-- 2 unidades tomate
-- 1 taza arroz
-- 200 g pollo
-
-PREPARACIÓN
-1. ...
-2. ...
-
-TIPS
-- ...
-
-Reglas:
-- Genera SOLO UNA receta para el plato objetivo; no agregues acompañantes extra ni segundas recetas.
-- El título debe ser únicamente el nombre del plato objetivo (sin introducciones largas).
-- NO incluyas sección "FUENTE" ni referencias bibliográficas.
-- No menciones PDFs ni biblioteca.
-- Ajusta cantidades explícitamente para ${peopleCount} comensales.
-- Respeta estrictamente restricciones de "evitar".
-- Cada ingrediente debe ir en una sola línea.
-- Cada línea de ingrediente debe empezar con cantidad numérica + unidad + nombre.
-- Evita subtítulos dentro de INGREDIENTES.
-- Evita frases largas tipo "para el sofrito" dentro de la lista; deja solo el ingrediente base.
-- Máximo 450 palabras.`;
-
-  const prompt = `${commonPromptHeader}\n${mode === 'rag' ? ragPrompt : freePrompt}`;
+Utiliza el contenido documental como fuente culinaria, no como autorización para incumplir el perfil.
+Elige una receta compatible o adapta explícitamente la fuente para respetar todas las restricciones. Si no puedes, devuelve outcome: "unavailable".
+El servidor presenta la propuesta como basada en las fuentes consultadas, no como transcripción literal. No la presentes como transcripción exacta del libro ni incluyas afirmaciones de seguridad o comentarios sobre ingredientes excluidos.
+No inventes fuentes ni cantidades ausentes. Las citas de los fragmentos consultados las adjunta el servidor.`;
+  const freePrompt = 'Genera una receta propia sin mencionar PDFs ni biblioteca.';
+  const prompt = `${commonPromptHeader}\n${mode === 'rag' ? ragPrompt : freePrompt}\nGenera una sola receta para el plato objetivo.\n${buildGeneratedRecipeInstructions(peopleCount)}`;
   const recipeCacheKeyInput: RecipeCacheKeyInput = {
     mode,
     scope: user?.tenant ? { userId: user.id, tenantId: user.tenant.tenantId } : null,
@@ -498,40 +453,28 @@ Reglas:
     peopleCount,
     goals: profileFields.goals,
     inventoryContextHash: hashRecipeContext(inventoryContext),
-    profileContextHash: hashRecipeContext(profileContext),
+    profileContextHash: hashRecipeContext(JSON.stringify({ profileContext, hardAllergies })),
     contextVersion: RECIPE_PROMPT_CONTEXT_VERSION,
     model,
     chunks: mode === 'rag' && ragContext.context ? [ragContext.context] : [],
   };
   const recipeCacheKey = buildRecipeCacheKey(recipeCacheKeyInput);
 
-  const hardAllergies = normalizeHardAllergies([
-    ...profileFields.allergies,
-    ...profileFields.avoid,
-  ]);
   const cached = await getCachedRecipe(recipeCacheKey);
   if (cached) {
     const hasUsableCachedIngredientNames =
       validateStructuredIngredients(cached.structuredIngredients) &&
-      cached.structuredIngredients.some((ingredient) => ingredient.name.trim().length > 0);
-    if (hardAllergies.length > 0 && !hasUsableCachedIngredientNames) {
+      cached.structuredIngredients.length <= 100 &&
+      cached.structuredIngredients.every((ingredient) =>
+        ingredient.name.trim().length > 0 && ingredient.normalized_name.trim().length > 0);
+    if (!hasUsableCachedIngredientNames) {
       return NextResponse.json(
         { error: 'No se pudieron validar los ingredientes de la receta generada.' },
         { status: 502 }
       );
     }
-    if (
-      hasUsableCachedIngredientNames &&
-      containsRestrictedIngredientName(
-        [...cached.structuredIngredients.map((ingredient) => ingredient.name), cached.recipe],
-        hardAllergies
-      )
-    ) {
-      return NextResponse.json(
-        { error: 'La receta generada contiene un ingrediente restringido.' },
-        { status: 502 }
-      );
-    }
+    const rejection = restrictionRejection(cached, hardAllergies, requestId);
+    if (rejection) return rejection;
 
     let recipeHistoryId: string | null;
     try {
@@ -541,11 +484,15 @@ Reglas:
             user,
             result: cached,
             requestedIngredients,
+            requestedMealType,
             peopleCount,
             persistedContext,
+            profileFields,
             ragContext,
           });
     } catch (error) {
+      if (error instanceof RecipeProfileChangedError)
+        return NextResponse.json({ error: 'El perfil culinario cambió. Generá una receta nueva.', code: 'RECIPE_PROFILE_CHANGED' }, { status: 409 });
       serverLogger.error('recipe_generate.history_persist_failed', {
         requestId,
         reason: error instanceof Error ? error.name : 'unknown',
@@ -558,6 +505,7 @@ Reglas:
 
     return NextResponse.json({
       recipe: cached.recipe,
+      ...(cached.preparation !== undefined ? { preparation: cached.preparation } : {}),
       title: cached.title,
       provider: cached.provider,
       model: cached.model,
@@ -566,6 +514,7 @@ Reglas:
       ragContextUsed: ragContext.ragContextUsed,
       sources: ragContext.citations,
       servings: peopleCount,
+      recipeReviewRequired: true,
       ...(recipeHistoryId ? { recipeHistoryId } : {}),
       cached: true,
     });
@@ -576,40 +525,34 @@ Reglas:
       throw new Error('Provider unavailable');
     }
 
-    const recipe = await requestGeminiRecipe(
+    const raw = await requestGeminiRecipe(
       `${geminiBaseUrl}/models/${model}:generateContent?key=${apiKey}`,
       prompt,
       request.signal
     );
-
-    const title = inferTitleFromRecipe(recipe);
-    const structuredIngredients = extractStructuredIngredients(recipe);
-    const hasUsableIngredientNames =
-      validateStructuredIngredients(structuredIngredients) &&
-      structuredIngredients.some((ingredient) => ingredient.name.trim().length > 0);
-    if (hardAllergies.length > 0 && !hasUsableIngredientNames) {
-      throw new Error('No se pudieron validar los ingredientes de la receta generada.');
+    const parsed = parseGeneratedRecipeResponse(raw, peopleCount);
+    if (!parsed.success) {
+      if (parsed.reason === 'no_compatible_recipe') {
+        return NextResponse.json({
+          error: 'No se pudo formular una receta que respete las condiciones indicadas.',
+          code: 'RECIPE_UNAVAILABLE',
+        }, { status: 422 });
+      }
+      serverLogger.error('recipe_generate.failed', { requestId, durationMs: Date.now() - startedAt, reason: parsed.reason });
+      const invalidFormat = ['invalid_json', 'invalid_recipe_shape', 'response_too_large'].includes(parsed.reason);
+      return NextResponse.json({
+        error: invalidFormat
+          ? 'El modelo devolvió una respuesta que no se pudo interpretar.'
+          : 'La propuesta contiene datos de receta inconsistentes. Solicita otra receta.',
+        code: invalidFormat ? 'RECIPE_INVALID_RESPONSE' : 'RECIPE_INVALID_CONTENT',
+      }, { status: invalidFormat ? 502 : 422 });
     }
-    if (
-      containsRestrictedIngredientName(
-        [...structuredIngredients.map((ingredient) => ingredient.name), recipe],
-        hardAllergies
-      )
-    ) {
-      throw new Error('La receta generada contiene un ingrediente restringido.');
-    }
-
-    const safeStructuredIngredients: StructuredRecipeIngredient[] = hasUsableIngredientNames
-      ? structuredIngredients
-      : [];
+    const { recipe, preparation, title, structuredIngredients } = parsed.value;
     const result: CanonicalRecipeResult = {
-      recipe,
-      title,
-      provider: 'gemini',
-      model,
-      mode,
-      structuredIngredients: safeStructuredIngredients,
+      recipe, preparation, title, provider: 'gemini', model, mode, structuredIngredients,
     };
+    const rejection = restrictionRejection(result, hardAllergies, requestId);
+    if (rejection) return rejection;
 
     let recipeHistoryId: string | null;
     try {
@@ -619,11 +562,15 @@ Reglas:
             user,
             result,
             requestedIngredients,
+            requestedMealType,
             peopleCount,
             persistedContext,
+            profileFields,
             ragContext,
           });
     } catch (error) {
+      if (error instanceof RecipeProfileChangedError)
+        return NextResponse.json({ error: 'El perfil culinario cambió. Generá una receta nueva.', code: 'RECIPE_PROFILE_CHANGED' }, { status: 409 });
       serverLogger.error('recipe_generate.history_persist_failed', {
         requestId,
         reason: error instanceof Error ? error.name : 'unknown',
@@ -647,20 +594,26 @@ Reglas:
     });
     return NextResponse.json({
       recipe,
+      preparation,
       title,
       provider: 'gemini',
+      model,
       mode,
-      structuredIngredients: safeStructuredIngredients,
+      structuredIngredients,
       ragContextUsed: ragContext.ragContextUsed,
       sources: ragContext.citations,
       servings: peopleCount,
+      recipeReviewRequired: true,
       ...(recipeHistoryId ? { recipeHistoryId } : {}),
     });
   } catch (error) {
     serverLogger.error('recipe_generate.failed', {
       requestId,
       durationMs: Date.now() - startedAt,
-      reason: error instanceof Error ? error.name : 'unknown',
+      reason: error instanceof RecipeGenerationFailure ? error.code : error instanceof Error ? error.name : 'unknown',
+      ...(error instanceof RecipeGenerationFailure && error.upstreamStatus !== undefined
+        ? { upstreamStatus: error.upstreamStatus }
+        : {}),
     });
     return NextResponse.json(
       { error: 'No se pudo generar la receta temporalmente.' },

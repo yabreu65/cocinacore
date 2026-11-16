@@ -122,10 +122,50 @@ test.describe('Connected Meal Planner shopping confirmation', () => {
       await page.goto('/meal-planner');
       await expect(page.getByRole('heading', { name: 'Planificador de menú' })).toBeVisible();
       await expect(page.getByRole('heading', { name: 'Menú generado' })).toBeVisible();
+      const pendingSuggestions = page.waitForRequest((request) =>
+        request.method() === 'GET' && request.url().includes('/api/meal-plan/shopping-suggestions?') &&
+        request.url().includes('horizon=14'));
+      let releaseSuggestions!: () => void;
+      const heldSuggestions = new Promise<void>((resolve) => { releaseSuggestions = resolve; });
+      const shoppingPattern = '**/api/meal-plan/shopping-suggestions?*';
+      await page.route(shoppingPattern, async (route) => {
+        if (route.request().method() === 'GET' && route.request().url().includes('horizon=14'))
+          await heldSuggestions;
+        await route.continue().catch(() => undefined);
+      });
+      const shoppingSection = page.locator('section[aria-busy]');
+      await expect(shoppingSection.getByLabel('Horizonte')).toBeEnabled();
+      await shoppingSection.getByLabel('Horizonte').selectOption('14');
+      await pendingSuggestions;
+      await expect(shoppingSection).toHaveAttribute('aria-busy', 'true');
+      await page.route('**/api/meal-plan', async (route) => {
+        if (route.request().method() !== 'POST') return route.continue();
+        await route.fulfill({ status: 503, json: { error: 'Generación de prueba fallida' } });
+      });
+      try {
+        await page.getByRole('button', { name: 'Generar menú' }).click();
+        await expect(page.getByText('Generación de prueba fallida')).toBeVisible();
+        await expect(shoppingSection).toHaveCount(0);
+      } finally {
+        releaseSuggestions();
+        await page.unroute(shoppingPattern);
+        await page.unroute('**/api/meal-plan');
+      }
+      // The deterministic POST returns the same already persisted, confirmed fixture.
+      // All suggestion reads and confirmation writes remain real HTTP/database operations.
+      await page.route('**/api/meal-plan', async (route) => {
+        if (route.request().method() !== 'POST') return route.continue();
+        await route.fulfill({ status: 200, json: { id: planId, plan } });
+      });
+      await page.getByRole('button', { name: 'Generar menú' }).click();
+      await expect(page.getByRole('heading', { name: 'Menú generado' })).toBeVisible();
+      await page.unroute('**/api/meal-plan');
       const suggestionsSection = page.locator('section[aria-busy]');
       await expect(
         suggestionsSection.getByRole('heading', { name: 'Compras anticipadas' })
       ).toBeVisible();
+      await expect(suggestionsSection.getByLabel('Horizonte')).toBeEnabled();
+      await suggestionsSection.getByLabel('Horizonte').selectOption('7');
       await expect(suggestionsSection.getByText(names.covered, { exact: false })).toHaveCount(0);
       await expect(suggestionsSection.getByText(names.partial, { exact: false })).toBeVisible();
       await expect(suggestionsSection.getByText(names.missing, { exact: false })).toBeVisible();
@@ -137,6 +177,11 @@ test.describe('Connected Meal Planner shopping confirmation', () => {
       await expect(suggestionsSection.getByText(/Desayuno de prueba/).first()).toBeVisible();
       await expect(suggestionsSection.getByText('Comprar', { exact: true }).first()).toBeVisible();
       await expect(suggestionsSection.getByText(/^Revisar:/)).toBeVisible();
+
+      await suggestionsSection.getByLabel('Horizonte').selectOption('14');
+      await expect(suggestionsSection.getByText(/No se puede calcular este horizonte/)).toBeVisible();
+      await suggestionsSection.getByLabel('Horizonte').selectOption('7');
+      await expect(suggestionsSection.getByText(names.partial, { exact: false })).toBeVisible();
 
       const addButton = suggestionsSection.getByRole('button', {
         name: 'Agregar seleccionados a compras',

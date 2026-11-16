@@ -178,8 +178,9 @@ describe('loadPersistedRecipeContext', () => {
     }
   });
 
-  it('returns neutral markers when inventory or an exact user/tenant profile is missing', async () => {
-    findCulinaryProfileByUserIdMock.mockResolvedValue(profile({ tenant_id: 'tenant-2' }));
+  it('returns neutral markers for an absent profile, but rejects mismatched profile scope', async () => {
+    findCulinaryProfileByUserIdMock.mockResolvedValue(null);
+    findCulinaryProfileTermsByUserIdMock.mockResolvedValue([]);
 
     const context = await loadPersistedRecipeContext('user-1', 'tenant-1');
 
@@ -190,8 +191,8 @@ describe('loadPersistedRecipeContext', () => {
     expect(context.profileContext).toBe('Sin perfil culinario configurado.');
 
     findCulinaryProfileByUserIdMock.mockResolvedValue(profile({ user_id: 'user-2' }));
-    const otherUserContext = await loadPersistedRecipeContext('user-1', 'tenant-1');
-    expect(otherUserContext.profile).toBeNull();
-    expect(otherUserContext.profileContext).toBe('Sin perfil culinario configurado.');
+    await expect(loadPersistedRecipeContext('user-1', 'tenant-1')).rejects.toThrow('Invalid persisted culinary profile');
+    findCulinaryProfileByUserIdMock.mockResolvedValue(profile({ tenant_id: 'tenant-2' }));
+    await expect(loadPersistedRecipeContext('user-1', 'tenant-1')).rejects.toThrow('Invalid persisted culinary profile');
   });
 });

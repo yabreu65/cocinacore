@@ -5,6 +5,7 @@ import type { RecipeInventoryItemRow, UserMealPlanRow, UserRecipeDetailDto } fro
 const mocks = vi.hoisted(() => ({
   requireUser: vi.fn(),
   findPersistentRecipeDetail: vi.fn(),
+  findPersistentRecipeVersion: vi.fn(),
   findMealPlanByIdForUserAndTenant: vi.fn(),
   listInventoryItemsByTenant: vi.fn(),
   findCulinaryProfileByUserId: vi.fn(),
@@ -14,6 +15,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/lib/auth/server', () => ({ requireUser: mocks.requireUser }));
 vi.mock('@/lib/db/repositories/recipeRepository', () => ({
   findPersistentRecipeDetail: mocks.findPersistentRecipeDetail,
+  findPersistentRecipeVersion: mocks.findPersistentRecipeVersion,
 }));
 vi.mock('@/lib/db/repositories/mealPlanRepository', () => ({
   findMealPlanByIdForUserAndTenant: mocks.findMealPlanByIdForUserAndTenant,
@@ -170,4 +172,25 @@ describe('GET /api/cooking-intent-preview', () => {
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({ error: 'Meal plan schedule is not confirmed' });
   });
+  it('loads the exact linked version and never falls back to the original meal', async () => {
+    const version = { ...recipe.current_version, title: 'Pinned version', ingredients: [{ name: 'Crema', quantity: '200', unit: 'ml' }] };
+    const calendar = { period: 'week', dayCount: 7,
+      schedule: { startDate: '2026-10-28', timeZone: 'UTC', confirmedAt: '2026-10-28T00:00:00.000Z',
+        portionConfirmation: { peopleCount: 2, confirmedAt: '2026-10-28T00:00:00.000Z' } },
+      days: Array.from({ length: 7 }, (_, i) => ({ dayIndex: i + 1,
+        meals: ['breakfast', 'lunch', 'dinner'].map((mealType) => ({ mealType, title: 'Original', description: null,
+          ingredients: [{ name: 'Rice', quantity: 1, unit: 'kg' }],
+          ...(mealType === 'lunch' && i === 0 ? { recipeRef: { recipeId, versionId: version.id } } : {}) })) })) };
+    mocks.findMealPlanByIdForUserAndTenant.mockResolvedValue({ ...unconfirmedPlan, calendar_payload: calendar });
+    mocks.findPersistentRecipeVersion.mockResolvedValue(version);
+    const query = 'source=meal_slot&mealPlanId=' + unconfirmedPlan.id + '&dayIndex=1&mealType=lunch';
+    const response = await GET(request(query));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ preview: { title: 'Pinned version', mealSlot: { mealPlanId: unconfirmedPlan.id, dayIndex: 1, mealType: 'lunch' }, ingredients: [{ name: 'Crema' }] } });
+    expect(mocks.findPersistentRecipeVersion).toHaveBeenCalledWith(recipeId, version.id, { tenantId: 'tenant-1', userId: 'user-1' });
+    expect(mocks.findPersistentRecipeDetail).not.toHaveBeenCalled();
+    mocks.findPersistentRecipeVersion.mockResolvedValue(null);
+    expect((await GET(request(query))).status).toBe(409);
+  });
+
 });

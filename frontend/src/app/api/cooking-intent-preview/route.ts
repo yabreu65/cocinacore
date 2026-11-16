@@ -1,3 +1,4 @@
+import { readHardRestrictionList } from '@/lib/profile/culinary-profile-contract';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/auth/server';
 import type { AuthUser } from '@/lib/auth/types';
@@ -5,7 +6,7 @@ import {
   listInventoryItemsByTenant,
   MAX_WASTE_PREVENTION_INVENTORY_LIMIT,
 } from '@/lib/db/repositories/inventoryRepository';
-import { findPersistentRecipeDetail } from '@/lib/db/repositories/recipeRepository';
+import { findPersistentRecipeDetail, findPersistentRecipeVersion } from '@/lib/db/repositories/recipeRepository';
 import {
   findCulinaryProfileByUserId,
   listWastePreventionCulinaryProfileTermsByUserId,
@@ -150,7 +151,14 @@ export async function GET(request: NextRequest) {
       const meal = day?.meals.find((candidate) => candidate.mealType === mealType);
       if (!meal) return NextResponse.json({ error: 'Meal slot not found' }, { status: 404 });
       timeZone = requestedTimeZone ?? parsedPlan.plan.schedule.timeZone;
+      const linkedVersion = meal.recipeRef
+        ? await findPersistentRecipeVersion(meal.recipeRef.recipeId, meal.recipeRef.versionId, { tenantId, userId: loadedUser.id })
+        : undefined;
+      if (meal.recipeRef && (!linkedVersion || linkedVersion.id !== meal.recipeRef.versionId ||
+          linkedVersion.recipe_id !== meal.recipeRef.recipeId || linkedVersion.tenant_id !== tenantId || linkedVersion.user_id !== loadedUser.id))
+        return NextResponse.json({ error: 'La versión de receta vinculada no está disponible.' }, { status: 409 });
       mealSlot = {
+        ...(linkedVersion ? { linkedVersion } : {}),
         mealPlan: persistedPlan,
         meal,
         dayIndex,
@@ -185,15 +193,17 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unable to load preview data' }, { status: 409 });
     }
 
+    const allergies = readHardRestrictionList(profile ? profile.allergies : []);
+    const hardAvoid = readHardRestrictionList(terms.filter((term) => term.preference_type === 'avoid').map((term) => term.term_label));
+    if (!allergies || !hardAvoid || (!profile && terms.length > 0) || terms.some((term) => term.user_id !== loadedUser.id))
+      return NextResponse.json({ error: 'Unable to load preview data' }, { status: 409 });
     const preview = buildCookingIntentPreview({
       source,
       recipe: recipe as Exclude<typeof recipe, null>,
       mealSlot,
       inventoryItems: inventory.filter((item) => item.tenant_id === tenantId),
-      allergies: profile?.allergies ?? [],
-      hardAvoid: terms
-        .filter((term) => term.preference_type === 'avoid')
-        .map((term) => term.term_label),
+      allergies,
+      hardAvoid,
       profileConfigured: Boolean(profile),
       now: new Date(),
       timeZone,

@@ -6,7 +6,9 @@ import Link from 'next/link';
 import { humanCopy } from '@/lib/copy';
 import { safeFetch } from '@/lib/api';
 import { createHistoryOperationGate, type HistoryOperation } from './history-operation-gate';
-import { buildRecipeImportFromHistory } from '@/lib/recipes/recipe-history-import';
+import { buildRecipeImportFromHistory, historyImportIngredientLimitExceeded } from '@/lib/recipes/recipe-history-import';
+import { getHistoryRecipeSources } from '@/lib/recipes/source-citations';
+import { RecipeEditor, draftFromImport, payloadFromDraft, type Draft } from '../RecipeLibraryClient';
 
 type HistoryFilter = 'all' | 'saved';
 
@@ -69,6 +71,7 @@ export default function RecipeHistoryPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [reviewId, setReviewId] = useState<string | null>(null);
   const gate = useRef(createHistoryOperationGate());
   const [pending, setPending] = useState(new Map<string, HistoryOperation>());
   const [importedRecipes, setImportedRecipes] = useState<Record<string, string>>({});
@@ -77,6 +80,7 @@ export default function RecipeHistoryPage() {
   const loadingRef = useRef(true);
   const loadEpoch = useRef(0);
   const [reloadVersion, setReloadVersion] = useState(0);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const changeFilter = useCallback((next: HistoryFilter) => {
     if (filterRef.current === next) return;
@@ -85,7 +89,9 @@ export default function RecipeHistoryPage() {
     loadingRef.current = true;
     setLoading(true);
     setRows([]);
+    setReviewId(null);
     setError(null);
+    setLoadError(null);
     setFilter(next);
   }, []);
 
@@ -95,10 +101,10 @@ export default function RecipeHistoryPage() {
     return true;
   };
 
-  const finishOperation = (id: string, operation: HistoryOperation) => {
+  const finishOperation = (id: string, operation: HistoryOperation, reload = true) => {
     gate.current.finish(id, operation);
     setPending(gate.current.snapshot());
-    if (gate.current.size === 0) {
+    if ((reload || loadingRef.current) && gate.current.size === 0) {
       loadingRef.current = true;
       setLoading(true);
       setReloadVersion((current) => current + 1);
@@ -124,6 +130,7 @@ export default function RecipeHistoryPage() {
     const isCurrent = () => current && loadEpoch.current === epoch && filterRef.current === filter;
     loadingRef.current = true;
     setLoading(true);
+    setLoadError(null);
     const load = async () => {
       try {
         const path = filter === 'saved' ? '/api/recipe-history?saved=true' : '/api/recipe-history';
@@ -134,10 +141,11 @@ export default function RecipeHistoryPage() {
         if (!isCurrent()) return;
         if (!result.ok) throw new Error(result.error);
         setRows(result.data.items);
+        setLoadError(null);
       } catch (cause) {
         if (!isCurrent() || (cause instanceof Error && cause.name === 'AbortError')) return;
         setRows([]);
-        setError(cause instanceof Error ? cause.message : 'No se pudo cargar historial.');
+        setLoadError(cause instanceof Error ? cause.message : 'No se pudo cargar historial.');
       } finally {
         if (isCurrent()) {
           loadingRef.current = false;
@@ -235,17 +243,9 @@ export default function RecipeHistoryPage() {
     }
   };
 
-  const importToRecetario = async (entry: HistoryRow) => {
-    if (importedIds.current.has(entry.id)) return;
-    const body = buildRecipeImportFromHistory({
-      id: entry.id,
-      title: entry.recipe_title,
-      payload: entry.recipe_payload,
-    });
-    if (!body) {
-      setError('Esta sugerencia antigua no tiene un formato compatible para importarla.');
-      return;
-    }
+  const importToRecetario = async (entry: HistoryRow, draft: Draft) => {
+    if (reviewId !== entry.id || importedIds.current.has(entry.id)) return;
+    const body = { ...payloadFromDraft(draft), sourceRecipeHistoryId: entry.id };
     if (!beginOperation(entry.id, 'import')) return;
     setError(null);
     try {
@@ -259,11 +259,12 @@ export default function RecipeHistoryPage() {
         throw new Error('No se pudo importar la receta.');
       }
       importedIds.current.add(entry.id);
+      setReviewId((current) => current === entry.id ? null : current);
       setImportedRecipes((current) => ({ ...current, [entry.id]: result.data.recipe.id }));
     } catch {
       setError('No pudimos llevar la receta a tu recetario. Podés intentarlo nuevamente.');
     } finally {
-      finishOperation(entry.id, 'import');
+      finishOperation(entry.id, 'import', importedIds.current.has(entry.id));
     }
   };
 
@@ -273,13 +274,14 @@ export default function RecipeHistoryPage() {
         <h1 className="text-3xl font-semibold">Historial de recetas</h1>
         <p className="mt-1 text-bistro-text-secondary">
           Tus ideas generadas. Marcar una idea para consultar no la guarda en Mi recetario; para
-          tenerla siempre disponible, usá «Importar a Mi recetario».
+          tenerla siempre disponible, usá «Importar a Mi recetario» y revisá los ingredientes y pasos antes de confirmar.
         </p>
 
         <label className="mt-4 flex w-fit items-center gap-2 text-sm font-semibold text-bistro-text-secondary">
           Mostrar recetas
           <select
             value={filter}
+            disabled={reviewId !== null}
             onChange={(event) => updateFilter(event.target.value as HistoryFilter)}
             className="rounded-xl border border-bistro-border bg-white px-3 py-1.5 text-sm font-medium text-bistro-text-primary"
           >
@@ -296,7 +298,20 @@ export default function RecipeHistoryPage() {
             {error}
           </p>
         ) : null}
-        {!loading && rows.length === 0 ? (
+        {loadError ? (
+          <div role="alert" className="mt-4 rounded-xl border border-bistro-danger/30 bg-bistro-danger/10 px-3 py-2 text-sm text-bistro-danger">
+            <p>{loadError}</p>
+            <button
+              type="button"
+              disabled={loading || pending.size > 0}
+              onClick={() => setReloadVersion((current) => current + 1)}
+              className="mt-2 font-semibold underline disabled:opacity-60"
+            >
+              Reintentar carga del historial
+            </button>
+          </div>
+        ) : null}
+        {!loading && !loadError && rows.length === 0 ? (
           <p className="mt-4 text-sm text-bistro-text-secondary">
             {filter === 'saved'
               ? 'Aún no hay ideas marcadas para consultar.'
@@ -307,8 +322,13 @@ export default function RecipeHistoryPage() {
         <ul className="mt-4 grid gap-3">
           {rows.map((entry) => {
             const isOpen = openId === entry.id;
+            const sources = isOpen || reviewId === entry.id ? getHistoryRecipeSources(entry.recipe_payload) : [];
             const operation = pending.get(entry.id);
             const busy = loading || operation !== undefined;
+            const otherReview = reviewId !== null && reviewId !== entry.id;
+            const importDraft = buildRecipeImportFromHistory({
+              id: entry.id, title: entry.recipe_title, payload: entry.recipe_payload,
+            });
             return (
               <li
                 key={entry.id}
@@ -326,7 +346,7 @@ export default function RecipeHistoryPage() {
                       type="button"
                       onClick={() => void setSaved(entry)}
                       aria-pressed={entry.is_saved}
-                      disabled={busy}
+                      disabled={busy || reviewId !== null}
                       className="rounded-xl border border-bistro-border bg-white px-3 py-1.5 text-sm font-semibold text-bistro-text-secondary disabled:opacity-70"
                     >
                       {entry.is_saved ? 'Quitar marca' : 'Marcar para consultar'}
@@ -338,15 +358,11 @@ export default function RecipeHistoryPage() {
                       >
                         Ver en Mi recetario
                       </Link>
-                    ) : buildRecipeImportFromHistory({
-                        id: entry.id,
-                        title: entry.recipe_title,
-                        payload: entry.recipe_payload,
-                      }) ? (
+                    ) : importDraft && reviewId !== entry.id ? (
                       <button
                         type="button"
-                        onClick={() => void importToRecetario(entry)}
-                        disabled={busy}
+                        onClick={() => { if (!loadingRef.current && gate.current.size === 0) setReviewId(entry.id); }}
+                        disabled={busy || otherReview || pending.size > 0}
                         className="min-h-10 rounded-xl bg-bistro-action-primary px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
                       >
                         {operation === 'import' ? 'Importando…' : 'Importar a Mi recetario'}
@@ -355,7 +371,7 @@ export default function RecipeHistoryPage() {
                     <button
                       type="button"
                       onClick={() => void setFeedback(entry.id, 'accepted')}
-                      disabled={busy}
+                      disabled={busy || reviewId !== null}
                       className={`rounded-xl border px-3 py-1.5 text-xs font-semibold ${entry.user_feedback === 'accepted' ? 'border-bistro-action-secondary/40 bg-bistro-action-secondary/10 text-bistro-action-secondary' : 'border-bistro-border bg-white text-bistro-text-secondary'}`}
                     >
                       Me gustó
@@ -363,7 +379,7 @@ export default function RecipeHistoryPage() {
                     <button
                       type="button"
                       onClick={() => void setFeedback(entry.id, 'discarded')}
-                      disabled={busy}
+                      disabled={busy || reviewId !== null}
                       className={`rounded-xl border px-3 py-1.5 text-xs font-semibold ${entry.user_feedback === 'discarded' ? 'border-bistro-danger/30 bg-bistro-danger/10 text-bistro-danger' : 'border-bistro-border bg-white text-bistro-text-secondary'}`}
                     >
                       No me gustó
@@ -378,13 +394,53 @@ export default function RecipeHistoryPage() {
                     <button
                       type="button"
                       onClick={() => void deleteHistoryItem(entry.id)}
-                      disabled={busy}
+                      disabled={busy || reviewId !== null}
                       className="rounded-xl border border-bistro-danger/30 bg-white px-3 py-1.5 text-sm font-semibold text-bistro-danger disabled:opacity-70"
                     >
                       {operation === 'delete' ? 'Eliminando...' : 'Eliminar'}
                     </button>
                   </div>
                 </div>
+                {!importedRecipes[entry.id] && !importDraft ? (
+                  <p className="mt-3 text-sm text-bistro-text-secondary">
+                    {historyImportIngredientLimitExceeded(entry.recipe_payload)
+                      ? 'No se puede importar esta receta: supera el límite de 100 ingredientes.'
+                      : 'No se puede importar esta receta sin alterar sus datos.'}{' '}
+                    La receta original sigue disponible en «Ver detalle».
+                  </p>
+                ) : null}
+                {reviewId === entry.id && importDraft && !importedRecipes[entry.id] ? (
+                  <div className="mt-3 grid gap-3">
+                    <p className="text-sm text-bistro-text-secondary">
+                      Propuesta generada: revisá que los ingredientes y cantidades correspondan a los pasos.
+                      Revisá también etiquetas y contaminación cruzada. No certifica ausencia de alérgenos.
+                    </p>
+                    <RecipeEditor
+                      key={entry.id}
+                      initial={draftFromImport(importDraft)}
+                      saving={busy}
+                      saveLabel="Confirmar y guardar"
+                      onSave={(draft) => void importToRecetario(entry, draft)}
+                      onCancel={() => setReviewId(null)}
+                    />
+                  </div>
+                ) : null}
+                {sources.length > 0 ? (
+                  <section className="mt-3" aria-label="Fuentes del recetario">
+                    <h3 className="font-semibold text-sm">Fuentes consultadas para la propuesta original</h3>
+                    <p className="text-xs text-bistro-text-secondary">Las fuentes describen el contexto consultado, no certifican una transcripción ni los cambios del usuario.</p>
+                    <ul className="mt-2 grid gap-2">
+                      {sources.map((source) => (
+                        <li key={JSON.stringify([source.sourceType, source.sourceId, source.pageNumber, source.chunkId])}
+                          className="rounded-lg border border-bistro-border bg-white px-3 py-2 text-sm">
+                          <p className="font-medium">{source.label}</p>
+                          {source.title ? <p>{source.title}</p> : null}
+                          {source.pageNumber ? <p>Página {source.pageNumber}</p> : null}
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                ) : null}
                 {isOpen ? (
                   <pre className="mt-3 whitespace-pre-wrap rounded-xl border border-bistro-border bg-bistro-page p-3 text-sm text-bistro-text-primary">
                     {toPrettyPayload(entry.recipe_payload)}

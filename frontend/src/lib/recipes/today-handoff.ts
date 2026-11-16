@@ -33,9 +33,8 @@ export function buildRecipeGenerationRequestPayload(
   return {
     mode: input.mode,
     ingredients: input.ingredients.split('\n').map((ingredient) => ingredient.trim()).filter(Boolean),
-    ...(input.todayFields
-      ? { recipeName: input.recipeName.trim(), mealType: input.todayFields.mealType }
-      : {}),
+    ...(input.recipeName.trim() ? { recipeName: input.recipeName.trim() } : {}),
+    ...(input.todayFields ? { mealType: input.todayFields.mealType } : {}),
     peopleCount: input.todayFields?.targetServings ?? 4,
     culinaryProfile: {
       level: 'Intermedio',
@@ -60,6 +59,13 @@ const mealTypes: Record<TodayHandoffSlot, string> = {
 
 function isTodaySlot(value: string): value is TodayHandoffSlot {
   return value === 'breakfast' || value === 'lunch' || value === 'snack' || value === 'dinner';
+}
+
+// Accept only explicit meal labels already used by the planner and Today.
+export function todaySlotForMealType(value: string): TodayHandoffSlot | undefined {
+  const key = value.trim().toLowerCase();
+  if (isTodaySlot(key)) return key;
+  return (Object.keys(mealTypes) as TodayHandoffSlot[]).find((slot) => mealTypes[slot].toLowerCase() === key);
 }
 
 export function parseTodayHandoff(params: URLSearchParams): (TodayHandoff & TodayRecipeRequestFields) | null {

@@ -15,6 +15,9 @@ import {
 import {
   createCulinaryProfileUpdatePayload,
   profileFormFromApi,
+  PROFILE_ALLERGEN_OPTIONS,
+  isProfileAllergenSelected,
+  toggleProfileAllergen,
   type CulinaryProfileFormState,
 } from '@/lib/profile/culinary-profile-form';
 
@@ -295,6 +298,61 @@ export default function ProfilePage() {
               onToggle={(termId) => toggleSelection('dietaryAvoidTermIds', termId, 12)}
             />
 
+            <fieldset className="grid gap-3 rounded-2xl border border-bistro-border bg-white/70 p-4">
+              <legend className="px-1 text-lg font-semibold text-bistro-text-primary">Alergias alimentarias</legend>
+              <p className="text-sm text-bistro-text-secondary">
+                Selecciona los alérgenos que necesitas evitar. Maní y frutos secos de árbol son opciones distintas.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {PROFILE_ALLERGEN_OPTIONS.map((option) => {
+                  const active = isProfileAllergenSelected(detailedForm.selectedAllergies, option.id);
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      aria-pressed={active}
+                      disabled={!active && payload.allergies.length >= PROFILE_LIST_MAX_ITEMS}
+                      onClick={() => setDetailedForm((current) => ({
+                        ...current,
+                        selectedAllergies: toggleProfileAllergen(current.selectedAllergies, option.id),
+                      }))}
+                      className={active
+                        ? 'rounded-full border border-bistro-action-primary bg-bistro-action-primary/10 px-3 py-2 text-sm font-semibold text-bistro-action-primary'
+                        : 'rounded-full border border-bistro-border bg-white px-3 py-2 text-sm text-bistro-text-primary disabled:opacity-40'}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-bistro-text-secondary">
+                {payload.allergies.length} de {PROFILE_LIST_MAX_ITEMS} alergias registradas (incluidas las adicionales).
+              </p>
+              <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
+                Alergias adicionales
+                <span id="allergies-language-hint" className="text-xs font-normal">
+                  Si falta alguna, escríbela en español, una por línea. Conservamos las alergias guardadas previamente.
+                  Hasta {PROFILE_LIST_MAX_LENGTH} caracteres por ingrediente.
+                  Revisa siempre ingredientes, etiquetas y contaminación cruzada: el filtro no certifica ausencia de alérgenos.
+                </span>
+                <textarea
+                  aria-invalid={Boolean(allergiesError)}
+                  aria-describedby={allergiesError ? 'allergies-language-hint allergies-error' : 'allergies-language-hint'}
+                  rows={3}
+                  value={detailedForm.allergiesText}
+                  onChange={(event) => setDetailedForm((current) => ({
+                    ...current,
+                    allergiesText: event.target.value,
+                  }))}
+                  placeholder="Otra alergia, una por línea"
+                  className="rounded-xl border border-bistro-border bg-white px-3 py-2 outline-none"
+                />
+                {allergiesError ? (
+                  <span id="allergies-error" className="text-xs text-bistro-danger">{allergiesError}</span>
+                ) : null}
+              </label>
+            </fieldset>
+
             <div className="grid gap-4 lg:grid-cols-2">
               <PreferenceGroup
                 title="Técnicas que disfrutas"
@@ -373,31 +431,6 @@ export default function ProfilePage() {
                   />
                   {dislikedError ? (
                     <span id="disliked-ingredients-error" className="text-xs text-bistro-danger">{dislikedError}</span>
-                  ) : null}
-                </label>
-                <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
-                  Alergias
-                  <span id="allergies-language-hint" className="text-xs font-normal">
-                    Escribe un ingrediente por línea en español (por ejemplo: huevo, leche, nueces).
-                    Hasta {PROFILE_LIST_MAX_ITEMS} ingredientes, con {PROFILE_LIST_MAX_LENGTH} caracteres por ingrediente.
-                    Revisa siempre los ingredientes y las etiquetas: el filtro no certifica ausencia de alérgenos.
-                  </span>
-                  <textarea
-                    aria-invalid={Boolean(allergiesError)}
-                    aria-describedby={allergiesError ? 'allergies-language-hint allergies-error' : 'allergies-language-hint'}
-                    rows={4}
-                    value={detailedForm.allergiesText}
-                    onChange={(event) =>
-                      setDetailedForm((current) => ({
-                        ...current,
-                        allergiesText: event.target.value,
-                      }))
-                    }
-                    placeholder={'Huevo\nLeche\nNueces'}
-                    className="rounded-xl border border-bistro-border bg-white px-3 py-2 outline-none"
-                  />
-                  {allergiesError ? (
-                    <span id="allergies-error" className="text-xs text-bistro-danger">{allergiesError}</span>
                   ) : null}
                 </label>
               </div>

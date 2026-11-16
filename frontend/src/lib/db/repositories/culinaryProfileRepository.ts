@@ -1,5 +1,6 @@
 import { query, mapSingleRow, scopedTransaction, type DbOperationOptions } from '@/lib/db';
-import type { PoolClient } from 'pg';
+import type { DbTransactionClient } from '@/lib/db/transaction-client';
+import { readHardRestrictionList } from '@/lib/profile/culinary-profile-contract';
 import {
   CulinaryDimensionRow,
   CulinaryTermRow,
@@ -114,7 +115,7 @@ export interface CulinaryProfileQueryClient {
   execute(queryText: string, values?: unknown[]): Promise<void>;
 }
 
-function queryClient(client: PoolClient | CulinaryProfileQueryClient): CulinaryProfileQueryClient {
+function queryClient(client: DbTransactionClient | CulinaryProfileQueryClient): CulinaryProfileQueryClient {
   if ('queryProfile' in client) return client;
   return {
     queryProfile: (queryText, values) => client.query<UserCulinaryProfileRow>(queryText, values),
@@ -145,7 +146,7 @@ function isProfileRowSecurityViolation(error: unknown): boolean {
 }
 
 export async function lockCulinaryProfileUpdateInTransaction(
-  client: PoolClient | CulinaryProfileQueryClient,
+  client: DbTransactionClient | CulinaryProfileQueryClient,
   userId: string,
   tenantId: string
 ): Promise<void> {
@@ -155,7 +156,7 @@ export async function lockCulinaryProfileUpdateInTransaction(
 }
 
 export async function findCulinaryProfileByUserIdInTransaction(
-  client: PoolClient | CulinaryProfileQueryClient,
+  client: DbTransactionClient | CulinaryProfileQueryClient,
   userId: string,
   tenantId: string
 ): Promise<UserCulinaryProfileRow | null> {
@@ -167,7 +168,7 @@ export async function findCulinaryProfileByUserIdInTransaction(
 }
 
 export async function findCulinaryProfileTermsByUserIdInTransaction(
-  client: PoolClient | CulinaryProfileQueryClient,
+  client: DbTransactionClient | CulinaryProfileQueryClient,
   userId: string,
   tenantId: string
 ): Promise<UserCulinaryProfileTermWithLabel[]> {
@@ -184,6 +185,22 @@ export async function findCulinaryProfileTermsByUserIdInTransaction(
     [userId, tenantId]
   );
   return result.rows;
+}
+
+/** Call under the existing culinary profile advisory lock. */
+export async function readHardRestrictionContextInTransaction(
+  client: DbTransactionClient | CulinaryProfileQueryClient,
+  userId: string,
+  tenantId: string
+): Promise<{ allergies: string[]; avoid: string[] } | null> {
+  const profile = await findCulinaryProfileByUserIdInTransaction(client, userId, tenantId);
+  const terms = await findCulinaryProfileTermsByUserIdInTransaction(client, userId, tenantId);
+  if ((profile && (profile.user_id !== userId || profile.tenant_id !== tenantId)) ||
+      (!profile && terms.length > 0) || terms.some((term) => term.user_id !== userId ||
+        !['identity', 'prefer', 'avoid', 'goal'].includes(term.preference_type))) return null;
+  const allergies = readHardRestrictionList(profile ? profile.allergies : []);
+  const avoid = readHardRestrictionList(terms.filter((term) => term.preference_type === 'avoid').map((term) => term.term_label));
+  return allergies && avoid ? { allergies, avoid } : null;
 }
 
 export async function findCulinaryProfileTermsByUserId(
@@ -329,7 +346,7 @@ export async function saveCulinaryProfile(
 }
 
 export async function saveCulinaryProfileInTransaction(
-  client: PoolClient | CulinaryProfileQueryClient,
+  client: DbTransactionClient | CulinaryProfileQueryClient,
   input: SaveCulinaryProfileInput
 ): Promise<UserCulinaryProfileRow> {
   const typedClient = queryClient(client);

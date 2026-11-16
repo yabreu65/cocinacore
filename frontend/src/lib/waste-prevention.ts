@@ -6,7 +6,7 @@ import {
   parseQuantity,
   type NormalizedUnit,
 } from './inventory/quantity-normalization';
-import { assessIngredientRestrictions } from './recipes/structured-ingredients';
+import { assessIngredientRestrictions, assessLocalRecipeRestrictions } from './recipes/structured-ingredients';
 
 export const DEFAULT_WASTE_PREVENTION_WINDOW_DAYS = 5;
 
@@ -45,6 +45,7 @@ export interface WastePreventionRecipeIngredientRow {
 export interface WastePreventionRecipeRow {
   id: string;
   title: string;
+  instructions?: string;
   ingredients: readonly WastePreventionRecipeIngredientRow[];
   archived_at?: string | null;
 }
@@ -492,7 +493,8 @@ function assessIngredientCoverage(
 function buildRecipeSuggestion(
   recipe: WastePreventionRecipeRow,
   lots: readonly WasteInventoryLotAssessment[],
-  restrictions: readonly string[],
+  allergies: readonly string[],
+  hardAvoid: readonly string[],
   dislikedIngredients: readonly string[]
 ): WasteRecipeSuggestion | null {
   if (recipe.archived_at || recipe.title.trim() === '' || recipe.ingredients.length === 0)
@@ -501,9 +503,11 @@ function buildRecipeSuggestion(
   const requirements = consolidateRecipeRequirements(originalRequirements);
   if (requirements.some((requirement) => !requirement.normalizedName)) return null;
 
-  const restrictionAssessment = assessIngredientRestrictions(
+  const restrictionAssessment = assessLocalRecipeRestrictions(
     originalRequirements.map((requirement) => requirement.name),
-    restrictions
+    [recipe.title, recipe.instructions ?? ''],
+    allergies,
+    hardAvoid
   );
   if (restrictionAssessment.status !== 'clear') return null;
 
@@ -601,11 +605,10 @@ export function buildWastePreventionReport(input: WastePreventionInput): WastePr
     };
   }
 
-  const restrictions = [...input.allergies, ...input.hardAvoid];
   const suggestions = input.culinaryProfileConfigured
     ? input.recipes
         .map((recipe) =>
-          buildRecipeSuggestion(recipe, lots, restrictions, input.dislikedIngredients)
+          buildRecipeSuggestion(recipe, lots, input.allergies, input.hardAvoid, input.dislikedIngredients)
         )
         .filter((suggestion): suggestion is WasteRecipeSuggestion => suggestion !== null)
         .sort(sortSuggestions)

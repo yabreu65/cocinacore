@@ -103,6 +103,12 @@ describe('Today recipe handoff', () => {
     expect(payload).not.toHaveProperty('mealType');
   });
 
+  it('forwards the requested dish in ordinary searches without a Today handoff', () => {
+    expect(buildRecipeGenerationRequestPayload({
+      mode: 'free', ingredients: 'arroz', recipeName: ' Risotto ', restrictions: '', todayFields: null,
+    })).toMatchObject({ recipeName: 'Risotto', ingredients: ['arroz'] });
+  });
+
   it('carries an explicitly selected target through the existing handoff and generation payload', () => {
     const handoff: TodayHandoff = { ...selected, targetServings: 3 };
     const url = serializeTodayHandoff(handoff);

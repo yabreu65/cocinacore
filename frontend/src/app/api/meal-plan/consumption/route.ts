@@ -93,6 +93,9 @@ export async function POST(request: NextRequest) {
       if (error.code === 'invalid_meal') {
         return NextResponse.json({ error: 'Comida inválida para este menú.' }, { status: 400 });
       }
+      if (error.code === 'linked_recipe') {
+        return NextResponse.json({ error: 'Registrá el consumo desde la preparación de la receta vinculada.', code: 'LINKED_RECIPE_REAL_CONSUMPTION_REQUIRED' }, { status: 409 });
+      }
       if (error.code === 'already_claimed') {
         return NextResponse.json(
           { error: 'La comida ya fue registrada por otra operación.', code: 'MEAL_SLOT_CLAIMED' },

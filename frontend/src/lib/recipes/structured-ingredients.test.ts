@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   assessIngredientRestrictions,
+  assessLocalIngredientRestrictions,
   containsRestrictedIngredientName,
   extractStructuredIngredients,
   mergeDuplicateIngredients,
@@ -164,9 +165,9 @@ describe('structured ingredients', () => {
     expect(assessIngredientRestrictions([ingredient], [restriction])).toEqual({ status: 'conflict' });
   });
 
-  it('keeps bare Gluten and Lactosa as explicit literal restrictions', () => {
-    expect(containsRestrictedIngredientName(['harina de trigo'], ['Gluten'])).toBe(false);
-    expect(containsRestrictedIngredientName(['milk'], ['Lactosa'])).toBe(false);
+  it('preserves the meaning of bare legacy dietary labels', () => {
+    expect(containsRestrictedIngredientName(['harina de trigo'], ['Gluten'])).toBe(true);
+    expect(containsRestrictedIngredientName(['milk'], ['Lactosa'])).toBe(true);
   });
 
   it.each([
@@ -195,6 +196,35 @@ describe('structured ingredients', () => {
     expect(assessIngredientRestrictions([''], ['Sin TACC'])).toEqual({ status: 'review' });
     expect(assessIngredientRestrictions(['   '], ['Vegano'])).toEqual({ status: 'review' });
     expect(assessIngredientRestrictions(['', 'pollo'], ['Vegano'])).toEqual({ status: 'conflict' });
+  });
+
+  it.each([
+    ['Maní', 'cacahuate'], ['Frutos secos', 'almendras'], ['Leche', 'queso'],
+    ['Huevo', 'mayonesa'], ['Pescado', 'atún'], ['Crustáceos', 'camarones'],
+    ['Moluscos', 'mejillones'], ['Trigo', 'harina de trigo'], ['Soja', 'tofu'],
+    ['Sésamo', 'tahini'], ['Mostaza', 'semillas de mostaza'], ['Apio', 'apio'],
+  ])('blocks a representative conflict for selected %s (%s)', (restriction, ingredient) => {
+    expect(assessIngredientRestrictions([ingredient], [restriction])).toEqual({ status: 'conflict' });
+    expect(assessIngredientRestrictions(['arroz'], [restriction])).toEqual({ status: 'clear' });
+  });
+
+  it('keeps distinct allergy categories and does not confuse milk allergy with lactose intolerance', () => {
+    expect(assessIngredientRestrictions(['maní'], ['Frutos secos'])).toEqual({ status: 'clear' });
+    expect(assessIngredientRestrictions(['almendra'], ['Maní'])).toEqual({ status: 'clear' });
+    expect(assessIngredientRestrictions(['leche sin lactosa'], ['Leche'])).toEqual({ status: 'conflict' });
+    expect(assessIngredientRestrictions(['leche sin lactosa'], ['Sin lactosa'])).toEqual({ status: 'clear' });
+  });
+
+  it('requires review for unassessed local categories and custom descriptions, but never hides a conflict', () => {
+    expect(assessLocalIngredientRestrictions(['arroz'], ['Frutos secos'])).toEqual({ status: 'review' });
+    expect(assessLocalIngredientRestrictions(['queso'], ['Leche'])).toEqual({ status: 'conflict' });
+    expect(assessLocalIngredientRestrictions(['arroz'], ['alergia a la proteína de la leche'])).toEqual({ status: 'review' });
+    expect(assessLocalIngredientRestrictions(['arroz'], ['Maní'])).toEqual({ status: 'review' });
+    expect(assessLocalIngredientRestrictions(['arroz'], ['Keto'])).toEqual({ status: 'review' });
+    expect(assessLocalIngredientRestrictions(['arroz'], ['Bajo en sodio'])).toEqual({ status: 'review' });
+    expect(assessLocalIngredientRestrictions(['arroz'], ['alergia al maní y nueces'])).toEqual({ status: 'review' });
+    expect(assessLocalIngredientRestrictions(['arroz'], [])).toEqual({ status: 'clear' });
+    expect(assessIngredientRestrictions([], ['Maní'])).toEqual({ status: 'review' });
   });
 
   it('parses structured amounts', () => {

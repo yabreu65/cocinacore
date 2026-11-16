@@ -18,7 +18,8 @@ import {
   type ReconciliationReceipt,
 } from '@/lib/inventory/reconciliation-retry';
 
-type Props = { recipeId: string; versionId: string };
+type PinnedSlot = { mealPlanId: string; dayIndex: number; mealType: StructuredMealType };
+type Props = { recipeId: string; versionId: string; pinnedSlot?: PinnedSlot };
 type Session = {
   id: string;
   mealPlanId: string;
@@ -97,11 +98,14 @@ export async function executeCookingSessionRequest<T>(
   }
 }
 
-const storageKey = (recipeId: string, versionId: string) =>
-  `cooking-session:${recipeId}:${versionId}`;
+export function startIdempotencyKey(recipeId: string, versionId: string, slot: PinnedSlot, revision: string) {
+  return ['cooking-session', recipeId, versionId, slot.mealPlanId, slot.dayIndex, slot.mealType, revision, 'start'].join(':');
+}
 
-const startIdempotencyKey = (recipeId: string, versionId: string) =>
-  `${storageKey(recipeId, versionId)}:start`;
+function sessionMatchesSlot(session: Session, recipeId: string, versionId: string, slot: PinnedSlot): boolean {
+  return session.recipeId === recipeId && session.versionId === versionId &&
+    session.mealPlanId === slot.mealPlanId && session.dayIndex === slot.dayIndex && session.mealType === slot.mealType;
+}
 
 const spanishMealName: Record<StructuredMealType, string> = {
   breakfast: 'Desayuno',
@@ -146,11 +150,13 @@ export function stableIngredientRows(
   });
 }
 
-export default function CookingSessionPanel({ recipeId, versionId }: Props) {
+export default function CookingSessionPanel({ recipeId, versionId, pinnedSlot }: Props) {
   const [open, setOpen] = useState(false);
   const [plan, setPlan] = useState<MealPlanPublicResponse | null>(null);
   const [session, setSession] = useState<Session | null>(null);
-  const [selectedSlot, setSelectedSlot] = useState('');
+  const [selectedSlot, setSelectedSlot] = useState(pinnedSlot ? pinnedSlot.dayIndex + ':' + pinnedSlot.mealType : '');
+  const [slotLookup, setSlotLookup] = useState<{ key: string; ready: boolean } | null>(null);
+  const [lookupRetry, setLookupRetry] = useState(0);
   const [loading, setLoading] = useState(false);
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState('');
@@ -164,7 +170,6 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
   const [receipt, setReceipt] = useState<ReconciliationReceipt | null>(null);
   const [reconciliationReady, setReconciliationReady] = useState(false);
   const [reconciliationReload, setReconciliationReload] = useState(0);
-  const loadStarted = useRef(false);
   const mountedRef = useRef(true);
   const workingRequestRef = useRef<AbortController | null>(null);
   const reconciliationRequestRef = useRef<AbortController | null>(null);
@@ -195,52 +200,65 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
     [plan, recipeId, versionId]
   );
 
+  const pinnedPlanId = pinnedSlot?.mealPlanId;
+  const pinnedSelection = pinnedSlot ? pinnedSlot.dayIndex + ':' + pinnedSlot.mealType : '';
+  const selectedPlanId = pinnedPlanId ?? plan?.id;
+  const selectedIdentity = useMemo<PinnedSlot | null>(() => {
+    const [day, type] = selectedSlot.split(':');
+    const dayIndex = Number(day);
+    if (!selectedPlanId || !Number.isInteger(dayIndex) || dayIndex < 1 ||
+        (type !== 'breakfast' && type !== 'lunch' && type !== 'dinner')) return null;
+    if (pinnedPlanId && selectedSlot !== pinnedSelection) return null;
+    return { mealPlanId: selectedPlanId, dayIndex, mealType: type };
+  }, [selectedPlanId, selectedSlot, pinnedPlanId, pinnedSelection]);
+  const selectionKey = selectedIdentity ? JSON.stringify([selectedIdentity, recipeId, versionId]) : '';
+
   useEffect(() => {
-    if (!open) {
-      loadStarted.current = false;
-      return;
-    }
-    if (loadStarted.current || loading || plan) return;
-    loadStarted.current = true;
+    if (!open) return;
+    const controller = new AbortController();
     setLoading(true);
-    const stored = window.sessionStorage.getItem(storageKey(recipeId, versionId));
-    const load = stored
-      ? safeFetch<{ session: Session }>(`/api/cooking-sessions/${encodeURIComponent(stored)}`)
-      : Promise.resolve(null);
-    void load
-      .then((storedResult) => {
-        if (!mountedRef.current) return null;
-        if (storedResult?.ok) {
-          setSession(storedResult.data.session);
-          return null;
-        }
-        return safeFetch<MealPlanPublicResponse>('/api/meal-plan', { credentials: 'same-origin' });
-      })
+    setPlan(null);
+    const url = pinnedPlanId ? '/api/meal-plan?mealPlanId=' + encodeURIComponent(pinnedPlanId) : '/api/meal-plan';
+    void safeFetch<MealPlanPublicResponse>(url, { credentials: 'same-origin', cache: 'no-store', signal: controller.signal })
       .then((result) => {
-        if (!result || !mountedRef.current) return;
-        if (!result.ok) {
-          setMessage(result.error);
+        if (controller.signal.aborted) return;
+        if (!result.ok) { setMessage(result.error); return; }
+        if (pinnedPlanId && result.data.id !== pinnedPlanId) { setMessage('El menú seleccionado no está disponible.'); return; }
+        setPlan(result.data);
+        const matching = result.data.plan?.days.flatMap((day) => day.meals
+          .filter((meal) => meal.recipeRef?.recipeId === recipeId && meal.recipeRef.versionId === versionId)
+          .map((meal) => day.dayIndex + ':' + meal.mealType)) ?? [];
+        setSelectedSlot((current) => pinnedSelection || (matching.includes(current) ? current : matching[0] ?? ''));
+      })
+      .catch(() => { if (!controller.signal.aborted) setMessage('No se pudo recuperar el menú.'); })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, [open, pinnedPlanId, pinnedSelection, recipeId, versionId, lookupRetry]);
+
+  useEffect(() => {
+    if (!open || !selectedIdentity) return;
+    const controller = new AbortController();
+    setSession(null);
+    setSlotLookup({ key: selectionKey, ready: false });
+    const query = new URLSearchParams({ mealPlanId: selectedIdentity.mealPlanId, dayIndex: String(selectedIdentity.dayIndex),
+      mealType: selectedIdentity.mealType, recipeId, versionId });
+    void safeFetch<{ session: Session | null }>('/api/cooking-sessions?' + query.toString(), { credentials: 'same-origin', cache: 'no-store', signal: controller.signal })
+      .then((result) => {
+        if (controller.signal.aborted) return;
+        if (!result.ok) { setMessage(result.error); return; }
+        if (result.data.session && !sessionMatchesSlot(result.data.session, recipeId, versionId, selectedIdentity)) {
+          setMessage('La sesión recuperada no corresponde a la comida seleccionada.');
           return;
         }
-        setPlan(result.data);
-        const first = result.data.plan?.days
-          .flatMap((day) => day.meals)
-          .find(
-            (meal) =>
-              meal.recipeRef?.recipeId === recipeId && meal.recipeRef.versionId === versionId
-          );
-        if (first && result.data.plan) {
-          const day = result.data.plan.days.find((candidate) => candidate.meals.includes(first));
-          if (day) setSelectedSlot(`${day.dayIndex}:${first.mealType}`);
-        }
+        setSession(result.data.session);
+        setSlotLookup({ key: selectionKey, ready: true });
       })
-      .catch(() => {
-        if (mountedRef.current) setMessage('No se pudo recuperar la preparación.');
-      })
-      .finally(() => {
-        if (mountedRef.current) setLoading(false);
-      });
-  }, [loading, open, plan, recipeId, versionId]);
+      .catch(() => { if (!controller.signal.aborted) setMessage('No se pudo recuperar la preparación.'); });
+    return () => controller.abort();
+  }, [open, selectedIdentity, selectionKey, recipeId, versionId, lookupRetry]);
+
+  const lookupReady = Boolean(selectionKey && slotLookup?.key === selectionKey && slotLookup.ready);
+  const selectedSession = lookupReady && session && selectedIdentity && sessionMatchesSlot(session, recipeId, versionId, selectedIdentity) ? session : null;
 
   useEffect(() => {
     if (!session || session.status !== 'completed') return;
@@ -322,9 +340,9 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
   };
 
   const start = async () => {
-    if (!plan?.id || !plan.updatedAt || !plan.plan || !selectedSlot) return;
-    const [dayIndexText, mealType] = selectedSlot.split(':');
-    const idempotencyStorageKey = startIdempotencyKey(recipeId, versionId);
+    if (!plan?.id || !plan.updatedAt || !plan.plan || !selectedIdentity || !lookupReady || selectedSession ||
+        plan.id !== selectedIdentity.mealPlanId || !slots.some((slot) => slot.dayIndex === selectedIdentity.dayIndex && slot.mealType === selectedIdentity.mealType)) return;
+    const idempotencyStorageKey = startIdempotencyKey(recipeId, versionId, selectedIdentity, plan.updatedAt);
     const idempotencyKey =
       window.sessionStorage.getItem(idempotencyStorageKey) ?? crypto.randomUUID();
     window.sessionStorage.setItem(idempotencyStorageKey, idempotencyKey);
@@ -336,8 +354,8 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             mealPlanId: plan.id,
-            dayIndex: Number(dayIndexText),
-            mealType,
+            dayIndex: selectedIdentity.dayIndex,
+            mealType: selectedIdentity.mealType,
             recipeId,
             versionId,
             expectedUpdatedAt: plan.updatedAt,
@@ -348,8 +366,12 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
           signal,
         }),
       (data) => {
+        if (!sessionMatchesSlot(data.session, recipeId, versionId, selectedIdentity)) {
+          setMessage('La sesión no corresponde a la comida seleccionada.'); return;
+        }
         setSession(data.session);
-        window.sessionStorage.setItem(storageKey(recipeId, versionId), data.session.id);
+        window.sessionStorage.removeItem(idempotencyStorageKey);
+        if (data.session.status === 'cancelled') setLookupRetry((value) => value + 1);
       },
       'No se pudo iniciar la preparación.'
     );
@@ -358,7 +380,7 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
   const transition = async (
     action: 'pause' | 'resume' | 'advance' | 'back' | 'complete' | 'cancel'
   ) => {
-    if (!session) return;
+    if (!session || !selectedSession) return;
     await runSessionRequest(
       (signal) =>
         safeFetch<{ session: Session }>(`/api/cooking-sessions/${session.id}`, {
@@ -373,7 +395,10 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
           }),
           signal,
         }),
-      (data) => setSession(data.session),
+      (data) => {
+        setSession(data.session);
+        if (data.session.status === 'cancelled') { setMessage('Preparación cancelada.'); setLookupRetry((value) => value + 1); }
+      },
       'No se pudo actualizar la preparación.'
     );
   };
@@ -521,7 +546,8 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
     <div className="mt-3">
       <button
         type="button"
-        onClick={() => setOpen((value) => !value)}
+        disabled={working || reconciliationWorking}
+        onClick={() => { if (!open) { setSlotLookup(null); setMessage(''); } setOpen((value) => !value); }}
         className="rounded-xl border border-bistro-action-secondary px-3 py-2 text-sm font-semibold text-bistro-action-secondary"
         aria-expanded={open}
       >
@@ -530,7 +556,7 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
       {open && (
         <div className="mt-3 grid gap-3 rounded-2xl bg-bistro-surface-warm p-3">
           {loading && <p role="status">Recuperando preparación…</p>}
-          {!loading && !session && slots.length === 0 && (
+          {!loading && !selectedSession && slots.length === 0 && !pinnedSlot && (
             <div className="rounded-xl border border-bistro-border bg-white p-4 text-sm text-bistro-text-secondary">
               <p className="font-semibold text-bistro-text-primary">
                 Esta receta todavía no está vinculada a una comida del menú.
@@ -555,14 +581,16 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
               </div>
             </div>
           )}
-          {!loading && !session && slots.length > 0 && (
+          {!loading && pinnedSlot && <p className="text-sm font-semibold">Día {pinnedSlot.dayIndex} · {spanishMealName[pinnedSlot.mealType]}</p>}
+          {!loading && slots.length > 0 && !pinnedSlot && (
             <>
               <label className="grid gap-1 text-sm font-semibold">
                 Comida asociada del menú
                 <select
                   className="rounded-xl border border-bistro-border bg-white px-3 py-2"
                   value={selectedSlot}
-                  onChange={(event) => setSelectedSlot(event.target.value)}
+                  disabled={working || reconciliationWorking}
+                  onChange={(event) => { setSession(null); setSlotLookup(null); setMessage(''); setSelectedSlot(event.target.value); }}
                 >
                   {slots.map((slot) => (
                     <option
@@ -574,6 +602,9 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
                   ))}
                 </select>
               </label>
+            </>
+          )}
+          {!loading && lookupReady && !selectedSession && plan?.id === selectedPlanId && slots.some((slot) => slot.dayIndex + ':' + slot.mealType === selectedSlot) && (
               <button
                 type="button"
                 disabled={working || !selectedSlot}
@@ -582,16 +613,18 @@ export default function CookingSessionPanel({ recipeId, versionId }: Props) {
               >
                 {working ? 'Iniciando…' : 'Iniciar preparación'}
               </button>
-            </>
           )}
-          {!loading && session && (
+          {!loading && selectedIdentity && (!lookupReady || (!selectedSession && !plan)) && (
+            <button type="button" disabled={working} onClick={() => setLookupRetry((value) => value + 1)} className="text-sm underline">Consultar preparación</button>
+          )}
+          {!loading && selectedSession && session && (
             <>
               <p role="status" className="font-semibold">
                 Paso {session.currentStep} de {session.totalSteps} ·{' '}
                 {cookingSessionStatusLabel(session.status)}
               </p>
               <p className="text-sm">
-                Porciones previstas: {session.instructionSnapshot.servings ?? '—'}
+                Porciones de la receta original: {session.instructionSnapshot.servings ?? '—'}
               </p>
               <ul aria-label="Ingredientes previstos" className="grid gap-1 text-sm">
                 {stableSessionIngredients.map((ingredient) => (

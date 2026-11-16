@@ -1,3 +1,4 @@
+import { readHardRestrictionList } from '@/lib/profile/culinary-profile-contract';
 import type { UserCulinaryProfileRow } from '@/lib/db/types';
 import type { UserCulinaryProfileTermWithLabel } from '@/lib/db/repositories/culinaryProfileRepository';
 
@@ -79,8 +80,12 @@ export function buildPersistedMealPlanProfileContext(
     if (term.user_id !== userId) continue;
 
     const field = fieldsByPreferenceType[term.preference_type];
-    const label = normalizeValue(term.term_label, MAX_TERM_LABEL_LENGTH);
-    if (!label || seen[field].has(label) || context[field].length >= MAX_VALUES_PER_FIELD) {
+    // Soft preferences can be bounded for the prompt. Never drop a saved
+    // hard exclusion, including legacy rows above the current form limit.
+    if (!field || typeof term.term_label !== 'string') return null;
+    if (field === 'avoid' && !readHardRestrictionList([term.term_label])) return null;
+    const label = normalizeValue(term.term_label, field === 'avoid' ? term.term_label.length : MAX_TERM_LABEL_LENGTH);
+    if (!label || seen[field].has(label) || (field !== 'avoid' && context[field].length >= MAX_VALUES_PER_FIELD)) {
       continue;
     }
 
@@ -100,12 +105,8 @@ export function buildPersistedMealPlanProfileContext(
     context.availableTimeMinutes = profile.available_time_minutes;
   }
 
-  const allergies = Array.isArray(profile.allergies)
-    ? normalizeStringList(
-        profile.allergies.filter((value): value is string => typeof value === 'string'),
-        MAX_PROFILE_ALLERGY_AND_DISLIKE_VALUES
-      )
-    : [];
+  const allergies = readHardRestrictionList(profile.allergies);
+  if (!allergies) return null;
   if (allergies.length > 0) context.allergies = allergies;
 
   const dislikedIngredients = Array.isArray(profile.disliked_ingredients)

@@ -80,6 +80,7 @@ export default function MealPlannerPage() {
   const [shoppingMessage, setShoppingMessage] = useState<string | null>(null);
   const [shoppingError, setShoppingError] = useState<string | null>(null);
   const [shoppingHorizon, setShoppingHorizon] = useState<7 | 14>(7);
+  const shoppingHorizonRef = useRef<7 | 14>(7);
   const [shoppingStatus, setShoppingStatus] = useState<'ready' | 'unknown'>('ready');
   const [shoppingReason, setShoppingReason] = useState<string | null>(null);
   const [shoppingExpectedUpdatedAt, setShoppingExpectedUpdatedAt] = useState<string | null>(null);
@@ -99,7 +100,7 @@ export default function MealPlannerPage() {
   const userEditedRef = useRef(false);
 
   const loadSuggestions = useCallback(
-    async (mealPlanId: string, preserveMessage = false, horizonDays: 7 | 14 = shoppingHorizon) => {
+    async (mealPlanId: string, preserveMessage = false, horizonDays: 7 | 14 = shoppingHorizonRef.current) => {
       const requestVersion = ++suggestionRequestVersionRef.current;
       setIsLoadingSuggestions(true);
       setShoppingError(null);
@@ -149,6 +150,13 @@ export default function MealPlannerPage() {
           setShoppingError(
             error instanceof Error ? error.message : 'No se pudieron cargar los faltantes.'
           );
+          setShoppingStatus('unknown');
+          setShoppingReason(null);
+          setShoppingExpectedUpdatedAt(null);
+          setShoppingFingerprint(null);
+          setShoppingCost(null);
+          setSuggestions([]);
+          setSelectedItems(new Set());
         }
       } finally {
         if (componentActiveRef.current && suggestionRequestVersionRef.current === requestVersion) {
@@ -156,7 +164,7 @@ export default function MealPlannerPage() {
         }
       }
     },
-    [shoppingHorizon]
+    []
   );
 
   const loadConsumptions = useCallback(async (mealPlanId: string) => {
@@ -372,6 +380,7 @@ export default function MealPlannerPage() {
     consumptionRequestVersionRef.current += 1;
     activePlanIdRef.current = null;
     setActivePlanId(null);
+    setIsLoadingSuggestions(false);
     setSuggestions([]);
     setSelectedItems(new Set());
     setShoppingMessage(null);
@@ -476,7 +485,6 @@ export default function MealPlannerPage() {
       if (!result.ok) throw new Error(result.error ?? 'No se pudieron agregar los artículos.');
       if (
         !componentActiveRef.current ||
-        generationStartedRef.current ||
         activePlanIdRef.current !== mealPlanId ||
         suggestionRequestVersionRef.current !== requestVersion
       )
@@ -692,6 +700,9 @@ export default function MealPlannerPage() {
                 {consumptionMessage}
               </p>
             ) : null}
+            <p className="mt-2 text-xs text-bistro-text-secondary">
+              Revisa los ingredientes y etiquetas del menú antes de cocinar. El plan no certifica ausencia de alérgenos.
+            </p>
             <section className="mt-4 rounded-xl border border-bistro-border bg-white p-3">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div>
@@ -808,6 +819,7 @@ export default function MealPlannerPage() {
                           {meal.description ? (
                             <p className="text-bistro-text-secondary">{meal.description}</p>
                           ) : null}
+                          {meal.recipeRef && <p className="mt-1 text-xs text-bistro-text-secondary">Receta vinculada: los datos de abajo corresponden a la estimación original del menú.</p>}
                           {meal.ingredients.length > 0 ? (
                             <ul className="mt-1 list-disc pl-5 text-bistro-text-secondary">
                               {meal.ingredients.map((ingredient, index) => (
@@ -825,6 +837,10 @@ export default function MealPlannerPage() {
                                 <span className="inline-flex rounded-full bg-bistro-success/10 px-3 py-1 text-xs font-semibold text-bistro-success">
                                   Cocinado
                                 </span>
+                              ) : meal.recipeRef ? (
+                                <Link href={'/app/cooking-intent?source=meal_slot&mealPlanId=' + encodeURIComponent(activePlanId) + '&dayIndex=' + day.dayIndex + '&mealType=' + meal.mealType} className="text-sm font-semibold text-bistro-action-primary underline">
+                                  Ver receta vinculada y registrar consumo real
+                                </Link>
                               ) : (
                                 <button
                                   type="button"
@@ -873,6 +889,7 @@ export default function MealPlannerPage() {
                   value={shoppingHorizon}
                   onChange={(event) => {
                     const nextHorizon = event.target.value === '14' ? 14 : 7;
+                    shoppingHorizonRef.current = nextHorizon;
                     setShoppingHorizon(nextHorizon);
                     setSuggestions([]);
                     setSelectedItems(new Set());
@@ -898,7 +915,7 @@ export default function MealPlannerPage() {
                 {shoppingError}
               </p>
             ) : null}
-            {!isLoadingSuggestions && shoppingStatus === 'unknown' ? (
+            {!isLoadingSuggestions && !shoppingError && shoppingStatus === 'unknown' ? (
               <p
                 aria-live="polite"
                 className="mt-2 rounded-lg bg-bistro-warning/10 p-3 text-sm text-bistro-warning"
@@ -908,7 +925,7 @@ export default function MealPlannerPage() {
                 y asegurate de que el plan cubra el horizonte solicitado.
               </p>
             ) : null}
-            {!isLoadingSuggestions && shoppingStatus === 'ready' && suggestions.length === 0 ? (
+            {!isLoadingSuggestions && !shoppingError && shoppingStatus === 'ready' && suggestions.length === 0 ? (
               <p className="mt-2 text-sm text-bistro-text-secondary">
                 No hay faltantes accionables para este menú.
               </p>

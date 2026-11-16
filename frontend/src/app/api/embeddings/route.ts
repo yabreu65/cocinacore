@@ -2,33 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { serverLogger } from '@/lib/serverLogger';
 import { validateRequest, EmbeddingsSchema, type EmbeddingsBody } from '@/lib/validation';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { getGeminiApiKey, getGeminiEmbeddingModel } from '@/lib/ai/gemini-config';
+import { getGeminiApiKey, getGeminiEmbeddingModel, getGeminiBaseUrl, GEMINI_EMBEDDING_DIMENSIONS, isConfiguredEmbedding } from '@/lib/ai/gemini-config';
 import { getRetryAfterSeconds, getTrustedClientIdentity } from '@/lib/rate-limit-identity';
 import { requireUser } from '@/lib/auth/server';
 import type { AuthUser } from '@/lib/auth/types';
 import { isPlatformOwner } from '@/lib/db/repositories/platformOwnerRepository';
 
 const EMBEDDINGS_TIMEOUT_MS = 15_000;
-
-const ENV_MODEL = getGeminiEmbeddingModel();
-const TARGET_EMBEDDING_DIM = Number(process.env.EMBEDDING_DIMENSIONS ?? '1536');
-const FALLBACK_MODELS = ['gemini-embedding-001', 'gemini-embedding-2-preview'];
-
-function normalizeDimensions(values: number[]): number[] {
-  if (!Number.isFinite(TARGET_EMBEDDING_DIM) || TARGET_EMBEDDING_DIM <= 0) {
-    return values;
-  }
-
-  if (values.length === TARGET_EMBEDDING_DIM) {
-    return values;
-  }
-
-  if (values.length > TARGET_EMBEDDING_DIM) {
-    return values.slice(0, TARGET_EMBEDDING_DIM);
-  }
-
-  return [...values, ...Array.from({ length: TARGET_EMBEDDING_DIM - values.length }, () => 0)];
-}
 
 async function requestEmbeddings(
   apiKey: string,
@@ -38,7 +18,7 @@ async function requestEmbeddings(
 ) {
   try {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:batchEmbedContents?key=${apiKey}`,
+      `${getGeminiBaseUrl()}/models/${model}:batchEmbedContents?key=${apiKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -47,7 +27,7 @@ async function requestEmbeddings(
           requests: texts.map((text) => ({
             model: `models/${model}`,
             content: { parts: [{ text }] },
-            outputDimensionality: TARGET_EMBEDDING_DIM,
+            outputDimensionality: GEMINI_EMBEDDING_DIMENSIONS,
           })),
         }),
       }
@@ -76,16 +56,10 @@ async function requestEmbeddings(
         (nested && typeof nested === 'object'
           ? (nested as Record<string, unknown>).values
           : undefined);
-      if (
-        !Array.isArray(values) ||
-        values.length === 0 ||
-        !(values as unknown[]).every(
-          (value): value is number => typeof value === 'number' && Number.isFinite(value)
-        )
-      ) {
+      if (!isConfiguredEmbedding(values)) {
         return { ok: false as const, status: 502 };
       }
-      embeddings.push(normalizeDimensions(values as number[]));
+      embeddings.push(values);
     }
 
     return { ok: true as const, embeddings };
@@ -166,34 +140,26 @@ export async function POST(request: NextRequest) {
     requestId,
     storage: rateLimit.storage,
     textsCount: texts.length,
-    modelsTried: [...new Set([ENV_MODEL, ...FALLBACK_MODELS].filter(Boolean) as string[])],
+    model: getGeminiEmbeddingModel(),
   });
 
-  const modelsToTry = [...new Set([ENV_MODEL, ...FALLBACK_MODELS].filter(Boolean) as string[])];
+  const model = getGeminiEmbeddingModel();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), EMBEDDINGS_TIMEOUT_MS);
   const abortFromRequest = () => controller.abort();
   request.signal.addEventListener('abort', abortFromRequest, { once: true });
   try {
-    for (const model of modelsToTry) {
-      if (controller.signal.aborted) break;
-      const result = await requestEmbeddings(apiKey, model, texts, controller.signal);
-      if (result.ok) {
-        serverLogger.info('embeddings.success', {
-          requestId,
-          durationMs: Date.now() - startedAt,
-          modelUsed: model,
-          embeddingsCount: result.embeddings.length,
-        });
-        return NextResponse.json({ embeddings: result.embeddings, modelUsed: model });
-      }
-
-      serverLogger.warn('embeddings.model_failed', {
+    const result = await requestEmbeddings(apiKey, model, texts, controller.signal);
+    if (result.ok) {
+      serverLogger.info('embeddings.success', {
         requestId,
-        model,
-        status: result.status,
+        durationMs: Date.now() - startedAt,
+        modelUsed: model,
+        embeddingsCount: result.embeddings.length,
       });
+      return NextResponse.json({ embeddings: result.embeddings, modelUsed: model });
     }
+    serverLogger.warn('embeddings.model_failed', { requestId, model, status: result.status });
   } finally {
     clearTimeout(timeout);
     request.signal.removeEventListener('abort', abortFromRequest);
@@ -202,7 +168,7 @@ export async function POST(request: NextRequest) {
   serverLogger.error('embeddings.failure', {
     requestId,
     durationMs: Date.now() - startedAt,
-    modelsTried: modelsToTry,
+    model,
   });
 
   return NextResponse.json(

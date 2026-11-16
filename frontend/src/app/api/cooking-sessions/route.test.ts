@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
-const mocks = vi.hoisted(() => ({ requireUser: vi.fn(), createCookingSession: vi.fn() }));
+const mocks = vi.hoisted(() => ({ requireUser: vi.fn(), createCookingSession: vi.fn(), findCookingSessionForSlot: vi.fn() }));
 vi.mock('@/lib/auth/server', () => ({ requireUser: mocks.requireUser }));
 vi.mock('@/lib/db/repositories/cookingSessionRepository', () => ({
   createCookingSession: mocks.createCookingSession,
+  findCookingSessionForSlot: mocks.findCookingSessionForSlot,
 }));
 
-import { POST } from './route';
+import { GET, POST } from './route';
 
 const planId = '00000000-0000-4000-8000-000000000010';
 const recipeId = '00000000-0000-4000-8000-000000000001';
@@ -91,4 +92,18 @@ describe('POST /api/cooking-sessions', () => {
       code: 'COOKING_SESSION_CONFLICT',
     });
   });
+  it('looks up the complete slot identity with server-owned scope', async () => {
+    const query = new URLSearchParams({ mealPlanId: planId, recipeId, versionId, dayIndex: '2', mealType: 'dinner' });
+    mocks.findCookingSessionForSlot.mockResolvedValue(null);
+    const get = () => GET(new NextRequest('https://app.example.test/api/cooking-sessions?' + query));
+    expect(await (await get()).json()).toEqual({ session: null });
+    expect(mocks.findCookingSessionForSlot).toHaveBeenCalledWith({
+      mealPlanId: planId, recipeId, versionId, dayIndex: 2, mealType: 'dinner', tenantId: 'tenant-1', userId: 'user-1',
+    });
+    query.set('tenantId', 'foreign');
+    expect((await get()).status).toBe(400);
+    mocks.requireUser.mockRejectedValue(new Error('unauthorized'));
+    expect((await get()).status).toBe(401);
+  });
+
 });

@@ -44,7 +44,7 @@ export type ConsumePlannedMealResult = {
 
 export class MealPlanConsumptionError extends Error {
   constructor(
-    public readonly code: 'not_found' | 'invalid_plan' | 'invalid_meal' | 'already_claimed',
+    public readonly code: 'not_found' | 'invalid_plan' | 'invalid_meal' | 'already_claimed' | 'linked_recipe',
     message: string
   ) {
     super(message);
@@ -254,6 +254,7 @@ export async function consumePlannedMealInTransaction(
   const key = mealConsumptionKey(input.dayIndex, input.mealType);
   const existing = payload[key];
   if (existing) return { alreadyConsumed: true, record: existing };
+  if (meal.recipeRef) throw new MealPlanConsumptionError('linked_recipe', 'Use the linked recipe cooking session to record actual consumption');
   // Never discard malformed legacy evidence while claiming a new slot.
   const raw = persistedPlan.consumption_payload;
   if (

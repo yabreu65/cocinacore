@@ -49,26 +49,19 @@ function structuredMealPlanText() {
   });
 }
 
-const recipeText = `[TITULO]
-
-Pollo conectado determinista
-
-INGREDIENTES
-- 2 unidades tomate
-- 1 taza arroz
-- 200 g pollo
-
-FUENTE
-- Recetario conectado
-- Página 7
-
-PREPARACIÓN
-1. Cociná el arroz y reservá.
-2. Dorá el pollo con el tomate.
-3. Serví el pollo sobre el arroz.
-
-TIPS
-- Ajustá la sal al final.`;
+function structuredRecipeText(body) {
+  const prompt = body.contents?.[0]?.parts?.[0]?.text ?? '';
+  const servings = Number(/servings debe ser (\d+)/.exec(prompt)?.[1] ?? 4);
+  return JSON.stringify({
+    outcome: 'recipe', title: 'Pollo conectado determinista', servings,
+    ingredients: [
+      { name: 'tomate', quantity: '2', unit: 'unidades', quantityNote: null },
+      { name: 'arroz', quantity: '1', unit: 'taza', quantityNote: null },
+      { name: 'pollo', quantity: '200', unit: 'g', quantityNote: null },
+    ],
+    steps: ['Cociná el {{2}} y reservá.', 'Dorá el {{3}} con el {{1}}.', 'Serví el {{3}} sobre el {{2}}.'],
+  });
+}
 
 function json(response, status, body) {
   response.writeHead(status, { 'Content-Type': 'application/json' });
@@ -134,9 +127,11 @@ const server = http.createServer(async (request, response) => {
       const responseJsonSchema = body.generationConfig?.responseJsonSchema;
       const text = responseSchema?.properties?.options
         ? structuredTodayText()
-        : responseJsonSchema
-          ? structuredMealPlanText()
-          : recipeText;
+        : responseJsonSchema?.properties?.ingredients && responseJsonSchema?.properties?.steps
+          ? structuredRecipeText(body)
+          : responseJsonSchema
+            ? structuredMealPlanText()
+            : structuredRecipeText(body);
       return json(response, 200, {
         candidates: [
           {

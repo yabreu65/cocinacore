@@ -1,15 +1,10 @@
-import type { RecipeInventoryItemRow, UserMealPlanRow, UserRecipeDetailDto } from '@/lib/db/types';
+import type { RecipeInventoryItemRow, UserMealPlanRow, UserRecipeDetailDto, UserRecipeVersionRow } from '@/lib/db/types';
 import { classifyWasteExpiration, type WasteExpiryStatus } from '@/lib/waste-prevention';
 import { normalizeInventoryName } from '@/lib/inventory/normalize-inventory';
-import {
-  canCompareUnits,
-  convertQuantity,
-  normalizeUnit,
-  parseQuantity,
-  type NormalizedUnit,
-} from '@/lib/inventory/quantity-normalization';
-import { assessIngredientRestrictions } from '@/lib/recipes/structured-ingredients';
-import type { StructuredMeal } from '@/lib/meal-planner/structured-plan';
+import { convertExactQuantity, parseExactStoredQuantity, type NormalizedUnit } from '@/lib/inventory/quantity-normalization';
+import { addQuantity, subtractQuantity, compareQuantity, multiplyQuantity, rational, quantityNumber, zeroQuantity, type ExactQuantity } from '@/lib/inventory/exact-quantity';
+import { assessLocalRecipeRestrictions } from '@/lib/recipes/structured-ingredients';
+import { mealPlanRestrictionsChanged, type StructuredMeal } from '@/lib/meal-planner/structured-plan';
 
 export type CookingIntentSource = 'saved_recipe' | 'confirmed_meal_slot';
 export type CookingIntentStatus = 'ready' | 'partial' | 'unknown' | 'blocked';
@@ -43,6 +38,7 @@ export interface CookingIntentPreview {
   source: CookingIntentSource;
   title: string;
   recipeVersion: { recipeId: string; versionId: string };
+  mealSlot?: { mealPlanId: string; dayIndex: number; mealType: StructuredMeal['mealType'] };
   portions: {
     original: number | null;
     requested: number | null;
@@ -57,6 +53,7 @@ export interface CookingIntentPreview {
 export interface CookingIntentMealSlot {
   mealPlan: UserMealPlanRow;
   meal: StructuredMeal;
+  linkedVersion?: UserRecipeVersionRow;
   dayIndex: number;
   timeZone: string;
 }
@@ -77,29 +74,21 @@ export interface BuildCookingIntentPreviewInput {
 type Requirement = {
   name: string;
   normalizedName: string;
-  quantity: number | null;
+  quantity: ExactQuantity | null;
   unit: NormalizedUnit;
 };
 
 const MAX_PORTIONS = 100;
 
-function round(value: number): number {
-  return Number(value.toFixed(4));
-}
-
 function parseRecipeAmount(
   quantity: string | number | null | undefined,
   unit: string | null | undefined
-): { value: number | null; unit: NormalizedUnit } {
-  const explicitUnit = normalizeUnit(unit ?? null);
-  const quantityText = typeof quantity === 'number' ? String(quantity) : (quantity?.trim() ?? '');
-  const parsed = parseQuantity([quantityText, unit ?? ''].filter(Boolean).join(' ').trim());
-
-  // A bare number is not evidence of a count. It must carry a recognized unit.
-  if (explicitUnit === 'unknown' || !parsed.structured || parsed.value === null) {
-    return { value: null, unit: 'unknown' };
-  }
-  return { value: parsed.value, unit: explicitUnit };
+): { value: ExactQuantity | null; unit: NormalizedUnit } {
+  const parsed = parseExactStoredQuantity({ quantity: quantity == null ? null : String(quantity), unit: unit ?? null });
+  return parsed && parsed.quantity.numerator > BigInt(0) &&
+    Number.isFinite(quantityNumber(parsed.quantity)) && quantityNumber(parsed.quantity) > 0
+    ? { value: parsed.quantity, unit: parsed.unit }
+    : { value: null, unit: 'unknown' };
 }
 
 function requirementFromIngredient(ingredient: {
@@ -128,15 +117,14 @@ function consolidateRequirements(requirements: Requirement[]): Requirement[] {
       current.quantity === null ||
       requirement.quantity === null ||
       current.unit === 'unknown' ||
-      requirement.unit === 'unknown' ||
-      !canCompareUnits(current.unit, requirement.unit)
+      requirement.unit === 'unknown'
     ) {
       current.quantity = null;
       current.unit = 'unknown';
       continue;
     }
-    const converted = convertQuantity(requirement.quantity, requirement.unit, current.unit);
-    current.quantity = converted === null ? null : round(current.quantity + converted);
+    const converted = convertExactQuantity(requirement.quantity, requirement.unit, current.unit);
+    current.quantity = converted === null ? null : addQuantity(current.quantity, converted);
     if (converted === null) current.unit = 'unknown';
   }
   return [...result.values()];
@@ -151,17 +139,18 @@ function scaleRequirements(
   if (requestedPortions === null || originalPortions === null) {
     if (requestedPortions !== null && originalPortions === null) {
       limitations.push('portions_cannot_be_scaled_without_original_servings');
+      return requirements.map((requirement) => ({ ...requirement, quantity: null, unit: 'unknown' }));
     }
     return requirements;
   }
-  if (originalPortions <= 0 || requestedPortions <= 0 || requestedPortions > MAX_PORTIONS) {
+  if (!Number.isSafeInteger(originalPortions) || !Number.isSafeInteger(requestedPortions) || originalPortions <= 0 || requestedPortions <= 0 || requestedPortions > MAX_PORTIONS) {
     limitations.push('invalid_portion_basis');
     return requirements.map((requirement) => ({ ...requirement, quantity: null, unit: 'unknown' }));
   }
-  const factor = requestedPortions / originalPortions;
+  const factor = rational(BigInt(requestedPortions), BigInt(originalPortions));
   return requirements.map((requirement) => ({
     ...requirement,
-    quantity: requirement.quantity === null ? null : round(requirement.quantity * factor),
+    quantity: requirement.quantity === null ? null : multiplyQuantity(requirement.quantity, factor),
   }));
 }
 
@@ -206,7 +195,7 @@ function buildIngredientEvidence(
   const usableWithQuantity = usable.map(({ item, expiry }) => ({
     item,
     expiry,
-    parsed: parseQuantity([item.quantity ?? '', item.unit ?? ''].filter(Boolean).join(' ').trim()),
+    parsed: parseExactStoredQuantity(item),
   }));
   const lotIds = usable.map(({ item }) => item.id);
   const earliest = [...knownExpiry].sort(
@@ -219,125 +208,46 @@ function buildIngredientEvidence(
       .filter((value): value is string => value !== null)
       .sort()[0] ?? null;
 
-  if (matches.length === 0 || requirement.quantity === null || requirement.unit === 'unknown') {
-    return {
-      name: requirement.name,
-      requiredQuantity: requirement.quantity,
-      requiredUnit: requirement.unit,
-      availableQuantity: null,
-      availableUnit: requirement.unit,
-      missingQuantity: null,
-      remainingQuantity: null,
-      availability: matches.length === 0 && requirement.quantity !== null ? 'missing' : 'unknown',
-      expiry,
-      expiryDate,
-      lotIds,
-      evidence: 'unknown',
-    };
-  }
-
-  if (
-    usableWithQuantity.length === 0 &&
-    assessments.some(({ expiry: itemExpiry }) => itemExpiry.status === 'unknown')
-  ) {
-    return {
-      name: requirement.name,
-      requiredQuantity: requirement.quantity,
-      requiredUnit: requirement.unit,
-      availableQuantity: null,
-      availableUnit: requirement.unit,
-      missingQuantity: null,
-      remainingQuantity: null,
-      availability: 'unknown',
-      expiry,
-      expiryDate,
-      lotIds,
-      evidence: 'unknown',
-    };
-  }
-
-  if (
-    usableWithQuantity.some(
-      ({ parsed }) => !parsed.structured || parsed.value === null || parsed.unit === 'unknown'
-    )
-  ) {
-    return {
-      name: requirement.name,
-      requiredQuantity: requirement.quantity,
-      requiredUnit: requirement.unit,
-      availableQuantity: null,
-      availableUnit: requirement.unit,
-      missingQuantity: null,
-      remainingQuantity: null,
-      availability: 'unknown',
-      expiry,
-      expiryDate,
-      lotIds,
-      evidence: 'unknown',
-    };
-  }
-
-  const requiredQuantity = requirement.quantity;
-  let available = 0;
+  const required = requirement.quantity;
+  const requiredQuantity = required === null ? null : quantityNumber(required);
+  const unknown = (): CookingIntentIngredient => ({
+    name: requirement.name,
+    requiredQuantity: requiredQuantity !== null && Number.isFinite(requiredQuantity) && requiredQuantity > 0 ? requiredQuantity : null,
+    requiredUnit: requirement.unit,
+    availableQuantity: null,
+    availableUnit: requirement.unit,
+    missingQuantity: null,
+    remainingQuantity: null,
+    availability: 'unknown',
+    expiry, expiryDate, lotIds,
+    evidence: 'unknown',
+  });
+  if (required === null || requiredQuantity === null || !Number.isFinite(requiredQuantity) ||
+      requiredQuantity <= 0 || requirement.unit === 'unknown') return unknown();
+  if (assessments.some(({ expiry: itemExpiry }) => itemExpiry.status === 'unknown')) return unknown();
+  let available = zeroQuantity;
   for (const { parsed } of usableWithQuantity) {
-    if (!canCompareUnits(parsed.unit, requirement.unit)) {
-      return {
-        name: requirement.name,
-        requiredQuantity: requirement.quantity,
-        requiredUnit: requirement.unit,
-        availableQuantity: null,
-        availableUnit: requirement.unit,
-        missingQuantity: null,
-        remainingQuantity: null,
-        availability: 'unknown',
-        expiry,
-        expiryDate,
-        lotIds,
-        evidence: 'unknown',
-      };
-    }
-    const converted =
-      parsed.value === null ? null : convertQuantity(parsed.value, parsed.unit, requirement.unit);
-    if (converted === null)
-      return {
-        name: requirement.name,
-        requiredQuantity: requirement.quantity,
-        requiredUnit: requirement.unit,
-        availableQuantity: null,
-        availableUnit: requirement.unit,
-        missingQuantity: null,
-        remainingQuantity: null,
-        availability: 'unknown',
-        expiry,
-        expiryDate,
-        lotIds,
-        evidence: 'unknown',
-      };
-    available += converted;
+    const converted = parsed && convertExactQuantity(parsed.quantity, parsed.unit, requirement.unit);
+    if (!converted || converted.numerator < BigInt(0)) return unknown();
+    available = addQuantity(available, converted);
   }
-
-  const roundedAvailable = round(available);
-  const difference = round(roundedAvailable - requiredQuantity);
-  const availability: CookingIntentAvailability =
-    difference >= 0 ? 'sufficient' : roundedAvailable > 0 ? 'partial' : 'missing';
-  const evidence: CookingIntentEvidence = assessments.some(
-    ({ expiry: itemExpiry }) => itemExpiry.status === 'unknown'
-  )
-    ? 'partial'
-    : 'verified';
+  const difference = subtractQuantity(available, required);
+  const sufficient = compareQuantity(difference, zeroQuantity) >= 0;
+  const availableQuantity = quantityNumber(available);
+  const missingQuantity = sufficient ? 0 : quantityNumber(subtractQuantity(zeroQuantity, difference));
+  const remainingQuantity = sufficient ? quantityNumber(difference) : 0;
+  if (![availableQuantity, missingQuantity, remainingQuantity].every(Number.isFinite)) return unknown();
   return {
     name: requirement.name,
-    requiredQuantity: requirement.quantity,
+    requiredQuantity,
     requiredUnit: requirement.unit,
-    availableQuantity: roundedAvailable,
+    availableQuantity,
     availableUnit: requirement.unit,
-    missingQuantity: difference >= 0 ? 0 : round(Math.abs(difference)),
-    remainingQuantity: difference >= 0 ? difference : 0,
-    availability,
-    expiry,
-    expiryDate,
-    lotIds,
-    evidence,
+    missingQuantity,
+    remainingQuantity,
+    availability: sufficient ? 'sufficient' : available.numerator > BigInt(0) ? 'partial' : 'missing',
+    expiry, expiryDate, lotIds,
+    evidence: 'verified',
   };
 }
 
@@ -346,37 +256,40 @@ export function buildCookingIntentPreview(
 ): CookingIntentPreview {
   const limitations: string[] = [];
   const isRecipe = input.source === 'saved_recipe';
-  const title = isRecipe
-    ? (input.recipe?.current_version.title ?? '')
-    : (input.mealSlot?.meal.title ?? '');
-  const recipeId = isRecipe ? (input.recipe?.id ?? '') : (input.mealSlot?.mealPlan.id ?? '');
-  const versionId = isRecipe
-    ? (input.recipe?.current_version.id ?? '')
-    : `meal-slot:${input.mealSlot?.dayIndex ?? ''}:${input.mealSlot?.meal.mealType ?? ''}`;
-  const ingredients = isRecipe
-    ? (input.recipe?.current_version.ingredients ?? [])
-    : (input.mealSlot?.meal.ingredients ?? []);
-  const originalPortions = isRecipe
-    ? (input.recipe?.current_version.servings ?? null)
-    : (input.mealSlot?.mealPlan.people_count ?? null);
-  const portionSource = isRecipe ? 'recipe' : 'plan';
+  const slot = input.mealSlot;
+  const linked = !isRecipe && slot?.meal.recipeRef;
+  const version = isRecipe ? input.recipe?.current_version : linked &&
+    slot?.linkedVersion?.id === linked.versionId && slot.linkedVersion.recipe_id === linked.recipeId
+    ? slot.linkedVersion : undefined;
+  const title = version?.title ?? (linked || isRecipe ? '' : slot?.meal.title ?? '');
+  const recipeId = version?.recipe_id ?? (linked || isRecipe ? '' : slot?.mealPlan.id ?? '');
+  const versionId = version?.id ?? (linked || isRecipe ? '' : 'meal-slot:' + (slot?.dayIndex ?? '') + ':' + (slot?.meal.mealType ?? ''));
+  const ingredients = version?.ingredients ?? (linked || isRecipe ? [] : slot?.meal.ingredients ?? []);
+  const originalPortions = version?.servings ?? (linked || isRecipe ? null : slot?.mealPlan.people_count ?? null);
+  const requestedPortions = input.requestedPortions ?? (!isRecipe ? slot?.mealPlan.people_count ?? null : null);
+  const portionSource = version ? 'recipe' : 'plan';
   const requirements = scaleRequirements(
     consolidateRequirements(ingredients.map(requirementFromIngredient)),
     originalPortions,
-    input.requestedPortions,
+    requestedPortions,
     limitations
   );
   const ingredientEvidence = requirements.map((requirement) =>
     buildIngredientEvidence(requirement, input.inventoryItems, input.now, input.timeZone)
   );
-  const restrictionAssessment = assessIngredientRestrictions(
+  const restrictionAssessment = assessLocalRecipeRestrictions(
     ingredients.map((ingredient) => ingredient.name),
-    [...input.allergies, ...input.hardAvoid]
+    [title, version?.instructions ?? (!linked && !isRecipe ? slot?.meal.description ?? '' : '')],
+    input.allergies,
+    [...input.hardAvoid, ...(!isRecipe ? input.mealSlot?.mealPlan.restrictions ?? [] : [])]
   );
-  const restrictions = !input.profileConfigured
-    ? { status: 'unknown' as const, reasons: ['culinary_profile_unavailable'] }
-    : restrictionAssessment.status === 'conflict'
-      ? { status: 'blocked' as const, reasons: ['ingredient_restriction_conflict'] }
+  const stale = !isRecipe && slot && mealPlanRestrictionsChanged(slot.mealPlan, [...input.allergies, ...input.hardAvoid]);
+  const restrictions = restrictionAssessment.status === 'conflict'
+    ? { status: 'blocked' as const, reasons: ['ingredient_restriction_conflict'] }
+    : !input.profileConfigured
+      ? { status: 'unknown' as const, reasons: ['culinary_profile_unavailable'] }
+      : stale
+        ? { status: 'unknown' as const, reasons: ['meal_plan_restrictions_changed'] }
       : restrictionAssessment.status === 'review'
         ? { status: 'unknown' as const, reasons: ['ingredient_restriction_requires_review'] }
         : { status: 'clear' as const, reasons: [] };
@@ -387,7 +300,7 @@ export function buildCookingIntentPreview(
   if (input.source === 'confirmed_meal_slot' && !input.mealSlot)
     limitations.push('meal_slot_unavailable');
   if (
-    !isRecipe &&
+    !isRecipe && !linked &&
     input.mealSlot?.meal.ingredients.some(
       (ingredient) => ingredient.quantity === null || !ingredient.unit
     )
@@ -404,7 +317,7 @@ export function buildCookingIntentPreview(
   const status: CookingIntentStatus =
     restrictions.status === 'blocked'
       ? 'blocked'
-      : limitations.length > 0 || hasUnknownEvidence
+      : restrictions.status === 'unknown' || limitations.length > 0 || hasUnknownEvidence
         ? 'unknown'
         : hasPartialCoverage
           ? 'partial'
@@ -415,12 +328,13 @@ export function buildCookingIntentPreview(
     source: input.source,
     title,
     recipeVersion: { recipeId, versionId },
+    ...(!isRecipe && slot ? { mealSlot: { mealPlanId: slot.mealPlan.id, dayIndex: slot.dayIndex, mealType: slot.meal.mealType } } : {}),
     portions: {
       original: originalPortions,
-      requested: input.requestedPortions ?? originalPortions,
+      requested: requestedPortions ?? originalPortions,
       source: originalPortions === null ? 'unknown' : portionSource,
     },
-    steps: isRecipe ? parseSteps(input.recipe?.current_version.instructions ?? '') : [],
+    steps: version ? parseSteps(version.instructions) : [],
     ingredients: ingredientEvidence,
     restrictions,
     limitations,

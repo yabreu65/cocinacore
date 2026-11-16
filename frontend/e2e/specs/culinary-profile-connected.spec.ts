@@ -64,11 +64,21 @@ test('persists culinary profile details for the authenticated synthetic user', a
 
     const availableTime = page.getByLabel('Tiempo disponible (minutos)');
     const dislikedIngredients = page.getByLabel('Ingredientes que no te gustan');
-    const allergies = page.getByLabel('Alergias');
+    const allergies = page.getByLabel('Alergias adicionales');
 
     await availableTime.fill('45');
     await dislikedIngredients.fill('aceitunas\ncilantro');
-    await allergies.fill('cacahuate\nmariscos');
+    await allergies.fill('alergia a la proteína de la leche\nmariscos');
+    const peanut = page.getByRole('button', { name: 'Maní (cacahuate)', exact: true });
+    const treeNuts = page.getByRole('button', { name: 'Frutos secos de árbol', exact: true });
+    await peanut.click();
+    await expect(peanut).toHaveAttribute('aria-pressed', 'true');
+    await expect(treeNuts).toHaveAttribute('aria-pressed', 'false');
+    await treeNuts.click();
+    await expect(treeNuts).toHaveAttribute('aria-pressed', 'true');
+    await peanut.click();
+    await expect(peanut).toHaveAttribute('aria-pressed', 'false');
+    await expect(treeNuts).toHaveAttribute('aria-pressed', 'true');
 
     await page.getByRole('button', { name: 'Añadir comensal' }).click();
     await page.getByLabel('Nombre', { exact: true }).fill('E2E Household Member');
@@ -90,7 +100,9 @@ test('persists culinary profile details for the authenticated synthetic user', a
     await expect(page.getByRole('heading', { name: 'Perfil', exact: true })).toBeVisible();
     await expect(page.getByLabel('Tiempo disponible (minutos)')).toHaveValue('45');
     await expect(page.getByLabel('Ingredientes que no te gustan')).toHaveValue('aceitunas\ncilantro');
-    await expect(page.getByLabel('Alergias')).toHaveValue('cacahuate\nmariscos');
+    await expect(page.getByLabel('Alergias adicionales')).toHaveValue('alergia a la proteína de la leche\nmariscos');
+    await expect(peanut).toHaveAttribute('aria-pressed', 'false');
+    await expect(treeNuts).toHaveAttribute('aria-pressed', 'true');
 
     await expect(page.getByLabel('Nombre', { exact: true })).toHaveValue('E2E Household Member');
     await expect(page.getByLabel('Grupo de edad')).toHaveValue('child');
