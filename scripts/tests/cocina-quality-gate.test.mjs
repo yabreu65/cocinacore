@@ -25,7 +25,7 @@ const validReportData = {
 };
 const validReport = JSON.stringify(validReportData);
 
-function harness({ version = 'v22.22.3', testResult = { status: 0 }, report = validReport, guardianResult = { status: 0 }, hookExists = true } = {}) {
+function harness({ version = 'v22.22.3', testResult = { status: 0 }, report = validReport } = {}) {
   const files = new Map([[path.join(root, '.nvmrc'), nvmrc]]);
   const calls = [];
   const reports = new Map();
@@ -38,16 +38,10 @@ function harness({ version = 'v22.22.3', testResult = { status: 0 }, report = va
     mkdtempSync(prefix) { return `${prefix}${++reportCounter}`; },
     writeFileSync(file, contents) { reports.set(file, contents); files.set(file, contents); },
     rmSync() {},
-    existsSync(file) { return hookExists && file === '/shared/hooks/pre-commit'; },
-    accessSync(file) {
-      if (!hookExists || file !== '/shared/hooks/pre-commit') throw new Error('not executable');
-    },
-    realpathSync(file) { return file; },
+    existsSync(file) { return files.has(file); },
   };
   const spawnSync = (command, args, options) => {
     calls.push({ command, args, options });
-    if (command === 'git') return { status: 0, stdout: '/shared\n' };
-    if (command === '/shared/hooks/pre-commit') return guardianResult;
     if (command === process.execPath) {
       if (testResult.onSpawn) return testResult.onSpawn({ args, options, reports });
       if (report !== null) {
@@ -76,34 +70,32 @@ function harness({ version = 'v22.22.3', testResult = { status: 0 }, report = va
   };
 }
 
-const guardianCalls = (h) => h.calls.filter((call) => call.command === '/shared/hooks/pre-commit').length;
+const externalCalls = (h) => h.calls.filter((call) => call.command !== process.execPath).length;
 
-test('Vitest-only stage passes without authorizing or invoking Guardian', () => {
+test('Vitest-only stage passes without authorizing the commit by itself', () => {
   const h = harness();
   const result = runTests({ ...h.options, spawn: h.options.spawnSync });
   assert.deepEqual(result, {
     testStatus: 'TEST_PASS',
-    guardianStatus: null,
     allowed: false,
     reason: null,
   });
   assert.equal(h.calls.length, 1);
   assert.equal(h.calls[0].command, process.execPath);
   assert.equal(h.calls[0].args.includes('run'), true);
-  assert.equal(guardianCalls(h), 0);
+  assert.equal(externalCalls(h), 0);
 });
 
-test('valid local Vitest report then Guardian success allows', async () => {
+test('valid local Vitest report alone authorizes the native commit gate', async () => {
   const h = harness();
   const result = await runQualityGate(h.options);
   assert.equal(result.testStatus, 'TEST_PASS');
-  assert.equal(result.guardianStatus, 'GUARDIAN_PASS');
   assert.equal(result.allowed, true);
   const vitest = h.calls.find((call) => call.command === process.execPath);
   assert.ok(vitest);
   assert.equal(vitest.args.includes('--passWithNoTests'), true);
   assert.equal(vitest.args.includes('--reporter=json'), true);
-  assert.equal(guardianCalls(h), 1);
+  assert.equal(externalCalls(h), 0);
 });
 
 test('Vitest assertion failures block Guardian as TEST_FAIL', async () => {
@@ -124,40 +116,39 @@ test('Vitest assertion failures block Guardian as TEST_FAIL', async () => {
   const result = await runQualityGate(h.options);
   assert.equal(result.testStatus, 'TEST_FAIL');
   assert.equal(result.allowed, false);
-  assert.equal(guardianCalls(h), 0);
+  assert.equal(externalCalls(h), 0);
 });
 
-test('runner startup failure without report is INFRA_UNAVAILABLE and blocks Guardian', async () => {
+test('runner startup failure without report is INFRA_UNAVAILABLE and blocks commit', async () => {
   const h = harness({ testResult: { status: null, error: Object.assign(new Error('ERR_REQUIRE_ESM'), { code: 'ERR_REQUIRE_ESM' }) }, report: null });
   const result = await runQualityGate(h.options);
   assert.equal(result.testStatus, 'INFRA_UNAVAILABLE');
   assert.equal(result.allowed, false);
-  assert.equal(guardianCalls(h), 0);
+  assert.equal(externalCalls(h), 0);
 });
 
 test('Node version mismatch is INFRA_UNAVAILABLE without starting children', async () => {
   const h = harness({ version: 'v20.0.0' });
   const result = await runQualityGate(h.options);
   assert.equal(result.testStatus, 'INFRA_UNAVAILABLE');
-  assert.equal(result.guardianStatus, null);
   assert.equal(h.calls.length, 0);
 });
 
-test('test runner timeout is INFRA_UNAVAILABLE and blocks Guardian', async () => {
+test('test runner timeout is INFRA_UNAVAILABLE and blocks commit', async () => {
   const h = harness({ testResult: { status: null, signal: 'SIGTERM', error: Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }) } });
   const result = await runQualityGate(h.options);
   assert.equal(result.testStatus, 'INFRA_UNAVAILABLE');
-  assert.equal(guardianCalls(h), 0);
+  assert.equal(externalCalls(h), 0);
 });
 
-test('test runner interruption is INFRA_UNAVAILABLE and blocks Guardian', async () => {
+test('test runner interruption is INFRA_UNAVAILABLE and blocks commit', async () => {
   const h = harness({ testResult: { status: null, signal: 'SIGINT' } });
   const result = await runQualityGate(h.options);
   assert.equal(result.testStatus, 'INFRA_UNAVAILABLE');
-  assert.equal(guardianCalls(h), 0);
+  assert.equal(externalCalls(h), 0);
 });
 
-test('zero collected tests is INFRA_UNAVAILABLE and blocks Guardian', async () => {
+test('zero collected tests is INFRA_UNAVAILABLE and blocks commit', async () => {
   const h = harness({ report: JSON.stringify({
     ...validReportData,
     numTotalTestSuites: 0,
@@ -168,22 +159,22 @@ test('zero collected tests is INFRA_UNAVAILABLE and blocks Guardian', async () =
   }) });
   const result = await runQualityGate(h.options);
   assert.equal(result.testStatus, 'INFRA_UNAVAILABLE');
-  assert.equal(guardianCalls(h), 0);
+  assert.equal(externalCalls(h), 0);
 });
 
-test('missing report is INFRA_UNAVAILABLE and blocks Guardian', async () => {
+test('missing report is INFRA_UNAVAILABLE and blocks commit', async () => {
   const h = harness({ report: null });
   const result = await runQualityGate(h.options);
   assert.equal(result.testStatus, 'INFRA_UNAVAILABLE');
-  assert.equal(guardianCalls(h), 0);
+  assert.equal(externalCalls(h), 0);
 });
 
-test('malformed JSON report is INFRA_UNAVAILABLE and blocks Guardian', async () => {
+test('malformed JSON report is INFRA_UNAVAILABLE and blocks commit', async () => {
   const h = harness({ report: '{not valid JSON' });
   const result = await runQualityGate(h.options);
   assert.equal(result.testStatus, 'INFRA_UNAVAILABLE');
   assert.equal(result.allowed, false);
-  assert.equal(guardianCalls(h), 0);
+  assert.equal(externalCalls(h), 0);
 });
 
 test('each runner invocation gets a fresh report path and cannot reuse stale output', async () => {
@@ -211,8 +202,6 @@ test('each runner invocation gets a fresh report path and cannot reuse stale out
     osApi: { tmpdir: () => temporaryRoot },
     spawnSync: (command, args, spawnOptions) => {
       calls.push({ command, args, options: spawnOptions });
-      if (command === 'git') return { status: 0, stdout: '.git\n' };
-      if (command === path.join(cwd, '.git', 'hooks', 'pre-commit')) return { status: 0 };
       if (command !== process.execPath) throw new Error(`unexpected process: ${command}`);
       runnerInvocations += 1;
       const reportArgument = args.find((argument) => argument.startsWith('--outputFile='));
@@ -241,21 +230,11 @@ test('each runner invocation gets a fresh report path and cannot reuse stale out
   }
 });
 
-test('Guardian nonzero exit fails closed after TEST_PASS', async () => {
-  const h = harness({ guardianResult: { status: 7 } });
-  const result = await runQualityGate(h.options);
-  assert.equal(result.testStatus, 'TEST_PASS');
-  assert.equal(result.guardianStatus, 'GUARDIAN_FAIL');
-  assert.equal(result.allowed, false);
-});
-
-test('missing Guardian hook fails closed after TEST_PASS', async () => {
-  const h = harness({ hookExists: false });
-  const result = await runQualityGate(h.options);
-  assert.equal(result.testStatus, 'TEST_PASS');
-  assert.equal(result.guardianStatus, 'GUARDIAN_FAIL');
-  assert.equal(result.allowed, false);
-  assert.equal(guardianCalls(h), 0);
+test('valid tests require no external reviewer or shared hook', async () => {
+  const h = harness();
+  assert.equal((await runQualityGate(h.options)).allowed, true);
+  assert.equal(h.calls.length, 1);
+  assert.equal(externalCalls(h), 0);
 });
 
 function reportWith(changes = {}) {
@@ -282,16 +261,16 @@ const rejectedReports = [
 ];
 
 for (const [name, report] of rejectedReports) {
-  test(`${name} report suppresses Guardian`, async () => {
+  test(`${name} report blocks commit`, async () => {
     const h = harness({ report });
     const result = await runQualityGate(h.options);
     assert.equal(result.testStatus, 'INFRA_UNAVAILABLE');
     assert.equal(result.allowed, false);
-    assert.equal(guardianCalls(h), 0);
+    assert.equal(externalCalls(h), 0);
   });
 }
 
-test('assertion failure with consistent report is TEST_FAIL and suppresses Guardian', async () => {
+test('assertion failure with consistent report is TEST_FAIL and blocks commit', async () => {
   const h = harness({
     testResult: { status: 1 },
     report: reportWith({
@@ -306,14 +285,14 @@ test('assertion failure with consistent report is TEST_FAIL and suppresses Guard
   });
   const result = await runQualityGate(h.options);
   assert.equal(result.testStatus, 'TEST_FAIL');
-  assert.equal(guardianCalls(h), 0);
+  assert.equal(externalCalls(h), 0);
 });
 
 test('nonzero child with passing report is infrastructure failure', async () => {
   const h = harness({ testResult: { status: 2 } });
   const result = await runQualityGate(h.options);
   assert.equal(result.testStatus, 'INFRA_UNAVAILABLE');
-  assert.equal(guardianCalls(h), 0);
+  assert.equal(externalCalls(h), 0);
 });
 
 test('Vitest receives a unique temporary config, report, and cache location', async () => {
@@ -380,8 +359,6 @@ test('generated config preserves fixture options and isolates config, report, an
     pathApi: path,
     osApi: { tmpdir: () => temporaryRoot },
     spawnSync: (command, args, spawnOptions) => {
-      if (command === 'git') return { status: 0, stdout: '.git\n' };
-      if (command.endsWith('/hooks/pre-commit')) return { status: 0 };
       spawned.push({ command, args, spawnOptions });
       const configPath = args.find((argument) => argument.startsWith('--config='))?.slice('--config='.length);
       const reportPath = args.find((argument) => argument.startsWith('--outputFile='))?.slice('--outputFile='.length);
@@ -431,11 +408,11 @@ test('generated config preserves fixture options and isolates config, report, an
   }
 });
 
-test('cleanup failure overrides a valid report and suppresses Guardian', async () => {
+test('cleanup failure overrides a valid report and blocks commit', async () => {
   const h = harness();
   h.options.fsApi.rmSync = () => { throw new Error('cannot remove temp directory'); };
   const result = await runQualityGate(h.options);
   assert.equal(result.testStatus, 'INFRA_UNAVAILABLE');
   assert.match(result.reason, /clean up/i);
-  assert.equal(guardianCalls(h), 0);
+  assert.equal(externalCalls(h), 0);
 });

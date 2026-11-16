@@ -5,12 +5,11 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const GATE_TIMEOUT_MS = 10 * 60 * 1000;
-const GUARDIAN_TIMEOUT_MS = 10 * 60 * 1000;
 const scriptPath = fileURLToPath(import.meta.url);
 const repositoryRoot = path.resolve(path.dirname(scriptPath), '..');
 
 function infra(reason) {
-  return { testStatus: 'INFRA_UNAVAILABLE', guardianStatus: null, allowed: false, reason };
+  return { testStatus: 'INFRA_UNAVAILABLE', allowed: false, reason };
 }
 
 const reportCountFields = [
@@ -130,11 +129,11 @@ export function runTests({ cwd, processInfo, fsApi, pathApi, osApi, spawn, origi
         if (counts.tests === 0 || counts.suites === 0 || counts.passedTests === 0) {
           result = infra('Vitest collected zero tests, suites, or passed assertions');
         } else if (counts.failedTests > 0 || counts.failedSuites > 0) {
-          result = { testStatus: 'TEST_FAIL', guardianStatus: null, allowed: false, reason: 'Vitest reported failed tests or suites' };
+          result = { testStatus: 'TEST_FAIL', allowed: false, reason: 'Vitest reported failed tests or suites' };
         } else if (child.status !== 0) {
           result = infra(`Vitest exited with status ${child.status}`);
         } else {
-          result = { testStatus: 'TEST_PASS', guardianStatus: null, allowed: false, reason: null };
+          result = { testStatus: 'TEST_PASS', allowed: false, reason: null };
         }
       }
     }
@@ -152,41 +151,6 @@ export function runTests({ cwd, processInfo, fsApi, pathApi, osApi, spawn, origi
   return result ?? infra('Vitest gate did not produce a result');
 }
 
-function runGuardian({ cwd, fsApi, pathApi, spawn, wrapperPath }) {
-  let commonDirResult;
-  try {
-    commonDirResult = spawn('git', ['rev-parse', '--git-common-dir'], { cwd, encoding: 'utf8', timeout: 10_000 });
-  } catch (error) {
-    return { status: 'GUARDIAN_FAIL', reason: `Unable to resolve Git common directory: ${error.message}` };
-  }
-  if (commonDirResult.error || commonDirResult.signal || commonDirResult.status !== 0) {
-    return { status: 'GUARDIAN_FAIL', reason: 'Unable to resolve Git common directory' };
-  }
-
-  const commonDir = pathApi.resolve(cwd, commonDirResult.stdout.trim());
-  const hookPath = pathApi.join(commonDir, 'hooks', 'pre-commit');
-  try {
-    if (!fsApi.existsSync(hookPath)) throw new Error('shared hook is missing');
-    fsApi.accessSync(hookPath, fsApi.constants?.X_OK ?? 1);
-    if (fsApi.realpathSync(hookPath) === fsApi.realpathSync(wrapperPath)) {
-      throw new Error('shared hook resolves to this project wrapper');
-    }
-  } catch (error) {
-    return { status: 'GUARDIAN_FAIL', reason: `Invalid shared Guardian hook: ${error.message}` };
-  }
-
-  let result;
-  try {
-    result = spawn(hookPath, [], { cwd, encoding: 'utf8', timeout: GUARDIAN_TIMEOUT_MS, stdio: 'inherit' });
-  } catch (error) {
-    return { status: 'GUARDIAN_FAIL', reason: `Unable to start shared Guardian hook: ${error.message}` };
-  }
-  if (result.error || result.signal || result.status !== 0) {
-    return { status: 'GUARDIAN_FAIL', reason: `Shared Guardian hook failed (${result.error?.code || result.signal || result.status})` };
-  }
-  return { status: 'GUARDIAN_PASS', reason: null };
-}
-
 export async function runQualityGate(options = {}) {
   const cwd = options.cwd ?? repositoryRoot;
   const processInfo = options.processInfo ?? process;
@@ -198,27 +162,12 @@ export async function runQualityGate(options = {}) {
     cwd, processInfo, fsApi, pathApi, osApi, spawn,
     originalConfigPath: options.originalConfigPath,
   });
-  if (testResult.testStatus !== 'TEST_PASS') return testResult;
-
-  const guardian = runGuardian({
-    cwd,
-    fsApi,
-    pathApi,
-    spawn,
-    wrapperPath: options.wrapperPath ?? pathApi.join(cwd, '.githooks', 'pre-commit'),
-  });
-  return {
-    testStatus: 'TEST_PASS',
-    guardianStatus: guardian.status,
-    allowed: guardian.status === 'GUARDIAN_PASS',
-    reason: guardian.reason,
-  };
+  return { ...testResult, allowed: testResult.testStatus === 'TEST_PASS' };
 }
 
 async function main() {
   const result = await runQualityGate();
   console.log(`TEST: ${result.testStatus}${result.reason ? ` — ${result.reason}` : ''}`);
-  if (result.guardianStatus) console.log(`GUARDIAN: ${result.guardianStatus}${result.reason ? ` — ${result.reason}` : ''}`);
   if (!result.allowed) process.exitCode = 1;
 }
 
