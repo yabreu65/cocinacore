@@ -49,6 +49,22 @@ describe('platform owner identity capability', () => {
     expect(mocks.query).not.toHaveBeenCalled();
   });
 
+  it('requires an approved platform owner and denies a pending-review row', async () => {
+    const query = vi.fn().mockImplementation(async (sql: string) => ({
+      // The pending row is visible to the authenticated user under self-only RLS.
+      // It must not be selected by the application authorization predicate.
+      rows: sql.includes('requires_manual_review = false') ? [] : [{ user_id: owner.id }],
+    }));
+    const client = { query } as unknown as PoolClient;
+    mocks.scopedTransaction.mockImplementationOnce(async (_scope, callback) => callback(client));
+
+    expect(await isPlatformOwner(owner)).toBe(false);
+    expect(query).toHaveBeenCalledWith(
+      'select user_id from public.platform_owners where user_id = $1 and requires_manual_review = false limit 1',
+      [owner.id]
+    );
+  });
+
   it('denies a session without tenant context without opening a database connection', async () => {
     expect(await isPlatformOwner({ ...owner, tenant: null })).toBe(false);
     expect(mocks.scopedTransaction).not.toHaveBeenCalled();
