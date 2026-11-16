@@ -10,7 +10,7 @@ export async function findPlatformOwnerForSession(
 
   return scopedTransaction({ tenantId, userId: user.id }, async (client) => {
     const result = await client.query<Pick<PlatformOwnerRow, 'user_id'>>(
-      'select user_id from public.platform_owners where user_id = $1 limit 1',
+      'select user_id from public.platform_owners where user_id = $1 and requires_manual_review = false limit 1',
       [user.id]
     );
     return result.rows[0] ?? null;
