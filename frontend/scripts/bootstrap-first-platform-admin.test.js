@@ -10,6 +10,7 @@ const { EventEmitter } = require('node:events');
 const path = require('node:path');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- Keep this test's Node harness in CommonJS.
 const test = require('node:test');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- The installer test imports its CommonJS CLI module directly.
 const { askSecret, getTargetConfig } = require('./bootstrap-first-platform-admin');
 
 const scriptPath = path.join(__dirname, 'bootstrap-first-platform-admin.js');

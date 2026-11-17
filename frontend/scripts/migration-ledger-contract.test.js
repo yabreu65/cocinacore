@@ -167,6 +167,7 @@ test('registers the additive first-platform-admin capability after the verified 
 });
 
 test('requires active 023 capabilities before applying or verifying migration 024', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- Inspect the CommonJS migration runner source as a static contract.
   const runner = require('node:fs').readFileSync(require.resolve('./run-migrations.js'), 'utf8');
   assert.ok(runner.includes("const FIRST_ADMIN_MIGRATION = '024_first_platform_admin_bootstrap.sql'"));
   assert.ok(runner.includes('FIRST_ADMIN_MIGRATION].includes(migration.filename)'));
