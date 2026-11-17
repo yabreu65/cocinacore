@@ -23,6 +23,9 @@ frontend/e2e/**
 !frontend/e2e/reporters/
 frontend/e2e/reporters/**
 !frontend/e2e/reporters/production-safety-reporter.ts
+!frontend/e2e/fixtures/
+frontend/e2e/fixtures/**
+!frontend/e2e/fixtures/family-week-cleanup-contract.ts
 !frontend/scripts/
 frontend/scripts/**
 !frontend/scripts/activate-020-capabilities.js

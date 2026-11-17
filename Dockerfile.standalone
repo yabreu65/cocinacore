@@ -15,9 +15,10 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY frontend/package.json frontend/package-lock.json frontend/next.config.ts frontend/tsconfig.json frontend/postcss.config.mjs frontend/instrumentation.ts frontend/middleware.ts frontend/sentry.client.config.ts frontend/sentry.edge.config.ts frontend/sentry.server.config.ts ./
 COPY frontend/src ./src
 COPY frontend/public ./public
-# The existing TypeScript checks import these three E2E helpers.
+# TypeScript includes tests importing these four E2E helpers.
 COPY frontend/e2e/database-target.ts frontend/e2e/standalone-server-env.ts ./e2e/
 COPY frontend/e2e/reporters/production-safety-reporter.ts ./e2e/reporters/
+COPY frontend/e2e/fixtures/family-week-cleanup-contract.ts ./e2e/fixtures/
 RUN npm run build
 
 # Operational dependencies are intentionally absent from the application image.
