@@ -50,6 +50,13 @@ const REQUIRED_FILES = [
   "docs/ops/rls-020e-b-recovery-runbook.md",
   "docs/ops/rls-020e-c-release-readiness.md",
 ];
+const FIRST_ADMIN_REQUIRED_FILES = [
+  "frontend/scripts/activated-capabilities-024-first-admin.sql",
+  "frontend/scripts/activated-capabilities-024-inventory.sql",
+  "frontend/scripts/bootstrap-first-platform-admin.js",
+  "scripts/provision-first-platform-admin-roles.sql",
+  "scripts/test-first-platform-admin-bootstrap.sh",
+];
 const LEGACY_016_017_FILES = [
   "scripts/migrate-pawtech-production.sh",
   ".github/workflows/migrate-production.yml",
@@ -187,13 +194,14 @@ function checkCandidate({ candidateRoot, releaseSha }) {
   );
   const entries = manifest.migrations;
   // A historical release approval is still bound to exactly 001–020.
-  // Working-tree CI may validate the exact successor artifacts separately; it
+  // Working-tree CI may validate exact successor artifacts through 024; this
   // does not authorize a release or change the original 020 artifact checks.
-  const successor = !releaseSha && [21, 22, 23].includes(entries.length);
-  const occurrenceSuccessor = !releaseSha && [22, 23].includes(entries.length);
-  const retentionSuccessor = !releaseSha && entries.length === 23;
+  const successor = !releaseSha && [21, 22, 23, 24].includes(entries.length);
+  const occurrenceSuccessor = !releaseSha && [22, 23, 24].includes(entries.length);
+  const retentionSuccessor = !releaseSha && [23, 24].includes(entries.length);
+  const firstAdminSuccessor = !releaseSha && entries.length === 24;
   if (
-    entries.length !== (retentionSuccessor ? 23 : occurrenceSuccessor ? 22 : successor ? 21 : expectedIds.length) ||
+    entries.length !== (firstAdminSuccessor ? 24 : retentionSuccessor ? 23 : occurrenceSuccessor ? 22 : successor ? 21 : expectedIds.length) ||
     entries.slice(0, 20).some((entry, index) => entry.id !== expectedIds[index])
   )
     fail("manifest migration sequence must contain the exact 001 through 020 prefix");
@@ -230,6 +238,32 @@ function checkCandidate({ candidateRoot, releaseSha }) {
     if (JSON.stringify(entry) !== JSON.stringify(expected) || file.length !== expected.byteLength || sha256(file) !== expected.sha256)
       fail("unreviewed migration 023 successor");
     console.log("PASS exact 023 successor in working-tree artifact check only");
+  }
+
+  if (firstAdminSuccessor) {
+    const entry = entries[23];
+    const file = readCandidate("db/migrations/024_first_platform_admin_bootstrap.sql", candidateRoot, releaseSha);
+    const expected = {
+      id: "024",
+      filename: "024_first_platform_admin_bootstrap.sql",
+      lane: "migration",
+      sha256: "2a43c9ea728735865073a25185a6ed724dfb1a4444eb9e5f39200b4e67d79944",
+      byteLength: 10338,
+      transactional: "required",
+      legacyChecksumBackfillAllowed: false,
+      catalogAdditions: [
+        { kind: "table", schema: "public", identity: "public.first_platform_admin_bootstrap_claim" },
+        { kind: "index", schema: "public", identity: "first_platform_admin_bootstrap_claim.first_platform_admin_bootstrap_claim_pkey" },
+        { kind: "constraint", schema: "public", identity: "first_platform_admin_bootstrap_claim.first_platform_admin_bootstrap_claim_pkey" },
+        { kind: "constraint", schema: "public", identity: "first_platform_admin_bootstrap_claim.first_platform_admin_bootstrap_claim_singleton_check" },
+        { kind: "constraint", schema: "public", identity: "first_platform_admin_bootstrap_claim.first_platform_admin_bootstrap_claim_email_check" },
+        { kind: "constraint", schema: "public", identity: "first_platform_admin_bootstrap_claim.first_platform_admin_bootstrap_claim_approval_reference_check" },
+        { kind: "function", schema: "public", identity: "public.provision_first_platform_administrator" },
+      ],
+    };
+    if (JSON.stringify(entry) !== JSON.stringify(expected) || file.length !== expected.byteLength || sha256(file) !== expected.sha256)
+      fail("unreviewed migration 024 successor");
+    console.log("PASS exact 024 successor in working-tree artifact check only");
   }
 
   for (const id of expectedIds.slice(0, 19)) {
@@ -275,7 +309,10 @@ function checkCandidate({ candidateRoot, releaseSha }) {
   }
   console.log("PASS historical migration workflow and release-mode artifacts remain pinned");
 
-  for (const relativePath of REQUIRED_FILES) {
+  const requiredFiles = firstAdminSuccessor
+    ? [...REQUIRED_FILES, ...FIRST_ADMIN_REQUIRED_FILES]
+    : REQUIRED_FILES;
+  for (const relativePath of requiredFiles) {
     const file = readCandidate(relativePath, candidateRoot, releaseSha);
     if (file.length === 0)
       fail(`required release asset is empty: ${relativePath}`);

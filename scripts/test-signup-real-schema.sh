@@ -88,6 +88,10 @@ for ((i=0; i<60; i++)); do
   if "${DOCKER[@]}" exec "$CID" pg_isready -U postgres -d signup_real_disposable >/dev/null 2>&1; then break; fi
   sleep 1
 done
+# Historical migrations 018-019 grant the legacy application role; keep it
+# isolated to this fresh disposable database and never grant it a login.
+"${DOCKER[@]}" exec "$CID" psql -X -U postgres -d signup_real_disposable -v ON_ERROR_STOP=1 \
+  -c 'create role cocinacore_user nologin nosuperuser nobypassrls nocreatedb nocreaterole noinherit noreplication' >/dev/null
 export SIGNUP_TEST_ADMIN_URL="postgresql://postgres:signup_disposable_only@127.0.0.1:$PORT/signup_real_disposable"
 export COCINACORE_SEPARATED_DB_LANES_ENABLED=false COCINACORE_SKIP_DOTENV=1
 unset MIGRATIONS_DIR

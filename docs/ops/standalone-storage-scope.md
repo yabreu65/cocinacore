@@ -17,14 +17,50 @@ Before switching an existing deployment to this S3 configuration, inventory lega
 
 ## First platform administrator acceptance
 
-The first platform administrator is a release prerequisite, not an ordinary tenant owner. No first-administrator provisioning procedure has been validated for F5.6. `frontend/scripts/bootstrap-owner.js` and `npm run db:bootstrap` are historical: their direct writes are incompatible with the current restricted runtime/RLS lanes, and the script accepts a password as a process argument. Do not use them as the F5.6 procedure or repeat or circumvent previously rejected operations.
+The first platform administrator is a release prerequisite, not an ordinary tenant owner. `frontend/scripts/bootstrap-owner.js` and `npm run db:bootstrap` remain historical: their direct writes are incompatible with the restricted runtime/RLS lanes, and the script accepts a password as a process argument. Do not use them for F5.6.
 
-Before accepting an authorized procedure, retain evidence of all of the following:
+A restricted, one-use procedure is implemented in migration 024 and `frontend/scripts/bootstrap-first-platform-admin.js`. The canonical migrations 001–024 and the first-admin integration acceptance passed against a disposable PostgreSQL 16 tmpfs cluster, including one-use and rollback checks. This is implementation evidence only: it does not authorize provisioning on a persistent or production target, approve a target/person, or replace target-specific owner approval.
+
+### Operator installer
+
+From `frontend`, the interactive command is `npm run db:bootstrap:first-platform-admin`. Configure only these non-secret values, using the exact authorized database and administrator email:
+
+```sh
+export COCINACORE_FIRST_ADMIN_DATABASE_URL='postgresql://cocinacore_first_admin_provisioner@127.0.0.1:5432/replace-with-exact-db-name'
+export COCINACORE_FIRST_ADMIN_EXPECTED_DATABASE='replace-with-exact-db-name'
+export COCINACORE_FIRST_ADMIN_EXPECTED_EMAIL='replace-with-authorized-email'
+```
+
+The installer accepts only the dedicated provisioner role and a loopback database host. It rejects passwords and connection options in the URL, refuses piped input and command-line arguments, requires the operator to type the exact database name and expected email, and prompts for the provisioner and new administrator passwords with terminal echo disabled. A remote database may be reached only through an owner-approved local port forward; the installer itself never accepts a remote host. Do not place either password in environment variables, command arguments, URLs, logs or repository files.
+
+Before writing, it checks the dedicated role and function grants, FORCE RLS on the required tables, and the pinned migration-024 capability attestation. It calls the one-use database function in a transaction, requires a non-secret owner-approval reference, and does not grant tenant-owner privileges. The installer fails if a platform owner already exists. Do not run it until the owner has explicitly approved the exact target, operator and intended person; no persistent-target run was performed as part of disposable acceptance.
+
+### Standalone Compose procedure
+
+The standalone `operations` service shares PostgreSQL's network namespace so the installer can keep its loopback-only target rule without publishing the database port. Run fresh database bootstrap from a terminal with a TTY; it asks for exact database confirmation and the provisioner password before applying migration 024:
+
+```sh
+docker compose -f docker-compose.standalone.yml --profile operations run --rm -it operations /app/bootstrap-db.sh --fresh
+```
+
+That command prepares roles and applies migrations; it does **not** create the administrator. After it succeeds, run the operator installer from the same TTY-enabled operations service, supplying only the non-secret target values; the provisioner and administrator passwords are prompted privately:
+
+```sh
+docker compose -f docker-compose.standalone.yml --profile operations run --rm -it \
+  -e COCINACORE_FIRST_ADMIN_DATABASE_URL='postgresql://cocinacore_first_admin_provisioner@127.0.0.1:5432/replace-with-exact-db-name' \
+  -e COCINACORE_FIRST_ADMIN_EXPECTED_DATABASE='replace-with-exact-db-name' \
+  -e COCINACORE_FIRST_ADMIN_EXPECTED_EMAIL='replace-with-authorized-email' \
+  operations npm run db:bootstrap:first-platform-admin
+```
+
+The bootstrap refuses non-interactive stdin/stdout before database preflight or mutation. Keep the two commands as separate operator-confirmed steps.
+
+Before an authorized persistent-target run and acceptance, retain evidence of all of the following:
 
 - **Authorization and target:** the operator, intended person and exact environment are explicitly authorized and verified; platform and tenant ownership remain distinct.
 - **Credentials:** secrets are protected during entry, transport and storage, and are absent from command arguments, logs and repository files.
 - **Integrity and concurrency:** account and administrator state are consistent, changes are atomic, and concurrent or repeated attempts cannot create unintended administrators or partial records.
-- **Existing security contracts:** the procedure is compatible with migrations 001–023, authentication, sessions, `platform_owners` approval and RLS; it does not weaken existing tenant boundaries or grant broad privileges to the application.
-- **Audit and acceptance:** record the authorization, target, operator and outcome without secrets; verify the legitimate administrator's `/owner` access and normal-user denial, then separately verify the authorized global PDF upload, metadata, indexing and access controls using RustFS.
+- **Existing security contracts:** the procedure is compatible with migrations 001–024, authentication, sessions, `platform_owners` approval and RLS; it does not weaken existing tenant boundaries or grant broad privileges to the application.
+- **Audit and acceptance:** record authorization, target, operator and outcome without secrets; verify the intended administrator's `/owner` access and normal-user denial. Separately verify the authorized global PDF upload, metadata, indexing and access controls using RustFS.
 
-Initial provisioning, administrator access and global PDF acceptance remain open until a compatible procedure and the relevant evidence are available. This checklist defines acceptance criteria; it does not authorize or specify a provisioning mechanism.
+Persistent-target provisioning, administrator access acceptance and global PDF acceptance remain open until the owner authorizes the exact run and the relevant evidence is recorded. This guidance does not authorize deployment or use of a persistent database.
