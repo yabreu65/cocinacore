@@ -208,7 +208,9 @@ async function verifyDatabaseContract(client, target) {
             EXISTS (SELECT 1 FROM pg_catalog.pg_roles f
                      WHERE f.rolname = $2 AND NOT f.rolcanlogin AND NOT f.rolsuper
                        AND NOT f.rolbypassrls AND NOT f.rolcreatedb AND NOT f.rolcreaterole
-                       AND NOT f.rolreplication AND NOT f.rolinherit) AS function_owner_is_restricted` ,
+                       AND NOT f.rolreplication AND NOT f.rolinherit) AS function_owner_is_restricted
+       FROM pg_catalog.pg_roles r
+      WHERE r.rolname = current_user`,
     [FUNCTION_SIGNATURE, FUNCTION_OWNER_ROLE]
   );
   const row = result.rows[0];
@@ -311,7 +313,7 @@ async function main() {
   }
 }
 
-module.exports = { askSecret, getTargetConfig };
+module.exports = { askSecret, getTargetConfig, verifyDatabaseContract };
 
 if (require.main === module) {
   main().catch((error) => {

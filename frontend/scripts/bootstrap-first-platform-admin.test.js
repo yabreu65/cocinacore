@@ -11,7 +11,7 @@ const path = require('node:path');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- Keep this test's Node harness in CommonJS.
 const test = require('node:test');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- The installer test imports its CommonJS CLI module directly.
-const { askSecret, getTargetConfig } = require('./bootstrap-first-platform-admin');
+const { askSecret, getTargetConfig, verifyDatabaseContract } = require('./bootstrap-first-platform-admin');
 
 const scriptPath = path.join(__dirname, 'bootstrap-first-platform-admin.js');
 const validEnvironment = (overrides = {}) => ({
@@ -87,6 +87,23 @@ test('rejects an explicit zero database port instead of allowing pg to choose a 
     })),
     /Refusing an invalid, credential-bearing, or unexpected database target/
   );
+});
+
+test('binds installer role checks to the connected provisioner role', async () => {
+  let queryText = '';
+  const client = {
+    async query(text) {
+      queryText = text;
+      return { rows: [] };
+    },
+  };
+
+  await assert.rejects(
+    verifyDatabaseContract(client, { database: 'cocinacore' }),
+    /Database role, function, grant, or FORCE RLS contract mismatch/
+  );
+
+  assert.match(queryText, /from pg_catalog\.pg_roles r\s+where r\.rolname = current_user/i);
 });
 
 test('secret entry enables raw mode, never echoes input, and restores terminal mode', async () => {
