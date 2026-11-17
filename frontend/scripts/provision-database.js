@@ -22,6 +22,18 @@ try {
 
 const MIGRATION_ROLE = 'migration_admin';
 const SCHEMA_OWNER = 'cocinacore_schema_owner';
+const FIRST_ADMIN_MIGRATION = '024_first_platform_admin_bootstrap.sql';
+const PREPARED_CAPABILITIES_MIGRATION = '020_tenant_rls_hardening.sql';
+const CAPABILITY_ATTESTATION_MIGRATIONS = [
+  ['020_tenant_rls_hardening.sql', '020'],
+  ['021_inventory_price_reference.sql', '021'],
+  ['022_real_consumption_occurrences.sql', '022'],
+  ['023_inventory_movement_retention.sql', '023'],
+  [FIRST_ADMIN_MIGRATION, '024'],
+];
+const FIRST_ADMIN_FUNCTION_OWNER = 'cocinacore_first_admin_function_owner';
+const FIRST_ADMIN_PROVISIONER = 'cocinacore_first_admin_provisioner';
+const FIRST_ADMIN_FUNCTION_IDENTITY = 'public.provision_first_platform_administrator';
 const RUNTIME_ROLE = 'cocinacore_user';
 const PRODUCTION_017_OWNER_PROFILE = Object.freeze({
   objectOwner: 'cocinacore_user',
@@ -458,22 +470,62 @@ async function releaseDatabaseChangeLock(client, key) {
   if (!result.rows[0].released) throw new Error('Database-change lock release failure.');
 }
 
+function assertFirstAdminProvisionerRole(role) {
+  const expectedConfig = ['row_security=on', 'search_path=pg_catalog, public'];
+  const actualConfig = Array.isArray(role?.rolconfig) ? [...role.rolconfig].sort() : [];
+  if (
+    !role ||
+    role.rolcanlogin !== true ||
+    role.rolinherit ||
+    role.rolsuper ||
+    role.rolcreatedb ||
+    role.rolcreaterole ||
+    role.rolreplication ||
+    role.rolbypassrls ||
+    role.rolconnlimit !== -1 ||
+    role.rolvaliduntil !== null ||
+    JSON.stringify(actualConfig) !== JSON.stringify(expectedConfig) ||
+    role.role_comment !== 'CocinaCore first platform-admin provisioner v1'
+  ) {
+    throw new Error('ROLE_STATE_MISMATCH: first-admin provisioner role has unexpected attributes.');
+  }
+}
+
 async function inspectReservedRoles(client) {
+  const roleNames = [MIGRATION_ROLE, SCHEMA_OWNER, FIRST_ADMIN_FUNCTION_OWNER, FIRST_ADMIN_PROVISIONER];
   const roles = await client.query(
     `select rolname, rolcanlogin, rolinherit, rolsuper, rolcreatedb, rolcreaterole,
-            rolreplication, rolbypassrls, rolconnlimit, rolvaliduntil, rolconfig
+            rolreplication, rolbypassrls, rolconnlimit, rolvaliduntil, rolconfig,
+            (select pg_catalog.shobj_description(auth.oid, 'pg_authid')
+               from pg_catalog.pg_authid auth where auth.rolname = pg_roles.rolname) as role_comment
        from pg_catalog.pg_roles
       where rolname = any($1::text[])
       order by rolname`,
-    [[MIGRATION_ROLE, SCHEMA_OWNER]]
+    [roleNames]
   );
-  if (roles.rowCount === 0) return 'absent';
-  if (roles.rowCount !== 2) {
+  const byName = new Map(roles.rows.map((role) => [role.rolname, role]));
+  const baseRolesPresent = byName.has(MIGRATION_ROLE) || byName.has(SCHEMA_OWNER);
+  const firstAdminRolesPresent =
+    byName.has(FIRST_ADMIN_FUNCTION_OWNER) || byName.has(FIRST_ADMIN_PROVISIONER);
+  if (!baseRolesPresent && !firstAdminRolesPresent) return 'absent';
+  if (!byName.has(MIGRATION_ROLE) || !byName.has(SCHEMA_OWNER)) {
     throw new Error('ROLE_STATE_MISMATCH: reserved database roles are only partially provisioned.');
   }
-  const byName = new Map(roles.rows.map((role) => [role.rolname, role]));
   assertRole(byName.get(MIGRATION_ROLE), true);
   assertRole(byName.get(SCHEMA_OWNER), false);
+  if (byName.has(FIRST_ADMIN_FUNCTION_OWNER) !== byName.has(FIRST_ADMIN_PROVISIONER)) {
+    throw new Error('ROLE_STATE_MISMATCH: first-admin roles are only partially provisioned.');
+  }
+  if (firstAdminRolesPresent) {
+    assertRole(byName.get(FIRST_ADMIN_FUNCTION_OWNER), false);
+    if (
+      byName.get(FIRST_ADMIN_FUNCTION_OWNER).role_comment !==
+      'CocinaCore first platform-admin function owner v1'
+    ) {
+      throw new Error('ROLE_STATE_MISMATCH: first-admin function owner role comment is unexpected.');
+    }
+    assertFirstAdminProvisionerRole(byName.get(FIRST_ADMIN_PROVISIONER));
+  }
 
   const memberships = await client.query(
     `select parent.rolname as granted_role, member.rolname as member_role,
@@ -483,16 +535,27 @@ async function inspectReservedRoles(client) {
        join pg_catalog.pg_roles member on member.oid = m.member
       where parent.rolname = any($1::text[]) or member.rolname = any($1::text[])
       order by granted_role, member_role`,
-    [[MIGRATION_ROLE, SCHEMA_OWNER]]
+    [roleNames]
   );
-  if (
-    memberships.rowCount !== 1 ||
-    memberships.rows[0].granted_role !== SCHEMA_OWNER ||
-    memberships.rows[0].member_role !== MIGRATION_ROLE ||
-    memberships.rows[0].admin_option ||
-    memberships.rows[0].inherit_option ||
-    !memberships.rows[0].set_option
-  ) {
+  const expectedMemberships = [
+    ...(firstAdminRolesPresent
+      ? [{ granted_role: FIRST_ADMIN_FUNCTION_OWNER, member_role: SCHEMA_OWNER }]
+      : []),
+    { granted_role: SCHEMA_OWNER, member_role: MIGRATION_ROLE },
+  ];
+  const membershipsMatch =
+    memberships.rowCount === expectedMemberships.length &&
+    expectedMemberships.every((expected, index) => {
+      const actual = memberships.rows[index];
+      return (
+        actual.granted_role === expected.granted_role &&
+        actual.member_role === expected.member_role &&
+        actual.admin_option === false &&
+        actual.inherit_option === false &&
+        actual.set_option === true
+      );
+    });
+  if (!membershipsMatch) {
     throw new Error('ROLE_STATE_MISMATCH: reserved database roles have unexpected memberships.');
   }
   return 'established';
@@ -1201,6 +1264,7 @@ function expectedCatalog(manifest, appliedMigrations, catalogFunctions) {
     functions: transferable
       .filter((o) => o.kind === 'function')
       .map((o) => `${o.schema}.${o.name}(${o.arguments})`),
+    otherRelations: [],
     indexes: manifest.baselineObjects.dependent.indexes.map((o) => `${o.schema}.${o.identity}`),
     constraints: manifest.baselineObjects.dependent.constraints.map(
       (o) => `${o.schema}.${o.identity}`
@@ -1209,6 +1273,33 @@ function expectedCatalog(manifest, appliedMigrations, catalogFunctions) {
     extensions: manifest.extensions.map((o) => `${o.name}@${o.expectedSchema}`),
     triggers: [],
   };
+  if (appliedMigrations.has(PREPARED_CAPABILITIES_MIGRATION)) {
+    const preparedObjects = manifest.preparedCapabilities?.objects;
+    if (!Array.isArray(preparedObjects)) {
+      throw new Error('BASELINE_MISMATCH: prepared capability inventory is missing.');
+    }
+    for (const object of preparedObjects) {
+      if (object.kind === 'view') {
+        const [schema, name] = object.identity.split('.');
+        if (!schema || !name || object.identity.split('.').length !== 2) {
+          throw new Error('BASELINE_MISMATCH: invalid prepared capability view identity.');
+        }
+        expected.otherRelations.push(object.identity);
+        for (const type of [`${schema}.${name}`, `${schema}._${name}`]) {
+          if (!expected.types.includes(type)) expected.types.push(type);
+        }
+      } else if (object.kind === 'function') {
+        const functionName = object.identity.slice(0, object.identity.indexOf('('));
+        const matches = catalogFunctions.filter((identity) => identity.startsWith(`${functionName}(`));
+        if (matches.length !== 1) {
+          throw new Error(`BASELINE_MISMATCH: prepared function ${functionName} must exist exactly once.`);
+        }
+        expected.functions.push(matches[0]);
+      } else {
+        throw new Error('BASELINE_MISMATCH: unsupported prepared capability kind.');
+      }
+    }
+  }
   for (const migration of manifest.migrations) {
     if (!appliedMigrations.has(migration.filename)) continue;
     for (const addition of migration.catalogAdditions || []) {
@@ -1361,6 +1452,15 @@ async function attestLedger(client, manifest, established) {
   };
 }
 
+function isFirstAdminFunctionAddition(migration, addition) {
+  return (
+    migration.filename === FIRST_ADMIN_MIGRATION &&
+    addition.kind === 'function' &&
+    addition.schema === 'public' &&
+    addition.identity === FIRST_ADMIN_FUNCTION_IDENTITY
+  );
+}
+
 async function attestBaselineCatalog(
   client,
   manifest,
@@ -1390,7 +1490,7 @@ async function attestBaselineCatalog(
   );
   compareExact(
     catalog.otherRelations.rows.map((row) => row.identity),
-    [],
+    expected.otherRelations,
     'Managed standalone relation set'
   );
   compareExact(
@@ -1423,18 +1523,42 @@ async function attestBaselineCatalog(
     expected.extensions,
     'Extension set'
   );
-  if (catalog.functions.rows.some((row) => row.security_definer)) {
+  if (
+    catalog.functions.rows.some((row) => {
+      if (!row.security_definer) return false;
+      if (
+        appliedMigrations.has(FIRST_ADMIN_MIGRATION) &&
+        row.identity.startsWith(`${FIRST_ADMIN_FUNCTION_IDENTITY}(`) &&
+        row.owner === FIRST_ADMIN_FUNCTION_OWNER
+      ) return false;
+      const preparedFunction = appliedMigrations.has(PREPARED_CAPABILITIES_MIGRATION)
+        ? manifest.preparedCapabilities?.objects?.find(
+            (object) =>
+              object.kind === 'function' &&
+              row.identity.startsWith(`${object.identity.slice(0, object.identity.indexOf('('))}(`)
+          )
+        : undefined;
+      return !preparedFunction || row.owner !== preparedFunction.owner;
+    })
+  ) {
     throw new Error('Managed function security mode differs from the trusted baseline.');
   }
 
   const appliedOwnerAdditions = manifest.migrations
     .filter((migration) => appliedMigrations.has(migration.filename))
-    .flatMap((migration) => migration.catalogAdditions || [])
-    .filter((addition) => addition.kind === 'function' || addition.kind === 'table');
-  const expectedAdditionOwner =
-    ownerState === 'legacy' ? legacyOwnerProfile?.objectOwner || 'cocinacore' : SCHEMA_OWNER;
+    .flatMap((migration) =>
+      (migration.catalogAdditions || [])
+        .filter((addition) => addition.kind === 'function' || addition.kind === 'table')
+        .map((addition) => ({ migration, addition }))
+    );
   const appliedOwnerEntries = new Map();
-  for (const addition of appliedOwnerAdditions) {
+  for (const { migration, addition } of appliedOwnerAdditions) {
+    const firstAdminFunction = isFirstAdminFunctionAddition(migration, addition);
+    const expectedAdditionOwner = firstAdminFunction
+      ? FIRST_ADMIN_FUNCTION_OWNER
+      : ownerState === 'legacy'
+        ? legacyOwnerProfile?.objectOwner || 'cocinacore'
+        : SCHEMA_OWNER;
     const rows = addition.kind === 'function' ? catalog.functions.rows : catalog.tables.rows;
     const identity =
       addition.kind === 'function'
@@ -1455,7 +1579,7 @@ async function attestBaselineCatalog(
     }
     appliedOwnerEntries.set(key, {
       expectedLegacyOwner: expectedAdditionOwner,
-      targetOwner: SCHEMA_OWNER,
+      targetOwner: firstAdminFunction ? FIRST_ADMIN_FUNCTION_OWNER : SCHEMA_OWNER,
     });
   }
 
@@ -1469,6 +1593,26 @@ async function attestBaselineCatalog(
       object,
     ])
   );
+  if (appliedMigrations.has(PREPARED_CAPABILITIES_MIGRATION)) {
+    for (const object of manifest.preparedCapabilities?.objects || []) {
+      if (object.kind !== 'function') continue;
+      const functionName = object.identity.slice(0, object.identity.indexOf('('));
+      const matches = catalog.functions.rows.filter((row) => row.identity.startsWith(`${functionName}(`));
+      if (matches.length !== 1) {
+        throw new Error(`BASELINE_MISMATCH: prepared function ${functionName} must exist exactly once.`);
+      }
+      const key = `function|${matches[0].identity}`;
+      if (byKey.has(key)) {
+        throw new Error(`BASELINE_MISMATCH: conflicting prepared-function owner policy for ${matches[0].identity}.`);
+      }
+      byKey.set(key, {
+        kind: 'function',
+        expectedLegacyOwner: object.owner,
+        targetOwner: object.owner,
+        preparedCapability: true,
+      });
+    }
+  }
   for (const [key, ownerPolicy] of appliedOwnerEntries) {
     if (byKey.has(key)) {
       throw new Error(
@@ -1487,8 +1631,9 @@ async function attestBaselineCatalog(
       if (!object) {
         throw new Error(`BASELINE_MISMATCH: missing owner policy for ${kind} ${row.identity}.`);
       }
-      const expectedOwner =
-        ownerState === 'legacy'
+      const expectedOwner = object.preparedCapability
+        ? object.targetOwner
+        : ownerState === 'legacy'
           ? object.kind === 'schema' && object.schema === 'public' && legacyOwnerProfile
             ? legacyOwnerProfile.publicSchemaOwner
             : legacyOwnerProfile?.objectOwner || object.expectedLegacyOwner
@@ -1798,9 +1943,10 @@ async function transferObject(client, object) {
       `alter table ${quoteIdentifier(object.schema)}.${quoteIdentifier(object.name)} owner to ${SCHEMA_OWNER}`
     );
   } else if (object.kind === 'function') {
+    const targetOwner = quoteIdentifier(object.owner || SCHEMA_OWNER);
     const statement = await client.query(
       `select pg_catalog.format(
-                'alter function %I.%I(%s) owner to ${SCHEMA_OWNER}',
+                'alter function %I.%I(%s) owner to ${targetOwner}',
                 n.nspname, p.proname, pg_catalog.pg_get_function_identity_arguments(p.oid)
               ) as sql
          from pg_catalog.pg_proc p
@@ -1823,16 +1969,19 @@ async function transferObject(client, object) {
 async function transferAppliedMigrationObjects(client, manifest, appliedMigrations) {
   const additions = manifest.migrations
     .filter((migration) => appliedMigrations.has(migration.filename))
-    .flatMap((migration) => migration.catalogAdditions || [])
-    .filter((addition) => addition.kind === 'table' || addition.kind === 'function');
-  for (const addition of additions.filter((entry) => entry.kind === 'table')) {
+    .flatMap((migration) =>
+      (migration.catalogAdditions || [])
+        .filter((addition) => addition.kind === 'table' || addition.kind === 'function')
+        .map((addition) => ({ migration, addition }))
+    );
+  for (const { addition } of additions.filter((entry) => entry.addition.kind === 'table')) {
     const [schema, name] = addition.identity.split('.');
     if (schema !== addition.schema || !name) {
       throw new Error(`BASELINE_MISMATCH: invalid applied table identity ${addition.identity}.`);
     }
     await transferObject(client, { kind: 'table', schema, name });
   }
-  for (const addition of additions.filter((entry) => entry.kind === 'function')) {
+  for (const { migration, addition } of additions.filter((entry) => entry.addition.kind === 'function')) {
     const name = addition.identity.split('.').at(-1);
     const matches = await client.query(
       `select pg_catalog.pg_get_function_identity_arguments(p.oid) as arguments
@@ -1856,6 +2005,9 @@ async function transferAppliedMigrationObjects(client, manifest, appliedMigratio
       schema: addition.schema,
       name,
       arguments: matches.rows[0].arguments,
+      owner: isFirstAdminFunctionAddition(migration, addition)
+        ? FIRST_ADMIN_FUNCTION_OWNER
+        : SCHEMA_OWNER,
     });
   }
 }
@@ -1934,6 +2086,13 @@ async function main() {
       appliedMigrations = ledger.appliedMigrations;
       legacyState = ledger.legacyState;
       ledgerMode = ledger.ledgerMode;
+      const capabilityAttestation = [...CAPABILITY_ATTESTATION_MIGRATIONS]
+        .reverse()
+        .find(([filename]) => appliedMigrations.has(filename));
+      if (capabilityAttestation) {
+        const { attestActivatedCapabilities } = require('./activated-capabilities-attestation');
+        await attestActivatedCapabilities(client, capabilityAttestation[1]);
+      }
       const legacyOwnerProfile =
         legacyState === 'production-017-unverifiable'
           ? await resolveLegacy017OwnerProfile(client)
@@ -2047,6 +2206,7 @@ module.exports = {
   assertReservedRoleOwnership,
   assertRuntimeAclRows,
   assertRuntimeLedgerPolicy,
+  inspectReservedRoles,
   attestLedger,
   attestBaselineCatalog,
   backfillTrustedLegacyChecksums,

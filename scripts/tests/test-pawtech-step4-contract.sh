@@ -177,6 +177,10 @@ const ownerFunctions = [
   { schema: 'public', name: 'validate_real_consumption_substitution', arguments: '' },
   { schema: 'public', name: 'validate_real_consumption_movement_link', arguments: '' },
 ];
+const firstAdminFunction = {
+  schema: 'public', name: 'provision_first_platform_administrator',
+  arguments: 'text, text, text, text', owner: 'cocinacore_first_admin_function_owner',
+};
 const functionIdentity = ({ schema, name, arguments: args }) => schema + '.' + name + '(' + args + ')';
 const appliedManifestMigrations = () => {
   if (process.env.LEDGER === 'adopted-017') return manifest.migrations.slice(0, 17);
@@ -277,6 +281,13 @@ class Pool {
             .filter((fn) => fn.schema === params[0] && fn.name === params[1])
             .filter((fn) => appliedFunctionNames.has(fn.schema + '.' + fn.name))
             .map((fn) => ({ ...fn, owner: schemaOwner }));
+          if (
+            params[0] === firstAdminFunction.schema &&
+            params[1] === firstAdminFunction.name &&
+            appliedFunctionNames.has(firstAdminFunction.schema + '.' + firstAdminFunction.name)
+          ) {
+            functions.push(firstAdminFunction);
+          }
           if (fixture === 'wrong-owner' && params[1] === 'is_valid_culinary_profile_text_list') {
             functions[0].owner = 'cocinacore';
           }

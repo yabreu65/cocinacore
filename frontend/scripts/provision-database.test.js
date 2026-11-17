@@ -15,6 +15,7 @@ const {
   attestBaselineCatalog,
   backfillTrustedLegacyChecksums,
   expectedCatalog,
+  inspectReservedRoles,
   resolveLegacy017OwnerProfile,
   RUNTIME_LEDGER_POLICY,
   RUNTIME_ROLE,
@@ -165,6 +166,88 @@ function checksummedLedgerRows(count) {
   }));
 }
 
+test('catalog inventory includes only declared prepared capabilities after 020', () => {
+  const migration020 = migrationManifest.migrations.find((entry) => entry.filename.startsWith('020_'));
+  assert.ok(migration020);
+  const prepared = migrationManifest.preparedCapabilities.objects;
+  const preparedFunctions = prepared.filter((object) => object.kind === 'function').map((object) => object.identity);
+  const preparedViews = prepared.filter((object) => object.kind === 'view').map((object) => object.identity);
+  const catalogFunctions = preparedFunctions.map((identity) =>
+    identity.startsWith('public.signup_new_account(')
+      ? 'public.signup_new_account(p_email text, p_password_hash text, p_full_name text, p_terms_accepted_at timestamp with time zone, p_terms_version text)'
+      : identity,
+  );
+
+  const before020 = expectedCatalog(migrationManifest, new Set(), catalogFunctions);
+  const after020 = expectedCatalog(migrationManifest, new Set([migration020.filename]), catalogFunctions);
+
+  assert.deepEqual(before020.otherRelations, []);
+  assert.deepEqual(after020.otherRelations, preparedViews);
+  for (const view of preparedViews) {
+    const [, name] = view.split('.');
+    assert.equal(before020.types.includes(`public.${name}`), false);
+    assert.equal(before020.types.includes(`public._${name}`), false);
+    assert.equal(after020.types.includes(`public.${name}`), true);
+    assert.equal(after020.types.includes(`public._${name}`), true);
+  }
+  for (const identity of catalogFunctions) {
+    assert.equal(before020.functions.includes(identity), false);
+    assert.equal(after020.functions.includes(identity), true);
+  }
+});
+
+test('reserved-role inspection admits only the exact first-admin function-owner membership', async () => {
+  const roles = [
+    ['migration_admin', true, null, null],
+    ['cocinacore_schema_owner', false, null, null],
+    ['cocinacore_first_admin_function_owner', false, null, 'CocinaCore first platform-admin function owner v1'],
+    ['cocinacore_first_admin_provisioner', true, ['search_path=pg_catalog, public', 'row_security=on'], 'CocinaCore first platform-admin provisioner v1'],
+  ].map(([rolname, rolcanlogin, rolconfig, role_comment]) => ({
+    rolname,
+    rolcanlogin,
+    rolinherit: false,
+    rolsuper: false,
+    rolcreatedb: false,
+    rolcreaterole: false,
+    rolreplication: false,
+    rolbypassrls: false,
+    rolconnlimit: -1,
+    rolvaliduntil: null,
+    rolconfig,
+    role_comment,
+  }));
+  const membership = (granted_role, member_role) => ({
+    granted_role,
+    member_role,
+    admin_option: false,
+    inherit_option: false,
+    set_option: true,
+  });
+  const baseMembership = membership('cocinacore_schema_owner', 'migration_admin');
+  const firstAdminMembership = membership('cocinacore_first_admin_function_owner', 'cocinacore_schema_owner');
+  const inspect = (memberships) => inspectReservedRoles({
+    query: async (sql, [names]) => {
+      if (sql.includes('from pg_catalog.pg_roles')) {
+        const rows = roles.filter((role) => names.includes(role.rolname));
+        return { rows, rowCount: rows.length };
+      }
+      if (sql.includes('from pg_catalog.pg_auth_members')) {
+        const rows = memberships
+          .filter((row) => names.includes(row.granted_role) || names.includes(row.member_role))
+          .sort((left, right) => left.granted_role.localeCompare(right.granted_role) || left.member_role.localeCompare(right.member_role));
+        return { rows, rowCount: rows.length };
+      }
+      throw new Error('unexpected query');
+    },
+  });
+
+  assert.equal(await inspect([baseMembership, firstAdminMembership]), 'established');
+  await assert.rejects(
+    inspect([baseMembership, firstAdminMembership, membership('cocinacore_first_admin_provisioner', 'cocinacore_schema_owner')]),
+    /reserved database roles have unexpected memberships/,
+  );
+});
+
 test('runtime ACL contract grants only the operations required by production SQL paths', () => {
   assert.equal(RUNTIME_ROLE, 'cocinacore_user');
   assert.equal(Object.keys(RUNTIME_TABLE_PRIVILEGES).length, 31);
@@ -247,6 +330,101 @@ test('admits an applied 014-declared function for both legacy and target ownersh
       )
     );
   }
+});
+
+test('admits only the exact 024 function as a dedicated SECURITY DEFINER owner addition', async () => {
+  const migration = {
+    filename: '024_first_platform_admin_bootstrap.sql',
+    catalogAdditions: [
+      {
+        kind: 'function',
+        schema: 'public',
+        identity: 'public.provision_first_platform_administrator',
+      },
+    ],
+  };
+  const { client, manifest } = fixture({
+    schemas: [{ identity: 'public', owner: 'cocinacore_schema_owner' }],
+    functions: [
+      {
+        identity: 'public.provision_first_platform_administrator(text,text,text,text)',
+        owner: 'cocinacore_first_admin_function_owner',
+        security_definer: true,
+      },
+    ],
+    migrations: [migration],
+    transferable: [
+      {
+        kind: 'schema',
+        schema: 'public',
+        expectedLegacyOwner: 'cocinacore',
+        targetOwner: 'cocinacore_schema_owner',
+      },
+    ],
+  });
+
+  await assert.doesNotReject(
+    attestBaselineCatalog(
+      client,
+      manifest,
+      'target',
+      new Set([migration.filename]),
+      undefined,
+      'checksummed'
+    )
+  );
+});
+
+test('rejects a wrong 024 function owner and keeps SECURITY DEFINER disallowed elsewhere', async () => {
+  const migration = {
+    filename: '024_first_platform_admin_bootstrap.sql',
+    catalogAdditions: [
+      {
+        kind: 'function',
+        schema: 'public',
+        identity: 'public.provision_first_platform_administrator',
+      },
+    ],
+  };
+  const { client, manifest } = fixture({
+    schemas: [{ identity: 'public', owner: 'cocinacore_schema_owner' }],
+    functions: [
+      {
+        identity: 'public.provision_first_platform_administrator(text,text,text,text)',
+        owner: 'cocinacore_schema_owner',
+        security_definer: false,
+      },
+    ],
+    migrations: [migration],
+    transferable: [
+      {
+        kind: 'schema',
+        schema: 'public',
+        expectedLegacyOwner: 'cocinacore',
+        targetOwner: 'cocinacore_schema_owner',
+      },
+    ],
+  });
+  await assert.rejects(
+    attestBaselineCatalog(
+      client,
+      manifest,
+      'target',
+      new Set([migration.filename]),
+      undefined,
+      'checksummed'
+    ),
+    /BASELINE_MISMATCH: applied function owner differs/
+  );
+  await assert.rejects(
+    attest(
+      {
+        functions: [{ identity: additionIdentity, owner: 'cocinacore_schema_owner', security_definer: true }],
+      },
+      'target'
+    ),
+    /Managed function security mode differs from the trusted baseline/
+  );
 });
 
 test('admits the fixed production-017 owner profile only when explicitly selected', async () => {

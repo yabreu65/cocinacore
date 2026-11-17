@@ -64,13 +64,11 @@ Esto deja:
 - Redis en `localhost:6379`
 - App en [http://localhost:3000](http://localhost:3000)
 
-### Bootstrap del primer owner
+### Primer administrador de plataforma
 
-```bash
-cd frontend && npm run db:bootstrap -- "owner@cocinacore.local" "Owner Local" "ChangeMe123!"
-```
+`frontend/scripts/bootstrap-owner.js` y `npm run db:bootstrap` son históricos: **no los uses para aprovisionar el administrador de F5.6**. El nuevo flujo interactivo `npm run db:bootstrap:first-platform-admin` usa la capacidad restringida de la migración 024 y pasó aceptación en PostgreSQL desechable con almacenamiento tmpfs (migraciones 001–024, uso único y rollback). Esa prueba no autoriza ejecutarlo contra una base persistente o de producción ni elige a la persona administradora.
 
-El script está diseñado como one-shot: si ya existe platform owner, aborta.
+La provisión en un objetivo persistente, la aceptación de acceso de administrador y la biblioteca global PDF siguen pendientes. El comando exige aprobación del dueño para el objetivo, operador y persona exactos; consulta [la guía operativa y sus salvaguardas](docs/ops/standalone-storage-scope.md#first-platform-administrator-acceptance) antes de cualquier uso.
 
 ### Opción full Docker
 

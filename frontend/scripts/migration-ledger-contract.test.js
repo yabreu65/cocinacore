@@ -145,3 +145,32 @@ test('validates the exact 018 then 019 pending sequence only after baseline 017'
     assertM5ExpectedPending(migrations, new Set([...applied, '020_fake.sql']), expected)
   );
 });
+
+test('registers the additive first-platform-admin capability after the verified baseline', () => {
+  const migration = manifest.migrations.at(-1);
+  assert.equal(migration?.filename, '024_first_platform_admin_bootstrap.sql');
+  assert.equal(migration?.lane, 'migration');
+  assert.equal(migration?.transactional, 'required');
+  assert.equal(migration?.legacyChecksumBackfillAllowed, false);
+  assert.deepEqual(
+    migration?.catalogAdditions,
+    [
+      { kind: 'table', schema: 'public', identity: 'public.first_platform_admin_bootstrap_claim' },
+      { kind: 'index', schema: 'public', identity: 'first_platform_admin_bootstrap_claim.first_platform_admin_bootstrap_claim_pkey' },
+      { kind: 'constraint', schema: 'public', identity: 'first_platform_admin_bootstrap_claim.first_platform_admin_bootstrap_claim_pkey' },
+      { kind: 'constraint', schema: 'public', identity: 'first_platform_admin_bootstrap_claim.first_platform_admin_bootstrap_claim_singleton_check' },
+      { kind: 'constraint', schema: 'public', identity: 'first_platform_admin_bootstrap_claim.first_platform_admin_bootstrap_claim_email_check' },
+      { kind: 'constraint', schema: 'public', identity: 'first_platform_admin_bootstrap_claim.first_platform_admin_bootstrap_claim_approval_reference_check' },
+      { kind: 'function', schema: 'public', identity: 'public.provision_first_platform_administrator' },
+    ],
+  );
+});
+
+test('requires active 023 capabilities before applying or verifying migration 024', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- Inspect the CommonJS migration runner source as a static contract.
+  const runner = require('node:fs').readFileSync(require.resolve('./run-migrations.js'), 'utf8');
+  assert.ok(runner.includes("const FIRST_ADMIN_MIGRATION = '024_first_platform_admin_bootstrap.sql'"));
+  assert.ok(runner.includes('FIRST_ADMIN_MIGRATION].includes(migration.filename)'));
+  assert.ok(runner.includes('migration.filename === FIRST_ADMIN_MIGRATION && post020Applied'));
+  assert.ok(runner.includes("attestActivatedCapabilities(client, '023')"));
+});

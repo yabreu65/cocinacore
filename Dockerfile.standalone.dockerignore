@@ -34,6 +34,9 @@ frontend/scripts/**
 !frontend/scripts/activated-capabilities-021-attestation.sql
 !frontend/scripts/activated-capabilities-022-occurrences.sql
 !frontend/scripts/activated-capabilities-023-retention.sql
+!frontend/scripts/activated-capabilities-024-first-admin.sql
+!frontend/scripts/activated-capabilities-024-inventory.sql
+!frontend/scripts/bootstrap-first-platform-admin.js
 !frontend/scripts/bootstrap-owner.js
 !frontend/scripts/legacy-017-attestation.js
 !frontend/scripts/legacy-017-database-attestation.js
@@ -53,6 +56,7 @@ scripts/**
 !scripts/provision-runtime-role.sql
 !scripts/provision-auth-role.sql
 !scripts/provision-020-inert-capabilities.sql
+!scripts/provision-first-platform-admin-roles.sql
 !scripts/provision-signup-bootstrap-roles.sql
 !scripts/provision-owner-metrics-role.sql
 !scripts/provision-global-writer-role.sql

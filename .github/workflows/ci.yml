@@ -156,7 +156,7 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
-      - name: Provision 019, prepare and activate 020, then run isolated E2E
+      - name: Provision migrations 019–024, then run isolated E2E
         env:
           RUN_CONNECTED_TODAY: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feat/m3-4-u5-hosted-e2e' && inputs.run_connected_today == true }}
           COCINACORE_E2E_EXECUTION_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
@@ -178,6 +178,7 @@ jobs:
           auth_password="$(openssl rand -hex 32)"
           metrics_password="$(openssl rand -hex 32)"
           global_writer_password="$(openssl rand -hex 32)"
+          first_admin_password="$(openssl rand -hex 32)"
           dist_dir=''
           verify_log=''
           cleanup() {
@@ -225,7 +226,7 @@ jobs:
 
           npm run db:provision
           npm run db:migrate -- --stop-after 019
-          MIGRATION_EXPECTED_PENDING=020_tenant_rls_hardening.sql,021_inventory_price_reference.sql,022_real_consumption_occurrences.sql,023_inventory_movement_retention.sql npm run db:migrate -- --verify-boundary 019
+          MIGRATION_EXPECTED_PENDING=020_tenant_rls_hardening.sql,021_inventory_price_reference.sql,022_real_consumption_occurrences.sql,023_inventory_movement_retention.sql,024_first_platform_admin_bootstrap.sql npm run db:migrate -- --verify-boundary 019
 
           printf '\\set runtime_password %s\n\\i ../scripts/provision-runtime-role.sql\n' "$runtime_password" \
             | psql "$admin_url" -X -v ON_ERROR_STOP=1
@@ -253,7 +254,7 @@ jobs:
           NODE
           psql "$admin_url" -X -v ON_ERROR_STOP=1 -f ../scripts/rls-candidates/020e-a1-inert-capability-guard.sql
 
-          MIGRATION_EXPECTED_PENDING=020_tenant_rls_hardening.sql,021_inventory_price_reference.sql,022_real_consumption_occurrences.sql,023_inventory_movement_retention.sql npm run db:migrate -- --stop-after 020
+          MIGRATION_EXPECTED_PENDING=020_tenant_rls_hardening.sql,021_inventory_price_reference.sql,022_real_consumption_occurrences.sql,023_inventory_movement_retention.sql,024_first_platform_admin_bootstrap.sql npm run db:migrate -- --stop-after 020
           node <<'NODE'
           const { Client } = require('pg');
           const { attestActivatedCapabilities } = require('./scripts/activated-capabilities-attestation');
@@ -286,7 +287,35 @@ jobs:
           verify_log=''
 
           COCINACORE_ACTIVATION_DATABASE_URL="$admin_url" node scripts/activate-020-capabilities.js
-          MIGRATION_EXPECTED_PENDING=021_inventory_price_reference.sql,022_real_consumption_occurrences.sql,023_inventory_movement_retention.sql npm run db:migrate
+          MIGRATION_EXPECTED_PENDING=021_inventory_price_reference.sql,022_real_consumption_occurrences.sql,023_inventory_movement_retention.sql,024_first_platform_admin_bootstrap.sql npm run db:migrate -- --stop-after 023
+
+          export FIRST_ADMIN_TEST_PASSWORD="$first_admin_password"
+          node <<'NODE'
+          const { Client } = require('pg');
+          (async () => {
+            const password = process.env.FIRST_ADMIN_TEST_PASSWORD;
+            if (!/^[0-9a-f]{64}$/.test(password || '')) throw new Error('Invalid disposable role password.');
+            const client = new Client({ connectionString: process.env.BOOTSTRAP_DATABASE_URL });
+            try {
+              await client.connect();
+              await client.query('CREATE ROLE cocinacore_first_admin_function_owner NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION');
+              await client.query("COMMENT ON ROLE cocinacore_first_admin_function_owner IS 'CocinaCore first platform-admin function owner v1'");
+              await client.query(`CREATE ROLE cocinacore_first_admin_provisioner LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION PASSWORD '${password}'`);
+              await client.query("COMMENT ON ROLE cocinacore_first_admin_provisioner IS 'CocinaCore first platform-admin provisioner v1'");
+              await client.query('ALTER ROLE cocinacore_first_admin_provisioner SET search_path = pg_catalog, public');
+              await client.query('ALTER ROLE cocinacore_first_admin_provisioner SET row_security = on');
+              await client.query('GRANT USAGE ON SCHEMA public TO cocinacore_first_admin_function_owner, cocinacore_first_admin_provisioner');
+              await client.query('GRANT CONNECT ON DATABASE cocinacore_local_db TO cocinacore_first_admin_provisioner');
+              await client.query('GRANT cocinacore_first_admin_function_owner TO cocinacore_schema_owner WITH INHERIT FALSE, SET TRUE');
+            } finally {
+              await client.end();
+            }
+          })().catch(() => {
+            console.error('Could not prepare restricted first-admin roles in the disposable database.');
+            process.exitCode = 1;
+          });
+          NODE
+          MIGRATION_EXPECTED_PENDING=024_first_platform_admin_bootstrap.sql npm run db:migrate
           npm run db:migrate:verify
           psql "$admin_url" -X -v ON_ERROR_STOP=1 -f ../scripts/tests/test-inventory-021-constraints.sql
 

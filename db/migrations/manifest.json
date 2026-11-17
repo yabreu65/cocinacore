@@ -13,14 +13,19 @@
         "identity": "public.runtime_identity_probe",
         "owner": "cocinacore_identity_probe",
         "definitionMd5": "8488958e031f004f834e064a4d2f8019",
-        "options": ["security_barrier=true"]
+        "options": [
+          "security_barrier=true"
+        ]
       },
       {
         "kind": "function",
         "identity": "public.signup_new_account(text,text,text,timestamptz,text)",
         "owner": "cocinacore_signup_bootstrap",
         "definitionMd5": "5358b46b5b10a8878408f2ffa5a2f223",
-        "options": ["security_definer", "search_path=pg_catalog"]
+        "options": [
+          "security_definer",
+          "search_path=pg_catalog"
+        ]
       },
       {
         "kind": "view",
@@ -55,7 +60,9 @@
         "identity": "public.owner_write_global_chunks",
         "owner": "cocinacore_global_writer_view_owner",
         "definitionMd5": "0bd8cd5e0a83eb114d2306b6dd0af4df",
-        "options": ["check_option=cascaded"]
+        "options": [
+          "check_option=cascaded"
+        ]
       }
     ]
   },
@@ -65,7 +72,10 @@
     "derivation": "pg_catalog.hashtextextended(namespacePrefix || current_database(), 0)",
     "scope": "session"
   },
-  "managedSchemas": ["internal", "public"],
+  "managedSchemas": [
+    "internal",
+    "public"
+  ],
   "extensions": [
     {
       "name": "vector",
@@ -135,7 +145,9 @@
           "setOption": true
         }
       ],
-      "databasePrivileges": ["CONNECT"],
+      "databasePrivileges": [
+        "CONNECT"
+      ],
       "roleSettings": [],
       "allowedOwnedObjects": []
     },
@@ -151,7 +163,9 @@
       "connectionLimit": -1,
       "validUntil": null,
       "memberOf": [],
-      "databasePrivileges": ["CREATE"],
+      "databasePrivileges": [
+        "CREATE"
+      ],
       "roleSettings": [],
       "allowedOwnedObjects": "baselineObjects.transferable"
     }
@@ -162,7 +176,10 @@
   },
   "bootstrapPolicy": {
     "durableOrdinaryObjectsAllowed": 0,
-    "reservedRoles": ["cocinacore_schema_owner", "migration_admin"],
+    "reservedRoles": [
+      "cocinacore_schema_owner",
+      "migration_admin"
+    ],
     "autoRunOnDeploy": false
   },
   "legacyLineages": [
@@ -1285,6 +1302,52 @@
       "transactional": "required",
       "legacyChecksumBackfillAllowed": false,
       "catalogAdditions": []
+    },
+    {
+      "id": "024",
+      "filename": "024_first_platform_admin_bootstrap.sql",
+      "lane": "migration",
+      "sha256": "2a43c9ea728735865073a25185a6ed724dfb1a4444eb9e5f39200b4e67d79944",
+      "byteLength": 10338,
+      "transactional": "required",
+      "legacyChecksumBackfillAllowed": false,
+      "catalogAdditions": [
+        {
+          "kind": "table",
+          "schema": "public",
+          "identity": "public.first_platform_admin_bootstrap_claim"
+        },
+        {
+          "kind": "index",
+          "schema": "public",
+          "identity": "first_platform_admin_bootstrap_claim.first_platform_admin_bootstrap_claim_pkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "first_platform_admin_bootstrap_claim.first_platform_admin_bootstrap_claim_pkey"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "first_platform_admin_bootstrap_claim.first_platform_admin_bootstrap_claim_singleton_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "first_platform_admin_bootstrap_claim.first_platform_admin_bootstrap_claim_email_check"
+        },
+        {
+          "kind": "constraint",
+          "schema": "public",
+          "identity": "first_platform_admin_bootstrap_claim.first_platform_admin_bootstrap_claim_approval_reference_check"
+        },
+        {
+          "kind": "function",
+          "schema": "public",
+          "identity": "public.provision_first_platform_administrator"
+        }
+      ]
     }
   ],
   "baselineObjects": {

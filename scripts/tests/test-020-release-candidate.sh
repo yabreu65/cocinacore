@@ -43,7 +43,7 @@ make_fixture "$FIXTURE"
 node "$CHECKER" --root "$FIXTURE" >/dev/null || fail 'copied candidate fixture did not validate'
 printf 'PASS: copied candidate fixture validated\n'
 
-for scenario in migration manifest legacy migration_script workflow occurrence_migration retention_migration; do
+for scenario in migration manifest legacy migration_script workflow occurrence_migration retention_migration first_admin_migration first_admin_manifest first_admin_asset_missing; do
   case_root="$TMP/$scenario"
   cp -R "$FIXTURE" "$case_root"
   case "$scenario" in
@@ -68,6 +68,15 @@ for scenario in migration manifest legacy migration_script workflow occurrence_m
       ;;
     retention_migration)
       printf '\n-- injected 023 migration drift\n' >>"$case_root/db/migrations/023_inventory_movement_retention.sql"
+      ;;
+    first_admin_migration)
+      printf '\n-- injected 024 migration drift\n' >>"$case_root/db/migrations/024_first_platform_admin_bootstrap.sql"
+      ;;
+    first_admin_manifest)
+      node -e "const fs=require('node:fs'); const p='$case_root/db/migrations/manifest.json'; const m=JSON.parse(fs.readFileSync(p,'utf8')); m.migrations[23].byteLength++; fs.writeFileSync(p,JSON.stringify(m));"
+      ;;
+    first_admin_asset_missing)
+      rm -- "$case_root/frontend/scripts/bootstrap-first-platform-admin.js"
       ;;
   esac
   before=$(snapshot "$case_root")

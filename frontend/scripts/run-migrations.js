@@ -32,8 +32,9 @@ const HISTORICAL_BASELINE_COUNT = 10;
 const INVENTORY_MIGRATION = '021_inventory_price_reference.sql';
 const OCCURRENCE_MIGRATION = '022_real_consumption_occurrences.sql';
 const RETENTION_MIGRATION = '023_inventory_movement_retention.sql';
+const FIRST_ADMIN_MIGRATION = '024_first_platform_admin_bootstrap.sql';
 function capabilityVersion(applied) {
-  return applied.has(RETENTION_MIGRATION) ? '023' : applied.has(OCCURRENCE_MIGRATION) ? '022' : applied.has(INVENTORY_MIGRATION) ? '021' : '020';
+  return applied.has(FIRST_ADMIN_MIGRATION) ? '024' : applied.has(RETENTION_MIGRATION) ? '023' : applied.has(OCCURRENCE_MIGRATION) ? '022' : applied.has(INVENTORY_MIGRATION) ? '021' : '020';
 }
 const MIGRATION_NAME = /^(\d{3})_[a-z0-9]+(?:_[a-z0-9]+)*(\.bootstrap)?\.sql$/;
 const LANES = new Set(['migration', 'bootstrap']);
@@ -66,8 +67,8 @@ function getOptions() {
   if (!LANES.has(lane)) throw new Error('--lane must be exactly migration or bootstrap.');
   const stopAfter = values.get('--stop-after');
   const verifyBoundary = values.get('--verify-boundary');
-  if ((stopAfter && !['019', '020'].includes(stopAfter)) || (verifyBoundary && verifyBoundary !== '019'))
-    throw new Error('Supported stop boundaries are 019 and 020; verification boundary is 019.');
+  if ((stopAfter && !['019', '020', '021', '022', '023', '024'].includes(stopAfter)) || (verifyBoundary && verifyBoundary !== '019'))
+    throw new Error('Supported stop boundaries are 019–024; verification boundary is 019.');
   if ((stopAfter || verifyBoundary) && (lane !== 'migration' || flags.has('--verify-complete') || (verifyBoundary && (flags.size || stopAfter))))
     throw new Error('Boundary options cannot be combined with another mode or bootstrap lane.');
   return { lane, dryRun: flags.has('--dry-run'), verifyComplete: flags.has('--verify-complete'), stopAfter, verifyBoundary };
@@ -825,11 +826,17 @@ async function assertSchemaOwnerDatabaseAuthority(client, manifest, applied) {
             where p.prokind='f' and n.nspname=$1 and p.proname=$2`,
           [schema, name]
         );
-        if (functions.rows.length !== 1 || functions.rows[0].owner !== SCHEMA_OWNER) {
+        const dedicatedFirstAdminFunction = migration.filename === FIRST_ADMIN_MIGRATION &&
+          declaration === 'public.provision_first_platform_administrator';
+        const expectedOwner = dedicatedFirstAdminFunction
+          ? 'cocinacore_first_admin_function_owner'
+          : SCHEMA_OWNER;
+        if (functions.rows.length !== 1 || functions.rows[0].owner !== expectedOwner) {
           throw new Error(
             `ROLE_STATE_MISMATCH: applied function ${declaration} is missing, ambiguous, or has an unexpected owner.`
           );
         }
+        if (dedicatedFirstAdminFunction) continue;
         const identity = `function,${schema}.${name}(${functions.rows[0].arguments})`;
         if (allowed.has(identity)) {
           throw new Error(
@@ -957,17 +964,26 @@ async function assertAndAssumeMigrationIdentity(client, manifest, migrations, se
        from pg_catalog.pg_auth_members m
        join pg_catalog.pg_roles parent on parent.oid = m.roleid
        join pg_catalog.pg_roles member on member.oid = m.member
-      where parent.rolname in ($1, $2) or member.rolname in ($1, $2)
+      where parent.rolname in ($1, $2, $3) or member.rolname in ($1, $2, $3)
       order by granted_role, member_role`,
-    [MIGRATION_ROLE, SCHEMA_OWNER]
+    [MIGRATION_ROLE, SCHEMA_OWNER, 'cocinacore_first_admin_function_owner']
   );
+  const firstAdminRolePrepared = memberships.rows.some(
+    (membership) => membership.granted_role === 'cocinacore_first_admin_function_owner'
+  );
+  const expectedMemberships = firstAdminRolePrepared
+    ? [
+        { granted_role: 'cocinacore_first_admin_function_owner', member_role: SCHEMA_OWNER },
+        { granted_role: SCHEMA_OWNER, member_role: MIGRATION_ROLE },
+      ]
+    : [{ granted_role: SCHEMA_OWNER, member_role: MIGRATION_ROLE }];
   if (
-    memberships.rowCount !== 1 ||
-    memberships.rows[0].granted_role !== SCHEMA_OWNER ||
-    memberships.rows[0].member_role !== MIGRATION_ROLE ||
-    memberships.rows[0].admin_option ||
-    memberships.rows[0].inherit_option ||
-    !memberships.rows[0].set_option
+    memberships.rowCount !== expectedMemberships.length ||
+    memberships.rows.some((membership, index) =>
+      membership.granted_role !== expectedMemberships[index].granted_role ||
+      membership.member_role !== expectedMemberships[index].member_role ||
+      membership.admin_option || membership.inherit_option || !membership.set_option
+    )
   ) {
     throw new Error('ROLE_STATE_MISMATCH: migration role membership does not match the contract.');
   }
@@ -1001,7 +1017,7 @@ async function assertAndAssumeMigrationIdentity(client, manifest, migrations, se
     assertGlobalOrder(migrations, applied);
   }
 
-  if (applied && migrations.some((migration) => migration.prefix > 20 && ![INVENTORY_MIGRATION, OCCURRENCE_MIGRATION, RETENTION_MIGRATION].includes(migration.filename) && applied.has(migration.filename))) {
+  if (applied && migrations.some((migration) => migration.prefix > 20 && ![INVENTORY_MIGRATION, OCCURRENCE_MIGRATION, RETENTION_MIGRATION, FIRST_ADMIN_MIGRATION].includes(migration.filename) && applied.has(migration.filename))) {
     throw new Error('UNSUPPORTED_CAPABILITY_MIGRATION: no reviewed catalog attestation.');
   }
 
@@ -1508,6 +1524,8 @@ async function runMigration(client, migration, ledgerMode, { post020Applied = fa
         if (await attestActivatedCapabilities(client, '021') !== 'active') throw new Error('ACTIVATION_PENDING: 022 requires active 021 capabilities.');
       } else if (migration.filename === RETENTION_MIGRATION && post020Applied) {
         if (await attestActivatedCapabilities(client, '022') !== 'active') throw new Error('ACTIVATION_PENDING: 023 requires active 022 capabilities.');
+      } else if (migration.filename === FIRST_ADMIN_MIGRATION && post020Applied) {
+        if (await attestActivatedCapabilities(client, '023') !== 'active') throw new Error('ACTIVATION_PENDING: 024 requires active 023 capabilities.');
       } else {
         throw new Error('UNSUPPORTED_CAPABILITY_MIGRATION: no reviewed catalog transition.');
       }
