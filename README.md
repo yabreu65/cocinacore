@@ -64,13 +64,11 @@ Esto deja:
 - Redis en `localhost:6379`
 - App en [http://localhost:3000](http://localhost:3000)
 
-### Bootstrap del primer owner
+### Primer administrador de plataforma
 
-```bash
-cd frontend && npm run db:bootstrap -- "owner@cocinacore.local" "Owner Local" "ChangeMe123!"
-```
+`frontend/scripts/bootstrap-owner.js` y `npm run db:bootstrap` son históricos: **no son un procedimiento validado para F5.6**. El script usa escrituras directas que no son compatibles con los roles y RLS restringidos actuales, y recibe la contraseña como argumento. No lo ejecutes para aprovisionar el administrador de F5.6.
 
-El script está diseñado como one-shot: si ya existe platform owner, aborta.
+El primer administrador y la aceptación de la biblioteca global PDF permanecen pendientes. Las garantías que deberá acreditar un procedimiento autorizado están en [el alcance operativo de almacenamiento](docs/ops/standalone-storage-scope.md#first-platform-administrator-acceptance).
 
 ### Opción full Docker
 
