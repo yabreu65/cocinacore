@@ -23,7 +23,8 @@
     "db:migrate:bootstrap": "node scripts/run-migrations.js --lane bootstrap",
     "db:migrate:verify": "node scripts/run-migrations.js --lane migration --verify-complete",
     "db:migrate:dry": "node scripts/run-migrations.js --lane migration --dry-run",
-    "db:bootstrap": "node scripts/bootstrap-owner.js"
+    "db:bootstrap": "node scripts/bootstrap-owner.js",
+    "db:bootstrap:first-platform-admin": "node scripts/bootstrap-first-platform-admin.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1068.0",

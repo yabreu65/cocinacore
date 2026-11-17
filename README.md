@@ -66,9 +66,9 @@ Esto deja:
 
 ### Primer administrador de plataforma
 
-`frontend/scripts/bootstrap-owner.js` y `npm run db:bootstrap` son históricos: **no son un procedimiento validado para F5.6**. El script usa escrituras directas que no son compatibles con los roles y RLS restringidos actuales, y recibe la contraseña como argumento. No lo ejecutes para aprovisionar el administrador de F5.6.
+`frontend/scripts/bootstrap-owner.js` y `npm run db:bootstrap` son históricos: **no los uses para aprovisionar el administrador de F5.6**. El nuevo flujo interactivo `npm run db:bootstrap:first-platform-admin` usa la capacidad restringida de la migración 024 y pasó aceptación en PostgreSQL desechable con almacenamiento tmpfs (migraciones 001–024, uso único y rollback). Esa prueba no autoriza ejecutarlo contra una base persistente o de producción ni elige a la persona administradora.
 
-El primer administrador y la aceptación de la biblioteca global PDF permanecen pendientes. Las garantías que deberá acreditar un procedimiento autorizado están en [el alcance operativo de almacenamiento](docs/ops/standalone-storage-scope.md#first-platform-administrator-acceptance).
+La provisión en un objetivo persistente, la aceptación de acceso de administrador y la biblioteca global PDF siguen pendientes. El comando exige aprobación del dueño para el objetivo, operador y persona exactos; consulta [la guía operativa y sus salvaguardas](docs/ops/standalone-storage-scope.md#first-platform-administrator-acceptance) antes de cualquier uso.
 
 ### Opción full Docker
 

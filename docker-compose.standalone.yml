@@ -95,7 +95,7 @@ services:
     env_file: ${CC_OPERATIONS_ENV:?private operations env file required}
     volumes:
       - ./scripts/standalone-bootstrap-db.sh:/app/bootstrap-db.sh:ro
-    networks: [data]
+    network_mode: service:postgres
     depends_on:
       postgres: {condition: service_healthy}
     logging: *bounded_logs
