@@ -22,7 +22,7 @@ check_ci_lanes_gate() {
   workflow=$1
   [ -f "$workflow" ] || fail "CI workflow is missing: $workflow"
   awk '
-    /^      - name: Provision 019, prepare and activate 020, then run isolated E2E$/ {
+    /^      - name: Provision migrations 019–024, then run isolated E2E$/ {
       in_step = 1
       next
     }
@@ -62,6 +62,30 @@ check_ci_postgres_image_prep() {
     in_job && in_prep && $0 == "        run: docker pull pgvector/pgvector:pg16" { pull = NR }
     END { exit !(prep && pull && bootstrap && canonical && prep < bootstrap && pull < bootstrap && prep < canonical && pull < canonical) }
   ' "$workflow" || fail 'frontend-quality must explicitly docker pull pgvector/pgvector:pg16 before both PostgreSQL integration tests'
+}
+
+check_standalone_first_admin_sequence() {
+  script=$1
+  if output=$(printf '' | sh "$script" --fresh 2>&1); then
+    fail 'standalone bootstrap accepted a non-interactive invocation'
+  fi
+  [ "$output" = 'Standalone database bootstrap requires interactive stdin/stdout; no database changes were made.' ] ||
+    fail 'standalone bootstrap must reject missing TTY before any setup work'
+  grep -Fq 'network_mode: service:postgres' "$ROOT/docker-compose.standalone.yml" ||
+    fail 'operations service must use the postgres network namespace for loopback-only installer access'
+  pending='MIGRATION_EXPECTED_PENDING=021_inventory_price_reference.sql,022_real_consumption_occurrences.sql,023_inventory_movement_retention.sql,024_first_platform_admin_bootstrap.sql npm run db:migrate -- --stop-after 023'
+  prepare='psql "$BOOTSTRAP_DATABASE_URL" -X -v ON_ERROR_STOP=1 -f /app/scripts/provision-first-platform-admin-roles.sql'
+  apply='MIGRATION_EXPECTED_PENDING=024_first_platform_admin_bootstrap.sql npm run db:migrate'
+  verify='npm run db:migrate:verify'
+  for command in "$pending" "$prepare" "$apply" "$verify"; do
+    grep -Fq "$command" "$script" || fail "standalone first-admin sequence is missing: $command"
+  done
+  pending_line=$(grep -nF "$pending" "$script" | cut -d: -f1)
+  prepare_line=$(grep -nF "$prepare" "$script" | cut -d: -f1)
+  apply_line=$(grep -nF "$apply" "$script" | cut -d: -f1)
+  verify_line=$(grep -nF "$verify" "$script" | tail -n1 | cut -d: -f1)
+  [ "$pending_line" -lt "$prepare_line" ] && [ "$prepare_line" -lt "$apply_line" ] && [ "$apply_line" -lt "$verify_line" ] ||
+    fail 'standalone first-admin sequence must stop at 023, prepare roles, apply 024, then verify'
 }
 
 if [ "${1:-}" = '--check-ci-workflow' ]; then
@@ -128,7 +152,7 @@ const fs = require('fs');
 const path = require('path');
 const [manifestPath, directory, base] = process.argv.slice(2);
 const HISTORICAL_BASELINE_COUNT = 10;
-const CURRENT_MIGRATION_COUNT = 23;
+const CURRENT_MIGRATION_COUNT = 24;
 const manifestBytes = fs.readFileSync(manifestPath);
 const manifest = JSON.parse(manifestBytes.toString('utf8'));
 if (manifest.manifestVersion !== 1 || manifest.trustedBaseCommit !== base) process.exit(1);
@@ -148,7 +172,20 @@ if (manifest.migrations[17]?.filename !== '018_cooking_sessions.sql' ||
     manifest.migrations[21]?.filename !== '022_real_consumption_occurrences.sql' ||
     manifest.migrations[21]?.sha256 !== '371ad525d4081e801da81e9802a44af745b0091931be061af818f6ceabe073e3' ||
     manifest.migrations[22]?.filename !== '023_inventory_movement_retention.sql' ||
-    manifest.migrations[22]?.sha256 !== '553a90822a22f0d46b1fdfa5bd9c97cf8129c9125c477c4af5fc0654497bebba') process.exit(1);
+    manifest.migrations[22]?.sha256 !== '553a90822a22f0d46b1fdfa5bd9c97cf8129c9125c477c4af5fc0654497bebba' ||
+    manifest.migrations[23]?.id !== '024' ||
+    manifest.migrations[23]?.filename !== '024_first_platform_admin_bootstrap.sql' ||
+    manifest.migrations[23]?.sha256 !== '2a43c9ea728735865073a25185a6ed724dfb1a4444eb9e5f39200b4e67d79944' ||
+    manifest.migrations[23]?.byteLength !== 10338 ||
+    JSON.stringify(manifest.migrations[23]?.catalogAdditions) !== JSON.stringify([
+      { kind: 'table', schema: 'public', identity: 'public.first_platform_admin_bootstrap_claim' },
+      { kind: 'index', schema: 'public', identity: 'first_platform_admin_bootstrap_claim.first_platform_admin_bootstrap_claim_pkey' },
+      { kind: 'constraint', schema: 'public', identity: 'first_platform_admin_bootstrap_claim.first_platform_admin_bootstrap_claim_pkey' },
+      { kind: 'constraint', schema: 'public', identity: 'first_platform_admin_bootstrap_claim.first_platform_admin_bootstrap_claim_singleton_check' },
+      { kind: 'constraint', schema: 'public', identity: 'first_platform_admin_bootstrap_claim.first_platform_admin_bootstrap_claim_email_check' },
+      { kind: 'constraint', schema: 'public', identity: 'first_platform_admin_bootstrap_claim.first_platform_admin_bootstrap_claim_approval_reference_check' },
+      { kind: 'function', schema: 'public', identity: 'public.provision_first_platform_administrator' },
+    ])) process.exit(1);
 if (manifest.baselineObjects?.transferable?.length !== 38) process.exit(1);
 const kinds = manifest.baselineObjects.transferable.reduce((counts, object) => {
   counts[object.kind] = (counts[object.kind] || 0) + 1;
@@ -226,6 +263,7 @@ grep -Fq 'npm run db:migrate:verify' "$PAWTECH_DEPLOY" || fail 'read-only runtim
 ! grep -Eq 'npm run db:migrate([[:space:]]|$)' "$PAWTECH_DEPLOY" || fail 'mutating runtime migration command is forbidden'
 grep -Fq "$IMAGE" "$ROOT/.github/workflows/ci.yml" || fail 'CI PostgreSQL image policy is missing'
 check_ci_lanes_gate "$CI_WORKFLOW"
+check_standalone_first_admin_sequence "$ROOT/scripts/standalone-bootstrap-db.sh"
 grep -Fq 'create role cocinacore_user nologin nosuperuser nobypassrls' "$ROOT/.github/workflows/ci.yml" || fail 'E2E disposable PostgreSQL role for M5 grants is missing'
 runtime_role_line=$(grep -nF 'create role cocinacore_user nologin nosuperuser nobypassrls' "$ROOT/.github/workflows/ci.yml" | cut -d: -f1)
 migration_line=$(grep -nF 'npm run db:migrate -- --stop-after 019' "$ROOT/.github/workflows/ci.yml" | head -n 1 | cut -d: -f1)
