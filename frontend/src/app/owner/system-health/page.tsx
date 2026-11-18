@@ -1,17 +1,18 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import { Database, RefreshCw, Server, Sparkles } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Database, HardDrive, RefreshCw, Server, Sparkles } from 'lucide-react';
+import { loadStorageHealth, summarizeHealth, type StorageHealth } from './storage-health';
 
 // ---------------------------------------------------------------------------
-// Types (mirrors the /api/health response shape)
+// Types (mirrors the existing owner health response shape)
 // ---------------------------------------------------------------------------
 
-type CheckStatus = 'ok' | 'fail' | 'timeout' | 'not_configured';
+type CheckStatus = 'ok' | 'fail' | 'timeout' | 'not_configured' | 'degraded' | 'unknown';
 
 interface SingleCheck {
   status: CheckStatus;
-  latency: number;
+  latency: number | null;
 }
 
 interface HealthData {
@@ -22,6 +23,7 @@ interface HealthData {
     postgresql: SingleCheck;
     redis: SingleCheck;
     gemini: SingleCheck;
+    storage: StorageHealth;
   };
 }
 
@@ -39,6 +41,7 @@ const SUBSYSTEMS: SubsystemDef[] = [
   { key: 'postgresql', label: 'PostgreSQL', icon: <Database size={18} /> },
   { key: 'redis', label: 'Redis', icon: <Server size={18} /> },
   { key: 'gemini', label: 'Gemini', icon: <Sparkles size={18} /> },
+  { key: 'storage', label: 'Almacenamiento S3 (RustFS)', icon: <HardDrive size={18} /> },
 ];
 
 // ---------------------------------------------------------------------------
@@ -61,14 +64,28 @@ const STATUS_CONFIG: Record<
     border: 'border-bistro-action-primary/30',
     text: 'text-bistro-action-primary',
     dot: 'bg-bistro-action-primary',
-    label: 'Timeout',
+    label: 'Tiempo de espera agotado',
   },
   not_configured: {
     bg: 'bg-bistro-surface-warm/10',
     border: 'border-bistro-border/20',
     text: 'text-bistro-text-secondary',
     dot: 'bg-bistro-surface-warm',
-    label: 'Not configured',
+    label: 'No configurado',
+  },
+  unknown: {
+    bg: 'bg-bistro-surface-warm/10',
+    border: 'border-bistro-border',
+    text: 'text-bistro-text-secondary',
+    dot: 'bg-bistro-border',
+    label: 'Sin datos',
+  },
+  degraded: {
+    bg: 'bg-bistro-warning/10',
+    border: 'border-bistro-warning/30',
+    text: 'text-bistro-warning',
+    dot: 'bg-bistro-warning',
+    label: 'Degradado',
   },
   fail: {
     bg: 'bg-bistro-danger/10',
@@ -89,22 +106,32 @@ export default function OwnerSystemHealthPage() {
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
+  const requestInFlight = useRef(false);
+
   const fetchHealth = useCallback(async () => {
+    if (requestInFlight.current) return;
+    requestInFlight.current = true;
     // Don't set loading=true on refresh to avoid UI flicker
     setFetchError(null);
 
     try {
-      const response = await fetch('/api/owner/health');
+      const [response, storage] = await Promise.all([
+        fetch('/api/owner/health'),
+        loadStorageHealth(),
+      ]);
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
 
-      const data = (await response.json()) as HealthData;
+      const ownerHealth = (await response.json()) as Omit<HealthData, 'checks'> & {
+        checks: Omit<HealthData['checks'], 'storage'>;
+      };
+      const data: HealthData = { ...ownerHealth, checks: { ...ownerHealth.checks, storage } };
       setHealth(data);
       setLastUpdated(new Date());
 
-      if (data.status === 'degraded') {
+      if (summarizeHealth(data.status, storage) === 'degraded') {
         console.warn('[health.dashboard_degraded]', {
           failedChecks: Object.entries(data.checks)
             .filter(([, c]) => c.status !== 'ok')
@@ -114,11 +141,13 @@ export default function OwnerSystemHealthPage() {
     } catch (err) {
       const msg =
         err instanceof Error ? err.message : 'Error desconocido al obtener estado del sistema.';
+      setHealth(null);
       setFetchError(msg);
       console.error('[health.dashboard_fetch_failed]', {
         error: msg,
       });
     } finally {
+      requestInFlight.current = false;
       setLoading(false);
     }
   }, []);
@@ -140,7 +169,7 @@ export default function OwnerSystemHealthPage() {
 
   function renderStatusCard(sub: SubsystemDef) {
     const check = health?.checks[sub.key];
-    const status = check?.status ?? 'fail';
+    const status = check?.status ?? 'unknown';
     const config = STATUS_CONFIG[status];
 
     return (
@@ -161,7 +190,7 @@ export default function OwnerSystemHealthPage() {
         </header>
 
         <div className="mt-3 space-y-1 text-xs text-bistro-text-secondary">
-          {check ? (
+          {check && check.latency !== null ? (
             <>
               <p>
                 Latencia:{' '}
@@ -179,7 +208,8 @@ export default function OwnerSystemHealthPage() {
   function renderOverallBanner() {
     if (!health) return null;
 
-    const isOk = health.status === 'ok';
+    const overall = summarizeHealth(health.status, health.checks.storage);
+    const isOk = overall === 'ok';
     return (
       <article
         className={`mb-5 rounded-3xl border p-4 premium-shadow ${
@@ -200,7 +230,7 @@ export default function OwnerSystemHealthPage() {
               <span
                 className={isOk ? 'text-bistro-action-secondary' : 'text-bistro-action-primary'}
               >
-                {isOk ? 'Todo operativo' : 'Degradado'}
+                {isOk ? 'Todo operativo' : overall === 'partial' ? 'Estado parcial: almacenamiento sin datos' : 'Degradado'}
               </span>
             </p>
           </div>
@@ -227,9 +257,9 @@ export default function OwnerSystemHealthPage() {
         <p className="inline-flex items-center gap-2 rounded-full border border-bistro-action-secondary/25 bg-bistro-action-secondary/10 px-3 py-1 text-xs font-semibold text-bistro-action-secondary">
           <ActivityIcon size={14} /> Monitoreo en tiempo real
         </p>
-        <h1 className="mt-3 text-2xl font-semibold text-bistro-text-primary">System Health</h1>
+        <h1 className="mt-3 text-2xl font-semibold text-bistro-text-primary">Estado del sistema</h1>
         <p className="mt-1 text-sm text-bistro-text-secondary">
-          Estado operativo de todos los subsistemas. Se actualiza automáticamente cada 30 segundos.
+          Estado de PostgreSQL, Redis, Gemini y almacenamiento S3. Se actualiza cada 30 segundos.
         </p>
       </article>
 
@@ -239,7 +269,10 @@ export default function OwnerSystemHealthPage() {
       {/* Error banner */}
       {fetchError ? (
         <article className="rounded-xl border border-bistro-danger/30 bg-bistro-danger/10 px-4 py-3">
-          <p className="text-sm text-bistro-danger">{fetchError}</p>
+          <p className="text-sm text-bistro-danger" role="alert">{fetchError}</p>
+          <button type="button" onClick={() => void fetchHealth()} className="mt-2 text-sm font-semibold underline">
+            Reintentar
+          </button>
         </article>
       ) : null}
 
