@@ -14,6 +14,8 @@ ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY frontend/package.json frontend/package-lock.json frontend/next.config.ts frontend/tsconfig.json frontend/postcss.config.mjs frontend/instrumentation.ts frontend/middleware.ts frontend/sentry.client.config.ts frontend/sentry.edge.config.ts frontend/sentry.server.config.ts ./
 COPY frontend/src ./src
+# TypeScript checks an integration test that imports this attestation helper.
+COPY frontend/scripts/activated-capabilities-attestation.js ./scripts/
 COPY frontend/public ./public
 # TypeScript includes tests importing these four E2E helpers.
 COPY frontend/e2e/database-target.ts frontend/e2e/standalone-server-env.ts ./e2e/
