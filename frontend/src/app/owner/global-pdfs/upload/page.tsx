@@ -3,7 +3,7 @@
 import { ChangeEvent, useRef, useState } from 'react';
 import { FileUp, Globe2, Hash, Sparkles } from 'lucide-react';
 
-type ParsedChunk = { content: string; pageNumber: number };
+import { preparePdfChunks, embedPdfChunks, type ParsedChunk } from './pdf-embeddings';
 
 type PdfPageLike = {
   getTextContent: () => Promise<{ items: Array<{ str?: string } | Record<string, unknown>> }>;
@@ -51,24 +51,6 @@ async function extractPdfChunks(file: File): Promise<{ pageCount: number; chunks
   return { pageCount: pdf.numPages, chunks };
 }
 
-async function generateEmbeddingsFromApi(texts: string[]): Promise<number[][]> {
-  const response = await fetch('/api/embeddings', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ texts }),
-  });
-
-  if (!response.ok) {
-    const payload = (await response.json().catch(() => ({ error: 'Error de embeddings.' }))) as {
-      error?: string;
-    };
-    throw new Error(payload.error ?? 'Error de embeddings.');
-  }
-
-  const payload = (await response.json()) as { embeddings: number[][] };
-  return payload.embeddings;
-}
-
 export default function OwnerGlobalPdfsUploadPage() {
   const [title, setTitle] = useState('');
   const [author, setAuthor] = useState('');
@@ -106,12 +88,8 @@ export default function OwnerGlobalPdfsUploadPage() {
 
     try {
       const { pageCount, chunks } = await extractPdfChunks(selectedFile);
-      const chunkCandidates = (
-        chunks.length > 0 ? chunks : [{ content: `Documento global: ${title}`, pageNumber: 1 }]
-      ).slice(0, 160);
-      const embeddings = await generateEmbeddingsFromApi(
-        chunkCandidates.map((chunk) => chunk.content)
-      );
+      const chunkCandidates = preparePdfChunks(chunks);
+      const embeddings = await embedPdfChunks(chunkCandidates);
 
       const parsedTags = tags
         .split(',')

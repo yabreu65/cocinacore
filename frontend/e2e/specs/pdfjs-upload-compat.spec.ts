@@ -50,7 +50,7 @@ test.describe('Owner global PDF upload PDF.js compatibility', () => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ embeddings: requestBody.texts.map(() => [0.1]) }),
+        body: JSON.stringify({ embeddings: requestBody.texts.map(() => [0.1, ...Array<number>(1535).fill(0)]) }),
       });
     });
     await page.route('**/api/owner/global-pdfs', async (route) => {
