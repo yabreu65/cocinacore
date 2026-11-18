@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { embedPdfChunks, preparePdfChunks } from './pdf-embeddings';
+import { assertPdfUploadSize, chunkPdfPage, embedPdfChunks, preparePdfChunks, PDF_UPLOAD_BUDGET_BYTES } from './pdf-embeddings';
 import { EmbeddingsSchema } from '@/lib/validation';
 
 const chunks = (count: number, size = 900) =>
@@ -15,15 +15,25 @@ describe('global PDF embedding preparation', () => {
   it('rejects empty extraction without creating a synthetic chunk', () => {
     expect(() => preparePdfChunks([])).toThrow('no contiene texto extraíble');
   });
-  it('rejects oversize documents instead of silently truncating them', () => {
-    expect(() => preparePdfChunks(chunks(161))).toThrow('160 fragmentos');
+  it('rejects oversize payloads instead of silently truncating them', () => {
+    expect(() => preparePdfChunks(chunks(1), PDF_UPLOAD_BUDGET_BYTES)).toThrow('50 MiB');
+    expect(() => assertPdfUploadSize(PDF_UPLOAD_BUDGET_BYTES + 1)).toThrow('50 MiB');
   });
-  it('preserves page attribution and every fragment within the document limit', () => {
-    const input = chunks(160);
-    expect(preparePdfChunks(input)).toEqual(input);
+  it('preserves every fragment of a representative 264-page cookbook within the transport budget', () => {
+    const input = chunks(308).map((chunk, i) => ({ ...chunk, pageNumber: Math.min(i + 1, 264) }));
+    expect(preparePdfChunks(input, 31_393_957, 4096)).toEqual(input);
   });
-  it.each([900, 5000])('batches all 160 fragments of %i characters within the API contract', async (size) => {
-    const input = chunks(160, size);
+  it('preserves short text pages and the tail of a long page', () => {
+    expect(chunkPdfPage('  Sal al gusto.  ', 7)).toEqual([{ content: 'Sal al gusto.', pageNumber: 7 }]);
+    expect(chunkPdfPage('  ', 8)).toEqual([]);
+    const input = 'a'.repeat(900) + ' FINAL';
+    const result = chunkPdfPage(input, 9);
+    expect(result).toHaveLength(2);
+    expect(result[1].content).toMatch(/FINAL$/);
+    expect(result.every((chunk) => chunk.pageNumber === 9)).toBe(true);
+  });
+  it.each([900, 5000])('batches all 308 fragments of %i characters within the API contract', async (size) => {
+    const input = chunks(308, size);
     const requests: string[][] = [];
     const mockFetch = vi.fn(async (_url: string, init: RequestInit) => {
       const body = JSON.parse(String(init.body)) as { texts: string[] };
@@ -32,7 +42,10 @@ describe('global PDF embedding preparation', () => {
       return Response.json({ embeddings: body.texts.map((t) => vector(Number(t.slice(0, 4)))) });
     });
     vi.stubGlobal('fetch', mockFetch);
-    expect(await embedPdfChunks(input)).toEqual(input.map((_, i) => vector(i)));
+    const progress = vi.fn();
+    expect(await embedPdfChunks(input, progress)).toEqual(input.map((_, i) => vector(i)));
+    expect(progress).toHaveBeenLastCalledWith(308, 308);
+    expect(progress).toHaveBeenCalledTimes(requests.length);
     expect(requests.length).toBeGreaterThan(1);
     expect(requests.flat()).toEqual(input.map((c) => c.content));
   });
@@ -56,7 +69,7 @@ describe('global PDF embedding preparation', () => {
     const mockFetch = vi.fn();
     vi.stubGlobal('fetch', mockFetch);
     await expect(embedPdfChunks([])).rejects.toThrow('no contiene texto extraíble');
-    await expect(embedPdfChunks(chunks(161))).rejects.toThrow('160 fragmentos');
+    await expect(embedPdfChunks(chunks(1300))).rejects.toThrow('50 MiB');
     expect(mockFetch).not.toHaveBeenCalled();
   });
 });
