@@ -9,6 +9,9 @@ const VECTOR_DIMENSIONS = 1536;
 const MAX_RETRIES_PER_BATCH = 2;
 const MAX_RETRIES_PER_UPLOAD = 6;
 const MAX_RETRY_DELAY_SECONDS = 120;
+// Conservative per-upload pacing for the observed free-tier quota of
+// 100 embedding inputs/minute. Other clients can still consume shared quota.
+const MIN_BATCH_PAUSE_SECONDS = 61;
 // A finite JS number serialized as JSON needs at most 25 ASCII bytes,
 // plus one separator. This upper bound avoids provider calls for oversized uploads.
 const MAX_VECTOR_JSON_BYTES = VECTOR_DIMENSIONS * 26;
@@ -91,7 +94,12 @@ export async function embedPdfChunks(
 
   const embeddings: number[][] = [];
   let retries = 0;
+  const pause = async (seconds: number) => {
+    onWait?.(embeddings.length, candidates.length, seconds);
+    await new Promise<void>((resolve) => setTimeout(resolve, seconds * 1000));
+  };
   for (const texts of batches) {
+    if (embeddings.length > 0) await pause(MIN_BATCH_PAUSE_SECONDS);
     let batchRetries = 0;
     let response: Response;
     while (true) {
@@ -113,8 +121,7 @@ export async function embedPdfChunks(
       }
       batchRetries += 1;
       retries += 1;
-      onWait?.(embeddings.length, candidates.length, seconds);
-      await new Promise<void>((resolve) => setTimeout(resolve, seconds * 1000));
+      await pause(Math.max(MIN_BATCH_PAUSE_SECONDS, seconds));
     }
     const payload: unknown = await response.json();
     const vectors = payload && typeof payload === 'object' && 'embeddings' in payload
