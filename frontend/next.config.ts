@@ -11,6 +11,14 @@ const nextConfig: NextConfig = {
   output: 'standalone',
   distDir: e2eDistDir ?? '.next',
 
+  // The standalone ingress already bounds this upload to 50 MiB and all
+  // other requests to 2 MiB. Keep the authenticated middleware enabled:
+  // Next's default 10 MiB clone limit otherwise truncates large multipart
+  // bodies before the route can parse them.
+  experimental: {
+    proxyClientMaxBodySize: 50 * 1024 * 1024,
+  },
+
   async headers() {
     const isDev = process.env.NODE_ENV !== 'production';
 
