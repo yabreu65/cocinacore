@@ -12,7 +12,7 @@ export default function OwnerSectionPlaceholder({
       <h2 className="text-2xl font-semibold text-bistro-text-primary">{title}</h2>
       <p className="mt-2 text-sm text-bistro-text-secondary">{description}</p>
       <p className="mt-4 rounded-xl border border-bistro-border bg-white/70 px-3 py-2 text-xs text-bistro-text-secondary">
-        Fase actual: solo lectura. Acciones de creación/edición llegan en la siguiente fase.
+        Módulo pendiente de implementación. Esta pantalla todavía no ofrece funciones de gestión.
       </p>
     </section>
   );

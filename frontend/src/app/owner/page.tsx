@@ -49,60 +49,49 @@ export default async function OwnerOverviewPage() {
           <Sparkles size={14} /> Control global de plataforma
         </p>
         <h2 className="mt-3 text-2xl font-semibold text-bistro-text-primary">
-          Owner Console Overview
+          Panel de administración
         </h2>
         <p className="mt-1 text-sm text-bistro-text-secondary">
-          Resumen mínimo ya desacoplado del backend anterior para continuar la migración.
+          Consulta el estado de CocinaCore y administra la biblioteca culinaria compartida desde un solo lugar.
         </p>
       </article>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {metricCard('Tenants totales', metrics.tenants, <Building2 size={14} />)}
-        {metricCard('Usuarios totales', metrics.users, <Users size={14} />)}
-        {metricCard('Global books', metrics.books, <Library size={14} />)}
-        {metricCard('Global PDFs', metrics.pdfs, <FileText size={14} />)}
-        {metricCard('Chunks globales', metrics.chunks, <Database size={14} />)}
-        {metricCard('Reports premium', metrics.reports, <AlertTriangle size={14} />)}
-        {metricCard('Owners registrados', metrics.owners, <Activity size={14} />)}
+        {metricCard('Hogares registrados', metrics.tenants, <Building2 size={14} />)}
+        {metricCard('Usuarios registrados', metrics.users, <Users size={14} />)}
+        {metricCard('Libros globales', metrics.books, <Library size={14} />)}
+        {metricCard('Documentos PDF', metrics.pdfs, <FileText size={14} />)}
+        {metricCard('Fragmentos indexados', metrics.chunks, <Database size={14} />)}
+        {metricCard('Reportes premium', metrics.reports, <AlertTriangle size={14} />)}
+        {metricCard('Administradores registrados', metrics.owners, <Activity size={14} />)}
       </div>
 
       <article className="rounded-2xl border border-bistro-border bg-white/80 p-4 premium-shadow">
-        <h2 className="text-lg font-semibold">Secciones rápidas</h2>
+        <h2 className="text-lg font-semibold">Biblioteca y sistema</h2>
         <p className="mt-1 text-sm text-bistro-text-secondary">
-          Varias acciones siguen en reconstrucción, pero las vistas ya compilan sobre PostgreSQL
-          directo.
+          Accede a las herramientas disponibles de la biblioteca global y al estado del sistema.
         </p>
         <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {[
             {
               href: '/owner/global-books',
-              title: 'Global Books',
-              description: 'Catálogo global compartido.',
+              title: 'Biblioteca global',
+              description: 'Consulta el catálogo de libros culinarios compartidos.',
             },
             {
               href: '/owner/global-pdfs',
-              title: 'Global PDFs',
-              description: 'Documentos globales del sistema.',
+              title: 'Documentos PDF',
+              description: 'Consulta los documentos del recetario global.',
             },
             {
-              href: '/owner/indexing',
-              title: 'Indexación',
-              description: 'Estado y cobertura de chunks.',
-            },
-            {
-              href: '/owner/premium-moderation',
-              title: 'Moderación Premium',
-              description: 'Revisión de reportes.',
-            },
-            {
-              href: '/owner/tenants',
-              title: 'Tenants',
-              description: 'Visión general multi-tenant.',
+              href: '/owner/global-pdfs/upload',
+              title: 'Cargar PDF',
+              description: 'Abre la herramienta de carga de documentos.',
             },
             {
               href: '/owner/system-health',
-              title: 'System Health',
-              description: 'Salud operativa.',
+              title: 'Estado del sistema',
+              description: 'Consulta la salud de los servicios.',
             },
           ].map((section) => (
             <Link
@@ -115,6 +104,14 @@ export default async function OwnerOverviewPage() {
             </Link>
           ))}
         </div>
+      </article>
+
+      <article className="rounded-2xl border border-bistro-border bg-white/80 p-4 premium-shadow">
+        <h2 className="text-lg font-semibold">Módulos pendientes</h2>
+        <p className="mt-1 text-sm text-bistro-text-secondary">
+          La gestión de hogares, la consola de indexación y la moderación Premium aún no
+          están disponibles como herramientas administrativas completas.
+        </p>
       </article>
     </section>
   );
