@@ -6,6 +6,9 @@ export const PDF_UPLOAD_BUDGET_BYTES = 49 * 1024 * 1024;
 const BATCH_SIZE = 100;
 const BATCH_CHAR_LIMIT = 100_000;
 const VECTOR_DIMENSIONS = 1536;
+const MAX_RETRIES_PER_BATCH = 2;
+const MAX_RETRIES_PER_UPLOAD = 6;
+const MAX_RETRY_DELAY_SECONDS = 120;
 // A finite JS number serialized as JSON needs at most 25 ASCII bytes,
 // plus one separator. This upper bound avoids provider calls for oversized uploads.
 const MAX_VECTOR_JSON_BYTES = VECTOR_DIMENSIONS * 26;
@@ -69,6 +72,7 @@ function isValidVector(value: unknown): value is number[] {
 export async function embedPdfChunks(
   chunks: ParsedChunk[],
   onProgress?: (completed: number, total: number) => void,
+  onWait?: (completed: number, total: number, seconds: number) => void,
 ): Promise<number[][]> {
   const candidates = preparePdfChunks(chunks);
   const batches: string[][] = [];
@@ -86,17 +90,31 @@ export async function embedPdfChunks(
   if (batch.length) batches.push(batch);
 
   const embeddings: number[][] = [];
+  let retries = 0;
   for (const texts of batches) {
-    const response = await fetch('/api/embeddings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ texts }),
-    });
-    if (!response.ok) {
+    let batchRetries = 0;
+    let response: Response;
+    while (true) {
+      response = await fetch('/api/embeddings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ texts }),
+      });
+      if (response.ok) break;
       const payload: unknown = await response.json().catch(() => null);
       const message = payload && typeof payload === 'object' && 'error' in payload &&
         typeof payload.error === 'string' ? payload.error : 'Error de embeddings.';
-      throw new Error(message);
+      const header = response.headers.get('Retry-After');
+      const seconds = header && /^\d+$/.test(header) ? Number(header) : null;
+      if (response.status !== 429 || seconds === null || !Number.isSafeInteger(seconds) ||
+        seconds < 1 || seconds > MAX_RETRY_DELAY_SECONDS ||
+        batchRetries >= MAX_RETRIES_PER_BATCH || retries >= MAX_RETRIES_PER_UPLOAD) {
+        throw new Error(message);
+      }
+      batchRetries += 1;
+      retries += 1;
+      onWait?.(embeddings.length, candidates.length, seconds);
+      await new Promise<void>((resolve) => setTimeout(resolve, seconds * 1000));
     }
     const payload: unknown = await response.json();
     const vectors = payload && typeof payload === 'object' && 'embeddings' in payload

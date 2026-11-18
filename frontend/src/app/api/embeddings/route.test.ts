@@ -121,6 +121,40 @@ describe('POST /api/embeddings error boundary', () => {
     }
   });
 
+  it('preserves provider 429 and the longest explicit retry delay without exposing upstream details', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({
+      error: { message: 'private upstream detail', details: [{
+        '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '61.25s',
+      }] },
+    }, { status: 429, headers: { 'Retry-After': '40' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const response = await POST(request());
+      expect(response.status).toBe(429);
+      expect(response.headers.get('Retry-After')).toBe('62');
+      expect(await response.json()).toEqual({
+        error: 'Gemini ha alcanzado un límite de uso. Revisá la cuota del proyecto.',
+        retryAfter: 62,
+      });
+      expect(fetchMock).toHaveBeenCalledOnce();
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it('does not invent a retry delay for quota rejection without RetryInfo', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({
+      error: { message: 'private quota detail', details: [{ retryDelay: '1s' }] },
+    }, { status: 429 })));
+    try {
+      const response = await POST(request());
+      expect(response.status).toBe(429);
+      expect(response.headers.has('Retry-After')).toBe(false);
+      expect(await response.json()).toEqual({
+        error: 'Gemini ha alcanzado un límite de uso. Revisá la cuota del proyecto.',
+        retryAfter: null,
+      });
+    } finally { vi.unstubAllGlobals(); }
+  });
+
   it('requests and accepts only the configured model and exact dimensions', async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(JSON.stringify({ embeddings: [{ embedding: { values: Array.from({ length: 1536 }, (_, i) => i === 0 ? 0.25 : 0.5) } }] }))
