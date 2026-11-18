@@ -53,6 +53,7 @@ describe('fixed owner metrics connection', () => {
     await expect(getOwnerMetrics()).rejects.toThrow('Owner metrics are unavailable');
     expect(mocks.query).not.toHaveBeenCalled();
     expect(mocks.pool).not.toHaveBeenCalled();
+    expect(mocks.error).toHaveBeenCalledWith('owner.metrics.query_failed', { stage: 'configuration', reason: 'metrics_configuration_invalid' });
   });
   it('rejects partial results and releases the connection', async () => {
     mocks.clientQuery.mockResolvedValue({
@@ -72,6 +73,36 @@ describe('fixed owner metrics connection', () => {
     await expect(getOwnerMetrics()).rejects.toThrow('Owner metrics are unavailable');
     expect(mocks.release).toHaveBeenCalledOnce();
   });
+  it.each([
+    ['connection', '28P01', 'db_authentication_failed'],
+    ['query', '42501', 'db_permission_denied'],
+    ['query', '42P01', 'db_schema_unavailable'],
+    ['connection', 'ECONNREFUSED', 'network_failure'],
+  ])('classifies %s failure without exposing details or retrying through another connection', async (stage, code, reason) => {
+    const failure = Object.assign(new Error('internal connection detail'), { code });
+    if (stage === 'connection') mocks.connect.mockRejectedValueOnce(failure);
+    else mocks.clientQuery.mockRejectedValueOnce(failure);
+    const { getOwnerMetrics } = await import('./metrics');
+    await expect(getOwnerMetrics()).rejects.toThrow('Owner metrics are unavailable');
+    expect(mocks.error).toHaveBeenCalledWith('owner.metrics.query_failed', { stage, reason });
+    expect(JSON.stringify(mocks.error.mock.calls)).not.toContain('internal connection detail');
+    expect(mocks.query).not.toHaveBeenCalled();
+    expect(mocks.release).toHaveBeenCalledTimes(stage === 'query' ? 1 : 0);
+  });
+
+  it.each([
+    [[], 'metrics_missing_result'],
+    [[{ tenants: null, users: null, books: null, pdfs: null, chunks: null, reports: null, owners: null }], 'metrics_unavailable_result'],
+    [[{ tenants: 'invalid', users: '2', books: '3', pdfs: '4', chunks: '5', reports: '6', owners: '7' }], 'metrics_invalid_result'],
+  ])('classifies unavailable or malformed result while rejecting the entire read', async (rows, reason) => {
+    mocks.clientQuery.mockResolvedValueOnce({ rows });
+    const { getOwnerMetrics } = await import('./metrics');
+    await expect(getOwnerMetrics()).rejects.toThrow('Owner metrics are unavailable');
+    expect(mocks.error).toHaveBeenCalledWith('owner.metrics.query_failed', { stage: 'result', reason });
+    expect(mocks.release).toHaveBeenCalledOnce();
+    expect(mocks.query).not.toHaveBeenCalled();
+  });
+
   it('preserves the legacy seven data reads when disabled', async () => {
     vi.stubEnv('COCINACORE_OWNER_METRICS_DB_ENABLED', 'false');
     mocks.query
