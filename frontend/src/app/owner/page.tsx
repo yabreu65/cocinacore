@@ -11,12 +11,12 @@ import {
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth/server';
-import { getOwnerMetrics } from '@/lib/owner/metrics';
+import { getOwnerMetrics, type OwnerMetrics } from '@/lib/owner/metrics';
 import { isPlatformOwner } from '@/lib/db/repositories/platformOwnerRepository';
 
 export const dynamic = 'force-dynamic';
 
-function metricCard(label: string, value: number, icon: React.ReactNode) {
+function metricCard(label: string, value: number | null, icon: React.ReactNode) {
   return (
     <article className="rounded-2xl border border-bistro-border bg-white/75 p-4 premium-shadow">
       <p className="flex items-center gap-2 text-sm text-bistro-text-secondary">
@@ -25,7 +25,7 @@ function metricCard(label: string, value: number, icon: React.ReactNode) {
         </span>
         {label}
       </p>
-      <p className="mt-2 text-3xl font-semibold text-bistro-text-primary">{value}</p>
+      <p className="mt-2 text-3xl font-semibold text-bistro-text-primary">{value ?? '—'}</p>
     </article>
   );
 }
@@ -40,7 +40,13 @@ export default async function OwnerOverviewPage() {
     redirect('/app');
   }
 
-  const metrics = await getOwnerMetrics();
+  let metrics: OwnerMetrics | null = null;
+  try {
+    metrics = await getOwnerMetrics();
+  } catch {
+    // The protected metrics service fails closed. Do not retry with another
+    // connection or fabricate zero counts; only the metrics are unavailable.
+  }
 
   return (
     <section className="space-y-4">
@@ -56,14 +62,26 @@ export default async function OwnerOverviewPage() {
         </p>
       </article>
 
+      {!metrics ? (
+        <article role="alert" className="rounded-2xl border border-bistro-warning/30 bg-bistro-warning/10 p-4">
+          <p className="font-semibold text-bistro-warning">Métricas temporalmente no disponibles</p>
+          <p className="mt-1 text-sm text-bistro-text-secondary">
+            No pudimos obtener los recuentos. Puedes continuar usando las demás secciones del panel.
+          </p>
+          <form action="/owner" method="get" className="mt-2">
+            <button type="submit" className="text-sm font-semibold underline">Reintentar métricas</button>
+          </form>
+        </article>
+      ) : null}
+
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {metricCard('Hogares registrados', metrics.tenants, <Building2 size={14} />)}
-        {metricCard('Usuarios registrados', metrics.users, <Users size={14} />)}
-        {metricCard('Libros globales', metrics.books, <Library size={14} />)}
-        {metricCard('Documentos PDF', metrics.pdfs, <FileText size={14} />)}
-        {metricCard('Fragmentos indexados', metrics.chunks, <Database size={14} />)}
-        {metricCard('Reportes premium', metrics.reports, <AlertTriangle size={14} />)}
-        {metricCard('Administradores registrados', metrics.owners, <Activity size={14} />)}
+        {metricCard('Hogares registrados', metrics?.tenants ?? null, <Building2 size={14} />)}
+        {metricCard('Usuarios registrados', metrics?.users ?? null, <Users size={14} />)}
+        {metricCard('Libros globales', metrics?.books ?? null, <Library size={14} />)}
+        {metricCard('Documentos PDF', metrics?.pdfs ?? null, <FileText size={14} />)}
+        {metricCard('Fragmentos indexados', metrics?.chunks ?? null, <Database size={14} />)}
+        {metricCard('Reportes premium', metrics?.reports ?? null, <AlertTriangle size={14} />)}
+        {metricCard('Administradores registrados', metrics?.owners ?? null, <Activity size={14} />)}
       </div>
 
       <article className="rounded-2xl border border-bistro-border bg-white/80 p-4 premium-shadow">

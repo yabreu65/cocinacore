@@ -85,6 +85,34 @@ describe('owner dashboard presentation', () => {
     expect(markup).not.toContain('href="/owner/premium-moderation"');
   });
 
+  it('keeps the dashboard usable when the protected metrics read fails', async () => {
+    mocks.user.mockResolvedValue({ id: 'owner-1' });
+    mocks.owner.mockResolvedValue(true);
+    mocks.metrics.mockRejectedValueOnce(new Error('internal diagnostic must not be rendered'));
+    const markup = renderToStaticMarkup(await Page());
+    expect(markup).toContain('Panel de administración');
+    expect(markup).toContain('Métricas temporalmente no disponibles');
+    expect(markup).toContain('Reintentar métricas');
+    expect(markup).toContain('action="/owner"');
+    expect(markup.match(/>—<\/p>/g)).toHaveLength(7);
+    expect(markup).not.toContain('internal diagnostic');
+    expect(markup).not.toContain('>0</p>');
+    expect(markup).toContain('href="/owner/global-pdfs/upload"');
+    expect(markup).toContain('href="/owner/system-health"');
+  });
+
+  it('renders a verified zero as zero, not as unavailable', async () => {
+    mocks.user.mockResolvedValue({ id: 'owner-1' });
+    mocks.owner.mockResolvedValue(true);
+    mocks.metrics.mockResolvedValueOnce({
+      tenants: 0, users: 2, books: 0, pdfs: 0, chunks: 0, reports: 0, owners: 1,
+    });
+    const markup = renderToStaticMarkup(await Page());
+    expect(markup).not.toContain('Métricas temporalmente no disponibles');
+    expect(markup.match(/>0<\/p>/g)).toHaveLength(5);
+    expect(markup).not.toContain('>—</p>');
+  });
+
   it('uses Spanish navigation, active page semantics and a return to the household', () => {
     mocks.pathname.mockReturnValue('/owner/global-pdfs/upload');
     const markup = renderToStaticMarkup(<OwnerShell><p>Contenido</p></OwnerShell>);

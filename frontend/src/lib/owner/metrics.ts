@@ -29,6 +29,31 @@ const metricNames: MetricName[] = [
 let metricsPool: Pool | null = null;
 let metricsPoolUrl: string | null = null;
 
+type MetricsStage = 'configuration' | 'connection' | 'query' | 'result';
+
+class MetricsResultError extends Error {
+  constructor(readonly reason: 'metrics_missing_result' | 'metrics_unavailable_result' | 'metrics_invalid_result') {
+    super('Owner metrics are unavailable.');
+  }
+}
+
+function metricsFailureReason(stage: MetricsStage, error: unknown): string {
+  if (error instanceof MetricsResultError) return error.reason;
+  if (stage === 'configuration') return 'metrics_configuration_invalid';
+  const code = typeof error === 'object' && error !== null && 'code' in error
+    ? error.code
+    : undefined;
+  switch (code) {
+    case '42501': return 'db_permission_denied';
+    case '28000':
+    case '28P01': return 'db_authentication_failed';
+    case '42P01':
+    case '42703':
+    case '3D000': return 'db_schema_unavailable';
+    default: return getSafeErrorReason(error);
+  }
+}
+
 function getMetricsPool(): Pool {
   const url = process.env.OWNER_METRICS_DATABASE_URL?.trim();
   if (!url) throw new Error('Owner metrics database is not configured.');
@@ -53,12 +78,17 @@ function getMetricsPool(): Pool {
 }
 
 function parseMetrics(row: MetricRow | undefined): OwnerMetrics {
-  if (!row || metricNames.some((name) => row[name] === null || !/^\d+$/.test(row[name]))) {
-    throw new Error('Owner metrics are unavailable; review RLS configuration.');
+  if (!row) throw new MetricsResultError('metrics_missing_result');
+  if (metricNames.some((name) => row[name] === null)) {
+    throw new MetricsResultError('metrics_unavailable_result');
+  }
+  if (metricNames.some((name) => !/^\d+$/.test(row[name] ?? ''))) {
+    throw new MetricsResultError('metrics_invalid_result');
   }
   const values = metricNames.map((name) => Number(row[name]));
-  if (values.some((value) => !Number.isSafeInteger(value)))
-    throw new Error('Owner metrics are unavailable.');
+  if (values.some((value) => !Number.isSafeInteger(value))) {
+    throw new MetricsResultError('metrics_invalid_result');
+  }
   return {
     tenants: values[0],
     users: values[1],
@@ -111,14 +141,19 @@ export async function getOwnerMetrics(): Promise<OwnerMetrics> {
   }
   if (enabled !== 'true') throw new Error('Invalid owner metrics configuration.');
   let client;
+  let stage: MetricsStage = 'configuration';
   try {
-    client = await getMetricsPool().connect();
+    const pool = getMetricsPool();
+    stage = 'connection';
+    client = await pool.connect();
+    stage = 'query';
     const result = await client.query<MetricRow>(
       'select tenants, users, books, pdfs, chunks, reports, owners from public.owner_global_metrics'
     );
+    stage = 'result';
     return parseMetrics(result.rows[0]);
   } catch (error) {
-    serverLogger.error('owner.metrics.query_failed', { reason: getSafeErrorReason(error) });
+    serverLogger.error('owner.metrics.query_failed', { stage, reason: metricsFailureReason(stage, error) });
     throw new Error('Owner metrics are unavailable.');
   } finally {
     client?.release();
