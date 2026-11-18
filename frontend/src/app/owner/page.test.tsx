@@ -1,15 +1,19 @@
+import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   user: vi.fn(),
   owner: vi.fn(),
   metrics: vi.fn(),
   redirect: vi.fn(),
+  pathname: vi.fn(),
 }));
 vi.mock('@/lib/auth/server', () => ({ getCurrentUser: mocks.user }));
 vi.mock('@/lib/db/repositories/platformOwnerRepository', () => ({ isPlatformOwner: mocks.owner }));
 vi.mock('@/lib/owner/metrics', () => ({ getOwnerMetrics: mocks.metrics }));
-vi.mock('next/navigation', () => ({ redirect: mocks.redirect }));
+vi.mock('next/navigation', () => ({ redirect: mocks.redirect, usePathname: mocks.pathname }));
 const { default: Page } = await import('./page');
+const { default: OwnerShell } = await import('./OwnerShell');
+const { default: OwnerSectionPlaceholder } = await import('./OwnerSectionPlaceholder');
 
 describe('owner metrics authorization', () => {
   beforeEach(() => {
@@ -19,6 +23,7 @@ describe('owner metrics authorization', () => {
       tenant: { tenantId: 'tenant-1' },
     });
     mocks.owner.mockResolvedValue(true);
+    mocks.pathname.mockReturnValue('/owner');
     mocks.metrics.mockResolvedValue({
       tenants: 1,
       users: 2,
@@ -53,5 +58,53 @@ describe('owner metrics authorization', () => {
     await expect(Page()).rejects.toThrow('redirect /login');
     expect(mocks.owner).not.toHaveBeenCalled();
     expect(mocks.metrics).not.toHaveBeenCalled();
+  });
+});
+
+describe('owner dashboard presentation', () => {
+  beforeEach(() => {
+    mocks.pathname.mockReturnValue('/owner');
+  });
+
+  it('shows available tools and distinguishes the pending modules', async () => {
+    mocks.user.mockResolvedValue({ id: 'owner-1' });
+    mocks.owner.mockResolvedValue(true);
+    mocks.metrics.mockResolvedValue({
+      tenants: 1, users: 2, books: 3, pdfs: 4, chunks: 5, reports: 6, owners: 7,
+    });
+    const markup = renderToStaticMarkup(await Page());
+    expect(markup).toContain('Panel de administración');
+    expect(markup).toContain('Hogares registrados');
+    expect(markup).toContain('Fragmentos indexados');
+    for (const route of ['/owner/global-books', '/owner/global-pdfs', '/owner/global-pdfs/upload', '/owner/system-health']) {
+      expect(markup).toContain(`href="${route}"`);
+    }
+    expect(markup).toContain('Módulos pendientes');
+    expect(markup).not.toContain('href="/owner/indexing"');
+    expect(markup).not.toContain('href="/owner/tenants"');
+    expect(markup).not.toContain('href="/owner/premium-moderation"');
+  });
+
+  it('uses Spanish navigation, active page semantics and a return to the household', () => {
+    mocks.pathname.mockReturnValue('/owner/global-pdfs/upload');
+    const markup = renderToStaticMarkup(<OwnerShell><p>Contenido</p></OwnerShell>);
+    expect(markup).toContain('aria-label="Administración"');
+    expect(markup).toContain('aria-label="Administración móvil"');
+    expect(markup).toContain('Volver a mi hogar');
+    expect(markup).toContain('href="/app"');
+    const uploadLinks = (markup.match(/<a\b[^>]*>/g) ?? []).filter(
+      (tag) => tag.includes('href="/owner/global-pdfs/upload"')
+    );
+    expect(uploadLinks).toHaveLength(2);
+    expect(uploadLinks.every((tag) => tag.includes('aria-current="page"'))).toBe(true);
+    expect(markup).toContain('Pendiente');
+    expect(markup).not.toContain('Owner Console');
+    expect(markup).toContain('Contenido');
+  });
+
+  it('does not promise unavailable management features in placeholder screens', () => {
+    const markup = renderToStaticMarkup(<OwnerSectionPlaceholder title="Indexación" description="Estado previsto" />);
+    expect(markup).toContain('Módulo pendiente de implementación');
+    expect(markup).toContain('todavía no ofrece funciones de gestión');
   });
 });

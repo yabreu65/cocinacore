@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { type ReactNode, useMemo } from 'react';
+import { type ReactNode } from 'react';
 import {
   Activity,
   Building2,
@@ -23,27 +23,24 @@ type OwnerNavItem = {
   href: string;
   label: string;
   icon: ReactNode;
+  pending?: boolean;
 };
 
 const navItems: OwnerNavItem[] = [
   { href: '/owner', label: 'Resumen', icon: <LayoutGrid size={16} /> },
-  { href: '/owner/global-books', label: 'Global Books', icon: <Library size={16} /> },
-  { href: '/owner/global-pdfs', label: 'Global PDFs', icon: <FileText size={16} /> },
-  { href: '/owner/global-pdfs/upload', label: 'Upload Global PDF', icon: <FileText size={16} /> },
-  { href: '/owner/indexing', label: 'Indexación', icon: <Database size={16} /> },
-  { href: '/owner/premium-moderation', label: 'Moderación Premium', icon: <Flag size={16} /> },
-  { href: '/owner/tenants', label: 'Tenants', icon: <Building2 size={16} /> },
-  { href: '/owner/system-health', label: 'System Health', icon: <Activity size={16} /> },
+  { href: '/owner/global-books', label: 'Biblioteca global', icon: <Library size={16} /> },
+  { href: '/owner/global-pdfs', label: 'Documentos PDF', icon: <FileText size={16} /> },
+  { href: '/owner/global-pdfs/upload', label: 'Cargar PDF', icon: <FileText size={16} /> },
+  { href: '/owner/indexing', pending: true, label: 'Indexación', icon: <Database size={16} /> },
+  { href: '/owner/premium-moderation', pending: true, label: 'Moderación Premium', icon: <Flag size={16} /> },
+  { href: '/owner/tenants', pending: true, label: 'Hogares', icon: <Building2 size={16} /> },
+  { href: '/owner/system-health', label: 'Estado del sistema', icon: <Activity size={16} /> },
 ];
 
 export default function OwnerShell({ children }: OwnerShellProps) {
   const pathname = usePathname();
-  const userLabel = 'Platform owner';
-
-  const currentTitle = useMemo(() => {
-    const current = navItems.find((item) => pathname === item.href);
-    return current?.label ?? 'Consola Owner';
-  }, [pathname]);
+  const current = navItems.find((item) => pathname === item.href);
+  const currentTitle = current?.label ?? 'Administración';
 
   return (
     <main className="texture-paper min-h-screen bg-bistro-page text-bistro-text-primary">
@@ -51,17 +48,18 @@ export default function OwnerShell({ children }: OwnerShellProps) {
         <aside className="bistro-focus-dark hidden w-[280px] shrink-0 rounded-3xl border border-white/10 bg-bistro-inverse p-4 text-bistro-cream lg:block">
           <div className="mb-5">
             <p className="flex items-center gap-2 text-xl font-bold">
-              <Shield size={18} /> Owner Console
+              <Shield size={18} aria-hidden="true" /> CocinaCore
             </p>
-            <p className="mt-1 text-xs text-bistro-cream">{userLabel}</p>
+            <p className="mt-1 text-xs text-bistro-cream">Administración de plataforma</p>
           </div>
-          <nav className="space-y-1">
+          <nav aria-label="Administración" className="space-y-1">
             {navItems.map((item) => {
               const active = pathname === item.href;
               return (
                 <Link
                   key={item.href}
                   href={item.href}
+                  aria-current={active ? 'page' : undefined}
                   className={`group flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold transition ${
                     active
                       ? 'bg-bistro-action-primary text-white'
@@ -69,8 +67,9 @@ export default function OwnerShell({ children }: OwnerShellProps) {
                   }`}
                 >
                   {item.icon}
-                  {item.label}
-                  <ChevronRight
+                  <span className="min-w-0 flex-1">{item.label}</span>
+                  {item.pending ? <span className="text-[10px] text-bistro-cream">Pendiente</span> : null}
+                  <ChevronRight aria-hidden="true"
                     size={14}
                     className={`ml-auto transition ${active ? 'opacity-100' : 'opacity-0 group-hover:opacity-80'}`}
                   />
@@ -80,12 +79,12 @@ export default function OwnerShell({ children }: OwnerShellProps) {
           </nav>
         </aside>
 
-        <section className="w-full">
+        <section className="min-w-0 flex-1">
           <header className="mb-4 rounded-3xl border border-bistro-border bg-white/85 px-4 py-4 premium-shadow md:px-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.12em] text-bistro-text-secondary">
-                  Platform Owner
+                  Administración de plataforma
                 </p>
                 <h1 className="text-2xl font-semibold">{currentTitle}</h1>
               </div>
@@ -94,24 +93,25 @@ export default function OwnerShell({ children }: OwnerShellProps) {
                   href="/app"
                   className="rounded-xl border border-bistro-border px-3 py-2 text-sm font-semibold text-bistro-text-secondary hover:border-bistro-action-primary/40"
                 >
-                  Ir a /app
+                  Volver a mi hogar
                 </Link>
               </div>
             </div>
-            <nav className="mt-4 flex gap-2 overflow-x-auto pb-1 lg:hidden">
+            <nav aria-label="Administración móvil" className="mt-4 flex gap-2 overflow-x-auto pb-1 lg:hidden">
               {navItems.map((item) => {
                 const active = pathname === item.href;
                 return (
                   <Link
                     key={item.href}
                     href={item.href}
+                    aria-current={active ? 'page' : undefined}
                     className={`whitespace-nowrap rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
                       active
                         ? 'border-bistro-action-primary/35 bg-bistro-action-primary/12 text-bistro-action-primary'
                         : 'border-bistro-border bg-white text-bistro-text-secondary hover:border-bistro-action-primary/30'
                     }`}
                   >
-                    {item.label}
+                    {item.label}{item.pending ? ' · Pendiente' : ''}
                   </Link>
                 );
               })}
