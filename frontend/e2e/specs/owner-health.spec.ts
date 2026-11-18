@@ -25,6 +25,6 @@ test.describe('Owner System Health', () => {
     await healthPage.goto();
 
     await expect(healthPage.title).toBeVisible();
-    await expect(healthPage.statusCards).toHaveCount(3);
+    await expect(healthPage.statusCards).toHaveCount(4);
   });
 });
