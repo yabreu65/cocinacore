@@ -3,53 +3,52 @@
 import { ChangeEvent, useRef, useState } from 'react';
 import { FileUp, Globe2, Hash, Sparkles } from 'lucide-react';
 
-import { preparePdfChunks, embedPdfChunks, type ParsedChunk } from './pdf-embeddings';
+import { assertPdfUploadSize, chunkPdfPage, estimatedPdfChunkBytes, preparePdfChunks, embedPdfChunks, type ParsedChunk } from './pdf-embeddings';
 
 type PdfPageLike = {
   getTextContent: () => Promise<{ items: Array<{ str?: string } | Record<string, unknown>> }>;
 };
 
-function chunkText(content: string, maxChars = 900, overlap = 120): string[] {
-  const normalized = content.replace(/\s+/g, ' ').trim();
-  if (!normalized) return [];
-  const chunks: string[] = [];
-  let start = 0;
+type PdfExtraction = { pageCount: number; textPages: number; chunks: ParsedChunk[] };
 
-  while (start < normalized.length) {
-    const end = Math.min(start + maxChars, normalized.length);
-    const slice = normalized.slice(start, end).trim();
-    if (slice.length > 40) chunks.push(slice);
-    if (end >= normalized.length) break;
-    start = Math.max(0, end - overlap);
-  }
-
-  return chunks;
-}
-
-async function extractPdfChunks(file: File): Promise<{ pageCount: number; chunks: ParsedChunk[] }> {
+async function extractPdfChunks(
+  file: File,
+  onPage: (completed: number, total: number) => void,
+): Promise<PdfExtraction> {
   const pdfjsLib = await import('pdfjs-dist');
   pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
 
   const bytes = new Uint8Array(await file.arrayBuffer());
   const loadingTask = pdfjsLib.getDocument({ data: bytes });
-  const pdf = await loadingTask.promise;
-  const chunks: ParsedChunk[] = [];
-
-  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-    const page = (await pdf.getPage(pageNumber)) as unknown as PdfPageLike;
-    const textContent = await page.getTextContent();
-    const pageText = textContent.items
-      .map((item) => ('str' in item ? item.str : ''))
-      .join(' ')
-      .trim();
-
-    for (const piece of chunkText(pageText)) {
-      chunks.push({ content: piece, pageNumber });
+  try {
+    const pdf = await loadingTask.promise;
+    const chunks: ParsedChunk[] = [];
+    let textPages = 0;
+    let estimatedBytes = file.size + 2;
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+      const page = (await pdf.getPage(pageNumber)) as unknown as PdfPageLike;
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items
+        .map((item) => ('str' in item ? item.str : ''))
+        .join(' ')
+        .trim();
+      const pageChunks = chunkPdfPage(pageText, pageNumber);
+      if (pageChunks.length) textPages += 1;
+      for (const chunk of pageChunks) {
+        estimatedBytes += estimatedPdfChunkBytes(chunk);
+        assertPdfUploadSize(estimatedBytes);
+        chunks.push(chunk);
+      }
+      onPage(pageNumber, pdf.numPages);
     }
+    return { pageCount: pdf.numPages, textPages, chunks };
+  } finally {
+    await loadingTask.destroy();
   }
-
-  return { pageCount: pdf.numPages, chunks };
 }
+
+type UploadProgress = { stage: 'extract' | 'embed' | 'upload'; completed: number; total: number };
+type TextCoverage = { pageCount: number; textPages: number };
 
 export default function OwnerGlobalPdfsUploadPage() {
   const [title, setTitle] = useState('');
@@ -60,6 +59,8 @@ export default function OwnerGlobalPdfsUploadPage() {
   const [style, setStyle] = useState('');
   const [tags, setTags] = useState('');
   const [working, setWorking] = useState(false);
+  const [progress, setProgress] = useState<UploadProgress | null>(null);
+  const [coverage, setCoverage] = useState<TextCoverage | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -69,6 +70,9 @@ export default function OwnerGlobalPdfsUploadPage() {
     const file = event.target.files?.[0] ?? null;
     event.target.value = '';
     setSelectedFile(file);
+    setCoverage(null);
+    setMessage(null);
+    setError(null);
   };
 
   const onSubmit = async () => {
@@ -82,40 +86,47 @@ export default function OwnerGlobalPdfsUploadPage() {
       return;
     }
 
+    if (working) return;
     setWorking(true);
+    setCoverage(null);
+    setProgress({ stage: 'extract', completed: 0, total: 0 });
     setMessage(null);
     setError(null);
 
     try {
-      const { pageCount, chunks } = await extractPdfChunks(selectedFile);
-      const chunkCandidates = preparePdfChunks(chunks);
-      const embeddings = await embedPdfChunks(chunkCandidates);
+      assertPdfUploadSize(selectedFile.size);
+      const { pageCount, textPages, chunks } = await extractPdfChunks(selectedFile, (completed, total) => {
+        setProgress({ stage: 'extract', completed, total });
+      });
+      setCoverage({ pageCount, textPages });
 
-      const parsedTags = tags
-        .split(',')
-        .map((value) => value.trim())
-        .filter((value) => value.length > 0);
+      const metadata = {
+        title: title.trim(),
+        author: author.trim(),
+        description: description.trim(),
+        region,
+        country: country.trim(),
+        style: style.trim(),
+        tags: tags.split(',').map((value) => value.trim()).filter(Boolean).join(','),
+        pageCount: String(pageCount),
+      };
+      const metadataBytes = new TextEncoder().encode(JSON.stringify(metadata) + selectedFile.name).byteLength;
+      const chunkCandidates = preparePdfChunks(chunks, selectedFile.size, metadataBytes);
+      setProgress({ stage: 'embed', completed: 0, total: chunkCandidates.length });
+      const embeddings = await embedPdfChunks(chunkCandidates, (completed, total) => {
+        setProgress({ stage: 'embed', completed, total });
+      });
 
+      const chunksJson = JSON.stringify(chunkCandidates.map((chunk, index) => ({
+        ...chunk,
+        embedding: embeddings[index],
+      })));
+      assertPdfUploadSize(selectedFile.size + metadataBytes + new TextEncoder().encode(chunksJson).byteLength);
       const formData = new FormData();
       formData.set('file', selectedFile);
-      formData.set('title', title.trim());
-      formData.set('author', author.trim());
-      formData.set('description', description.trim());
-      formData.set('region', region);
-      formData.set('country', country.trim());
-      formData.set('style', style.trim());
-      formData.set('tags', parsedTags.join(','));
-      formData.set('pageCount', String(Math.max(pageCount, 1)));
-      formData.set(
-        'chunks',
-        JSON.stringify(
-          chunkCandidates.map((chunk, index) => ({
-            content: chunk.content,
-            pageNumber: chunk.pageNumber,
-            embedding: embeddings[index],
-          }))
-        )
-      );
+      for (const [key, value] of Object.entries(metadata)) formData.set(key, value);
+      formData.set('chunks', chunksJson);
+      setProgress({ stage: 'upload', completed: 0, total: 0 });
 
       const uploadResponse = await fetch('/api/owner/global-pdfs', {
         method: 'POST',
@@ -129,7 +140,10 @@ export default function OwnerGlobalPdfsUploadPage() {
 
       const uploadPayload = (await uploadResponse.json()) as { chunkCount: number };
 
-      setMessage(`Global PDF cargado e indexado: ${uploadPayload.chunkCount} chunk(s).`);
+      if (uploadPayload.chunkCount !== chunkCandidates.length) {
+        throw new Error('El servidor no confirmó todos los fragmentos. Revisá Documentos PDF antes de volver a cargar el libro.');
+      }
+      setMessage(`Global PDF cargado e indexado: ${uploadPayload.chunkCount} fragmentos de ${textPages} de ${pageCount} páginas con texto.`);
       setSelectedFile(null);
       setTitle('');
       setAuthor('');
@@ -141,6 +155,7 @@ export default function OwnerGlobalPdfsUploadPage() {
       setError(caughtError instanceof Error ? caughtError.message : 'No se pudo subir PDF global.');
     } finally {
       setWorking(false);
+      setProgress(null);
     }
   };
 
@@ -244,6 +259,7 @@ export default function OwnerGlobalPdfsUploadPage() {
             </div>
             <button
               type="button"
+              disabled={working}
               onClick={() => fileInputRef.current?.click()}
               className="inline-flex items-center justify-center gap-2 rounded-xl border border-bistro-border bg-white px-3 py-2 text-sm font-semibold text-bistro-text-secondary hover:border-bistro-action-primary/35"
             >
@@ -251,6 +267,27 @@ export default function OwnerGlobalPdfsUploadPage() {
             </button>
           </div>
         </div>
+
+        {progress ? (
+          <div role="status" aria-live="polite" className="mt-3 space-y-2 rounded-xl border border-bistro-border bg-bistro-page p-3 text-sm">
+            <p className="font-semibold text-bistro-text-primary">
+              {progress.stage === 'extract' ? `Extrayendo texto: ${progress.completed} de ${progress.total || '…'} páginas`
+                : progress.stage === 'embed' ? `Generando embeddings: ${progress.completed} de ${progress.total} fragmentos`
+                : 'Guardando el PDF completo y su índice…'}
+            </p>
+            {progress.total > 0 ? (
+              <progress aria-label="Progreso de indexación" className="h-2 w-full accent-bistro-action-secondary" value={progress.completed} max={progress.total} />
+            ) : <p className="text-bistro-text-secondary">Mantené esta página abierta hasta que termine el proceso.</p>}
+          </div>
+        ) : null}
+
+        {coverage && coverage.textPages < coverage.pageCount ? (
+          <p className="mt-3 rounded-xl border border-bistro-warning/30 bg-bistro-warning/10 px-3 py-2 text-sm text-bistro-warning">
+            Se encontró texto en {coverage.textPages} de {coverage.pageCount} páginas.
+            Las {coverage.pageCount - coverage.textPages} páginas restantes no tienen texto extraíble.
+            {message ? 'Se conservó el PDF original completo.' : 'Se conservará el PDF original completo si la carga finaliza.'} No se aplica OCR.
+          </p>
+        ) : null}
 
         {error ? (
           <p className="mt-3 rounded-xl border border-bistro-danger/30 bg-bistro-danger/10 px-3 py-2 text-sm text-bistro-danger">
