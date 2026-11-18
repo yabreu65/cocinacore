@@ -10,6 +10,30 @@ import { isPlatformOwner } from '@/lib/db/repositories/platformOwnerRepository';
 
 const EMBEDDINGS_TIMEOUT_MS = 15_000;
 
+function providerRetrySeconds(header: string | null, body: unknown): number | null {
+  const candidates: number[] = [];
+  if (header && /^\d+$/.test(header)) {
+    candidates.push(Number(header));
+  } else if (header) {
+    const date = Date.parse(header);
+    if (Number.isFinite(date)) candidates.push(Math.ceil((date - Date.now()) / 1000));
+  }
+  if (body && typeof body === 'object' && 'error' in body) {
+    const error = body.error;
+    if (error && typeof error === 'object' && 'details' in error && Array.isArray(error.details)) {
+      for (const detail of error.details as unknown[]) {
+        if (detail && typeof detail === 'object' && '@type' in detail &&
+          detail['@type'] === 'type.googleapis.com/google.rpc.RetryInfo' &&
+          'retryDelay' in detail && typeof detail.retryDelay === 'string' && /^\d+(?:\.\d{1,9})?s$/.test(detail.retryDelay)) {
+          candidates.push(Math.ceil(Number(detail.retryDelay.slice(0, -1))));
+        }
+      }
+    }
+  }
+  const seconds = candidates.filter((value) => Number.isSafeInteger(value) && value >= 0);
+  return seconds.length ? Math.max(1, ...seconds) : null;
+}
+
 async function requestEmbeddings(
   apiKey: string,
   model: string,
@@ -33,6 +57,14 @@ async function requestEmbeddings(
       }
     );
 
+    if (response.status === 429) {
+      const body: unknown = await response.json().catch(() => null);
+      return {
+        ok: false as const,
+        status: 429,
+        retryAfter: providerRetrySeconds(response.headers.get('Retry-After'), body),
+      };
+    }
     if (!response.ok) return { ok: false as const, status: response.status };
 
     const payload: unknown = await response.json();
@@ -160,6 +192,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ embeddings: result.embeddings, modelUsed: model });
     }
     serverLogger.warn('embeddings.model_failed', { requestId, model, status: result.status });
+    if (result.status === 429) {
+      const retryAfter = 'retryAfter' in result ? result.retryAfter : null;
+      return NextResponse.json(
+        { error: 'Gemini ha alcanzado un límite de uso. Revisá la cuota del proyecto.', retryAfter },
+        { status: 429, headers: retryAfter ? { 'Retry-After': String(retryAfter) } : {} },
+      );
+    }
   } finally {
     clearTimeout(timeout);
     request.signal.removeEventListener('abort', abortFromRequest);

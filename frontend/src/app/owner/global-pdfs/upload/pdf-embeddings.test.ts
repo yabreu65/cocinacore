@@ -9,7 +9,7 @@ const chunks = (count: number, size = 900) =>
   }));
 const vector = (n: number) => [n + 1, ...Array<number>(1535).fill(0)];
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 describe('global PDF embedding preparation', () => {
   it('rejects empty extraction without creating a synthetic chunk', () => {
@@ -57,6 +57,50 @@ describe('global PDF embedding preparation', () => {
     await expect(embedPdfChunks(chunks(160))).rejects.toThrow('Servicio no disponible');
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
+  it('honors explicit Retry-After and retries only the rejected batch', async () => {
+    vi.useFakeTimers();
+    const input = chunks(108);
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce(Response.json({ embeddings: input.slice(0, 100).map((_, i) => vector(i)) }))
+      .mockResolvedValueOnce(Response.json({ error: 'Cuota' }, { status: 429, headers: { 'Retry-After': '60' } }))
+      .mockResolvedValueOnce(Response.json({ embeddings: input.slice(100).map((_, i) => vector(100 + i)) }));
+    vi.stubGlobal('fetch', mockFetch);
+    const progress = vi.fn();
+    const waiting = vi.fn();
+    const promise = embedPdfChunks(input, progress, waiting);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(waiting).toHaveBeenCalledWith(100, 108, 60);
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await promise).toEqual(input.map((_, i) => vector(i)));
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    expect(mockFetch.mock.calls[1][1]).toEqual(mockFetch.mock.calls[2][1]);
+    expect(progress.mock.calls).toEqual([[100, 108], [108, 108]]);
+  });
+
+  it.each([null, '121', 'bad'])('stops when there is no usable bounded retry instruction: %s', async (delay) => {
+    const headers = new Headers();
+    if (delay !== null) headers.set('Retry-After', delay);
+    const mockFetch = vi.fn().mockResolvedValue(Response.json({ error: 'Cuota' }, { status: 429, headers }));
+    vi.stubGlobal('fetch', mockFetch);
+    await expect(embedPdfChunks(chunks(1))).rejects.toThrow('Cuota');
+    expect(mockFetch).toHaveBeenCalledOnce();
+  });
+
+  it('stops after two retries when the same batch remains rate limited', async () => {
+    vi.useFakeTimers();
+    const mockFetch = vi.fn().mockImplementation(() => Promise.resolve(
+      Response.json({ error: 'Cuota' }, { status: 429, headers: { 'Retry-After': '1' } }),
+    ));
+    vi.stubGlobal('fetch', mockFetch);
+    const result = expect(embedPdfChunks(chunks(1))).rejects.toThrow('Cuota');
+    await vi.advanceTimersByTimeAsync(2000);
+    await result;
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
+
   it.each([
     { vectors: [] },
     { vectors: [[0.1]] },

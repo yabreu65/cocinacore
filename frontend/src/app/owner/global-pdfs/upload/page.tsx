@@ -47,7 +47,7 @@ async function extractPdfChunks(
   }
 }
 
-type UploadProgress = { stage: 'extract' | 'embed' | 'upload'; completed: number; total: number };
+type UploadProgress = { stage: 'extract' | 'embed' | 'wait' | 'upload'; completed: number; total: number; seconds?: number };
 type TextCoverage = { pageCount: number; textPages: number };
 
 export default function OwnerGlobalPdfsUploadPage() {
@@ -115,6 +115,8 @@ export default function OwnerGlobalPdfsUploadPage() {
       setProgress({ stage: 'embed', completed: 0, total: chunkCandidates.length });
       const embeddings = await embedPdfChunks(chunkCandidates, (completed, total) => {
         setProgress({ stage: 'embed', completed, total });
+      }, (completed, total, seconds) => {
+        setProgress({ stage: 'wait', completed, total, seconds });
       });
 
       const chunksJson = JSON.stringify(chunkCandidates.map((chunk, index) => ({
@@ -272,6 +274,7 @@ export default function OwnerGlobalPdfsUploadPage() {
           <div role="status" aria-live="polite" className="mt-3 space-y-2 rounded-xl border border-bistro-border bg-bistro-page p-3 text-sm">
             <p className="font-semibold text-bistro-text-primary">
               {progress.stage === 'extract' ? `Extrayendo texto: ${progress.completed} de ${progress.total || '…'} páginas`
+                : progress.stage === 'wait' ? `Límite temporal: esperando ${progress.seconds} segundos. ${progress.completed} de ${progress.total} fragmentos listos.`
                 : progress.stage === 'embed' ? `Generando embeddings: ${progress.completed} de ${progress.total} fragmentos`
                 : 'Guardando el PDF completo y su índice…'}
             </p>
@@ -284,7 +287,7 @@ export default function OwnerGlobalPdfsUploadPage() {
         {coverage && coverage.textPages < coverage.pageCount ? (
           <p className="mt-3 rounded-xl border border-bistro-warning/30 bg-bistro-warning/10 px-3 py-2 text-sm text-bistro-warning">
             Se encontró texto en {coverage.textPages} de {coverage.pageCount} páginas.
-            Las {coverage.pageCount - coverage.textPages} páginas restantes no tienen texto extraíble.
+            Las {coverage.pageCount - coverage.textPages} páginas restantes no tienen texto extraíble.{' '}
             {message ? 'Se conservó el PDF original completo.' : 'Se conservará el PDF original completo si la carga finaliza.'} No se aplica OCR.
           </p>
         ) : null}
