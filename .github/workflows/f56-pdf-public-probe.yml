@@ -1,0 +1,31 @@
+# Temporary, supplemental verification of public standard runners.
+# No production, privileged provisioning, provider calls or merge approval.
+name: F56 PDF public runner verification
+on:
+  push:
+    branches: [test/f56-actions-public]
+permissions:
+  contents: read
+jobs:
+  pdf-regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 207a91fdf2f7277ccfca5585ad9a4f768c44a352
+          persist-credentials: false
+      - name: Verify exact candidate
+        run: |
+          test "$(git rev-parse HEAD)" = 207a91fdf2f7277ccfca5585ad9a4f768c44a352
+          test "$(git rev-parse HEAD^{tree})" = 9c2a7f2e089d4b80b5e9d50ac1ee7d6c915cb5ff
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.3
+      - name: Install locked dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: PDF and RAG unit regression
+        working-directory: frontend
+        run: |
+          npm run test -- src/app/owner/global-pdfs/upload/pdf-embeddings.test.ts src/app/api/owner/global-pdfs/route.test.ts src/lib/recipes/server-rag-context.test.ts src/lib/recipes/source-citations.test.ts src/services/gemini.test.ts
