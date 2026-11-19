@@ -20,6 +20,7 @@ import {
 } from '@/lib/meal-planner/consumption';
 import { shouldApplyConsumptionResponse, withConsumptionRecord } from './consumptionState';
 import LoadErrorNotice from './load-error-notice';
+import MealPreparationAction from './MealPreparationAction';
 
 type ShoppingSuggestion = {
   normalizedName: string;
@@ -57,9 +58,12 @@ const mealTypeLabels: Record<StructuredMealType, string> = {
 
 export default function MealPlannerPage() {
   const [peopleCount, setPeopleCount] = useState(4);
+  const [planPeopleCount, setPlanPeopleCount] = useState(4);
   const [period, setPeriod] = useState<'week' | 'fortnight' | 'month'>('week');
   const [baseCuisine, setBaseCuisine] = useState('');
   const [restrictions, setRestrictions] = useState('');
+  // Snapshot from the saved plan, not the currently editable form field.
+  const [planHardRestrictions, setPlanHardRestrictions] = useState<string[]>([]);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -344,9 +348,11 @@ export default function MealPlannerPage() {
         activePlanIdRef.current = restoredPlanId;
         setActivePlanId(restoredPlanId);
         setPeopleCount(restored.peopleCount);
+        setPlanPeopleCount(restored.peopleCount);
         setPeriod(restored.period);
         setBaseCuisine(restored.baseCuisine);
         setRestrictions(restored.restrictions);
+        setPlanHardRestrictions(result.data.restrictions ?? []);
         setPlan(restored.plan);
         if (restoredPlanId) {
           void loadSuggestions(restoredPlanId);
@@ -380,6 +386,7 @@ export default function MealPlannerPage() {
     consumptionRequestVersionRef.current += 1;
     activePlanIdRef.current = null;
     setActivePlanId(null);
+    setPlanHardRestrictions([]);
     setIsLoadingSuggestions(false);
     setSuggestions([]);
     setSelectedItems(new Set());
@@ -437,6 +444,8 @@ export default function MealPlannerPage() {
         throw new Error('El proveedor IA no devolvió un menú estructurado.');
       }
       setPlan(result.data.plan);
+      setPlanPeopleCount(peopleCount);
+      setPlanHardRestrictions(restrictions.split(',').map((value) => value.trim()).filter(Boolean));
       const generatedPlanId = typeof result.data.id === 'string' ? result.data.id : null;
       activePlanIdRef.current = generatedPlanId;
       setActivePlanId(generatedPlanId);
@@ -831,6 +840,12 @@ export default function MealPlannerPage() {
                               ))}
                             </ul>
                           ) : null}
+                          <MealPreparationAction
+                            key={`${activePlanId ?? 'unsaved'}:${day.dayIndex}:${meal.mealType}:${JSON.stringify(meal)}`}
+                            meal={meal}
+                            peopleCount={planPeopleCount}
+                            hardRestrictions={planHardRestrictions}
+                          />
                           {activePlanId ? (
                             <div className="mt-3">
                               {consumed ? (
