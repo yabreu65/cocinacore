@@ -430,9 +430,8 @@ describe('POST /api/meal-plan', () => {
     expect(JSON.stringify(geminiRequest().generationConfig.responseJsonSchema)).toContain(
       'prepMinutes'
     );
-    expect(JSON.stringify(geminiRequest().generationConfig.responseJsonSchema)).toContain(
-      '"minimum":1'
-    );
+    expect(JSON.stringify(geminiRequest().generationConfig.responseJsonSchema)).not.toMatch(/"(?:minimum|maximum|minItems|maxItems|minLength|maxLength)"/);
+    expect(geminiPrompt()).toContain('las cocinas favoritas, preferencias y objetivos nutricionales orientan la propuesta');
     expect(createMealPlanMock.mock.calls[0]?.[0]).toMatchObject({
       structuredPlan: { availableTimeMinutesSnapshot: 30 },
     });
@@ -838,13 +837,60 @@ describe('POST /api/meal-plan', () => {
         await vi.advanceTimersByTimeAsync(60_000);
         const response = await pending;
         expect(providerSignal?.aborted).toBe(true);
-        expect(response.status).toBe(502);
+        expect(response.status).toBe(504);
         expect(createMealPlanMock).not.toHaveBeenCalled();
       } finally {
         vi.useRealTimers();
       }
     }
   );
+
+  it.each([['fortnight', 120_000], ['month', 180_000]] as const)(
+    'allows more time for %s but still cancels at its bounded deadline', async (period, timeout) => {
+      vi.useFakeTimers();
+      try {
+        let signal: AbortSignal | undefined;
+        let notify: () => void = () => {};
+        const started = new Promise<void>((resolve) => { notify = resolve; });
+        fetchMock.mockImplementationOnce((_url: string, init: RequestInit) => {
+          signal = init.signal ?? undefined;
+          notify();
+          return new Promise<Response>(() => {});
+        });
+        const pending = POST(request({ mode: 'balanced_ai', period }) as unknown as NextRequest);
+        await started;
+        await vi.advanceTimersByTimeAsync(timeout - 1);
+        expect(signal?.aborted).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect((await pending).status).toBe(504);
+        expect(signal?.aborted).toBe(true);
+        expect(createMealPlanMock).not.toHaveBeenCalled();
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+      } finally { vi.useRealTimers(); }
+    }
+  );
+
+  it.each([['week', 7], ['fortnight', 14], ['month', 30]] as const)(
+    'accepts and persists exactly one complete %s plan with the simplified wire schema', async (period, count) => {
+      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: structuredPlanJson(period) }] } }] }), { status: 200 }));
+      const response = await POST(request({ mode: 'balanced_ai', period }) as unknown as NextRequest);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ plan: { period, dayCount: count } });
+      expect(geminiPrompt()).toContain(`dayCount ${count}`);
+      expect(geminiPrompt()).toContain('Mantén el JSON compacto');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(createMealPlanMock).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it.each([429, 503])('reports provider saturation or quota (%s) without retry or persistence', async (status) => {
+    fetchMock.mockResolvedValueOnce(new Response('{}', { status }));
+    const response = await POST(request({ mode: 'balanced_ai' }) as unknown as NextRequest);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ error: 'El proveedor IA está temporalmente saturado o alcanzó su límite de uso. Intenta más tarde.' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(createMealPlanMock).not.toHaveBeenCalled();
+  });
 
   it('propagates client cancellation while reading the provider body', async () => {
     const client = new AbortController();

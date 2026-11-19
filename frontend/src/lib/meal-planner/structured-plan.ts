@@ -138,49 +138,45 @@ export const structuredMealPlanCandidateSchema = z
   })
   .strict();
 
-/** JSON Schema sent to Gemini so its output shape matches the server contract. */
+/** Provider wire shape only: Gemini rejects nested bounded arrays and numeric ranges
+ * as too many constraint states. All cardinality, value and text bounds remain
+ * enforced by the independent Zod candidate parser above. */
 export const structuredMealPlanResponseJsonSchema = {
   type: 'object',
   additionalProperties: false,
   required: ['period', 'dayCount', 'days'],
   properties: {
     period: { type: 'string', enum: ['week', 'fortnight', 'month'] },
-    dayCount: { type: 'integer', minimum: 1, maximum: 30 },
+    dayCount: { type: 'integer' },
     days: {
       type: 'array',
-      minItems: 1,
-      maxItems: 30,
       items: {
         type: 'object',
         additionalProperties: false,
         required: ['dayIndex', 'meals'],
         properties: {
-          dayIndex: { type: 'integer', minimum: 1, maximum: 30 },
+          dayIndex: { type: 'integer' },
           meals: {
             type: 'array',
-            minItems: 3,
-            maxItems: 3,
             items: {
               type: 'object',
               additionalProperties: false,
               required: ['mealType', 'title', 'prepMinutes', 'description', 'ingredients'],
               properties: {
                 mealType: { type: 'string', enum: [...MEAL_TYPES] },
-                title: { type: 'string', minLength: 1, maxLength: 160 },
-                prepMinutes: { type: 'integer', minimum: 1, maximum: 240 },
-                description: { type: ['string', 'null'], maxLength: 300 },
+                title: { type: 'string' },
+                prepMinutes: { type: 'integer' },
+                description: { type: ['string', 'null'] },
                 ingredients: {
                   type: 'array',
-                  maxItems: 30,
-                  minItems: 1,
                   items: {
                     type: 'object',
                     additionalProperties: false,
                     required: ['name', 'quantity', 'unit'],
                     properties: {
-                      name: { type: 'string', minLength: 1, maxLength: 120 },
-                      quantity: { type: ['number', 'null'], minimum: 0 },
-                      unit: { type: ['string', 'null'], minLength: 1, maxLength: 40 },
+                      name: { type: 'string' },
+                      quantity: { type: ['number', 'null'] },
+                      unit: { type: ['string', 'null'] },
                     },
                   },
                 },
@@ -208,10 +204,12 @@ export function buildStructuredMealPlanInstructions(
 El JSON debe respetar exactamente el esquema de respuesta configurado.
 Usa period como "${period}", dayCount ${dayCount}, y días con dayIndex consecutivos de 1 a ${dayCount}.
 Cada día debe incluir exactamente un mealType breakfast, lunch y dinner.
+Mantén el JSON compacto: títulos breves, descripciones de una frase corta o null si no aportan información, sin instrucciones de preparación extensas. Declara los ingredientes necesarios de cada comida, sin repeticiones ni relleno.
+Incluye de 1 a 30 ingredientes por comida; cada nombre debe tener de 1 a 120 caracteres, título de 1 a 160, descripción de hasta 300 y unidad de hasta 40 cuando corresponda.
 Cada comida debe incluir prepMinutes como estimación entera de minutos entre 1 y 240; no es una garantía de duración real.
 ${capInstruction}
 Las cantidades numéricas deben ser el total para las ${peopleCount} personas solicitadas, no una cantidad por persona.
-Para cantidades desconocidas usa quantity: null y unit: null; no inventes cantidades.`;
+Las cantidades conocidas deben ser números finitos no negativos. Para cantidades desconocidas usa quantity: null y unit: null; no inventes cantidades.`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

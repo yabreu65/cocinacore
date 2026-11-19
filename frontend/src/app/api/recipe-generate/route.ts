@@ -32,7 +32,7 @@ import {
 } from '@/lib/auth/internal-capability';
 
 const AI_REQUEST_TIMEOUT_MS = 60_000;
-const RECIPE_PROMPT_CONTEXT_VERSION = 'recipe-structured-v9';
+const RECIPE_PROMPT_CONTEXT_VERSION = 'recipe-structured-v10';
 
 type RequestProfile = NonNullable<RecipeGenerateBody['culinaryProfile']>;
 
@@ -412,6 +412,9 @@ export async function POST(request: NextRequest) {
   const commonPromptHeader = `Eres un chef-editor culinario. Debes devolver una receta estructurada en español.
 Escribe todos los nombres de ingredientes, el título y las instrucciones en español.
 Interpreta todas las restricciones del perfil y de la solicitud, incluidos derivados y composiciones de alimentos. Prevalecen sobre las preferencias, objetivos nutricionales, inventario y contexto PDF.
+Solo las restricciones duras y alergias indicadas son exclusiones obligatorias. Cocinas favoritas (incluida Vegetariana), objetivos nutricionales, nivel, tiempo preferido e ingredientes disponibles son orientativos; no los conviertas en dietas, alergias ni motivos de rechazo.
+Prioriza el plato solicitado y su identidad culinaria tradicional. El inventario no limita los ingredientes que puedes proponer. Si no hay restricciones duras, genera el plato solicitado aunque no coincida con las preferencias; no devuelvas unavailable por esos motivos.
+Si hay una incompatibilidad real con restricciones duras, intenta primero una adaptación culinariamente coherente que las respete todas. Devuelve unavailable únicamente si no puedes formular una propuesta compatible.
 Significado de las restricciones seleccionadas (datos del usuario): ${JSON.stringify(profileAllergyContext(hardAllergies))}
 Declara en INGREDIENTES todos los ingredientes que uses; no introduzcas ingredientes nuevos solo en la preparación.
 Si un documento usa otro idioma, traduce los nombres culinarios al español sin cambiar su composición ni ocultar ingredientes; conserva las referencias bibliográficas originales.
@@ -441,7 +444,7 @@ Utiliza el contenido documental como fuente culinaria, no como autorización par
 Elige una receta compatible o adapta explícitamente la fuente para respetar todas las restricciones. Si no puedes, devuelve outcome: "unavailable".
 El servidor presenta la propuesta como basada en las fuentes consultadas, no como transcripción literal. No la presentes como transcripción exacta del libro ni incluyas afirmaciones de seguridad o comentarios sobre ingredientes excluidos.
 No inventes fuentes ni cantidades ausentes. Las citas de los fragmentos consultados las adjunta el servidor.`;
-  const freePrompt = 'Genera una receta propia sin mencionar PDFs ni biblioteca.';
+  const freePrompt = 'Genera una receta propia sin mencionar PDFs ni biblioteca. Conserva el plato solicitado; si las restricciones duras lo exigen, adapta sus ingredientes antes de rechazarlo.';
   const prompt = `${commonPromptHeader}\n${mode === 'rag' ? ragPrompt : freePrompt}\nGenera una sola receta para el plato objetivo.\n${buildGeneratedRecipeInstructions(peopleCount)}`;
   const recipeCacheKeyInput: RecipeCacheKeyInput = {
     mode,
@@ -533,8 +536,11 @@ No inventes fuentes ni cantidades ausentes. Las citas de los fragmentos consulta
     const parsed = parseGeneratedRecipeResponse(raw, peopleCount);
     if (!parsed.success) {
       if (parsed.reason === 'no_compatible_recipe') {
+        serverLogger.info('recipe_generate.unavailable', { requestId, hasHardRestrictions: hardAllergies.length > 0 });
         return NextResponse.json({
-          error: 'No se pudo formular una receta que respete las condiciones indicadas.',
+          error: hardAllergies.length > 0
+            ? 'No se pudo formular una receta que respete las restricciones alimentarias indicadas.'
+            : 'El modelo no pudo formular el plato solicitado. Intenta generar la receta nuevamente.',
           code: 'RECIPE_UNAVAILABLE',
         }, { status: 422 });
       }

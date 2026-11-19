@@ -35,7 +35,16 @@ import { z } from 'zod';
 import { validateOperationalMealPlanRequest } from '@/lib/operational-domain';
 import { getRetryAfterSeconds } from '@/lib/rate-limit-identity';
 
-const AI_REQUEST_TIMEOUT_MS = 60_000;
+// Keep one bounded request per plan; long periods need more output time.
+const AI_REQUEST_TIMEOUT_MS: Record<MealPlanBody['period'], number> = {
+  week: 60_000,
+  fortnight: 120_000,
+  month: 180_000,
+};
+
+class MealPlanProviderError extends Error {
+  constructor(readonly status: number) { super('provider_response_failed'); }
+}
 const DEFAULT_PEOPLE_COUNT = 4;
 const DEFAULT_BASE_CUISINE = 'Latinoamericana';
 
@@ -281,7 +290,7 @@ Reglas:
 - Usa solo ingredientes disponibles en el inventario real.
 - No inventes cantidades de inventario; cuando diga "cantidad no especificada", no la supongas.
 - Si falta algo crítico, marcar como "pendiente de compra".
-- Respeta estrictamente "Evitar", las alergias del perfil (incluidos derivados) y las restricciones explícitas de esta solicitud. Prevalecen sobre el PDF y el inventario; los objetivos nutricionales orientan la propuesta. No afirmes ausencia garantizada de alérgenos.
+- Respeta estrictamente "Evitar", las alergias del perfil (incluidos derivados) y las restricciones explícitas de esta solicitud. Prevalecen sobre el PDF y el inventario; las cocinas favoritas, preferencias y objetivos nutricionales orientan la propuesta, no son restricciones obligatorias. Prioriza la cocina base solicitada. No afirmes ausencia garantizada de alérgenos.
 - Integra técnicas/sabores de fusión si se especifican culturas de fusión.
 - Si intensidad es sutil: prioriza cocina base y toques menores de fusión.
 - Si intensidad es media: balancea cocina base y fusión.
@@ -306,7 +315,7 @@ Reglas:
 - ${structuredOutputInstructions}
 - Usa primero el inventario real antes de proponer comidas y no supongas cantidades no especificadas.
 - No incluyas una lista de compras: esta respuesta solo contiene el menú estructurado.
-- Respeta estrictamente "Evitar", las alergias del perfil (incluidos derivados) y las restricciones explícitas de esta solicitud. Prevalecen sobre el PDF y el inventario; los objetivos nutricionales orientan la propuesta. No afirmes ausencia garantizada de alérgenos.
+- Respeta estrictamente "Evitar", las alergias del perfil (incluidos derivados) y las restricciones explícitas de esta solicitud. Prevalecen sobre el PDF y el inventario; las cocinas favoritas, preferencias y objetivos nutricionales orientan la propuesta, no son restricciones obligatorias. Prioriza la cocina base solicitada. No afirmes ausencia garantizada de alérgenos.
 - Integra técnicas/sabores de fusión si se especifican culturas de fusión.
 - Si intensidad es sutil: prioriza cocina base y toques menores de fusión.
 - Si intensidad es media: balancea cocina base y fusión.
@@ -317,13 +326,17 @@ Reglas:
     const controller = new AbortController();
     const abortFromClient = () => controller.abort();
     request.signal.addEventListener('abort', abortFromClient, { once: true });
-    const timeoutId = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
+    let timedOut = false;
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, AI_REQUEST_TIMEOUT_MS[period]);
     let removeAbortListener = () => {};
     let payload: unknown;
     try {
       if (request.signal.aborted) controller.abort();
       const aborted = new Promise<never>((_, reject) => {
-        const onAbort = () => reject(new Error('provider_request_aborted'));
+        const onAbort = () => reject(new Error(timedOut ? 'provider_request_timeout' : 'provider_request_aborted'));
         removeAbortListener = () => controller.signal.removeEventListener('abort', onAbort);
         if (controller.signal.aborted) onAbort();
         else controller.signal.addEventListener('abort', onAbort, { once: true });
@@ -348,12 +361,12 @@ Reglas:
             model,
             status: response.status,
           });
-          throw new Error('provider_response_failed');
+          throw new MealPlanProviderError(response.status);
         }
         return response.json() as Promise<unknown>;
       };
       payload = await Promise.race([providerRequest(), aborted]);
-      if (controller.signal.aborted) throw new Error('provider_request_aborted');
+      if (controller.signal.aborted) throw new Error(timedOut ? 'provider_request_timeout' : 'provider_request_aborted');
     } finally {
       clearTimeout(timeoutId);
       request.signal.removeEventListener('abort', abortFromClient);
@@ -467,15 +480,21 @@ Reglas:
       dayCount: parsedPlan.plan.dayCount,
     });
     return NextResponse.json({ id: persistedPlan.id, content, plan: parsedPlan.plan });
-  } catch {
+  } catch (error) {
+    const providerBusy = error instanceof MealPlanProviderError && (error.status === 429 || error.status === 503);
+    const timedOut = error instanceof Error && error.message === 'provider_request_timeout';
     serverLogger.warn('meal_plan.failed', {
       requestId,
       durationMs: Date.now() - startedAt,
-      reason: 'provider_error',
+      reason: providerBusy ? 'provider_busy' : timedOut ? 'provider_timeout' : 'provider_error',
     });
     return NextResponse.json(
-      { error: 'No se pudo generar menú con el proveedor IA.' },
-      { status: 502 }
+      { error: providerBusy
+        ? 'El proveedor IA está temporalmente saturado o alcanzó su límite de uso. Intenta más tarde.'
+        : timedOut
+          ? 'El proveedor IA tardó demasiado en completar el menú. Intenta nuevamente.'
+          : 'No se pudo generar menú con el proveedor IA.' },
+      { status: providerBusy ? 503 : timedOut ? 504 : 502 }
     );
   }
 }

@@ -73,7 +73,7 @@ export function buildGeneratedRecipeInstructions(servings: number): string {
     'Si hay restricciones, elige alimentos de composición identificable; evita productos de composición incierta. Si es apropiado, usa agua en vez de caldo. Si no puedes formular una propuesta compatible o la composición necesaria es incierta, devuelve outcome: "unavailable", title: "Sin propuesta compatible", ingredients: [], steps: [].',
     `Las cantidades son totales para ${servings} comensales; servings debe ser ${servings}. Declara todos los ingredientes utilizados.`,
     'quantity es un número positivo expresado como texto (decimal o fracción); unit es la unidad explícita o null. Ejemplo: {"name":"Tomates maduros medianos","quantity":"2","unit":"unidades","quantityNote":null}. Si la cantidad falta o es al gusto, usa quantity: null y la indicación original en quantityNote. No inventes cantidades, unidades ni referencias bibliográficas.',
-    'Escribe pasos claros de cocina en lenguaje natural, usando los ingredientes declarados. Puedes usar sus nombres o referencias {{1}}, {{2}}, etc. por posición. No agregues ingredientes fuera de la lista ni menciones ingredientes excluidos.',
+    'Escribe pasos claros de cocina en lenguaje natural, usando los ingredientes declarados. Usa directamente los nombres de los ingredientes declarados, sin referencias numéricas ni llaves. No agregues ingredientes fuera de la lista ni menciones ingredientes excluidos.',
     'Integra la técnica culinaria necesaria en los pasos. No añadas un apartado de consejos, sustituciones ni afirmaciones sobre seguridad o adaptación. Las fuentes se adjuntan en el servidor.',
   ].join('\n');
 }

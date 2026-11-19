@@ -247,10 +247,11 @@ describe('generated recipe contract', () => {
     });
   });
 
-  it('instructs Gemini to use Spanish, exact quantities, references and the requested portions', () => {
+  it('instructs Gemini to use Spanish, exact quantities, ingredient names and the requested portions', () => {
     expect(buildGeneratedRecipeInstructions(6)).toContain('servings debe ser 6');
     expect(buildGeneratedRecipeInstructions(6)).toContain('en español');
-    expect(buildGeneratedRecipeInstructions(6)).toContain('{{1}}');
+    expect(buildGeneratedRecipeInstructions(6)).toContain('Usa directamente los nombres de los ingredientes declarados, sin referencias numéricas ni llaves.');
+    expect(buildGeneratedRecipeInstructions(6)).not.toContain('{{1}}');
     expect(buildGeneratedRecipeInstructions(6)).toContain('quantity: null');
     expect(buildGeneratedRecipeInstructions(6)).toContain('usa agua en vez de caldo');
     expect(buildGeneratedRecipeInstructions(6)).toContain('composición incierta');
