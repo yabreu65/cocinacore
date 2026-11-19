@@ -82,6 +82,14 @@ describe('recipe editor operation guards', () => {
 
   afterEach(() => vi.unstubAllGlobals());
 
+  it('offers direct access to generated recipe history beside manual creation', () => {
+    const page = render(RecipeLibraryClient);
+    const history = find(page, (element) => element.props.href === '/recipes/history');
+    expect(history?.props.children).toBe('Historial');
+    expect(button(page, 'Crear receta')).toBeDefined();
+    expect(safeFetch).not.toHaveBeenCalled();
+  });
+
   it('keeps manual creation mounted through failed saves and blocks duplicate submission or closing', async () => {
     const page = () => render(RecipeLibraryClient);
     click(button(page(), 'Crear receta'));

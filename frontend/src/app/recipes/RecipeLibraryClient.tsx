@@ -328,13 +328,21 @@ export default function RecipeLibraryClient() {
               Tus recetas, organizadas en un solo lugar.
             </p>
           </div>
-          <button
-            disabled={saving}
-            onClick={() => { if (!saveLock.current) setCreating((current) => !current); }}
-            className="rounded-full bg-bistro-action-primary px-5 py-2.5 font-bold text-white"
-          >
-            Crear receta
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Link
+              href="/recipes/history"
+              className="rounded-full border border-bistro-action-primary px-5 py-2.5 font-semibold text-bistro-action-primary"
+            >
+              Historial
+            </Link>
+            <button
+              disabled={saving}
+              onClick={() => { if (!saveLock.current) setCreating((current) => !current); }}
+              className="rounded-full bg-bistro-action-primary px-5 py-2.5 font-bold text-white"
+            >
+              Crear receta
+            </button>
+          </div>
         </div>
         {creating && (
           <section

@@ -65,6 +65,40 @@ beforeEach(() => {
 });
 
 describe('RecipeSearchPage Today handoff', () => {
+  it('offers direct access to generated recipe history without generating a recipe', () => {
+    const markup = renderToStaticMarkup(createElement(RecipeSearchPage));
+    expect(markup).toMatch(/href="\/recipes\/history"[^>]*>Historial<\/a>/);
+    expect(safeFetch).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('keeps citations in the history workflow, not under the generated recipe (context=%s)', async (hasContext) => {
+    hooks.active = true;
+    try {
+      const initial = renderContent();
+      const select = findNode(initial, (item) => item.type === 'select');
+      expect(select).toBeDefined();
+      (select?.props.onChange as (event: { target: { value: string } }) => void)({ target: { value: 'rag' } });
+      const name = findNode(initial, (item) => item.props.name === 'recipeName');
+      (name?.props.onChange as (event: { target: { value: string } }) => void)({ target: { value: 'Arroz' } });
+      vi.mocked(safeFetch).mockResolvedValueOnce({ ok: true, data: {
+        title: 'Arroz', recipe: 'Cocinar arroz.', recipeHistoryId: 'history-1',
+        ragContextUsed: hasContext,
+        sources: hasContext ? [{ sourceType: 'global_pdf', globalBookId: 'book-1', title: 'Libro de prueba', pageNumber: 111, chunkId: 'chunk-1' }] : [],
+      } });
+      const form = findNode(renderContent(), (item) => item.type === 'form');
+      await (form?.props.onSubmit as (event: FormEvent) => Promise<void>)({ preventDefault: vi.fn() } as unknown as FormEvent);
+      const result = renderContent();
+      expect(findNode(result, (item) => item.props.children === 'Cocinar arroz.')).toBeDefined();
+      expect(findNode(result, (item) => item.props.children === 'Importar al recetario')).toBeDefined();
+      expect(findNode(result, (item) => item.props.href === '/recipes/history')).toBeDefined();
+      expect(findNode(result, (item) => item.props.children === 'Fuentes del recetario')).toBeUndefined();
+      expect(findNode(result, (item) => item.props.children === 'Libro de prueba')).toBeUndefined();
+      expect(Boolean(findNode(result, (item) => item.props.children === 'No se encontró contexto documental relevante para esta receta.'))).toBe(!hasContext);
+    } finally {
+      hooks.active = false;
+    }
+  });
+
   it('prefills valid URL intent, maps it into the canonical request body fields, and keeps explicit submit', () => {
     searchParams.current = 'slot=snack&title=Tostadas+con+tomate&ingredient=pan&ingredient=tomate';
     const markup = renderToStaticMarkup(createElement(RecipeSearchPage));
