@@ -9,7 +9,6 @@ import {
   CalendarDays,
   CreditCard,
   LayoutGrid,
-  Library,
   Menu,
   Package,
   ShoppingCart,
@@ -26,7 +25,6 @@ const icons = {
   package: Package,
   calendar: CalendarDays,
   cart: ShoppingCart,
-  library: Library,
   user: User,
   card: CreditCard,
 } as const;

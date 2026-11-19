@@ -45,7 +45,7 @@ describe('UX2: CocinaCore Hogar shared navigation', () => {
     expect(activeHouseholdRoute('/recipes/inventory')).toBe('/recipes/inventory');
     expect(activeHouseholdRoute('/shopping-list')).toBe('/shopping-list');
     expect(activeHouseholdRoute('/meal-planner')).toBe('/meal-planner');
-    expect(activeHouseholdRoute('/library')).toBe('/library');
+    expect(activeHouseholdRoute('/library')).toBeNull();
     expect(activeHouseholdRoute('/profile')).toBe('/profile');
     expect(activeHouseholdRoute('/billing')).toBe('/billing');
     expect(activeHouseholdRoute('/premium')).toBeNull();
@@ -57,6 +57,8 @@ describe('UX2: CocinaCore Hogar shared navigation', () => {
     expect(labels).toContain('Asistente de recetas');
     expect(labels).toContain('Inventario');
     expect(labels).toContain('Compras');
+    expect(labels).not.toContain('Biblioteca');
+    expect(householdNavigation.map(({ href }) => href)).not.toContain('/library');
     expect(labels).not.toContain('Miembros');
     expect(labels).not.toContain('Premium Board');
     expect(new Set(householdNavigation.map(({ href }) => href)).size).toBe(
