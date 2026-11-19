@@ -8,7 +8,7 @@ import type { StructuredRecipeIngredient } from '@/components/recipe-view/types'
 import { safeFetch } from '@/lib/api';
 import { RecipeGenerateSchema } from '@/lib/validation';
 import { buildRecipeImportPayload } from '@/lib/recipes/recipe-import';
-import { getVisibleRecipeSources, type VisibleRecipeSource } from '@/lib/recipes/source-citations';
+import { getVisibleRecipeSources } from '@/lib/recipes/source-citations';
 import {
   buildRecipeGenerationRequestPayload,
   buildTodayRecipeRequestFields,
@@ -32,9 +32,7 @@ interface RecipeSearchResult {
   preparation?: string;
   title: string;
   structuredIngredients: StructuredRecipeIngredient[];
-  mode: 'free' | 'rag';
-  ragContextUsed: boolean;
-  sources: VisibleRecipeSource[];
+  missingDocumentContext: boolean;
   recipeHistoryId?: string;
   servings: number;
 }
@@ -96,9 +94,8 @@ function RecipeSearchContent() {
         preparation: data.preparation,
         title: data.title,
         structuredIngredients: data.structuredIngredients ?? [],
-        mode,
-        ragContextUsed,
-        sources: getVisibleRecipeSources(mode, ragContextUsed, data.sources ?? []),
+        missingDocumentContext: mode === 'rag' &&
+          getVisibleRecipeSources(mode, ragContextUsed, data.sources ?? []).length === 0,
         recipeHistoryId: data.recipeHistoryId,
         servings: data.servings ?? 4,
       });
@@ -291,33 +288,7 @@ function RecipeSearchContent() {
               </div>
             ) : null}
 
-            {result.sources.length > 0 ? (
-              <section className="mt-4" aria-labelledby="recipe-sources-heading">
-                <h3 id="recipe-sources-heading" className="font-semibold">
-                  Fuentes del recetario
-                </h3>
-                <p className="mt-1 text-sm text-bistro-text-secondary">
-                  Propuesta elaborada a partir de las fuentes consultadas; puede incluir adaptaciones y no constituye una transcripción literal.
-                </p>
-                <ul className="mt-2 grid gap-2">
-                  {result.sources.map((source) => (
-                    <li
-                      key={JSON.stringify([
-                        source.sourceType,
-                        source.sourceId,
-                        source.pageNumber ?? null,
-                        source.chunkId ?? null,
-                      ])}
-                      className="rounded-lg border border-bistro-border bg-white px-3 py-2 text-sm"
-                    >
-                      <p className="font-medium">{source.label}</p>
-                      {source.title ? <p>{source.title}</p> : null}
-                      {source.pageNumber ? <p>Página {source.pageNumber}</p> : null}
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            ) : result.mode === 'rag' && (!result.ragContextUsed || result.sources.length === 0) ? (
+            {result.missingDocumentContext ? (
               <p className="mt-4 text-sm text-bistro-text-secondary">
                 No se encontró contexto documental relevante para esta receta.
               </p>

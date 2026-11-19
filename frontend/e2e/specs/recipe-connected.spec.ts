@@ -111,12 +111,12 @@ test.describe('Connected recipe search', () => {
     expect(prompt).not.toContain(seed.tenantBSecretMarker);
     expect(prompt).not.toContain(seed.tenantBBookTitle);
 
-    await expect(page.getByRole('heading', { name: 'Fuentes del recetario' })).toBeVisible();
-    await expect(page.getByText('Propuesta elaborada a partir de las fuentes consultadas; puede incluir adaptaciones y no constituye una transcripción literal.')).toBeVisible();
-    await expect(page.getByText(seed.globalBookTitle, { exact: true })).toBeVisible();
-    await expect(page.getByText(seed.tenantBookTitle, { exact: true })).toBeVisible();
-    await expect(page.getByText('Página 7', { exact: true })).toBeVisible();
-    await expect(page.getByText('Página 11', { exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Fuentes del recetario' })).toHaveCount(0);
+    await expect(page.getByText(seed.globalBookTitle, { exact: true })).toHaveCount(0);
+    await expect(page.getByText(seed.tenantBookTitle, { exact: true })).toHaveCount(0);
+    await expect(page.getByText('Página 7', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('Página 11', { exact: true })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: 'Historial', exact: true })).toHaveAttribute('href', '/recipes/history');
     await expect(page.getByText(seed.tenantBBookTitle, { exact: true })).toHaveCount(0);
     await expect(page.getByText(seed.tenantBSecretMarker, { exact: true })).toHaveCount(0);
 
@@ -144,7 +144,7 @@ test.describe('Connected recipe search', () => {
     const cachedInspection = await inspectProvider(page);
     expect(cachedInspection.generationCallCount).toBe(1);
 
-    await page.goto('/recipes/history');
+    await page.getByRole('link', { name: 'Historial', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Historial de recetas' })).toBeVisible();
     const historyEntry = page.getByRole('listitem').filter({ hasText: GENERATED_TITLE }).first();
     await expect(historyEntry).toBeVisible();
@@ -159,6 +159,8 @@ test.describe('Connected recipe search', () => {
     await expect(historySources).toContainText(seed.tenantBookTitle);
     await expect(historySources).not.toContainText(seed.tenantBBookTitle);
     await expect(historySources).toContainText('Página 7');
+    await expect(historySources).toContainText('Página 11');
+    await expect(historySources).not.toContainText(seed.tenantBSecretMarker);
 
 
     await historyEntry.getByRole('button', { name: 'Marcar para consultar' }).click();
