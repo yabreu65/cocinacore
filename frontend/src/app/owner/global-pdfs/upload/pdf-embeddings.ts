@@ -3,15 +3,18 @@ export type ParsedChunk = { content: string; pageNumber: number };
 // Nginx allows 50 MiB for the multipart upload. Reserve 1 MiB for
 // multipart framing and headers; preflight text, vectors and metadata in UTF-8.
 export const PDF_UPLOAD_BUDGET_BYTES = 49 * 1024 * 1024;
-const BATCH_SIZE = 100;
-const BATCH_CHAR_LIMIT = 100_000;
+// Leave headroom for the observed free-tier limits of 100 inputs and
+// 30,000 tokens per minute. UTF-8 bytes are a conservative local size
+// proxy, not an exact Gemini tokenizer or a shared quota counter.
+const BATCH_SIZE = 60;
+const BATCH_BYTE_LIMIT = 20_000;
 const VECTOR_DIMENSIONS = 1536;
 const MAX_RETRIES_PER_BATCH = 2;
 const MAX_RETRIES_PER_UPLOAD = 6;
 const MAX_RETRY_DELAY_SECONDS = 120;
 // Conservative per-upload pacing for the observed free-tier quota of
 // 100 embedding inputs/minute. Other clients can still consume shared quota.
-const MIN_BATCH_PAUSE_SECONDS = 61;
+const MIN_BATCH_PAUSE_SECONDS = 65;
 // A finite JS number serialized as JSON needs at most 25 ASCII bytes,
 // plus one separator. This upper bound avoids provider calls for oversized uploads.
 const MAX_VECTOR_JSON_BYTES = VECTOR_DIMENSIONS * 26;
@@ -80,15 +83,16 @@ export async function embedPdfChunks(
   const candidates = preparePdfChunks(chunks);
   const batches: string[][] = [];
   let batch: string[] = [];
-  let characters = 0;
+  let bytes = 0;
   for (const { content } of candidates) {
-    if (batch.length >= BATCH_SIZE || characters + content.length > BATCH_CHAR_LIMIT) {
+    const contentBytes = encoder.encode(content).byteLength;
+    if (batch.length && (batch.length >= BATCH_SIZE || bytes + contentBytes > BATCH_BYTE_LIMIT)) {
       batches.push(batch);
       batch = [];
-      characters = 0;
+      bytes = 0;
     }
     batch.push(content);
-    characters += content.length;
+    bytes += contentBytes;
   }
   if (batch.length) batches.push(batch);
 
