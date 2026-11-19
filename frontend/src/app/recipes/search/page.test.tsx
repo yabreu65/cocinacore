@@ -65,6 +65,12 @@ beforeEach(() => {
 });
 
 describe('RecipeSearchPage Today handoff', () => {
+  it('offers direct access to generated recipe history without generating a recipe', () => {
+    const markup = renderToStaticMarkup(createElement(RecipeSearchPage));
+    expect(markup).toMatch(/href="\/recipes\/history"[^>]*>Historial<\/a>/);
+    expect(safeFetch).not.toHaveBeenCalled();
+  });
+
   it('prefills valid URL intent, maps it into the canonical request body fields, and keeps explicit submit', () => {
     searchParams.current = 'slot=snack&title=Tostadas+con+tomate&ingredient=pan&ingredient=tomate';
     const markup = renderToStaticMarkup(createElement(RecipeSearchPage));

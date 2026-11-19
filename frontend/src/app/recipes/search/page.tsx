@@ -147,16 +147,24 @@ function RecipeSearchContent() {
   return (
     <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 text-bistro-text-primary md:px-6">
       <section className="mx-auto w-full max-w-4xl rounded-3xl border border-bistro-border bg-white/80 p-5 premium-shadow">
-        <div className="mb-4 flex items-center justify-between">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-3xl font-semibold">Buscar recetas</h1>
             <p className="text-bistro-text-secondary">
               Generá recetas con IA a partir de tus ingredientes.
             </p>
           </div>
-          <Link href="/app" className="text-sm font-semibold text-bistro-action-primary">
-            Volver
-          </Link>
+          <div className="flex flex-wrap items-center gap-3">
+            <Link
+              href="/recipes/history"
+              className="rounded-full border border-bistro-action-primary px-4 py-2 text-sm font-semibold text-bistro-action-primary"
+            >
+              Historial
+            </Link>
+            <Link href="/app" className="text-sm font-semibold text-bistro-action-primary">
+              Volver
+            </Link>
+          </div>
         </div>
 
         <form onSubmit={onSubmit} className="grid gap-3">
