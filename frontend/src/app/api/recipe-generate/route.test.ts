@@ -292,7 +292,7 @@ describe('POST /api/recipe-generate', () => {
         goals: ['Comidas rápidas'],
         inventoryContextHash: 'sha256-private-context',
         profileContextHash: 'sha256-private-context',
-        contextVersion: 'recipe-structured-v9',
+        contextVersion: 'recipe-structured-v10',
         model: 'gemini-test-model',
       })
     );
@@ -1655,6 +1655,35 @@ describe('POST /api/recipe-generate', () => {
     expect(createRecipeHistoryMock).not.toHaveBeenCalled();
     expect(setCachedRecipeMock).not.toHaveBeenCalled();
     if (source === 'cached') expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each(['free', 'rag'] as const)('keeps preferences optional for a requested traditional dish (%s)', async (mode) => {
+    loadPersistedRecipeContextMock.mockResolvedValueOnce(persistedContext({
+      profile: { identity: ['Vegetariana', 'Mediterránea'], preferred: [], avoid: [], goals: ['Bajar de peso', 'Ganar músculo'], allergies: [] },
+      profileContext: 'Identidad/contexto: Vegetariana, Mediterránea\nObjetivos: Bajar de peso, Ganar músculo',
+    }));
+    fetchMock.mockResolvedValueOnce(geminiResponse('Pabellón criollo\n\nINGREDIENTES\n- 400 g carne de res\n- 200 g arroz\n- 200 g caraotas negras\n- 2 unidades plátano maduro'));
+    const response = await POST(request({ mode, recipeName: 'Pabellón criollo' }) as unknown as NextRequest);
+    expect(response.status).toBe(200);
+    expect(geminiPrompt()).toContain('Restricciones duras: Ninguna');
+    expect(geminiPrompt()).toContain('Receta objetivo (OBLIGATORIO): Pabellón criollo');
+    expect(geminiPrompt()).toContain('son orientativos; no los conviertas en dietas, alergias ni motivos de rechazo');
+    expect(geminiPrompt()).toContain('no devuelvas unavailable por esos motivos');
+    expect(geminiPrompt()).toContain('intenta primero una adaptación culinariamente coherente');
+    expect(createRecipeHistoryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not imply a dietary conflict when the provider declines a dish with no hard restrictions', async () => {
+    loadPersistedRecipeContextMock.mockResolvedValueOnce(persistedContext({
+      profile: { identity: ['Vegetariana'], preferred: [], avoid: [], goals: [], allergies: [] },
+      profileContext: 'Identidad/contexto: Vegetariana',
+    }));
+    fetchMock.mockResolvedValueOnce(providerResponse({ outcome: 'unavailable', title: 'Sin propuesta compatible', servings: 4, ingredients: [], steps: [], tips: [] }));
+    const response = await POST(request({ mode: 'free', recipeName: 'Bandeja paisa' }) as unknown as NextRequest);
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({ code: 'RECIPE_UNAVAILABLE', error: 'El modelo no pudo formular el plato solicitado. Intenta generar la receta nuevamente.' });
+    expect(createRecipeHistoryMock).not.toHaveBeenCalled();
+    expect(setCachedRecipeMock).not.toHaveBeenCalled();
   });
 
   it.each(['free', 'rag'])('returns no recipe if Gemini cannot satisfy the profile (%s)', async (mode) => {
