@@ -6,7 +6,6 @@ export const householdNavigation = [
   { label: 'Inventario', href: '/recipes/inventory', icon: 'package' },
   { label: 'Planificador', href: '/meal-planner', icon: 'calendar' },
   { label: 'Compras', href: '/shopping-list', icon: 'cart' },
-  { label: 'Biblioteca', href: '/library', icon: 'library' },
   { label: 'Perfil', href: '/profile', icon: 'user' },
   { label: 'Mi plan', href: '/billing', icon: 'card' },
 ] as const;
