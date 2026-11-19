@@ -33,6 +33,7 @@ describe('global PDF embedding preparation', () => {
     expect(result.every((chunk) => chunk.pageNumber === 9)).toBe(true);
   });
   it.each([900, 5000])('batches all 308 fragments of %i characters within the API contract', async (size) => {
+    vi.useFakeTimers();
     const input = chunks(308, size);
     const requests: string[][] = [];
     const mockFetch = vi.fn(async (_url: string, init: RequestInit) => {
@@ -43,41 +44,87 @@ describe('global PDF embedding preparation', () => {
     });
     vi.stubGlobal('fetch', mockFetch);
     const progress = vi.fn();
-    expect(await embedPdfChunks(input, progress)).toEqual(input.map((_, i) => vector(i)));
+    const result = embedPdfChunks(input, progress);
+    await vi.runAllTimersAsync();
+    expect(await result).toEqual(input.map((_, i) => vector(i)));
     expect(progress).toHaveBeenLastCalledWith(308, 308);
     expect(progress).toHaveBeenCalledTimes(requests.length);
     expect(requests.length).toBeGreaterThan(1);
+    expect(requests.every((batch) => batch.length <= 60)).toBe(true);
+    expect(requests.every((batch) =>
+      batch.reduce((sum, text) => sum + new TextEncoder().encode(text).byteLength, 0) <= 20_000,
+    )).toBe(true);
     expect(requests.flat()).toEqual(input.map((c) => c.content));
   });
+  it('uses UTF-8 bytes instead of character count for multilingual text', async () => {
+    vi.useFakeTimers();
+    const input = Array.from({ length: 18 }, (_, i) => ({
+      content: '食'.repeat(900), pageNumber: i + 1,
+    }));
+    const requests: string[][] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      const { texts } = JSON.parse(String(init.body)) as { texts: string[] };
+      requests.push(texts);
+      return Response.json({ embeddings: texts.map((_, i) => vector(i)) });
+    }));
+    const result = embedPdfChunks(input);
+    await vi.runAllTimersAsync();
+    expect(await result).toHaveLength(18);
+    expect(requests.map((batch) => batch.length)).toEqual([7, 7, 4]);
+    expect(requests.flat()).toEqual(input.map((chunk) => chunk.content));
+  });
+
   it('stops on a failed later batch rather than returning partial results', async () => {
+    vi.useFakeTimers();
     const mockFetch = vi.fn()
-      .mockResolvedValueOnce(Response.json({ embeddings: chunks(100).map((_, i) => vector(i)) }))
+      .mockResolvedValueOnce(Response.json({ embeddings: chunks(60, 100).map((_, i) => vector(i)) }))
       .mockResolvedValueOnce(Response.json({ error: 'Servicio no disponible' }, { status: 503 }));
     vi.stubGlobal('fetch', mockFetch);
-    await expect(embedPdfChunks(chunks(160))).rejects.toThrow('Servicio no disponible');
+    const result = expect(embedPdfChunks(chunks(160, 100))).rejects.toThrow('Servicio no disponible');
+    await vi.runAllTimersAsync();
+    await result;
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
-  it('honors explicit Retry-After and retries only the rejected batch', async () => {
+  it('paces batches and retries only the rejected batch after a short Retry-After', async () => {
     vi.useFakeTimers();
-    const input = chunks(108);
+    const input = chunks(108, 100);
     const mockFetch = vi.fn()
-      .mockResolvedValueOnce(Response.json({ embeddings: input.slice(0, 100).map((_, i) => vector(i)) }))
-      .mockResolvedValueOnce(Response.json({ error: 'Cuota' }, { status: 429, headers: { 'Retry-After': '60' } }))
-      .mockResolvedValueOnce(Response.json({ embeddings: input.slice(100).map((_, i) => vector(100 + i)) }));
+      .mockResolvedValueOnce(Response.json({ embeddings: input.slice(0, 60).map((_, i) => vector(i)) }))
+      .mockResolvedValueOnce(Response.json({ error: 'Cuota' }, { status: 429, headers: { 'Retry-After': '3' } }))
+      .mockResolvedValueOnce(Response.json({ embeddings: input.slice(60).map((_, i) => vector(60 + i)) }));
     vi.stubGlobal('fetch', mockFetch);
     const progress = vi.fn();
     const waiting = vi.fn();
     const promise = embedPdfChunks(input, progress, waiting);
     await vi.advanceTimersByTimeAsync(0);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(waiting).toHaveBeenCalledWith(60, 108, 65);
+    await vi.advanceTimersByTimeAsync(64_999);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
     expect(mockFetch).toHaveBeenCalledTimes(2);
-    expect(waiting).toHaveBeenCalledWith(100, 108, 60);
-    await vi.advanceTimersByTimeAsync(59_999);
+    expect(waiting).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(64_999);
     expect(mockFetch).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(1);
     expect(await promise).toEqual(input.map((_, i) => vector(i)));
     expect(mockFetch).toHaveBeenCalledTimes(3);
     expect(mockFetch.mock.calls[1][1]).toEqual(mockFetch.mock.calls[2][1]);
-    expect(progress.mock.calls).toEqual([[100, 108], [108, 108]]);
+    expect(progress.mock.calls).toEqual([[60, 108], [108, 108]]);
+  });
+
+  it('honors a longer provider Retry-After rather than shortening it', async () => {
+    vi.useFakeTimers();
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce(Response.json({ error: 'Cuota' }, { status: 429, headers: { 'Retry-After': '120' } }))
+      .mockResolvedValueOnce(Response.json({ embeddings: [vector(0)] }));
+    vi.stubGlobal('fetch', mockFetch);
+    const result = embedPdfChunks(chunks(1));
+    await vi.advanceTimersByTimeAsync(119_999);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await result).toEqual([vector(0)]);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
   it.each([null, '121', 'bad'])('stops when there is no usable bounded retry instruction: %s', async (delay) => {
@@ -96,7 +143,7 @@ describe('global PDF embedding preparation', () => {
     ));
     vi.stubGlobal('fetch', mockFetch);
     const result = expect(embedPdfChunks(chunks(1))).rejects.toThrow('Cuota');
-    await vi.advanceTimersByTimeAsync(2000);
+    await vi.advanceTimersByTimeAsync(130_000);
     await result;
     expect(mockFetch).toHaveBeenCalledTimes(3);
   });

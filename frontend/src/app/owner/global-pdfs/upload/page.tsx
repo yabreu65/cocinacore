@@ -274,7 +274,7 @@ export default function OwnerGlobalPdfsUploadPage() {
           <div role="status" aria-live="polite" className="mt-3 space-y-2 rounded-xl border border-bistro-border bg-bistro-page p-3 text-sm">
             <p className="font-semibold text-bistro-text-primary">
               {progress.stage === 'extract' ? `Extrayendo texto: ${progress.completed} de ${progress.total || '…'} páginas`
-                : progress.stage === 'wait' ? `Límite temporal: esperando ${progress.seconds} segundos. ${progress.completed} de ${progress.total} fragmentos listos.`
+                : progress.stage === 'wait' ? `Pausa para respetar la cuota de Gemini: ${progress.seconds} segundos. ${progress.completed} de ${progress.total} fragmentos listos.`
                 : progress.stage === 'embed' ? `Generando embeddings: ${progress.completed} de ${progress.total} fragmentos`
                 : 'Guardando el PDF completo y su índice…'}
             </p>
