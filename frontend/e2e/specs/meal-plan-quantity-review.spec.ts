@@ -80,9 +80,16 @@ test('revises weekly quantities only after explicit preparation and partial appr
   await expect(approval).toBeChecked();
   const uncalculable = page.getByLabel('Aprobar canela');
   const otherMeal = page.locator('h4').filter({ hasText: 'Almuerzo:' }).first().locator('..').getByRole('checkbox').first();
+  const dinner = page.locator('h4').filter({ hasText: 'Cena:' }).first().locator('..').getByRole('checkbox').first();
   await expect(uncalculable).not.toBeChecked();
   await expect(uncalculable).toBeDisabled();
-  await expect(otherMeal).not.toBeChecked();
+  // All three valid Monday estimates start selected, not only breakfast.
+  await expect(otherMeal).toBeChecked();
+  await expect(dinner).toBeChecked();
+  await expect(page.getByText(`Cantidades listas para guardar: 3. Sin seleccionar: ${items.length - 3}.`)).toBeVisible();
+  // The customer can exclude lunch and dinner, then confirm only breakfast.
+  await otherMeal.uncheck();
+  await dinner.uncheck();
   await expect(page.getByText(`Cantidades listas para guardar: 1. Sin seleccionar: ${items.length - 1}.`)).toBeVisible();
   await expect(page.getByRole('button', { name: 'Guardar cantidades aprobadas' })).toBeEnabled();
   await approval.uncheck();
