@@ -55,8 +55,11 @@ test('revises weekly quantities only after explicit preparation and partial appr
     const body: unknown = route.request().postDataJSON();
     if (route.request().method() === 'POST') {
       preparations++;
-      expect(body).toEqual({ mealPlanId });
-      return route.fulfill({ json: { mealPlanId, expectedUpdatedAt: 'fixture', fingerprint: 'source', items } });
+      expect(body).toEqual({ mealPlanId, dayIndex: expect.any(Number) });
+      const selectedDay = (body as { dayIndex: number }).dayIndex;
+      const dayItems = items.filter(item => item.dayIndex === selectedDay);
+      expect(dayItems.length).toBeGreaterThan(0);
+      return route.fulfill({ json: { mealPlanId, expectedUpdatedAt: 'fixture', fingerprint: 'source', items: dayItems } });
     }
     expect(route.request().method()).toBe('PUT');
     saves++;
@@ -66,10 +69,15 @@ test('revises weekly quantities only after explicit preparation and partial appr
 
   await page.goto('/meal-planner');
   await expect(page.getByRole('heading', { name: 'Agenda confirmada' })).toBeVisible();
-  const prepare = page.getByRole('button', { name: 'Preparar cantidades estimadas para mi menú' });
+  const prepare = page.getByRole('button', { name: /Preparar cantidades estimadas de/ });
   await expect(prepare).toBeVisible();
   expect(preparations).toBe(0);
   expect(saves).toBe(0);
+  const dayPicker = page.getByLabel('Día del menú');
+  await expect(dayPicker).toBeVisible();
+  await dayPicker.selectOption('2');
+  expect(preparations).toBe(0);
+  await dayPicker.selectOption('1');
   await prepare.click();
   await expect(page.getByRole('heading', { name: 'Estimación de IA — revisar' })).toBeVisible();
   expect(preparations).toBe(1);
@@ -95,4 +103,10 @@ test('revises weekly quantities only after explicit preparation and partial appr
   await expect.poll(() => saves).toBe(1);
   await expect.poll(() => planReads).toBe(2);
   await expect.poll(() => shoppingReads).toBe(2);
+  await page.getByLabel('Día del menú').selectOption('2');
+  expect(preparations).toBe(1);
+  await prepare.click();
+  await expect.poll(() => preparations).toBe(2);
+  await expect(page.locator('section[aria-labelledby="quantity-review-title"] summary')).toHaveText('MARTES');
+  await expect(page.locator('section[aria-labelledby="quantity-review-title"] summary')).not.toHaveText('LUNES');
 });

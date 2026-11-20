@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
+import { serverLogger } from '@/lib/serverLogger';
 import { requireUser } from '@/lib/auth/server';
 import { getGeminiApiKey, getGeminiBaseUrl, getGeminiModel } from '@/lib/ai/gemini-config';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -12,6 +13,7 @@ import { hasRestrictedMealPlanContent, mealPlanRestrictionsChanged, parseStructu
 import { missingQuantityItems, quantityReviewItemsSchema, validateReviewItems, type QuantityReviewItem } from '@/lib/meal-planner/quantity-review';
 
 const requestSchema = z.object({ mealPlanId: z.string().uuid() }).strict();
+const prepareSchema = requestSchema.extend({ dayIndex: z.number().int().min(1).max(7).default(1) }).strict();
 const confirmSchema = requestSchema.extend({
   expectedUpdatedAt: z.string().min(1).max(100),
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
@@ -64,34 +66,53 @@ async function identity(request: NextRequest) {
 }
 const invalid = () => NextResponse.json({ error: 'Solicitud inválida.' }, { status: 400 });
 const conflict = () => NextResponse.json({ error: 'El menú o las restricciones cambiaron. Prepará una nueva revisión.' }, { status: 409 });
-const unavailable = (status: number) => NextResponse.json({ error: 'No se pudieron preparar las estimaciones. Intentá más tarde.' }, { status });
+type FailureReason = 'rate_limiter_unavailable' | 'rate_limit_exceeded' | 'gemini_key_missing' |
+  'gemini_unavailable' | 'gemini_rate_limited' | 'gemini_response_invalid' |
+  'gemini_request_failed' | 'gemini_timeout' | 'plan_read_unavailable' | 'prompt_too_large';
+const failureMessages: Record<FailureReason, string> = {
+  rate_limiter_unavailable: 'El servicio de solicitudes no está disponible. Intentá de nuevo más tarde.',
+  rate_limit_exceeded: 'Se alcanzó el límite de solicitudes. Intentá de nuevo en un minuto.',
+  gemini_key_missing: 'Las estimaciones de IA no están configuradas. Avisá al administrador.',
+  gemini_unavailable: 'Gemini está ocupado temporalmente. Volvé a intentar en unos minutos.',
+  gemini_rate_limited: 'Gemini alcanzó el límite de solicitudes. Intentá más tarde.',
+  gemini_response_invalid: 'Gemini no devolvió cantidades válidas. Podés intentar de nuevo.',
+  gemini_request_failed: 'No se pudo completar la consulta con Gemini. Intentá más tarde.',
+  gemini_timeout: 'La preparación tardó demasiado. Intentá nuevamente con este día.',
+  plan_read_unavailable: 'No se pudo consultar el menú guardado. No se modificó nada.',
+  prompt_too_large: 'El día contiene demasiada información para preparar las cantidades.',
+};
+function unavailable(status: number, reason: FailureReason) {
+  // Reason only: no ingredient names, prompts, credentials, user IDs or provider bodies.
+  serverLogger.warn('meal_plan.quantity_review.unavailable', { reason, status });
+  return NextResponse.json({ error: failureMessages[reason] }, { status });
+}
 
 export async function POST(request: NextRequest) {
   const scope = await identity(request);
   if (!scope) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   let body: unknown;
   try { body = await readBody(request); } catch { return invalid(); }
-  const input = requestSchema.safeParse(body);
+  const input = prepareSchema.safeParse(body);
   if (!input.success) return invalid();
   try {
     const source = await withQuantityReviewSource(scope, input.data.mealPlanId, async (_client, row, restrictions) => {
       const plan = checkPlan(row, restrictions);
       if (!plan) return { status: 'conflict' as const };
       if (plan.dayCount !== 7 || row.period !== 'week') return { status: 'long' as const };
-      const missing = missingQuantityItems(plan);
+      const missing = missingQuantityItems(plan).filter(item => item.dayIndex === input.data.dayIndex);
       if (!missing.length) return { status: 'none' as const };
       return { status: 'ready' as const, plan, missing, peopleCount: row.people_count, updatedAt: row.updated_at, fingerprint: fingerprint(row, restrictions) };
     });
     if (!source) return NextResponse.json({ error: 'Menú no encontrado.' }, { status: 404 });
     if (source.status === 'conflict') return conflict();
     if (source.status === 'long') return NextResponse.json({ error: 'La revisión completa solo está disponible para menús de 7 días.' }, { status: 409 });
-    if (source.status === 'none') return NextResponse.json({ error: 'El menú no tiene cantidades pendientes.' }, { status: 409 });
+    if (source.status === 'none') return NextResponse.json({ error: 'Este día no tiene cantidades pendientes.' }, { status: 409 });
     const limit = await checkRateLimit('meal-plan', scope.tenantId, scope.userId, { requireSharedStore: true });
-    if (!limit.success) return unavailable(limit.storage === 'unavailable' ? 503 : 429);
+    if (!limit.success) return limit.storage === 'unavailable' ? unavailable(503, 'rate_limiter_unavailable') : unavailable(429, 'rate_limit_exceeded');
     const apiKey = getGeminiApiKey();
-    if (!apiKey) return unavailable(503);
-    const prompt = `Estima cantidades de ingredientes para revisión humana, nunca para compra directa. Las cantidades son TOTALES para ${source.peopleCount} personas, no por persona. Devuelve JSON {"items":[{"dayIndex":1,"mealType":"breakfast","ingredientIndex":0,"name":"...","quantity":1,"unit":"g"}]} con exactamente una entrada por cada ingrediente pendiente, copiando identidad y nombre exactamente. Si no es fiable usa quantity y unit null. No alteres componentes existentes. Unidades permitidas: unidad, g, kg, ml, l, paquete, cucharada, cucharadita, taza. Menú: ${JSON.stringify(source.plan.days)}. Pendientes: ${JSON.stringify(source.missing)}`;
-    if (prompt.length > 150000) return unavailable(409);
+    if (!apiKey) return unavailable(503, 'gemini_key_missing');
+    const prompt = `Estima cantidades de ingredientes para revisión humana, nunca para compra directa. Las cantidades son TOTALES para ${source.peopleCount} personas, no por persona. Devuelve JSON {"items":[{"dayIndex":${input.data.dayIndex},"mealType":"breakfast","ingredientIndex":0,"name":"...","quantity":1,"unit":"g"}]} con exactamente una entrada por cada ingrediente pendiente, copiando identidad y nombre exactamente. Si no es fiable usa quantity y unit null. No alteres componentes existentes. Unidades permitidas: unidad, g, kg, ml, l, paquete, cucharada, cucharadita, taza. Menú: ${JSON.stringify(source.plan.days.filter(day => day.dayIndex === input.data.dayIndex))}. Pendientes: ${JSON.stringify(source.missing)}`;
+    if (prompt.length > 150000) return unavailable(413, 'prompt_too_large');
     const controller = new AbortController();
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 45000);
@@ -114,16 +135,16 @@ export async function POST(request: NextRequest) {
         return { status: 200, items: parsed.items };
       };
       const result = await Promise.race([provider(), aborted]);
-      if (!result.items) return unavailable(result.status === 429 || result.status === 503 ? result.status : 502);
-      if (!validateReviewItems(source.plan, result.items, true)) return unavailable(502);
+      if (!result.items) return result.status === 503 ? unavailable(503, 'gemini_unavailable') : result.status === 429 ? unavailable(429, 'gemini_rate_limited') : unavailable(502, 'gemini_response_invalid');
+      if (!validateReviewItems(source.plan, result.items, true, input.data.dayIndex)) return unavailable(502, 'gemini_response_invalid');
       const stillCurrent = await withQuantityReviewSource(scope, input.data.mealPlanId, async (_client, row, restrictions) =>
         checkPlan(row, restrictions) !== null && fingerprint(row, restrictions) === source.fingerprint
       );
       if (!stillCurrent) return conflict();
       return NextResponse.json({ mealPlanId: input.data.mealPlanId, expectedUpdatedAt: source.updatedAt, fingerprint: source.fingerprint, items: result.items });
-    } catch { return unavailable(timedOut ? 504 : 502); }
+    } catch { return timedOut ? unavailable(504, 'gemini_timeout') : unavailable(502, 'gemini_request_failed'); }
     finally { clearTimeout(timer); request.signal.removeEventListener('abort', abort); }
-  } catch { return unavailable(503); }
+  } catch { return unavailable(503, 'plan_read_unavailable'); }
 }
 
 export async function PUT(request: NextRequest) {
