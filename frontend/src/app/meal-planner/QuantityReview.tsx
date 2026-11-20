@@ -38,6 +38,19 @@ export function reviewUnit(original: string | null, proposed: string | null): st
   return existing !== 'unknown' ? existing : estimate !== 'unknown' ? estimate : null;
 }
 
+/** Preselect only provider estimates with a usable quantity and recognized unit. */
+export function isSaveableReviewAmount(quantityText: string, unit: string | null): boolean {
+  const amount = Number(quantityText);
+  return quantityText.trim() !== '' && Number.isFinite(amount) && amount > 0 && amount <= 100000 &&
+    unit !== null && units.includes(unit);
+}
+
+export function initialQuantityReviewDraft(item: Item, originalQuantity: number | null, originalUnit: string | null): Draft {
+  const unit = reviewUnit(originalUnit, item.unit);
+  const quantityText = String(originalQuantity ?? item.quantity ?? '');
+  return { ...item, unit, quantityText, selected: isSaveableReviewAmount(quantityText, unit) };
+}
+
 
 export default function QuantityReview({ plan, mealPlanId, disabled, isCurrent, onReloaded }: Props) {
   const [proposal, setProposal] = useState<Proposal | null>(null);
@@ -64,8 +77,7 @@ export default function QuantityReview({ plan, mealPlanId, disabled, isCurrent, 
       setProposal(result.data);
       setItems(result.data.items.map((item) => {
         const original = plan.days.find((day) => day.dayIndex === item.dayIndex)?.meals.find((meal) => meal.mealType === item.mealType)?.ingredients[item.ingredientIndex];
-        const unit = reviewUnit(original?.unit ?? null, item.unit);
-        return { ...item, unit, quantityText: String(original?.quantity ?? item.quantity ?? ''), selected: false };
+        return initialQuantityReviewDraft(item, original?.quantity ?? null, original?.unit ?? null);
       }));
     } catch (failure) {
       if (current()) setError(failure instanceof Error ? failure.message : 'No se pudieron preparar las estimaciones.');
@@ -75,7 +87,7 @@ export default function QuantityReview({ plan, mealPlanId, disabled, isCurrent, 
   async function save() {
     if (!proposal || pending.current || disabled) return;
     const selected = items.filter((item) => item.selected);
-    if (!selected.length || selected.some((item) => !item.quantityText || !Number.isFinite(Number(item.quantityText)) || Number(item.quantityText) <= 0 || !item.unit || !units.includes(item.unit))) {
+    if (!selected.length || selected.some((item) => !isSaveableReviewAmount(item.quantityText, item.unit))) {
       setError('Elegí al menos un ingrediente con cantidad positiva y unidad válida.'); return;
     }
     pending.current = true; setBusy(true); setError(null);
@@ -101,39 +113,39 @@ export default function QuantityReview({ plan, mealPlanId, disabled, isCurrent, 
   }
 
   function update(index: number, patch: Partial<Draft>) {
-    setItems((previous) => previous.map((item, i) => i === index ? { ...item, ...patch } : item));
-  }
-
-  function approveMeal(dayIndex: number, mealType: StructuredMealType) {
-    setItems((previous) => previous.map((item) => {
-      if (item.dayIndex !== dayIndex || item.mealType !== mealType) return item;
-      const quantity = Number(item.quantityText);
-      return { ...item, selected: item.quantityText.trim() !== '' && Number.isFinite(quantity) && quantity > 0 && item.unit !== null && units.includes(item.unit) };
+    setItems((previous) => previous.map((item, i) => {
+      if (i !== index) return item;
+      const changed = { ...item, ...patch };
+      // Correcting an amount opts that ingredient in when it becomes usable;
+      // explicitly unchecking a valid estimate remains respected.
+      return 'quantityText' in patch || 'unit' in patch
+        ? { ...changed, selected: isSaveableReviewAmount(changed.quantityText, changed.unit) }
+        : changed;
     }));
   }
+  const readyCount = items.filter((item) => item.selected).length;
 
   return <section className="mt-4 rounded-xl border border-bistro-border bg-white p-4" aria-labelledby="quantity-review-title">
     <h2 id="quantity-review-title" className="font-semibold">Cantidades pendientes</h2>
     {plan.dayCount !== 7 || plan.days.length !== 7 ? <p className="mt-2 text-sm">La revisión completa de cantidades aún no está disponible para menús de más de una semana.</p> : <>
       <p className="mt-2 text-sm">Las estimaciones requieren tu revisión y no modifican el menú hasta que las guardes. El inventario incierto puede seguir requiriendo revisión.</p>
       <button type="button" onClick={prepare} disabled={disabled || busy} className="mt-3 min-h-11 rounded-xl bg-bistro-action-primary px-4 font-semibold text-white disabled:opacity-60">{busy && !proposal ? 'Preparando…' : 'Preparar cantidades estimadas para mi menú'}</button>
-      {proposal ? <div className="mt-4"><h3 className="font-semibold">Estimación de IA — revisar</h3><p className="text-sm">Aprobá solo los ingredientes que quieras guardar. Los demás seguirán pendientes.</p>
-        {plan.days.map((day) => <details key={day.dayIndex} className="mt-3 rounded-lg border border-bistro-border p-3"><summary className="cursor-pointer font-semibold">{day.label}</summary>
+      {proposal ? <div className="mt-4"><h3 className="font-semibold">Estimación de IA — revisar</h3><p className="text-sm">CocinaCore ya seleccionó las cantidades estimadas válidas. Podés corregir o excluir cualquier ingrediente; lo no calculable queda pendiente. Nada se guardará hasta que confirmes.</p>
+        {plan.days.map((day) => <details key={day.dayIndex} className="mt-3 rounded-lg border border-bistro-border p-3"><summary className="cursor-pointer font-semibold">{day.label} · {items.filter((item) => item.dayIndex === day.dayIndex && item.selected).length} listas · {items.filter((item) => item.dayIndex === day.dayIndex && !item.selected).length} por revisar</summary>
           {day.meals.map((meal) => {
             const entries = items.map((item, index) => ({ item, index })).filter(({ item }) => item.dayIndex === day.dayIndex && item.mealType === meal.mealType);
             if (!entries.length) return null;
             return <div key={meal.mealType} className="mt-3"><h4 className="font-semibold">{labels[meal.mealType]}: {meal.title}</h4>
-              <button type="button" onClick={() => approveMeal(day.dayIndex, meal.mealType)} disabled={disabled || busy} className="mt-2 min-h-11 rounded-xl border border-bistro-border px-4 text-sm font-semibold disabled:opacity-60">Aprobar cantidades válidas de este plato</button>
               {entries.map(({ item, index }) => <div key={item.ingredientIndex} className="mt-2 grid gap-2 rounded-lg bg-bistro-page p-3 sm:grid-cols-3">
-                <label className="flex items-center gap-2 text-sm"><input type="checkbox" disabled={disabled || busy} checked={item.selected} onChange={(event) => update(index, { selected: event.target.checked })} />Aprobar {item.name}</label>
+                <label className="flex items-center gap-2 text-sm"><input type="checkbox" disabled={disabled || busy || !isSaveableReviewAmount(item.quantityText, item.unit)} checked={item.selected} onChange={(event) => update(index, { selected: event.target.checked })} />Aprobar {item.name}</label>
                 <label className="grid gap-1 text-sm">Cantidad de {item.name}<input type="number" min="0.001" step="any" value={item.quantityText} disabled={disabled || busy || meal.ingredients[item.ingredientIndex]?.quantity != null} onChange={(event) => update(index, { quantityText: event.target.value })} className="min-h-11 rounded-lg border border-bistro-border px-2" /></label>
                 <label className="grid gap-1 text-sm">Unidad de {item.name}<select value={item.unit ?? ''} disabled={disabled || busy || normalizeExplicitUnit(meal.ingredients[item.ingredientIndex]?.unit ?? null) !== 'unknown'} onChange={(event) => update(index, { unit: event.target.value || null })} className="min-h-11 rounded-lg border border-bistro-border px-2"><option value="">No calculable</option>{units.map((unit) => <option key={unit} value={unit}>{unit}</option>)}</select></label>
-                {item.quantity == null || item.unit == null ? <p className="text-sm">No calculable: completá una cantidad y unidad si podés revisarlas.</p> : null}
+                {!isSaveableReviewAmount(item.quantityText, item.unit) ? <p className="text-sm">No calculable: completá una cantidad y unidad si podés revisarlas.</p> : null}
               </div>)}
             </div>;
           })}
         </details>)}
-        <p className="mt-4 text-sm" aria-live="polite">Cantidades seleccionadas: {items.filter((item) => item.selected).length}</p>
+        <p className="mt-4 text-sm" aria-live="polite">Cantidades listas para guardar: {readyCount}. Sin seleccionar: {items.length - readyCount}.</p>
         <button type="button" onClick={save} disabled={disabled || busy || !items.some((item) => item.selected)} className="mt-4 min-h-11 rounded-xl bg-bistro-action-primary px-4 font-semibold text-white disabled:opacity-60">{busy ? 'Guardando…' : 'Guardar cantidades aprobadas'}</button>
       </div> : null}
     </>}

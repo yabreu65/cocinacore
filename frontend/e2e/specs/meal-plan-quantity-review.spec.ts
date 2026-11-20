@@ -77,19 +77,24 @@ test('revises weekly quantities only after explicit preparation and partial appr
   await page.locator('summary').filter({ hasText: 'LUNES' }).click();
   await expect(page.getByText(/No calculable: completá/).first()).toBeVisible();
   const approval = page.getByLabel('Aprobar avena').first();
-  await expect(approval).not.toBeChecked();
+  await expect(approval).toBeChecked();
   const uncalculable = page.getByLabel('Aprobar canela');
   const otherMeal = page.locator('h4').filter({ hasText: 'Almuerzo:' }).first().locator('..').getByRole('checkbox').first();
-  await expect(otherMeal).not.toBeChecked();
-  await expect(page.getByText('Cantidades seleccionadas: 0')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Guardar cantidades aprobadas' })).toBeDisabled();
-  await page.locator('h4').filter({ hasText: 'Desayuno:' }).first().locator('..').getByRole('button', { name: 'Aprobar cantidades válidas de este plato' }).click();
-  await expect(approval).toBeChecked();
+  const dinner = page.locator('h4').filter({ hasText: 'Cena:' }).first().locator('..').getByRole('checkbox').first();
   await expect(uncalculable).not.toBeChecked();
-  await expect(otherMeal).not.toBeChecked();
-  await expect(page.getByText('Cantidades seleccionadas: 1')).toBeVisible();
+  await expect(uncalculable).toBeDisabled();
+  // All three valid Monday estimates start selected, not only breakfast.
+  await expect(otherMeal).toBeChecked();
+  await expect(dinner).toBeChecked();
+  await expect(page.getByText(`Cantidades listas para guardar: 3. Sin seleccionar: ${items.length - 3}.`)).toBeVisible();
+  // The customer can exclude lunch and dinner, then confirm only breakfast.
+  await otherMeal.uncheck();
+  await dinner.uncheck();
+  await expect(page.getByText(`Cantidades listas para guardar: 1. Sin seleccionar: ${items.length - 1}.`)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Guardar cantidades aprobadas' })).toBeEnabled();
   await approval.uncheck();
-  await expect(page.getByText('Cantidades seleccionadas: 0')).toBeVisible();
+  await expect(page.getByText(`Cantidades listas para guardar: 0. Sin seleccionar: ${items.length}.`)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Guardar cantidades aprobadas' })).toBeDisabled();
   await approval.check();
   await page.getByRole('button', { name: 'Guardar cantidades aprobadas' }).click();
   await expect.poll(() => saves).toBe(1);
