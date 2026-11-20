@@ -21,6 +21,7 @@ import {
 import { shouldApplyConsumptionResponse, withConsumptionRecord } from './consumptionState';
 import LoadErrorNotice from './load-error-notice';
 import MealPreparationAction from './MealPreparationAction';
+import ScheduleConfirmation from './ScheduleConfirmation';
 
 type ShoppingSuggestion = {
   normalizedName: string;
@@ -95,6 +96,7 @@ export default function MealPlannerPage() {
   const [consumingMealKeys, setConsumingMealKeys] = useState<Set<string>>(new Set());
   const [consumptionMessage, setConsumptionMessage] = useState<string | null>(null);
   const [consumptionError, setConsumptionError] = useState<string | null>(null);
+  const planRef = useRef(plan);
   const generationStartedRef = useRef(false);
   const activePlanIdRef = useRef<string | null>(null);
   const suggestionRequestVersionRef = useRef(0);
@@ -102,6 +104,11 @@ export default function MealPlannerPage() {
   const adaptiveRequestVersionRef = useRef(0);
   const componentActiveRef = useRef(true);
   const userEditedRef = useRef(false);
+
+  const setCurrentPlan = (next: StructuredMealPlan | null) => {
+    planRef.current = next;
+    setPlan(next);
+  };
 
   const loadSuggestions = useCallback(
     async (mealPlanId: string, preserveMessage = false, horizonDays: 7 | 14 = shoppingHorizonRef.current) => {
@@ -295,7 +302,7 @@ export default function MealPlannerPage() {
         adaptiveRequestVersionRef.current !== requestVersion
       )
         return;
-      setPlan(result.data.plan);
+      setCurrentPlan(result.data.plan);
       setAdaptiveProposal(null);
       setAdaptiveExpectedUpdatedAt(null);
       setAdaptiveSourceFingerprint(null);
@@ -353,7 +360,7 @@ export default function MealPlannerPage() {
         setBaseCuisine(restored.baseCuisine);
         setRestrictions(restored.restrictions);
         setPlanHardRestrictions(result.data.restrictions ?? []);
-        setPlan(restored.plan);
+        setCurrentPlan(restored.plan);
         if (restoredPlanId) {
           void loadSuggestions(restoredPlanId);
           void loadConsumptions(restoredPlanId);
@@ -412,7 +419,7 @@ export default function MealPlannerPage() {
     setIsConfirmingAdaptive(false);
     setIsGenerating(true);
     setGenerationError(null);
-    setPlan(null);
+    setCurrentPlan(null);
 
     try {
       const result = await safeFetch<{ id?: string; plan?: StructuredMealPlan; content?: string }>(
@@ -443,7 +450,7 @@ export default function MealPlannerPage() {
       if (!result.data.plan) {
         throw new Error('El proveedor IA no devolvió un menú estructurado.');
       }
-      setPlan(result.data.plan);
+      setCurrentPlan(result.data.plan);
       setPlanPeopleCount(peopleCount);
       setPlanHardRestrictions(restrictions.split(',').map((value) => value.trim()).filter(Boolean));
       const generatedPlanId = typeof result.data.id === 'string' ? result.data.id : null;
@@ -691,6 +698,21 @@ export default function MealPlannerPage() {
         {plan ? (
           <div className="mt-6 rounded-xl border border-bistro-border bg-bistro-page p-4">
             <h2 className="font-semibold">Menú generado</h2>
+            {activePlanId ? (
+              <ScheduleConfirmation
+                key={`${activePlanId}:${JSON.stringify(plan.days)}`}
+                plan={plan}
+                mealPlanId={activePlanId}
+                peopleCount={planPeopleCount}
+                disabled={isGenerating || isConfirmingAdaptive}
+                onConfirmed={(mealPlanId, confirmedPlan, schedule) => {
+                  if (!componentActiveRef.current || activePlanIdRef.current !== mealPlanId || planRef.current !== confirmedPlan) return;
+                  setCurrentPlan({ ...confirmedPlan, schedule });
+                  void loadSuggestions(mealPlanId);
+                }}
+              />
+            ) : null}
+
             <p className="mt-1 text-sm text-bistro-text-secondary">
               Los tiempos son estimaciones de IA, no una garantía de duración real.
             </p>
