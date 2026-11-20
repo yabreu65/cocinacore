@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { POST, PUT } from './route';
 import type { QuantityReviewItem } from '@/lib/meal-planner/quantity-review';
-type Proposal = { expectedUpdatedAt: string; fingerprint: string; items: QuantityReviewItem[] };
+type Proposal = { expectedUpdatedAt: string; fingerprint: string; items: QuantityReviewItem[]; unavailableDays: number[] };
 type Action = (client: { query: typeof query }, planRow: PlanRow, restrictions: string[]) => Promise<unknown>;
 
 const mocks = vi.hoisted(() => ({ requireUser: vi.fn(), source: vi.fn(), limit: vi.fn(), fetch: vi.fn() }));
@@ -122,6 +122,52 @@ describe('quantity review route', () => {
     expect(query).not.toHaveBeenCalled();
   });
 
+  it('keeps other days after Gemini returns 503 and unreadable JSON for two batches', async () => {
+    const defaultProvider = mocks.fetch.getMockImplementation()!;
+    mocks.fetch.mockImplementation(async (url: string, init: RequestInit) => {
+      const payload = JSON.parse(String(init.body)) as { contents: Array<{ parts: Array<{ text: string }> }> };
+      const prompt = payload.contents[0].parts[0].text;
+      const missing = JSON.parse(prompt.slice(prompt.indexOf('Pendientes: ') + 'Pendientes: '.length)) as Array<{ dayIndex: number }>;
+      if (missing[0].dayIndex === 3) return new Response('', { status: 503 });
+      if (missing[0].dayIndex === 4) return new Response('{malformed');
+      return defaultProvider(url, init) as Promise<Response>;
+    });
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const response = await POST(request('POST', { mealPlanId: id }));
+      expect(response.status).toBe(200);
+      const proposal = await response.json() as Proposal;
+      expect(proposal.unavailableDays).toEqual([3, 4]);
+      expect(proposal.items).toHaveLength(21);
+      expect(proposal.items.filter(item => [3, 4].includes(item.dayIndex))).toHaveLength(6);
+      expect(proposal.items.filter(item => [3, 4].includes(item.dayIndex)).every(item => item.quantity === null && item.unit === null)).toBe(true);
+      expect(proposal.items.filter(item => ![3, 4].includes(item.dayIndex)).every(item => item.quantity === 100 && item.unit === 'g')).toBe(true);
+      expect(mocks.fetch).toHaveBeenCalledTimes(7);
+      expect(warning).toHaveBeenCalledWith('quantity_review.provider_failed', expect.objectContaining({ code: 'provider_http', upstreamStatus: 503, batch: 3 }));
+      expect(warning).toHaveBeenCalledWith('quantity_review.provider_failed', expect.objectContaining({ code: 'provider_invalid_response', batch: 4 }));
+      expect(query).not.toHaveBeenCalled();
+      const valid = proposal.items.filter(item => item.quantity !== null);
+      const confirmation = await PUT(request('PUT', { mealPlanId: id, expectedUpdatedAt: proposal.expectedUpdatedAt, fingerprint: proposal.fingerprint, items: valid }));
+      expect(confirmation.status).toBe(200);
+      const payload = JSON.parse((query.mock.calls[0][1] as string[])[0]) as ReturnType<typeof calendar>;
+      expect(payload.days[2].meals[0].ingredients[0].quantity).toBeNull();
+      expect(payload.days[3].meals[0].ingredients[0].quantity).toBeNull();
+      expect(payload.days[0].meals[0].ingredients[0].quantity).toBe(100);
+      expect(payload.days[6].meals[2].ingredients[0].quantity).toBe(100);
+    } finally { warning.mockRestore(); }
+  });
+  it('reports provider outage when all seven days are unavailable; no fake complete proposal', async () => {
+    mocks.fetch.mockResolvedValue(new Response('', { status: 503 }));
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const response = await POST(request('POST', { mealPlanId: id }));
+      expect(response.status).toBe(503);
+      expect((await response.json() as { error: string }).error).toMatch(/no está disponible/);
+      expect(mocks.fetch).toHaveBeenCalledTimes(7);
+      expect(query).not.toHaveBeenCalled();
+    } finally { warning.mockRestore(); }
+  });
+
   it('rejects invalid day identities without returning partial estimates or writing data', async () => {
     const defaultProvider = mocks.fetch.getMockImplementation()!;
     mocks.fetch.mockImplementation(async (url: string, init: RequestInit) => {
@@ -178,12 +224,16 @@ describe('quantity review route', () => {
     mocks.fetch.mockResolvedValue(new Response('x'.repeat(150001)));
     expect((await POST(request('POST', { mealPlanId: id }))).status).toBe(502);
   });
-  it('does not retry provider overload and rejects a changed restriction', async () => {
-    for (const status of [429, 503]) {
-      mocks.fetch.mockResolvedValueOnce(new Response('', { status }));
-      expect((await POST(request('POST', { mealPlanId: id }))).status).toBe(status);
-    }
-    expect(mocks.fetch).toHaveBeenCalledTimes(4);
+  it('preserves 429 as fatal, degrades a 503 day without retry and rejects changed restrictions', async () => {
+    mocks.fetch.mockResolvedValueOnce(new Response('', { status: 429 }));
+    expect((await POST(request('POST', { mealPlanId: id }))).status).toBe(429);
+    mocks.fetch.mockResolvedValueOnce(new Response('', { status: 503 }));
+    const response = await POST(request('POST', { mealPlanId: id }));
+    expect(response.status).toBe(200);
+    const proposal = await response.json() as Proposal;
+    expect(proposal.unavailableDays).toHaveLength(1);
+    expect(mocks.fetch.mock.calls.length).toBeLessThanOrEqual(9);
+    expect(query).not.toHaveBeenCalled();
     mocks.source.mockImplementation(async (_scope: unknown, _id: unknown, action: Action) => action({ query }, row, ['peanuts']));
     expect((await POST(request('POST', { mealPlanId: id }))).status).toBe(409);
   });

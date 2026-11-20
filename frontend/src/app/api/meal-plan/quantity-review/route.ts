@@ -131,6 +131,12 @@ export async function POST(request: NextRequest) {
     request.signal.addEventListener('abort', abort, { once: true });
     let next = 0;
     let failure: EstimateFailure | null = null;
+    let firstRecoverableStatus = 503;
+    let completedDays = 0;
+    const unavailableDays: number[] = [];
+    const recoverableDayFailure = (error: EstimateFailure) =>
+      (error.code === 'provider_http' && error.upstreamStatus === 503) ||
+      error.code === 'provider_invalid_response';
     const estimateDay = async (index: number): Promise<QuantityReviewItem[]> => {
       const { day, missing } = batches[index];
       const prompt = `Estima cantidades de ingredientes para revisión humana, nunca para compra directa. Las cantidades son TOTALES para ${source.peopleCount} personas, no por persona. Devuelve JSON {"items":[{"dayIndex":1,"mealType":"breakfast","ingredientIndex":0,"name":"...","quantity":1,"unit":"g"}]} con exactamente una entrada por cada ingrediente pendiente, copiando identidad y nombre exactamente. Si no es fiable usa quantity y unit null. No alteres componentes existentes. Unidades permitidas: unidad, g, kg, ml, l, paquete, cucharada, cucharadita, taza. Menú del día: ${JSON.stringify(day)}. Pendientes: ${JSON.stringify(missing)}`;
@@ -180,25 +186,41 @@ export async function POST(request: NextRequest) {
       }
     };
     try {
-      // Maximum of two concurrent requests per user action; no retries.
+      // At most two concurrent Gemini calls. Preserve valid days when the
+      // provider is temporarily unavailable or sends unreadable JSON.
+      // A bad ingredient identity, quota exhaustion, timeout or cancellation
+      // is still fatal; no failed response is ever trusted as a quantity.
       const worker = async () => {
         while (!failure && next < batches.length) {
           const index = next++;
-          try { chunks[index] = await estimateDay(index); }
-          catch (error) {
-            if (!failure) { failure = error as EstimateFailure; abort(); }
+          try {
+            chunks[index] = await estimateDay(index);
+            completedDays++;
+          } catch (error) {
+            const estimateError = error as EstimateFailure;
+            if (!request.signal.aborted && recoverableDayFailure(estimateError)) {
+              if (unavailableDays.length === 0) firstRecoverableStatus = estimateError.status;
+              unavailableDays.push(batches[index].day.dayIndex);
+              chunks[index] = batches[index].missing.map(({ dayIndex, mealType, ingredientIndex, name }) =>
+                ({ dayIndex, mealType, ingredientIndex, name, quantity: null, unit: null }));
+            } else if (!failure) {
+              failure = estimateError;
+              abort();
+            }
           }
         }
       };
       await Promise.all(Array.from({ length: Math.min(2, batches.length) }, () => worker()));
       if (failure) return unavailable((failure as EstimateFailure).status);
+      if (!completedDays) return unavailable(firstRecoverableStatus);
       const items = chunks.flat();
       if (!validateReviewItems(source.plan, items, true)) return unavailable(502);
       const stillCurrent = await withQuantityReviewSource(scope, input.data.mealPlanId, async (_client, row, restrictions) =>
         checkPlan(row, restrictions) !== null && fingerprint(row, restrictions) === source.fingerprint
       );
       if (!stillCurrent) return conflict();
-      return NextResponse.json({ mealPlanId: input.data.mealPlanId, expectedUpdatedAt: source.updatedAt, fingerprint: source.fingerprint, items });
+      return NextResponse.json({ mealPlanId: input.data.mealPlanId, expectedUpdatedAt: source.updatedAt, fingerprint: source.fingerprint,
+        items, unavailableDays: unavailableDays.sort((a, b) => a - b) });
     } catch { return unavailable(503); }
     finally { request.signal.removeEventListener('abort', abort); }
   } catch { return unavailable(503); }
