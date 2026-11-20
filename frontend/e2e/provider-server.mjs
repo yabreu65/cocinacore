@@ -63,6 +63,36 @@ function structuredRecipeText(body) {
   });
 }
 
+function structuredQuantityReviewText(prompt) {
+  const marker = 'Pendientes: ';
+  const markerIndex = prompt.indexOf(marker);
+  if (markerIndex < 0 || prompt.indexOf(marker, markerIndex + marker.length) !== -1) {
+    throw new Error('Invalid quantity review prompt');
+  }
+  const missing = JSON.parse(prompt.slice(markerIndex + marker.length));
+  if (!Array.isArray(missing) || missing.length < 1 || missing.length > 630) {
+    throw new Error('Invalid quantity review identities');
+  }
+  const seen = new Set();
+  const items = missing.map((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item) ||
+        Object.keys(item).sort().join(',') !== 'dayIndex,ingredientIndex,mealType,name,quantity,unit' ||
+        !Number.isInteger(item.dayIndex) || item.dayIndex < 1 || item.dayIndex > 7 ||
+        !['breakfast', 'lunch', 'dinner'].includes(item.mealType) ||
+        !Number.isInteger(item.ingredientIndex) || item.ingredientIndex < 0 || item.ingredientIndex > 29 ||
+        typeof item.name !== 'string' || item.name.length < 1 || item.name.length > 120 ||
+        !(item.quantity === null || (typeof item.quantity === 'number' && Number.isFinite(item.quantity) && item.quantity > 0)) ||
+        !(item.unit === null || typeof item.unit === 'string')) {
+      throw new Error('Invalid quantity review identity');
+    }
+    const key = `${item.dayIndex}:${item.mealType}:${item.ingredientIndex}`;
+    if (seen.has(key)) throw new Error('Duplicate quantity review identity');
+    seen.add(key);
+    return { dayIndex: item.dayIndex, mealType: item.mealType, ingredientIndex: item.ingredientIndex, name: item.name, quantity: 100, unit: 'g' };
+  });
+  return JSON.stringify({ items });
+}
+
 function json(response, status, body) {
   response.writeHead(status, { 'Content-Type': 'application/json' });
   response.end(JSON.stringify(body));
@@ -125,7 +155,10 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname.endsWith(':generateContent')) {
       const responseSchema = body.generationConfig?.responseSchema;
       const responseJsonSchema = body.generationConfig?.responseJsonSchema;
-      const text = responseSchema?.properties?.options
+      const prompt = body.contents?.[0]?.parts?.[0]?.text;
+      const text = typeof prompt === 'string' && prompt.startsWith('Estima cantidades de ingredientes para revisión humana')
+        ? structuredQuantityReviewText(prompt)
+        : responseSchema?.properties?.options
         ? structuredTodayText()
         : responseJsonSchema?.properties?.ingredients && responseJsonSchema?.properties?.steps
           ? structuredRecipeText(body)
