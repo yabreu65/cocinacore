@@ -56,7 +56,7 @@ test('revises weekly quantities only after explicit preparation and partial appr
     if (route.request().method() === 'POST') {
       preparations++;
       expect(body).toEqual({ mealPlanId });
-      return route.fulfill({ json: { mealPlanId, expectedUpdatedAt: 'fixture', fingerprint: 'source', items } });
+      return route.fulfill({ json: { mealPlanId, expectedUpdatedAt: 'fixture', fingerprint: 'source', items, unavailableDays: [2, 3] } });
     }
     expect(route.request().method()).toBe('PUT');
     saves++;
@@ -72,6 +72,8 @@ test('revises weekly quantities only after explicit preparation and partial appr
   expect(saves).toBe(0);
   await prepare.click();
   await expect(page.getByRole('heading', { name: 'Estimación de IA — revisar' })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: 'Gemini no pudo completar 2 días' })).toBeVisible();
+  await expect(page.locator('section[aria-labelledby="quantity-review-title"] summary').filter({ hasText: 'MARTES' })).toContainText('IA no disponible');
   expect(preparations).toBe(1);
   expect(saves).toBe(0);
   await page.locator('summary').filter({ hasText: 'LUNES' }).click();

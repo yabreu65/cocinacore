@@ -7,7 +7,7 @@ import type { StructuredMealPlan, StructuredMealType } from '@/lib/meal-planner/
 import type { MealPlanPublicResponse } from '@/lib/meal-planner/rehydration';
 
 type Item = { dayIndex: number; mealType: StructuredMealType; ingredientIndex: number; name: string; quantity: number | null; unit: string | null };
-type Proposal = { mealPlanId: string; expectedUpdatedAt: string; fingerprint: string; items: Item[] };
+type Proposal = { mealPlanId: string; expectedUpdatedAt: string; fingerprint: string; items: Item[]; unavailableDays?: number[] };
 type Draft = Item & { quantityText: string; selected: boolean };
 type Props = {
   plan: StructuredMealPlan;
@@ -131,7 +131,8 @@ export default function QuantityReview({ plan, mealPlanId, disabled, isCurrent, 
       <p className="mt-2 text-sm">Las estimaciones requieren tu revisión y no modifican el menú hasta que las guardes. El inventario incierto puede seguir requiriendo revisión.</p>
       <button type="button" onClick={prepare} disabled={disabled || busy} className="mt-3 min-h-11 rounded-xl bg-bistro-action-primary px-4 font-semibold text-white disabled:opacity-60">{busy && !proposal ? 'Preparando…' : 'Preparar cantidades estimadas para mi menú'}</button>
       {proposal ? <div className="mt-4"><h3 className="font-semibold">Estimación de IA — revisar</h3><p className="text-sm">CocinaCore ya seleccionó las cantidades estimadas válidas. Podés corregir o excluir cualquier ingrediente; lo no calculable queda pendiente. Nada se guardará hasta que confirmes.</p>
-        {plan.days.map((day) => <details key={day.dayIndex} className="mt-3 rounded-lg border border-bistro-border p-3"><summary className="cursor-pointer font-semibold">{day.label} · {items.filter((item) => item.dayIndex === day.dayIndex && item.selected).length} listas · {items.filter((item) => item.dayIndex === day.dayIndex && !item.selected).length} por revisar</summary>
+        {proposal.unavailableDays?.length ? <p role="status" className="mt-2 rounded-lg bg-bistro-warning/10 p-3 text-sm text-bistro-warning">Gemini no pudo completar {proposal.unavailableDays.length} {proposal.unavailableDays.length === 1 ? 'día' : 'días'}. Las cantidades válidas de los demás días están listas para confirmar; después podrás volver a calcular solo las pendientes.</p> : null}
+        {plan.days.map((day) => <details key={day.dayIndex} className="mt-3 rounded-lg border border-bistro-border p-3"><summary className="cursor-pointer font-semibold">{day.label} · {items.filter((item) => item.dayIndex === day.dayIndex && item.selected).length} listas · {items.filter((item) => item.dayIndex === day.dayIndex && !item.selected).length} por revisar{proposal.unavailableDays?.includes(day.dayIndex) ? ' · IA no disponible' : ''}</summary>
           {day.meals.map((meal) => {
             const entries = items.map((item, index) => ({ item, index })).filter(({ item }) => item.dayIndex === day.dayIndex && item.mealType === meal.mealType);
             if (!entries.length) return null;
