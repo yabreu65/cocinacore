@@ -24,6 +24,14 @@ describe('quantity review validation', () => {
     expect(validateReviewItems(plan, items.slice(0, 1), false)).toBe(true);
     expect(validateReviewItems(plan, items.slice(0, 1), true)).toBe(false);
   });
+  it('validates a complete single-day response without accepting other days', () => {
+    const plan = sample();
+    const firstDay = proposals(plan).filter(item => item.dayIndex === 1);
+    expect(firstDay).toHaveLength(33);
+    expect(validateReviewItems(plan, firstDay, true, 1)).toBe(true);
+    expect(validateReviewItems(plan, firstDay.slice(0, 32), true, 1)).toBe(false);
+    expect(validateReviewItems(plan, [...firstDay.slice(0, 32), proposals(plan).find(item => item.dayIndex === 2)!], true, 1)).toBe(false);
+  });
   it('rejects duplicates, forged names and indexes', () => {
     const plan = sample(); const items = proposals(plan);
     expect(validateReviewItems(plan, [items[0], items[0]], false)).toBe(false);

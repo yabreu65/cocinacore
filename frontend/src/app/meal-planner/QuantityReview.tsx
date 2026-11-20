@@ -44,19 +44,29 @@ export default function QuantityReview({ plan, mealPlanId, disabled, isCurrent, 
   const [items, setItems] = useState<Draft[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedDayIndex, setSelectedDayIndex] = useState(() => plan.days.find(day =>
+    day.meals.some(meal => meal.ingredients.some(ingredient => ingredient.quantity == null || normalizeExplicitUnit(ingredient.unit) === 'unknown'))
+  )?.dayIndex ?? 1);
   const pending = useRef(false);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const current = () => mounted.current && isCurrent(plan, mealPlanId);
-  const hasUnknown = plan.days.some((day) => day.meals.some((meal) => meal.ingredients.some((ingredient) => ingredient.quantity == null || normalizeExplicitUnit(ingredient.unit) === 'unknown')));
-  if (!hasUnknown || !plan.schedule?.portionConfirmation) return null;
+  const pendingDays = plan.days.map(day => ({
+    dayIndex: day.dayIndex,
+    label: day.label,
+    pending: day.meals.reduce((sum, meal) => sum + meal.ingredients.filter(ingredient =>
+      ingredient.quantity == null || normalizeExplicitUnit(ingredient.unit) === 'unknown').length, 0),
+  })).filter(day => day.pending > 0);
+  const selectedDay = pendingDays.some(day => day.dayIndex === selectedDayIndex) ? selectedDayIndex : pendingDays[0]?.dayIndex ?? 1;
+  const selectedLabel = pendingDays.find(day => day.dayIndex === selectedDay)?.label ?? `Día ${selectedDay}`;
+  if (!pendingDays.length || !plan.schedule?.portionConfirmation) return null;
 
   async function prepare() {
     if (pending.current || disabled) return;
     pending.current = true; setBusy(true); setError(null); setProposal(null); setItems([]);
     try {
       const result = await safeFetch<Proposal>('/api/meal-plan/quantity-review', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ mealPlanId }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ mealPlanId, dayIndex: selectedDay }),
       });
       if (!current()) return;
       if (!result.ok) throw new Error(result.error || 'No se pudieron preparar las estimaciones.');
@@ -115,10 +125,19 @@ export default function QuantityReview({ plan, mealPlanId, disabled, isCurrent, 
   return <section className="mt-4 rounded-xl border border-bistro-border bg-white p-4" aria-labelledby="quantity-review-title">
     <h2 id="quantity-review-title" className="font-semibold">Cantidades pendientes</h2>
     {plan.dayCount !== 7 || plan.days.length !== 7 ? <p className="mt-2 text-sm">La revisión completa de cantidades aún no está disponible para menús de más de una semana.</p> : <>
-      <p className="mt-2 text-sm">Las estimaciones requieren tu revisión y no modifican el menú hasta que las guardes. El inventario incierto puede seguir requiriendo revisión.</p>
-      <button type="button" onClick={prepare} disabled={disabled || busy} className="mt-3 min-h-11 rounded-xl bg-bistro-action-primary px-4 font-semibold text-white disabled:opacity-60">{busy && !proposal ? 'Preparando…' : 'Preparar cantidades estimadas para mi menú'}</button>
+      <p className="mt-2 text-sm">Revisá un día por vez. Las estimaciones no modifican el menú hasta que las guardes; el inventario incierto puede seguir requiriendo revisión.</p>
+      <label className="mt-3 grid max-w-sm gap-1 text-sm font-semibold">
+        Día del menú
+        <select value={selectedDay} disabled={disabled || busy} onChange={event => {
+          setSelectedDayIndex(Number(event.target.value));
+          setProposal(null); setItems([]); setError(null);
+        }} className="min-h-11 rounded-lg border border-bistro-border bg-white px-3">
+          {pendingDays.map(day => <option key={day.dayIndex} value={day.dayIndex}>{day.label} · {day.pending} pendientes</option>)}
+        </select>
+      </label>
+      <button type="button" onClick={prepare} disabled={disabled || busy} className="mt-3 min-h-11 rounded-xl bg-bistro-action-primary px-4 font-semibold text-white disabled:opacity-60">{busy && !proposal ? 'Preparando…' : `Preparar cantidades estimadas de ${selectedLabel}`}</button>
       {proposal ? <div className="mt-4"><h3 className="font-semibold">Estimación de IA — revisar</h3><p className="text-sm">Aprobá solo los ingredientes que quieras guardar. Los demás seguirán pendientes.</p>
-        {plan.days.map((day) => <details key={day.dayIndex} className="mt-3 rounded-lg border border-bistro-border p-3"><summary className="cursor-pointer font-semibold">{day.label}</summary>
+        {plan.days.filter(day => day.dayIndex === selectedDay).map((day) => <details key={day.dayIndex} className="mt-3 rounded-lg border border-bistro-border p-3"><summary className="cursor-pointer font-semibold">{day.label}</summary>
           {day.meals.map((meal) => {
             const entries = items.map((item, index) => ({ item, index })).filter(({ item }) => item.dayIndex === day.dayIndex && item.mealType === meal.mealType);
             if (!entries.length) return null;

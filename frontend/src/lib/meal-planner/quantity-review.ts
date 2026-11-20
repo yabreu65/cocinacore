@@ -30,8 +30,8 @@ export function missingQuantityItems(plan: StructuredMealPlan) {
 }
 
 /** Exact positional and name matching; never replace any previously known component. */
-export function validateReviewItems(plan: StructuredMealPlan, items: QuantityReviewItem[], complete: boolean): boolean {
-  const missing = missingQuantityItems(plan);
+export function validateReviewItems(plan: StructuredMealPlan, items: QuantityReviewItem[], complete: boolean, dayIndex?: number): boolean {
+  const missing = missingQuantityItems(plan).filter(item => dayIndex === undefined || item.dayIndex === dayIndex);
   if (complete && items.length !== missing.length) return false;
   const seen = new Set<string>();
   return items.every(item => {

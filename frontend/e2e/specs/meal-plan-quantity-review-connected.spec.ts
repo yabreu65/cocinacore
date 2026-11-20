@@ -82,9 +82,10 @@ test.describe('Connected weekly quantity review', () => {
       expect(postCount).toBe(0);
       const proposalResponse = page.waitForResponse((response) =>
         response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/meal-plan/quantity-review');
-      await page.getByRole('button', { name: 'Preparar cantidades estimadas para mi menú' }).click();
+      await page.getByRole('button', { name: /Preparar cantidades estimadas de/ }).click();
       const proposal = await proposalResponse;
       expect(proposal.status()).toBe(200);
+      expect(proposal.request().postDataJSON()).toEqual({ mealPlanId: planId, dayIndex: 1 });
       expect(postCount).toBe(1);
       await expect(page.getByRole('heading', { name: 'Estimación de IA — revisar' })).toBeVisible();
       expect((await readPlan()).rows).toEqual(beforePlan.rows);

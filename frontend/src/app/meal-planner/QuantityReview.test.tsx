@@ -33,7 +33,8 @@ describe('QuantityReview', () => {
   });
   it('offers explicit preparation only for a confirmed plan with missing quantities, without fetching', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
-    expect(renderToStaticMarkup(createElement(QuantityReview, { ...props, plan }))).toContain('Preparar cantidades estimadas para mi menú');
+    expect(renderToStaticMarkup(createElement(QuantityReview, { ...props, plan }))).toContain('Preparar cantidades estimadas de');
+    expect(renderToStaticMarkup(createElement(QuantityReview, { ...props, plan }))).toContain('Día del menú');
     expect(renderToStaticMarkup(createElement(QuantityReview, { ...props, plan: { ...plan, schedule: undefined } }))).toBe('');
     expect(renderToStaticMarkup(createElement(QuantityReview, { ...props, plan: { ...plan, days: plan.days.map((day) => ({ ...day, meals: day.meals.map((meal) => ({ ...meal, ingredients: [{ name: 'Avena', quantity: 1, unit: 'g' }] })) })) } }))).toBe('');
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -42,6 +43,6 @@ describe('QuantityReview', () => {
   it('does not offer calls for a longer menu', () => {
     const html = renderToStaticMarkup(createElement(QuantityReview, { ...props, plan: { ...plan, period: 'fortnight', dayCount: 14 } }));
     expect(html).toContain('aún no está disponible');
-    expect(html).not.toContain('Preparar cantidades estimadas para mi menú');
+    expect(html).not.toContain('Preparar cantidades estimadas de');
   });
 });
