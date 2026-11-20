@@ -55,6 +55,9 @@ describe('ScheduleConfirmation', () => {
     const markup = renderToStaticMarkup(tree);
     expect(markup).toContain('1. Confirmar fecha y porciones');
     expect(markup).toContain('3 comensales');
+    const checkboxLabel = find(tree, (node) => node.type === 'label' && Boolean(input(node, 'checkbox')));
+    expect(checkboxLabel).toBeDefined();
+    expect(renderToStaticMarkup(checkboxLabel)).not.toMatch(/comensales/i);
     expect(markup).toContain('no se puede calcular su compra exacta');
     expect(markup).toContain('Zona horaria:');
     await submit(tree);

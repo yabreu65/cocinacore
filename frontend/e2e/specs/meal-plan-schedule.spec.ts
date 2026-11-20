@@ -57,7 +57,8 @@ test('409 is visible and does not claim success', async ({ page }) => {
   await page.goto('/meal-planner');
   await fillConfirmation(page);
   await page.getByRole('button', { name: 'Confirmar agenda y porciones' }).click();
-  await expect(page.getByRole('alert')).toContainText('El menú cambió');
+  const confirmationPanel = page.getByRole('region', { name: '1. Confirmar fecha y porciones' });
+  await expect(confirmationPanel.getByRole('alert')).toContainText('El menú cambió');
   await expect(page.getByRole('heading', { name: 'Agenda confirmada' })).toHaveCount(0);
 });
 

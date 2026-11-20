@@ -83,7 +83,7 @@ export default function ScheduleConfirmation({ plan, mealPlanId, peopleCount, di
               <input type="date" required min={localToday()} value={startDate} onChange={(event) => setStartDate(event.target.value)} className="min-h-11 rounded-xl border border-bistro-border px-3" />
               <span className="text-xs font-normal">Zona horaria: {timeZone}</span>
             </label>
-            <label className="flex items-start gap-2 text-sm"><input type="checkbox" required checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} className="mt-1" />Confirmo que revisé las cantidades y porciones declaradas en este menú para {peopleCount} comensales.</label>
+            <label className="flex items-start gap-2 text-sm"><input type="checkbox" required checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} className="mt-1" />Confirmo que revisé las cantidades y porciones declaradas en este menú.</label>
             {error ? <p role="alert" className="text-sm text-bistro-danger">{error}</p> : null}
             <button type="submit" disabled={disabled || saving || !confirmed || !startDate} className="min-h-11 rounded-xl bg-bistro-action-primary px-4 font-semibold text-white disabled:opacity-60">{saving ? 'Guardando…' : 'Confirmar agenda y porciones'}</button>
           </form></>
