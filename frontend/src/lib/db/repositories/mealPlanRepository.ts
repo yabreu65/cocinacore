@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
+import type { DbTransactionClient } from '@/lib/db/transaction-client';
 import { readHardRestrictionList } from '@/lib/profile/culinary-profile-contract';
 import { lockInventorySourceTenant } from '@/lib/db/inventory-source-lock';
 import { equalPostgresTimestamps } from '@/lib/db/postgres-timestamp';
@@ -442,4 +443,24 @@ export async function findLatestMealPlanByUserAndTenant(
     )
   );
   return mapSingleRow(result);
+}
+
+/** Read or update quantity review under the same profile and plan locks. */
+export async function withQuantityReviewSource<T>(
+  scope: { tenantId: string; userId: string },
+  mealPlanId: string,
+  action: (client: DbTransactionClient, plan: UserMealPlanRow, restrictions: string[]) => Promise<T>
+): Promise<T | null> {
+  return scopedTransaction(scope, async client => {
+    await lockInventorySourceTenant(client, scope.tenantId);
+    await lockCulinaryProfileUpdateInTransaction(client, scope.userId, scope.tenantId);
+    const row = (await client.query<UserMealPlanRow>(
+      `select * from public.user_meal_plans where id = $1 and tenant_id = $2 and user_id = $3 for update`,
+      [mealPlanId, scope.tenantId, scope.userId]
+    )).rows[0];
+    if (!row || row.user_id !== scope.userId || row.tenant_id !== scope.tenantId || !Array.isArray(row.restrictions)) return null;
+    const restrictions = await readLockedHardRestrictions(client, scope.userId, scope.tenantId, row.restrictions);
+    if (!restrictions) throw new Error('Invalid restrictions');
+    return action(client, row, restrictions);
+  }, { isolationLevel: 'read committed' });
 }

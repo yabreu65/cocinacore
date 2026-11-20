@@ -22,6 +22,7 @@ import { shouldApplyConsumptionResponse, withConsumptionRecord } from './consump
 import LoadErrorNotice from './load-error-notice';
 import MealPreparationAction from './MealPreparationAction';
 import ScheduleConfirmation from './ScheduleConfirmation';
+import QuantityReview, { isQuantityReviewCurrent } from './QuantityReview';
 
 type ShoppingSuggestion = {
   normalizedName: string;
@@ -98,6 +99,7 @@ export default function MealPlannerPage() {
   const [consumptionError, setConsumptionError] = useState<string | null>(null);
   const planRef = useRef(plan);
   const generationStartedRef = useRef(false);
+  const generationInFlightRef = useRef(false);
   const activePlanIdRef = useRef<string | null>(null);
   const suggestionRequestVersionRef = useRef(0);
   const consumptionRequestVersionRef = useRef(0);
@@ -388,6 +390,7 @@ export default function MealPlannerPage() {
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
     generationStartedRef.current = true;
+    generationInFlightRef.current = true;
     adaptiveRequestVersionRef.current += 1;
     suggestionRequestVersionRef.current += 1;
     consumptionRequestVersionRef.current += 1;
@@ -463,6 +466,7 @@ export default function MealPlannerPage() {
     } catch (error) {
       setGenerationError(error instanceof Error ? error.message : 'Error desconocido.');
     } finally {
+      generationInFlightRef.current = false;
       setIsGenerating(false);
     }
   };
@@ -709,6 +713,22 @@ export default function MealPlannerPage() {
                   if (!componentActiveRef.current || activePlanIdRef.current !== mealPlanId || planRef.current !== confirmedPlan) return;
                   setCurrentPlan({ ...confirmedPlan, schedule });
                   void loadSuggestions(mealPlanId);
+                }}
+              />
+            ) : null}
+
+            {activePlanId ? (
+              <QuantityReview
+                key={`${activePlanId}:${JSON.stringify(plan)}`}
+                plan={plan}
+                mealPlanId={activePlanId}
+                disabled={isGenerating || isConfirmingAdaptive}
+                isCurrent={(sourcePlan, id) => isQuantityReviewCurrent(componentActiveRef.current, generationInFlightRef.current, activePlanIdRef.current, id, planRef.current, sourcePlan)}
+                onReloaded={(sourcePlan, id, result) => {
+                  if (!isQuantityReviewCurrent(componentActiveRef.current, generationInFlightRef.current, activePlanIdRef.current, id, planRef.current, sourcePlan) || !result.plan) return;
+                  setCurrentPlan(result.plan);
+                  setPlanHardRestrictions(result.restrictions ?? []);
+                  void loadSuggestions(id);
                 }}
               />
             ) : null}
