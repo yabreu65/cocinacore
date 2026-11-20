@@ -92,9 +92,10 @@ test.describe('Connected weekly quantity review', () => {
       expect((await readShopping()).rows).toEqual(beforeShopping.rows);
       await page.locator('section[aria-labelledby="quantity-review-title"] summary').filter({ hasText: 'Lunes' }).click();
       await expect(page.getByLabel(`Cantidad de ${names.selected}`)).toHaveValue('100');
-      await expect(page.getByLabel(`Aprobar ${names.selected}`)).not.toBeChecked();
-      await expect(page.getByLabel(`Aprobar ${names.pending}`)).not.toBeChecked();
-      await page.getByLabel(`Aprobar ${names.selected}`).check();
+      await expect(page.getByLabel(`Aprobar ${names.selected}`)).toBeChecked();
+      await expect(page.getByLabel(`Aprobar ${names.pending}`)).toBeChecked();
+      // The user can still exclude one estimate before a single bulk save.
+      await page.getByLabel(`Aprobar ${names.pending}`).uncheck();
       const saveRequest = page.waitForRequest((request) =>
         request.method() === 'PUT' && new URL(request.url()).pathname === '/api/meal-plan/quantity-review');
       const saveResponse = page.waitForResponse((response) =>

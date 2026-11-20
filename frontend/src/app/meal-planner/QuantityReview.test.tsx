@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import type { StructuredMealPlan } from '@/lib/meal-planner/structured-plan';
-import QuantityReview, { isQuantityReviewCurrent, reloadSavedPlan, reviewUnit } from './QuantityReview';
+import QuantityReview, { initialQuantityReviewDraft, isQuantityReviewCurrent, isSaveableReviewAmount, reloadSavedPlan, reviewUnit } from './QuantityReview';
 
 const plan: StructuredMealPlan = {
   period: 'week', dayCount: 7,
@@ -26,6 +26,20 @@ describe('QuantityReview', () => {
     expect(isQuantityReviewCurrent(true, false, 'plan', 'plan', { ...plan }, plan)).toBe(false);
     expect(isQuantityReviewCurrent(true, false, null, 'plan', plan, plan)).toBe(false);
   });
+  it('preselects usable AI estimates while leaving unknown amounts out of the save', () => {
+    const source = { dayIndex: 1, mealType: 'lunch' as const, ingredientIndex: 0, name: 'Arroz' };
+    expect(initialQuantityReviewDraft({ ...source, quantity: 400, unit: 'g' }, null, null)).toMatchObject({ selected: true, quantityText: '400', unit: 'g' });
+    expect(initialQuantityReviewDraft({ ...source, quantity: null, unit: null }, null, null)).toMatchObject({ selected: false, quantityText: '', unit: null });
+    expect(initialQuantityReviewDraft({ ...source, quantity: 20, unit: null }, null, null)).toMatchObject({ selected: false, unit: null });
+    expect(initialQuantityReviewDraft({ ...source, quantity: 20, unit: 'unidad' }, null, null)).toMatchObject({ selected: true, unit: 'unidad' });
+    expect(initialQuantityReviewDraft({ ...source, quantity: 20, unit: 'g' }, 200, 'kg')).toMatchObject({ selected: true, quantityText: '200', unit: 'kg' });
+    expect(isSaveableReviewAmount('', 'g')).toBe(false);
+    expect(isSaveableReviewAmount('-3', 'g')).toBe(false);
+    expect(isSaveableReviewAmount('100001', 'g')).toBe(false);
+    expect(isSaveableReviewAmount('100', null)).toBe(false);
+    expect(isSaveableReviewAmount('100', 'g')).toBe(true);
+  });
+
   it('uses the estimate only when the original unit is not recognized', () => {
     expect(reviewUnit('pizca', 'gramos')).toBe('g');
     expect(reviewUnit('kg', 'gramos')).toBe('kg');
