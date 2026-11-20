@@ -23,7 +23,12 @@ beforeEach(() => {
   mocks.requireUser.mockResolvedValue({ id: 'user', tenant: { tenantId: 'tenant' } });
   mocks.source.mockImplementation(async (_scope: unknown, _id: unknown, action: Action) => action({ query }, row, []));
   mocks.limit.mockResolvedValue({ success: true });
-  mocks.fetch.mockImplementation(async () => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({ items: row.calendar_payload.days.flatMap(day => day.meals.map(meal => ({ dayIndex: day.dayIndex, mealType: meal.mealType, ingredientIndex: 0, name: 'Rice', quantity: 100, unit: 'g' }))) }) }] } }] })));
+  mocks.fetch.mockImplementation(async (_url: string, init: RequestInit) => {
+    const input = JSON.parse(String(init.body)) as { contents: Array<{ parts: Array<{ text: string }> }> };
+    const prompt = input.contents[0].parts[0].text;
+    const missing = JSON.parse(prompt.slice(prompt.indexOf('Pendientes: ') + 'Pendientes: '.length)) as Array<{ dayIndex: number; mealType: string; ingredientIndex: number; name: string }>;
+    return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({ items: missing.map(item => ({ ...item, quantity: 100, unit: 'g' })) }) }] } }] }));
+  });
   vi.stubGlobal('fetch', mocks.fetch);
 });
 
@@ -45,6 +50,7 @@ describe('quantity review route', () => {
     expect(response.status).toBe(200);
     const proposal = await response.json() as Proposal;
     expect(proposal.items).toHaveLength(21);
+    expect(mocks.fetch).toHaveBeenCalledTimes(7);
     expect((mocks.fetch.mock.calls[0][1] as RequestInit).body).toContain('TOTALES para 4 personas');
     expect(query).not.toHaveBeenCalled();
     const confirmation = await PUT(request('PUT', { mealPlanId: id, expectedUpdatedAt: proposal.expectedUpdatedAt, fingerprint: proposal.fingerprint, items: [proposal.items[0]] }));
@@ -65,6 +71,108 @@ describe('quantity review route', () => {
     expect(payload.days[0].meals[0].ingredients[0]).toEqual({ name: 'Rice', quantity: 100, unit: 'g' });
     expect(payload.days[0].meals[1].ingredients[0]).toEqual({ name: 'Rice', quantity: 100, unit: 'gramos' });
   });
+  it('estimates 223 missing entries in bounded day batches without changing saved data', async () => {
+    let ingredientCounter = 0;
+    for (const day of row.calendar_payload.days) {
+      for (const meal of day.meals) {
+        const count = ingredientCounter < 13 * 11 ? 11 : 10;
+        meal.ingredients = Array.from({ length: count }, () => {
+          const ingredient = { name: `Synthetic ingredient ${++ingredientCounter}`, quantity: null, unit: null };
+          return ingredient;
+        });
+      }
+    }
+    // 13 meals with 11 ingredients, 8 meals with 10 => 223.
+    expect(ingredientCounter).toBe(223);
+    const result = await POST(request('POST', { mealPlanId: id }));
+    expect(result.status).toBe(200);
+    const proposal = await result.json() as Proposal;
+    expect(proposal.items).toHaveLength(223);
+    expect(mocks.fetch).toHaveBeenCalledTimes(7);
+    const groups = mocks.fetch.mock.calls.map((call) => {
+      const init = call[1] as RequestInit;
+      const payload = JSON.parse(String(init.body)) as { contents: Array<{ parts: Array<{ text: string }> }> };
+      const prompt = payload.contents[0].parts[0].text;
+      const missing = JSON.parse(prompt.slice(prompt.indexOf('Pendientes: ') + 'Pendientes: '.length)) as Array<{ dayIndex: number }>;
+      expect(prompt).toContain('TOTALES para 4 personas');
+      expect(missing.length).toBeLessThanOrEqual(33);
+      expect(new Set(missing.map(item => item.dayIndex)).size).toBe(1);
+      return missing[0].dayIndex;
+    });
+    expect([...groups].sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('keeps unsupported Gemini units unconfirmed while preserving other day entries', async () => {
+    const original = mocks.fetch.getMockImplementation()!;
+    mocks.fetch.mockImplementation(async (url: string, init: RequestInit) => {
+      const response = await original(url, init) as Response;
+      const envelope = await response.json() as { candidates: Array<{ content: { parts: Array<{ text: string }> } }> };
+      const content = JSON.parse(envelope.candidates[0].content.parts[0].text) as { items: Array<{ unit: string | null; quantity: number | null }> };
+      content.items[0].unit = 'pizca-no-normalizable';
+      envelope.candidates[0].content.parts[0].text = JSON.stringify(content);
+      return new Response(JSON.stringify(envelope));
+    });
+    const response = await POST(request('POST', { mealPlanId: id }));
+    expect(response.status).toBe(200);
+    const proposal = await response.json() as Proposal;
+    expect(proposal.items).toHaveLength(21);
+    expect(proposal.items.filter(item => item.quantity === null && item.unit === null)).toHaveLength(7);
+    expect(proposal.items.filter(item => item.quantity === 100 && item.unit === 'g')).toHaveLength(14);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid day identities without returning partial estimates or writing data', async () => {
+    const defaultProvider = mocks.fetch.getMockImplementation()!;
+    mocks.fetch.mockImplementation(async (url: string, init: RequestInit) => {
+      const payload = JSON.parse(String(init.body)) as { contents: Array<{ parts: Array<{ text: string }> }> };
+      const prompt = payload.contents[0].parts[0].text;
+      if (prompt.includes('"dayIndex":3')) {
+        return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({ items: [{ dayIndex: 3, mealType: 'breakfast', ingredientIndex: 0, name: 'FORGED INGREDIENT', quantity: 100, unit: 'g' }] }) }] } }] }));
+      }
+      return (await defaultProvider(url, init)) as Response;
+    });
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const response = await POST(request('POST', { mealPlanId: id }));
+      expect(response.status).toBe(502);
+      expect(mocks.fetch.mock.calls.length).toBeLessThanOrEqual(7);
+      expect(query).not.toHaveBeenCalled();
+      expect(warning).toHaveBeenCalledWith('quantity_review.provider_failed', expect.objectContaining({ code: 'provider_invalid_items' }));
+    } finally { warning.mockRestore(); }
+  });
+
+  it('returns an explicit 504 for a slow provider without writing anything', async () => {
+    vi.useFakeTimers();
+    mocks.fetch.mockImplementation(() => new Promise<Response>(() => {}));
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const result = POST(request('POST', { mealPlanId: id }));
+      await vi.advanceTimersByTimeAsync(45001);
+      const response = await result;
+      expect(response.status).toBe(504);
+      expect((await response.json() as { error: string }).error).toMatch(/tardó demasiado/);
+      expect(query).not.toHaveBeenCalled();
+      expect(warning).toHaveBeenCalledWith('quantity_review.provider_failed', expect.objectContaining({ code: 'provider_timeout' }));
+    } finally {
+      warning.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not retry a batch when the provider returns 429', async () => {
+    mocks.fetch.mockResolvedValueOnce(new Response('', { status: 429 }));
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const response = await POST(request('POST', { mealPlanId: id }));
+      expect(response.status).toBe(429);
+      const payload = await response.json() as { error: string };
+      expect(payload.error).toMatch(/límite de solicitudes/);
+      expect(mocks.fetch.mock.calls.length).toBeLessThanOrEqual(2);
+      expect(query).not.toHaveBeenCalled();
+    } finally { warning.mockRestore(); }
+  });
+
   it('bounds request and provider response bodies even without Content-Length', async () => {
     expect((await POST(request('POST', { mealPlanId: id, oversized: 'x'.repeat(100001) }))).status).toBe(400);
     mocks.fetch.mockResolvedValue(new Response('x'.repeat(150001)));
@@ -75,21 +183,21 @@ describe('quantity review route', () => {
       mocks.fetch.mockResolvedValueOnce(new Response('', { status }));
       expect((await POST(request('POST', { mealPlanId: id }))).status).toBe(status);
     }
-    expect(mocks.fetch).toHaveBeenCalledTimes(2);
+    expect(mocks.fetch).toHaveBeenCalledTimes(4);
     mocks.source.mockImplementation(async (_scope: unknown, _id: unknown, action: Action) => action({ query }, row, ['peanuts']));
     expect((await POST(request('POST', { mealPlanId: id }))).status).toBe(409);
   });
   it('rejects an old provider result when the plan changes during the call', async () => {
     mocks.fetch.mockImplementationOnce(async () => {
       row.updated_at = '2026-11-20T00:01:00.000Z';
-      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({ items: row.calendar_payload.days.flatMap(day => day.meals.map(meal => ({ dayIndex: day.dayIndex, mealType: meal.mealType, ingredientIndex: 0, name: 'Rice', quantity: 100, unit: 'g' }))) }) }] } }] }));
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({ items: row.calendar_payload.days[0].meals.map(meal => ({ dayIndex: 1, mealType: meal.mealType, ingredientIndex: 0, name: 'Rice', quantity: 100, unit: 'g' })) }) }] } }] }));
     });
     expect((await POST(request('POST', { mealPlanId: id }))).status).toBe(409);
   });
   it('accepts equivalent timestamp representations and rejects different instants', async () => {
     mocks.fetch.mockImplementationOnce(async () => {
       row.updated_at = '2026-11-19 20:00:00-04';
-      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({ items: row.calendar_payload.days.flatMap(day => day.meals.map(meal => ({ dayIndex: day.dayIndex, mealType: meal.mealType, ingredientIndex: 0, name: 'Rice', quantity: 100, unit: 'g' }))) }) }] } }] }));
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({ items: row.calendar_payload.days[0].meals.map(meal => ({ dayIndex: 1, mealType: meal.mealType, ingredientIndex: 0, name: 'Rice', quantity: 100, unit: 'g' })) }) }] } }] }));
     });
     const response = await POST(request('POST', { mealPlanId: id }));
     expect(response.status).toBe(200);
