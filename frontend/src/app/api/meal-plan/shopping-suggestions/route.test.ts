@@ -443,6 +443,84 @@ describe('POST /api/meal-plan/shopping-suggestions', () => {
     addMealPlanShoppingItemsMock.mockResolvedValue({ added: [], alreadyPresent: [] });
   });
 
+  it.each([99, 100, 101, 250])(
+    'accepts a bounded confirmation of %i unique keys without fabricating purchases',
+    async (count) => {
+      const body = await confirmationBody();
+      addMealPlanShoppingItemsMock.mockClear();
+      const selectedItems = Array.from({ length: count }, (_, index) => 'pending-' + index);
+      const response = await POST(postRequest({ ...body, selectedItems }));
+      expect(response.status).toBe(200);
+      const result = (await response.json()) as { ignored: string[] };
+      expect(result.ignored).toHaveLength(count);
+      expect(addMealPlanShoppingItemsMock).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([0, 251])('rejects %i selected keys before any database read or write', async (count) => {
+    const selectedItems = Array.from({ length: count }, (_, index) => 'pending-' + index);
+    const response = await POST(
+      postRequest({
+        mealPlanId: planId,
+        horizonDays: 7,
+        selectedItems,
+        expectedUpdatedAt: '2026-01-01T00:00:00.000Z',
+        expectedFingerprint: 'a'.repeat(64),
+      })
+    );
+    expect(response.status).toBe(400);
+    expect(scopedMock).not.toHaveBeenCalled();
+    expect(addMealPlanShoppingItemsMock).not.toHaveBeenCalled();
+  });
+
+  it('confirms more than 100 real menu ingredients in one guarded transaction', async () => {
+    const fixture = persistedPlan();
+    const payload = fixture.calendar_payload as {
+      days: Array<{
+        meals: Array<{ ingredients: Array<{ name: string; quantity: number; unit: string }> }>;
+      }>;
+    };
+    const largePlan = persistedPlan({
+      calendar_payload: {
+        ...(fixture.calendar_payload as Record<string, unknown>),
+        days: payload.days.map((day, dayIndex) => ({
+          ...day,
+          meals: day.meals.map((meal, mealIndex) =>
+            mealIndex === 0
+              ? {
+                  ...meal,
+                  ingredients: Array.from({ length: 18 }, (_, index) => ({
+                    name: 'Producto ' + dayIndex + '-' + index,
+                    quantity: 1,
+                    unit: 'kg',
+                  })),
+                }
+              : meal
+          ),
+        })),
+      },
+    });
+    findMealPlanByIdForUserAndTenantMock.mockResolvedValue(largePlan);
+    listInventoryItemsByTenantMock.mockResolvedValue([]);
+    const proposalResponse = await GET(request());
+    expect(proposalResponse.status).toBe(200);
+    const proposal = (await proposalResponse.json()) as {
+      items: Array<{ normalizedName: string; status: string; alreadyPresent: boolean }>;
+    };
+    const keys = proposal.items
+      .filter((item) => item.status === 'buy' && !item.alreadyPresent)
+      .map((item) => item.normalizedName)
+      .slice(0, 126);
+    expect(keys).toHaveLength(126);
+    addMealPlanShoppingItemsMock.mockClear();
+    const response = await POST(postRequest(await confirmationBody(keys)));
+    expect(response.status).toBe(200);
+    expect(addMealPlanShoppingItemsMock).toHaveBeenCalledTimes(1);
+    const confirmed = addMealPlanShoppingItemsMock.mock.calls[0][1] as { items: unknown[] };
+    expect(confirmed.items).toHaveLength(126);
+    expect(scopedMock).toHaveBeenCalled();
+  });
+
   it('recomputes current candidates and persists only selected actionable keys with server-owned data', async () => {
     const response = await POST(postRequest(await confirmationBody(['arroz', 'sal', 'harina'])));
     expect(response.status).toBe(200);
