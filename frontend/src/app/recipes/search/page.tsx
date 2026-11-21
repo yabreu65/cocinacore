@@ -2,6 +2,7 @@
 
 import { FormEvent, useRef, useState } from 'react';
 import Link from 'next/link';
+import { ChevronRight, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import type { StructuredRecipeIngredient } from '@/components/recipe-view/types';
@@ -14,7 +15,12 @@ import {
   buildTodayRecipeRequestFields,
 } from '@/lib/recipes/today-handoff';
 import type { Citation } from '@/services/types';
-import { RecipeEditor, draftFromImport, payloadFromDraft, type Draft } from '../RecipeLibraryClient';
+import {
+  RecipeEditor,
+  draftFromImport,
+  payloadFromDraft,
+  type Draft,
+} from '../RecipeLibraryClient';
 
 type RecipeGenerationResponse = {
   recipe: string;
@@ -60,10 +66,16 @@ function RecipeSearchContent() {
     event.preventDefault();
     if (generationLock.current || importLock.current || reviewing) return;
     const payload = buildRecipeGenerationRequestPayload({
-      mode, ingredients, recipeName, restrictions, todayFields,
+      mode,
+      ingredients,
+      recipeName,
+      restrictions,
+      todayFields,
     });
     if (!RecipeGenerateSchema.safeParse(payload).success) {
-      setError('Revisa el nombre, los ingredientes y las restricciones: máximo 30 ingredientes de 200 caracteres y 10 restricciones de 100 caracteres.');
+      setError(
+        'Revisa el nombre, los ingredientes y las restricciones: máximo 30 ingredientes de 200 caracteres y 10 restricciones de 100 caracteres.'
+      );
       return;
     }
     generationLock.current = true;
@@ -94,7 +106,8 @@ function RecipeSearchContent() {
         preparation: data.preparation,
         title: data.title,
         structuredIngredients: data.structuredIngredients ?? [],
-        missingDocumentContext: mode === 'rag' &&
+        missingDocumentContext:
+          mode === 'rag' &&
           getVisibleRecipeSources(mode, ragContextUsed, data.sources ?? []).length === 0,
         recipeHistoryId: data.recipeHistoryId,
         servings: data.servings ?? 4,
@@ -108,7 +121,14 @@ function RecipeSearchContent() {
   };
 
   const onImport = async (draft: Draft) => {
-    if (!reviewing || !result?.recipeHistoryId || generationLock.current || importLock.current || importedRecipe) return;
+    if (
+      !reviewing ||
+      !result?.recipeHistoryId ||
+      generationLock.current ||
+      importLock.current ||
+      importedRecipe
+    )
+      return;
     importLock.current = true;
     setImporting(true);
     setImportError(null);
@@ -142,88 +162,145 @@ function RecipeSearchContent() {
   };
 
   return (
-    <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 text-bistro-text-primary md:px-6">
-      <section className="mx-auto w-full max-w-4xl rounded-3xl border border-bistro-border bg-white/80 p-5 premium-shadow">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h1 className="text-3xl font-semibold">Buscar recetas</h1>
-            <p className="text-bistro-text-secondary">
-              Generá recetas con IA a partir de tus ingredientes.
+    <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 text-bistro-text-primary md:px-6 md:py-8">
+      <div className="mx-auto w-full max-w-4xl">
+        <header className="rounded-3xl bg-bistro-inverse px-5 py-4 text-white shadow-sm sm:px-8 sm:py-7">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs font-bold uppercase tracking-[0.15em] text-bistro-champagne">
+              Tu asistente de cocina
             </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
             <Link
               href="/recipes/history"
-              className="rounded-full border border-bistro-action-primary px-4 py-2 text-sm font-semibold text-bistro-action-primary"
+              className="inline-flex min-h-10 shrink-0 items-center rounded-xl border border-white/40 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-white/10"
             >
               Historial
             </Link>
-            <Link href="/app" className="text-sm font-semibold text-bistro-action-primary">
-              Volver
-            </Link>
           </div>
-        </div>
-
-        <form onSubmit={onSubmit} className="grid gap-3">
-          <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
-            Nombre de receta (opcional)
-            <input
-              name="recipeName"
-              maxLength={200}
-              value={recipeName}
-              onChange={(e) => setRecipeName(e.target.value)}
-              className="h-11 rounded-xl border border-bistro-border bg-white px-3 outline-none"
-            />
-          </label>
-
-          <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
-            Quiero cocinar con (opcional; enfoca la solicitud, uno por línea)
-            <textarea
-              value={ingredients}
-              onChange={(e) => setIngredients(e.target.value)}
-              rows={4}
-              className="rounded-xl border border-bistro-border bg-white px-3 py-2 outline-none"
-            />
-            {todayFields ? (
-              <span className="font-normal">
-                Estos ingredientes son sugerencias, no inventario confirmado.
-              </span>
-            ) : null}
-          </label>
-
-          <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
-            Restricciones (separadas por comas)
-            <input
-              value={restrictions}
-              aria-describedby="recipe-restrictions-hint"
-              onChange={(e) => setRestrictions(e.target.value)}
-              className="h-11 rounded-xl border border-bistro-border bg-white px-3 outline-none"
-            />
-          </label>
-          <p id="recipe-restrictions-hint" className="text-xs text-bistro-text-secondary">
-            Escribe las restricciones en español (por ejemplo: huevo, leche, sin gluten).
+          <h1 className="mt-2 font-bistro-heading text-3xl font-semibold leading-tight sm:text-4xl">
+            Buscar recetas
+          </h1>
+          <p className="mt-1 max-w-xl text-sm leading-relaxed text-bistro-cream sm:text-base">
+            Contame qué tenés o qué te gustaría cocinar.
           </p>
+        </header>
 
-          <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
-            Modo
-            <select
-              value={mode}
-              onChange={(e) => setMode(e.target.value as 'free' | 'rag')}
-              className="h-11 rounded-xl border border-bistro-border bg-white px-3 outline-none"
+        <section
+          aria-label="Crear una receta con IA"
+          className="mt-4 rounded-2xl border border-bistro-border bg-white p-4 shadow-sm sm:p-6"
+        >
+          <p className="mb-3 text-sm leading-relaxed text-bistro-text-secondary">
+            Podés usar tus ingredientes o pedir una idea sin indicar ninguno.
+          </p>
+          {todayFields?.recipeName ? (
+            <p className="mb-3 rounded-lg bg-bistro-surface-warm px-3 py-2 text-sm font-semibold text-bistro-action-primary">
+              Receta que elegiste: {todayFields.recipeName}
+            </p>
+          ) : null}
+
+          <form onSubmit={onSubmit} className="grid gap-3">
+            <label className="grid gap-2 text-sm font-semibold text-bistro-text-primary">
+              Quiero cocinar con (opcional; uno por línea)
+              <textarea
+                value={ingredients}
+                onChange={(e) => setIngredients(e.target.value)}
+                rows={3}
+                placeholder={'pollo\narroz\nzanahoria'}
+                className="min-h-24 w-full resize-y rounded-xl border border-bistro-border bg-bistro-page px-3 py-3 text-base font-normal leading-relaxed text-bistro-text-primary placeholder:text-bistro-text-secondary focus-visible:outline-2 focus-visible:outline-bistro-action-primary"
+              />
+              {todayFields ? (
+                <span className="text-xs font-normal text-bistro-text-secondary">
+                  Ingredientes sugeridos para tu comida; todavía no se ha confirmado tu inventario.
+                </span>
+              ) : null}
+            </label>
+
+            <div className="grid gap-3 border-t border-bistro-border pt-3 sm:grid-cols-2">
+              <div>
+                <label className="grid gap-1.5 text-sm font-semibold text-bistro-text-primary">
+                  Restricciones (separadas por comas)
+                  <input
+                    value={restrictions}
+                    aria-describedby="recipe-restrictions-hint"
+                    placeholder="Ej.: sin gluten, sin leche"
+                    onChange={(e) => setRestrictions(e.target.value)}
+                    className="min-h-12 w-full rounded-xl border border-bistro-border bg-bistro-page px-3 py-2 text-base font-normal text-bistro-text-primary focus-visible:outline-2 focus-visible:outline-bistro-action-primary"
+                  />
+                </label>
+                <p
+                  id="recipe-restrictions-hint"
+                  className="mt-1.5 text-xs leading-relaxed text-bistro-text-secondary"
+                >
+                  Separá con comas lo que querés evitar.
+                </p>
+              </div>
+
+              <div>
+                <label className="grid gap-1.5 text-sm font-semibold text-bistro-text-primary">
+                  ¿De dónde tomamos ideas?
+                  <select
+                    aria-label="Modo"
+                    value={mode}
+                    onChange={(e) => setMode(e.target.value as 'free' | 'rag')}
+                    className="min-h-12 w-full rounded-xl border border-bistro-border bg-bistro-page px-3 py-2 text-base font-normal text-bistro-text-primary focus-visible:outline-2 focus-visible:outline-bistro-action-primary"
+                  >
+                    <option value="free">Ideas de la IA</option>
+                    <option value="rag">Libros de cocina (PDF)</option>
+                  </select>
+                </label>
+                <p className="mt-1.5 text-xs leading-relaxed text-bistro-text-secondary">
+                  {mode === 'rag'
+                    ? 'Buscaremos información en los libros disponibles de la biblioteca.'
+                    : 'La IA propondrá una receta según tu solicitud.'}
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={loading || importing || reviewing}
+              className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-bistro-action-primary px-5 py-3 text-base font-bold text-white transition-colors hover:bg-bistro-action-primary-hover disabled:opacity-60 sm:w-fit"
             >
-              <option value="free">Libre</option>
-              <option value="rag">Basado en biblioteca (RAG)</option>
-            </select>
-          </label>
-
-          <button
-            type="submit"
-            disabled={loading || importing || reviewing}
-            className="h-11 rounded-xl bg-bistro-action-primary px-4 font-semibold text-white disabled:opacity-60"
-          >
-            {loading ? 'Generando...' : 'Generar receta'}
-          </button>
-        </form>
+              <Sparkles aria-hidden="true" className="h-5 w-5" />
+              {loading ? 'Generando...' : 'Generar receta'}
+            </button>
+            <details
+              className="group rounded-xl border border-bistro-border bg-bistro-page"
+              open={Boolean(todayFields?.recipeName)}
+            >
+              <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 text-sm font-semibold text-bistro-action-primary [&::-webkit-details-marker]:hidden">
+                <span className="inline-flex items-center gap-2">
+                  <SlidersHorizontal aria-hidden="true" className="h-4 w-4" />
+                  Ponerle nombre a mi receta
+                  {recipeName.trim() ? (
+                    <span className="rounded-full bg-bistro-champagne px-2 py-0.5 text-xs text-bistro-text-primary">
+                      Definido
+                    </span>
+                  ) : null}
+                </span>
+                <ChevronRight
+                  aria-hidden="true"
+                  className="h-4 w-4 transition-transform group-open:rotate-90"
+                />
+              </summary>
+              <div className="border-t border-bistro-border px-3 py-3">
+                <label className="grid gap-1.5 text-sm font-semibold text-bistro-text-primary">
+                  Nombre de receta (opcional)
+                  <input
+                    name="recipeName"
+                    maxLength={200}
+                    value={recipeName}
+                    placeholder="Ej.: Pasta cremosa con verduras"
+                    onChange={(e) => setRecipeName(e.target.value)}
+                    className="min-h-12 w-full rounded-xl border border-bistro-border bg-white px-3 py-2 text-base font-normal text-bistro-text-primary focus-visible:outline-2 focus-visible:outline-bistro-action-primary"
+                  />
+                </label>
+              </div>
+            </details>
+            <p className="-mt-2 text-xs leading-relaxed text-bistro-text-secondary">
+              Antes de guardar, vas a poder revisar y corregir la receta que se genere.
+            </p>
+          </form>
+        </section>
 
         {error ? (
           <p className="mt-4 rounded-xl border border-bistro-danger/30 bg-bistro-danger/10 px-3 py-2 text-sm text-bistro-danger">
@@ -232,34 +309,54 @@ function RecipeSearchContent() {
         ) : null}
 
         {result ? (
-          <div className="mt-6 rounded-xl border border-bistro-border bg-bistro-page p-4">
-            <h2 className="font-semibold">{result.title}</h2>
+          <div
+            className="mt-5 min-w-0 rounded-2xl border border-bistro-border bg-white p-4 shadow-sm sm:p-6"
+            role="region"
+            aria-label="Receta generada"
+          >
+            <div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-bistro-action-primary">
+              <Sparkles aria-hidden="true" className="h-4 w-4" /> Propuesta de receta
+            </div>
+            <h2 className="font-bistro-heading text-2xl font-semibold leading-snug">
+              {result.title}
+            </h2>
             <p className="mt-2 text-xs text-bistro-text-secondary">
-              Propuesta generada por IA: revisa que todos los ingredientes de la preparación estén en la lista,
-              sus cantidades y las etiquetas antes de guardar o cocinar. No certifica ausencia de alérgenos ni de contaminación cruzada.
+              Propuesta generada por IA: revisa que todos los ingredientes de la preparación estén
+              en la lista, sus cantidades y las etiquetas antes de guardar o cocinar. No certifica
+              ausencia de alérgenos ni de contaminación cruzada.
             </p>
-            <pre className="mt-2 whitespace-pre-wrap text-sm">{result.recipe}</pre>
+            <pre className="mt-4 max-w-full whitespace-pre-wrap break-words rounded-xl bg-bistro-page p-4 font-sans text-sm leading-relaxed [overflow-wrap:anywhere]">
+              {result.recipe}
+            </pre>
 
             {result.recipeHistoryId ? (
               <div className="mt-4 grid gap-2">
                 {!importedRecipe && reviewing ? (
                   <RecipeEditor
                     key={result.recipeHistoryId}
-                    initial={draftFromImport(buildRecipeImportPayload({
-                      title: result.title, instructions: result.recipe, preparation: result.preparation, servings: result.servings,
-                      structuredIngredients: result.structuredIngredients, recipeHistoryId: result.recipeHistoryId,
-                    }))}
+                    initial={draftFromImport(
+                      buildRecipeImportPayload({
+                        title: result.title,
+                        instructions: result.recipe,
+                        preparation: result.preparation,
+                        servings: result.servings,
+                        structuredIngredients: result.structuredIngredients,
+                        recipeHistoryId: result.recipeHistoryId,
+                      })
+                    )}
                     saving={importing}
                     saveLabel="Confirmar y guardar"
                     onSave={(draft) => void onImport(draft)}
-                    onCancel={() => { if (!importLock.current) setReviewing(false); }}
+                    onCancel={() => {
+                      if (!importLock.current) setReviewing(false);
+                    }}
                   />
                 ) : !importedRecipe ? (
                   <button
                     type="button"
                     onClick={() => setReviewing(true)}
                     disabled={importing}
-                    className="h-11 w-fit rounded-xl bg-bistro-action-primary px-4 font-semibold text-white disabled:opacity-60"
+                    className="min-h-12 w-full rounded-xl bg-bistro-action-primary px-4 py-3 font-semibold text-white disabled:opacity-60 sm:w-fit"
                   >
                     {importing ? 'Importando...' : 'Importar al recetario'}
                   </button>
@@ -295,7 +392,7 @@ function RecipeSearchContent() {
             ) : null}
           </div>
         ) : null}
-      </section>
+      </div>
     </main>
   );
 }
