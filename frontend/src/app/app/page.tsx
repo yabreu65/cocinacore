@@ -74,10 +74,31 @@ export default function DashboardPage() {
   return (
     <main className="min-w-0 flex-1 px-4 py-6 md:px-6">
       <section className="mx-auto w-full max-w-5xl">
-        <h1 className="text-3xl font-semibold text-bistro-text-primary">
-          Hola, {data?.fullName || 'bienvenido'}
-        </h1>
-        <p className="mt-1 text-bistro-text-secondary">Este es tu resumen de cocina.</p>
+        <header className="rounded-3xl bg-bistro-inverse px-5 py-6 text-bistro-cream shadow-sm sm:px-8 sm:py-8">
+          <p className="text-xs font-bold uppercase tracking-[0.16em] text-bistro-champagne">
+            Tu cocina, hoy
+          </p>
+          <h1 className="mt-2 font-bistro-heading text-3xl font-semibold leading-tight text-white sm:text-4xl">
+            Hola, {data?.fullName || 'bienvenido'}
+          </h1>
+          <p className="mt-2 max-w-xl text-sm leading-relaxed text-bistro-cream sm:text-base">
+            Encontrá qué cocinar y retomá tu organización desde un solo lugar.
+          </p>
+          <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+            <Link
+              href="/recipes/search"
+              className="inline-flex min-h-12 items-center justify-center rounded-xl bg-bistro-champagne px-5 py-3 text-sm font-bold text-bistro-text-primary transition-colors hover:bg-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+            >
+              Encontrar una receta
+            </Link>
+            <Link
+              href="/meal-planner"
+              className="inline-flex min-h-12 items-center justify-center rounded-xl border border-white/40 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+            >
+              Organizar mi semana
+            </Link>
+          </div>
+        </header>
 
         {loading ? <p className="mt-4 text-sm text-bistro-text-secondary">Cargando...</p> : null}
         {error ? (
@@ -97,7 +118,6 @@ export default function DashboardPage() {
               hasRecipes={data.hasSavedRecipes}
               hasGeneratedIdeas={data.recentRecipes.length > 0}
             />
-            <DashboardQuickActions />
           </>
         ) : null}
 
@@ -131,6 +151,8 @@ export default function DashboardPage() {
             </div>
           </div>
         ) : null}
+
+        {data ? <DashboardQuickActions /> : null}
 
         {data &&
         (data.onboardingCompleted || data.inventory.length > 0 || data.recentRecipes.length > 0) ? (

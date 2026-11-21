@@ -77,10 +77,10 @@ export function DashboardDailySnapshot() {
   return (
     <section className="mt-7" aria-labelledby="daily-snapshot-heading">
       <h2 id="daily-snapshot-heading" className="text-xl font-semibold text-bistro-text-primary">
-        Para continuar donde lo dejaste
+        Continuá donde lo dejaste
       </h2>
       <p className="mt-1 text-sm text-bistro-text-secondary">
-        Un vistazo a tus compras y tu menú, con datos de CocinaCore.
+        Tu menú y tus compras, sin perder el hilo.
       </p>
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
         <Link
