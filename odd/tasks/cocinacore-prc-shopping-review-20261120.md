@@ -21,3 +21,9 @@ Base: `origin/main` 9f0216295d1e7973e804ed6e86ff9f5ddb470190. Rama: `feat/cc-prc
 - Hook nativo de precommit, commit/árbol y CI de PR.
 - No merge ni despliegue sin autorización del propietario.
 - Aceptación funcional con Gemini real de PR #139 y aceptación manual de PR C por separado.
+
+## Verificación del primer CI (2026-11-21)
+- Ejecución `44849827670`: frontend-quality SUCCESS, E2E failure (59 passed / 3 failed / 2 skipped).
+- Causa confirmada en logs: tres pruebas conectadas antiguas buscaban tarjetas visibles, etiquetas `Para comprar:` y `Agregar seleccionados a compras`; PR C pasó a grupos plegables, cantidad compacta, preselección y botón con número. Las migraciones 019–024 sí se aprovisionaron y las pruebas arrancaron.
+- Corrección limitada a `meal-plan-shopping-connected.spec.ts`, `meta1-family-week-connected.spec.ts`, `shopping-list-full-connected.spec.ts`: abrir detalles, verificar cantidades y selección real, confirmar con nuevo CTA y validar conteo de ya existentes; se mantienen verificaciones de filas reales, bloqueo de cambios, idempotencia y ausencia de mutación indebida.
+- No cambia código de negocio, datos, SQL, permisos ni endpoints. TypeScript, ESLint de archivos modificados y diff-check aprobados; Playwright conectado requiere CI nuevamente.

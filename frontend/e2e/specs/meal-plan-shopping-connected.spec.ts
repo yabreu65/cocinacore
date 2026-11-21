@@ -122,11 +122,16 @@ test.describe('Connected Meal Planner shopping confirmation', () => {
       await page.goto('/meal-planner');
       await expect(page.getByRole('heading', { name: 'Planificador de menú' })).toBeVisible();
       await expect(page.getByRole('heading', { name: 'Menú generado' })).toBeVisible();
-      const pendingSuggestions = page.waitForRequest((request) =>
-        request.method() === 'GET' && request.url().includes('/api/meal-plan/shopping-suggestions?') &&
-        request.url().includes('horizon=14'));
+      const pendingSuggestions = page.waitForRequest(
+        (request) =>
+          request.method() === 'GET' &&
+          request.url().includes('/api/meal-plan/shopping-suggestions?') &&
+          request.url().includes('horizon=14')
+      );
       let releaseSuggestions!: () => void;
-      const heldSuggestions = new Promise<void>((resolve) => { releaseSuggestions = resolve; });
+      const heldSuggestions = new Promise<void>((resolve) => {
+        releaseSuggestions = resolve;
+      });
       const shoppingPattern = '**/api/meal-plan/shopping-suggestions?*';
       await page.route(shoppingPattern, async (route) => {
         if (route.request().method() === 'GET' && route.request().url().includes('horizon=14'))
@@ -167,41 +172,61 @@ test.describe('Connected Meal Planner shopping confirmation', () => {
       await expect(suggestionsSection.getByLabel('Horizonte')).toBeEnabled();
       await suggestionsSection.getByLabel('Horizonte').selectOption('7');
       await expect(suggestionsSection.getByText(names.covered, { exact: false })).toHaveCount(0);
+      await suggestionsSection
+        .locator('summary')
+        .filter({ hasText: /^Revisar o ajustar/ })
+        .click();
+      await suggestionsSection
+        .locator('summary')
+        .filter({ hasText: /^Revisar cantidad/ })
+        .click();
       await expect(suggestionsSection.getByText(names.partial, { exact: false })).toBeVisible();
       await expect(suggestionsSection.getByText(names.missing, { exact: false })).toBeVisible();
       await expect(suggestionsSection.getByText(names.unknown, { exact: false })).toBeVisible();
+      const partialRow = suggestionsSection.locator('li').filter({ hasText: names.partial });
+      await expect(partialRow).toContainText('0.75 kg');
+      await partialRow.getByText('Ver origen y cálculo').click();
+      await expect(partialRow.getByText('Requerido: 1 kg · Disponible: 0.25 kg')).toBeVisible();
+      await expect(partialRow.getByText(/Desayuno de prueba/)).toBeVisible();
       await expect(
-        suggestionsSection.getByText('Requerido: 1 kg · Disponible: 0.25 kg')
-      ).toBeVisible();
-      await expect(suggestionsSection.getByText('Para comprar: 0.75 kg')).toBeVisible();
-      await expect(suggestionsSection.getByText(/Desayuno de prueba/).first()).toBeVisible();
-      await expect(suggestionsSection.getByText('Comprar', { exact: true }).first()).toBeVisible();
-      await expect(suggestionsSection.getByText(/^Revisar:/)).toBeVisible();
+        page.getByRole('checkbox', { name: new RegExp(names.partial, 'i') })
+      ).toBeChecked();
+      await expect(
+        page.getByRole('checkbox', { name: new RegExp(names.missing, 'i') })
+      ).toBeChecked();
+      await expect(
+        page.getByRole('checkbox', { name: new RegExp(names.unknown, 'i') })
+      ).toHaveCount(0);
 
       await suggestionsSection.getByLabel('Horizonte').selectOption('14');
-      await expect(suggestionsSection.getByText(/No se puede calcular este horizonte/)).toBeVisible();
+      await expect(
+        suggestionsSection.getByText(/No se puede calcular este horizonte/)
+      ).toBeVisible();
       await suggestionsSection.getByLabel('Horizonte').selectOption('7');
+      await suggestionsSection
+        .locator('summary')
+        .filter({ hasText: /^Revisar o ajustar/ })
+        .click();
       await expect(suggestionsSection.getByText(names.partial, { exact: false })).toBeVisible();
-
-      const addButton = suggestionsSection.getByRole('button', {
-        name: 'Agregar seleccionados a compras',
-      });
-      await expect(addButton).toBeVisible();
       const confirmationRows = await database.query<{ count: string }>(
         'select count(*)::text as count from public.shopping_list_items where tenant_id = $1 and user_id = $2 and source = $3',
         [identity.tenantId, identity.userId, seed.source]
       );
       expect(confirmationRows.rows[0]?.count).toBe('0');
 
-      await page.getByRole('checkbox', { name: new RegExp(names.partial, 'i') }).check();
+      await expect(
+        page.getByRole('checkbox', { name: new RegExp(names.partial, 'i') })
+      ).toBeChecked();
       await page.getByRole('checkbox', { name: new RegExp(names.missing, 'i') }).uncheck();
       await expect(
         page.getByRole('checkbox', { name: new RegExp(names.missing, 'i') })
       ).not.toBeChecked();
       await expect(
         page.getByRole('checkbox', { name: new RegExp(names.unknown, 'i') })
-      ).not.toBeChecked();
-      await addButton.click();
+      ).toHaveCount(0);
+      await suggestionsSection
+        .getByRole('button', { name: 'Agregar 1 producto al supermercado' })
+        .click();
       await expect(page.getByText(/Se agregaron 1 artículo/)).toBeVisible();
 
       const persisted = await database.query<{
@@ -229,10 +254,10 @@ test.describe('Connected Meal Planner shopping confirmation', () => {
 
       await page.reload();
       await expect(page.getByRole('heading', { name: 'Compras anticipadas' })).toBeVisible();
-      await expect(page.getByText('Ya está en compras', { exact: true })).toBeVisible();
+      await expect(page.getByText('1 ya en la lista')).toBeVisible();
       await expect(
         page.getByRole('checkbox', { name: new RegExp(names.partial, 'i') })
-      ).not.toBeChecked();
+      ).toHaveCount(0);
 
       const snapshotResponse = await page.request.get(
         `/api/meal-plan/shopping-suggestions?mealPlanId=${encodeURIComponent(seed.planId)}&horizon=7`
