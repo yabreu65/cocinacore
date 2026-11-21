@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { safeFetch } from '@/lib/api';
 import { ShoppingTransferControls, type ShoppingItem } from './ShoppingTransferControls';
+import { consolidateShoppingItems, type ConsolidatedShoppingProduct } from './consolidate-shopping';
 
 function provenanceLabel(source: string): string {
   if (source === 'manual') return 'Agregado manualmente';
@@ -182,8 +183,10 @@ export default function ShoppingListPage() {
 
   const pendingItems = items.filter((item) => item.status === 'pending');
   const purchasedItems = items.filter((item) => item.status === 'purchased');
+  const pendingProducts = consolidateShoppingItems(pendingItems);
+  const purchasedProducts = consolidateShoppingItems(purchasedItems);
 
-  const renderItems = (sectionItems: ShoppingItem[]) =>
+  const renderItems = (sectionItems: ShoppingItem[], product?: ConsolidatedShoppingProduct) =>
     sectionItems.map((item) => {
       const busy = busyItemIds.has(item.id);
       const nextStatusLabel =
@@ -199,6 +202,16 @@ export default function ShoppingListPage() {
             </h3>
             {item.quantity ? (
               <p className="mt-1 text-sm text-bistro-text-secondary">Cantidad: {item.quantity}</p>
+            ) : null}
+            {product?.purchase && item.status === 'pending' ? (
+              <p className="mt-1 text-sm font-semibold text-bistro-text-primary">
+                Comprar: {product.purchase}
+              </p>
+            ) : null}
+            {product?.needsReview && item.status === 'pending' ? (
+              <p className="mt-1 text-sm text-bistro-danger">
+                Revisar cantidad o presentación antes de comprar.
+              </p>
             ) : null}
             <p className="mt-1 text-sm text-bistro-text-secondary">
               Estado: {item.status === 'pending' ? 'Pendiente' : 'Comprado'}
@@ -233,6 +246,42 @@ export default function ShoppingListPage() {
         </article>
       );
     });
+
+  const renderProducts = (products: ConsolidatedShoppingProduct[]) =>
+    products.map((product) =>
+      product.rows.length === 1 ? (
+        <div key={product.key}>{renderItems(product.rows, product)}</div>
+      ) : (
+        <section
+          key={product.key}
+          aria-label={`${product.name} consolidado`}
+          className="rounded-xl border border-bistro-border bg-white p-4"
+        >
+          <h3 className="font-semibold text-bistro-text-primary">{product.name}</h3>
+          <p className="mt-1 text-sm text-bistro-text-secondary">Necesario: {product.required}</p>
+          {product.purchase && product.status === 'pending' ? (
+            <p className="mt-1 text-sm font-semibold text-bistro-text-primary">
+              Comprar: {product.purchase}
+            </p>
+          ) : null}
+          {product.needsReview && product.status === 'pending' ? (
+            <p className="mt-1 text-sm text-bistro-danger">
+              Revisar cantidades antes de elegir una presentación.
+            </p>
+          ) : null}
+          <details className="mt-3 rounded-lg border border-bistro-border p-3">
+            <summary className="cursor-pointer text-sm font-semibold text-bistro-action-primary">
+              Gestionar {product.rows.length} registros de origen
+            </summary>
+            <p className="my-2 text-xs text-bistro-text-secondary">
+              La sugerencia de compra no cambia las cantidades originales ni el inventario. Las
+              acciones de compra e inventario siguen disponibles por registro.
+            </p>
+            <div className="grid gap-2">{renderItems(product.rows)}</div>
+          </details>
+        </section>
+      )
+    );
 
   return (
     <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 text-bistro-text-primary md:px-6">
@@ -318,6 +367,11 @@ export default function ShoppingListPage() {
           </button>
         </form>
 
+        <p className="mb-3 text-sm text-bistro-text-secondary">
+          Los ingredientes equivalentes se muestran juntos. «Necesario» conserva lo que requieren
+          las recetas; «Comprar» sugiere envases completos cuando hay una presentación conocida. No
+          se modifica la cantidad guardada ni se añade inventario automáticamente.
+        </p>
         <p className="mb-5 text-sm text-bistro-text-secondary">
           Cuando compres un producto, marcalo como comprado y después elegí «Agregar al inventario»
           para registrar lo que ya tenés en casa.{' '}
@@ -332,10 +386,10 @@ export default function ShoppingListPage() {
         <div className="grid gap-6">
           <section aria-labelledby="pending-heading" className="grid gap-3">
             <h2 id="pending-heading" className="text-xl font-semibold">
-              Pendientes ({pendingItems.length})
+              Pendientes ({pendingProducts.length})
             </h2>
             {pendingItems.length > 0 ? (
-              <div className="grid gap-3">{renderItems(pendingItems)}</div>
+              <div className="grid gap-3">{renderProducts(pendingProducts)}</div>
             ) : (
               <p className="rounded-xl border border-bistro-border bg-white/70 p-4 text-sm text-bistro-text-secondary">
                 No tenés compras pendientes.
@@ -345,10 +399,10 @@ export default function ShoppingListPage() {
 
           <section aria-labelledby="purchased-heading" className="grid gap-3">
             <h2 id="purchased-heading" className="text-xl font-semibold">
-              Comprados ({purchasedItems.length})
+              Comprados ({purchasedProducts.length})
             </h2>
             {purchasedItems.length > 0 ? (
-              <div className="grid gap-3">{renderItems(purchasedItems)}</div>
+              <div className="grid gap-3">{renderProducts(purchasedProducts)}</div>
             ) : (
               <p className="rounded-xl border border-bistro-border bg-white/70 p-4 text-sm text-bistro-text-secondary">
                 No hay compras marcadas como realizadas.
