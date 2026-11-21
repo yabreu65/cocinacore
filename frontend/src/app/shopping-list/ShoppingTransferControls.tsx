@@ -8,6 +8,8 @@ export type ShoppingItem = {
   status: 'pending' | 'purchased';
   transfer_inventory_item_id: string | null;
   transferred_at: string | null;
+  purchased_quantity?: string | null;
+  purchased_unit?: string | null;
   created_at: string;
   updated_at: string;
 };

@@ -2,7 +2,7 @@ import { normalizeInventoryName } from '@/lib/inventory/normalize-inventory';
 import { parseExplicitQuantity } from '@/lib/inventory/quantity-normalization';
 import type { ShoppingItem } from './ShoppingTransferControls';
 
-type BaseUnit = 'g' | 'ml' | 'unidad' | 'paquete' | 'cucharada' | 'cucharadita' | 'taza';
+export type BaseUnit = 'g' | 'ml' | 'unidad' | 'paquete' | 'cucharada' | 'cucharadita' | 'taza';
 
 export type ConsolidatedShoppingProduct = {
   key: string;
@@ -11,6 +11,10 @@ export type ConsolidatedShoppingProduct = {
   rows: ShoppingItem[];
   required: string;
   purchase: string | null;
+  requiredAmount: number | null;
+  purchaseQuantity: string | null;
+  actualPurchased: string | null;
+  unit: BaseUnit | null;
   needsReview: boolean;
 };
 
@@ -38,7 +42,10 @@ function identity(name: string): { key: string; name: string } {
   return ALIASES[key] ?? { key, name: name.trim() };
 }
 
-function baseAmount(unit: string, amount: number): { unit: BaseUnit; amount: number } | null {
+export function baseShoppingAmount(
+  unit: string,
+  amount: number
+): { unit: BaseUnit; amount: number } | null {
   switch (unit) {
     case 'kg':
       return { unit: 'g', amount: amount * 1000 };
@@ -89,6 +96,14 @@ function packRule(
   return null;
 }
 
+function commercialQuantity(key: string, amount: number, unit: BaseUnit): number | null {
+  const pack = packRule(key, unit);
+  if (pack) return Math.ceil(amount / pack.size) * pack.size;
+  if (unit === 'unidad' || unit === 'paquete') return Math.ceil(amount);
+  if (unit === 'g' || unit === 'ml') return amount;
+  return null;
+}
+
 function formatPurchase(key: string, amount: number, unit: BaseUnit): string | null {
   const pack = packRule(key, unit);
   if (pack) {
@@ -110,7 +125,7 @@ function consolidateOne(
   const quantities = rows.map((row) => {
     if (row.quantity === null) return null;
     const parsed = parseExplicitQuantity(row.quantity);
-    return parsed ? baseAmount(parsed.unit, parsed.value) : null;
+    return parsed ? baseShoppingAmount(parsed.unit, parsed.value) : null;
   });
   const known = quantities.filter(
     (quantity): quantity is NonNullable<typeof quantity> => quantity !== null
@@ -125,6 +140,30 @@ function consolidateOne(
   const required = formatted.join(' + ') || 'Cantidad pendiente';
   const unit = units[0];
   const amount = unit === undefined ? null : (totals.get(unit) ?? null);
+  const transferredIds = new Set<string>();
+  const actualStock = new Map<BaseUnit, number>();
+  let completeReceipts = status === 'purchased' && rows.length > 0;
+  for (const row of rows) {
+    const id = row.transfer_inventory_item_id;
+    if (!id || !row.purchased_quantity || !row.purchased_unit) {
+      completeReceipts = false;
+      break;
+    }
+    if (transferredIds.has(id)) continue;
+    transferredIds.add(id);
+    const parsed = parseExplicitQuantity(`${row.purchased_quantity} ${row.purchased_unit}`);
+    const purchased = parsed ? baseShoppingAmount(parsed.unit, parsed.value) : null;
+    if (!purchased) {
+      completeReceipts = false;
+      break;
+    }
+    actualStock.set(purchased.unit, (actualStock.get(purchased.unit) ?? 0) + purchased.amount);
+  }
+  const purchasedEntries = [...actualStock];
+  const actualPurchased =
+    completeReceipts && purchasedEntries.length === 1
+      ? formatRequired(purchasedEntries[0][1], purchasedEntries[0][0])
+      : null;
   const valid =
     !needsReview &&
     unit !== undefined &&
@@ -142,6 +181,13 @@ function consolidateOne(
         ? `${required} (${unresolvedAlternative ? 'elegir alternativa' : 'revisar equivalencias'})`
         : required,
     purchase: valid ? formatPurchase(key, amount, unit) : null,
+    actualPurchased,
+    requiredAmount: valid ? amount : null,
+    purchaseQuantity:
+      valid && commercialQuantity(key, amount, unit) !== null
+        ? `${niceNumber(commercialQuantity(key, amount, unit)!)} ${unit}`
+        : null,
+    unit: valid ? unit : null,
     needsReview,
   };
 }

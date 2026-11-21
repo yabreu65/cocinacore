@@ -12,6 +12,10 @@ import {
   normalizeInventoryName,
 } from '@/lib/inventory/normalize-inventory';
 import { parseExplicitQuantity } from '@/lib/inventory/quantity-normalization';
+import {
+  baseShoppingAmount,
+  consolidateShoppingItems,
+} from '@/app/shopping-list/consolidate-shopping';
 
 export interface CreateShoppingListItemInput {
   tenantId: string;
@@ -19,6 +23,26 @@ export interface CreateShoppingListItemInput {
   ingredientName: string;
   quantity?: string | null;
   source: string;
+}
+
+export interface ConfirmShoppingProductInput {
+  tenantId: string;
+  userId: string;
+  groupKey: string;
+  rows: Array<{ id: string; ingredientName: string; quantity: string | null }>;
+  actualQuantity: string;
+}
+
+export class ShoppingGroupPurchaseError extends Error {
+  constructor(readonly code: 'stale' | 'invalid_quantity' | 'insufficient' | 'ambiguous') {
+    super(code);
+    this.name = 'ShoppingGroupPurchaseError';
+  }
+}
+
+export interface ShoppingGroupPurchaseResult {
+  items: ShoppingListItemRow[];
+  inventoryItem: RecipeInventoryItemRow;
 }
 
 export interface ShoppingListFilter {
@@ -63,14 +87,18 @@ export async function listShoppingListItems(
   scope?: AuthenticatedDbScope
 ): Promise<ShoppingListItemRow[]> {
   const values: unknown[] = [tenantId, userId];
-  const statusClause = filter.status ? ` and status = $${values.push(filter.status)}` : '';
+  const statusClause = filter.status ? ` and sl.status = $${values.push(filter.status)}` : '';
   const boundedLimit =
     typeof limit === 'number' && Number.isInteger(limit) && limit > 0 ? Math.min(limit, 501) : null;
   const limitClause = boundedLimit === null ? '' : ` limit $${values.push(boundedLimit)}`;
 
-  const sql = `select * from public.shopping_list_items
-     where tenant_id = $1 and user_id = $2${statusClause}
-     order by created_at desc, id desc${limitClause}`;
+  const sql = `select sl.*, stock.quantity as purchased_quantity, stock.unit as purchased_unit
+     from public.shopping_list_items sl
+     left join public.recipe_inventory_items stock
+       on stock.id = sl.transfer_inventory_item_id
+       and stock.tenant_id = sl.tenant_id and stock.user_id = sl.user_id
+     where sl.tenant_id = $1 and sl.user_id = $2${statusClause}
+     order by sl.created_at desc, sl.id desc${limitClause}`;
   if (scope && (scope.tenantId !== tenantId || scope.userId !== userId))
     throw new Error('Shopping scope mismatch');
   const result = scope
@@ -162,6 +190,107 @@ export async function addMealPlanShoppingItemsInTransaction(
   return { added, alreadyPresent };
 }
 
+/**
+ * Confirm a single physical purchase for all matching pending source rows.
+ * The whole group, one inventory row, one audit movement and every source
+ * marker commit together or not at all. No source quantity is overwritten.
+ */
+export async function confirmShoppingProductPurchase(
+  input: ConfirmShoppingProductInput
+): Promise<ShoppingGroupPurchaseResult> {
+  return scopedTransaction(
+    { tenantId: input.tenantId, userId: input.userId },
+    async (client) => {
+      await lockInventorySourceTenant(client, input.tenantId);
+      const pending = await client.query<ShoppingListItemRow>(
+        `select * from public.shopping_list_items
+         where tenant_id = $1 and user_id = $2 and status = 'pending'
+         order by id for update`,
+        [input.tenantId, input.userId]
+      );
+      if (pending.rows.length > 500) throw new ShoppingGroupPurchaseError('ambiguous');
+      const product = consolidateShoppingItems(pending.rows).find(
+        (candidate) => candidate.key === input.groupKey
+      );
+      if (!product || product.rows.length !== input.rows.length || input.rows.length > 250) {
+        throw new ShoppingGroupPurchaseError('stale');
+      }
+      const expected = new Map(input.rows.map((row) => [row.id, row]));
+      if (
+        expected.size !== product.rows.length ||
+        product.rows.some(
+          (row) =>
+            expected.get(row.id)?.ingredientName !== row.ingredient_name ||
+            expected.get(row.id)?.quantity !== row.quantity ||
+            row.transfer_inventory_item_id !== null ||
+            row.transferred_at !== null
+        )
+      ) {
+        throw new ShoppingGroupPurchaseError('stale');
+      }
+      if (
+        product.needsReview ||
+        product.unit === null ||
+        product.requiredAmount === null ||
+        product.purchaseQuantity === null
+      )
+        throw new ShoppingGroupPurchaseError('ambiguous');
+
+      const parsed = parseExplicitQuantity(input.actualQuantity);
+      const actual = parsed ? baseShoppingAmount(parsed.unit, parsed.value) : null;
+      if (
+        !actual ||
+        actual.unit !== product.unit ||
+        !Number.isFinite(actual.amount) ||
+        actual.amount <= 0 ||
+        actual.amount > 10_000_000 ||
+        ((actual.unit === 'unidad' || actual.unit === 'paquete') &&
+          !Number.isInteger(actual.amount))
+      )
+        throw new ShoppingGroupPurchaseError('invalid_quantity');
+      if (actual.amount < product.requiredAmount)
+        throw new ShoppingGroupPurchaseError('insufficient');
+
+      const inventoryItem = await createInventoryItemInTransaction(client, {
+        tenantId: input.tenantId,
+        userId: input.userId,
+        ingredientName: product.name,
+        quantity: String(actual.amount),
+        unit: actual.unit,
+        category: detectInventoryCategory(product.name),
+        normalizedName: normalizeInventoryName(product.name),
+      });
+
+      await client.query(
+        `insert into public.inventory_movements
+         (tenant_id, user_id, inventory_item_id, movement_type, quantity, unit, normalized_name, source)
+         values ($1, $2, $3, 'purchase', $4, $5, $6, 'shopping_list')`,
+        [
+          input.tenantId,
+          input.userId,
+          inventoryItem.id,
+          String(actual.amount),
+          actual.unit,
+          normalizeInventoryName(product.name),
+        ]
+      );
+      const ids = product.rows.map((row) => row.id);
+      const result = await client.query<ShoppingListItemRow>(
+        `update public.shopping_list_items
+         set status = 'purchased', transfer_inventory_item_id = $1,
+             transferred_at = now(), updated_at = now()
+         where tenant_id = $2 and user_id = $3 and id = any($4::uuid[])
+           and status = 'pending' and transfer_inventory_item_id is null
+         returning *`,
+        [inventoryItem.id, input.tenantId, input.userId, ids]
+      );
+      if (result.rows.length !== ids.length) throw new ShoppingGroupPurchaseError('stale');
+      return { items: result.rows, inventoryItem };
+    },
+    { isolationLevel: 'read committed' }
+  );
+}
+
 export async function transferPurchasedShoppingListItem(
   id: string,
   tenantId: string,
@@ -238,6 +367,7 @@ export async function updateShoppingListItemStatus(
       `update public.shopping_list_items
      set status = $1, updated_at = now()
      where id = $2 and tenant_id = $3 and user_id = $4
+       and ($1 = 'purchased' or transfer_inventory_item_id is null)
      returning *`,
       [status, id, tenantId, userId]
     );
@@ -255,6 +385,7 @@ export async function deleteShoppingListItem(
     return client.query<ShoppingListItemRow>(
       `delete from public.shopping_list_items
      where id = $1 and tenant_id = $2 and user_id = $3
+       and transfer_inventory_item_id is null
      returning *`,
       [id, tenantId, userId]
     );
