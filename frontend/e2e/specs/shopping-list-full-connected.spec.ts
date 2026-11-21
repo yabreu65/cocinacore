@@ -173,11 +173,16 @@ test.describe('Connected full Meal Planner to Shopping List journey', () => {
       await expect(page.getByRole('heading', { name: 'Menú generado' })).toBeVisible();
       const suggestions = page.locator('section[aria-busy]');
       await expect(suggestions.getByRole('heading', { name: 'Compras anticipadas' })).toBeVisible();
+      await suggestions
+        .locator('summary')
+        .filter({ hasText: /^Revisar o ajustar/ })
+        .click();
       const shortageCard = suggestions.locator('li').filter({ hasText: shortageName });
       await expect(shortageCard).toHaveCount(1);
       await expect(shortageCard.getByText(shortageName, { exact: true })).toBeVisible();
+      await expect(shortageCard).toContainText('0.75 kg');
+      await shortageCard.getByText('Ver origen y cálculo').click();
       await expect(shortageCard.getByText('Requerido: 1 kg · Disponible: 0.25 kg')).toBeVisible();
-      await expect(shortageCard.getByText('Para comprar: 0.75 kg')).toBeVisible();
 
       const shortageCheckbox = shortageCard.getByRole('checkbox', {
         name: new RegExp(shortageName, 'i'),
@@ -189,7 +194,7 @@ test.describe('Connected full Meal Planner to Shopping List journey', () => {
       await expect(shortageCheckbox).toBeChecked();
 
       const addButton = suggestions.getByRole('button', {
-        name: 'Agregar seleccionados a compras',
+        name: 'Agregar 1 producto al supermercado',
       });
       await addButton.click();
       await expect(page.getByText('Se agregaron 1 artículo.', { exact: true })).toBeVisible();
@@ -264,15 +269,12 @@ test.describe('Connected full Meal Planner to Shopping List journey', () => {
       await page.getByRole('link', { name: 'Planificador', exact: true }).click();
       await expect(page).toHaveURL('/meal-planner');
       const returnedSuggestions = page.locator('section[aria-busy]');
-      const returnedShortageCard = returnedSuggestions
-        .locator('li')
-        .filter({ hasText: shortageName });
-      await expect(returnedShortageCard).toHaveCount(1);
-      await expect(returnedShortageCard.getByText('Ya comprado', { exact: true })).toBeVisible();
-      const returnedCheckbox = returnedShortageCard.getByRole('checkbox', {
-        name: new RegExp(shortageName, 'i'),
-      });
-      await expect(returnedCheckbox).toBeDisabled();
+      await expect(returnedSuggestions.getByText('1 ya en la lista')).toBeVisible();
+      await expect(
+        returnedSuggestions.getByRole('checkbox', {
+          name: new RegExp(shortageName, 'i'),
+        })
+      ).toHaveCount(0);
 
       const snapshotResponse = await page.request.get(
         `/api/meal-plan/shopping-suggestions?mealPlanId=${encodeURIComponent(seed.planId)}&horizon=7`
