@@ -18,3 +18,8 @@
 - Seguridad de finalización: una compra ya transferida no puede desmarcarse ni eliminar su registro por HTTP; inventario y movimiento son independientes, con auditoría.
 - Sin migraciones, sin Docker, sin modificaciones de datos privados ni despliegues.
 - Se requieren: CI completo, PR #141 integrada por autorización del propietario y aprobación separada antes del merge/deploy de este bloque.
+
+## Corrección tras CI #44926784145
+- PR #141 integrada en main con commit 84d2790b6447e193a38756ce67a8dd9e8deb1dcb; PR #142 retarget a main, sin merge.
+- CI manual #44926784145: frontend-quality PASS, E2E 63 PASS / 2 FAIL / 2 SKIP. Dos fallos de Playwright por selectores ambiguos: aviso Next.js role=alert adicional y un segundo campo de cantidad comercial.
+- Cambio exclusivo en selectores del E2E de compras: identificar alerta por texto y campo de creación manual por nombre exacto; sin modificar lógica de negocio.

@@ -238,7 +238,9 @@ test.describe('Shopping List UI', () => {
     await grouped.getByLabel('Cantidad realmente comprada de Huevos').fill('25 unidad');
     page.once('dialog', (d) => d.accept());
     await grouped.getByRole('button', { name: 'Confirmar compra e inventario' }).click();
-    await expect(page.getByRole('alert')).toContainText('no cubre lo necesario');
+    await expect(
+      page.getByRole('alert').filter({ hasText: 'no cubre lo necesario' })
+    ).toContainText('no cubre lo necesario');
     await expect(page.getByRole('heading', { name: 'Pendientes (1)' })).toBeVisible();
 
     await grouped.getByLabel('Cantidad realmente comprada de Huevos').fill('30 unidad');
@@ -297,7 +299,7 @@ test.describe('Shopping List UI', () => {
     const api = await openShoppingList(page, [manualItem, plannerItem]);
 
     await page.getByLabel(/ingrediente/i).fill('Leche');
-    await page.getByLabel(/cantidad/i).fill('1 litro');
+    await page.getByRole('textbox', { name: 'Cantidad (opcional)', exact: true }).fill('1 litro');
     const manualAddForm = page.locator('form').filter({ has: page.getByLabel(/ingrediente/i) });
     await manualAddForm.getByRole('button', { name: 'Agregar', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Leche' })).toBeVisible();
