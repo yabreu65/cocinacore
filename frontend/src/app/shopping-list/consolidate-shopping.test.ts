@@ -39,6 +39,8 @@ describe('safe grocery consolidation with practical purchases', () => {
       needsReview: false,
     });
     expect(grouped[0].rows.map((r) => r.id)).toEqual(['1', '2']);
+    expect(grouped[0].purchaseQuantity).toBe('30 unidad');
+    expect(grouped[0].requiredAmount).toBe(left + right);
   });
 
   it('rounds egg cartons up without silently changing required count', () => {
@@ -139,6 +141,46 @@ describe('safe grocery consolidation with practical purchases', () => {
     expect(grouped[3].required).toBe('225 g');
     expect(grouped[2]).toMatchObject({ purchase: null, needsReview: true });
     expect(grouped[2].required).toContain('elegir alternativa');
+  });
+
+  it('reports a persisted 30-egg stock receipt once for two source rows after reload', () => {
+    const receipt = {
+      status: 'purchased' as const,
+      transfer_inventory_item_id: 'inventory-1',
+      transferred_at: '2026-11-21T12:00:00Z',
+      purchased_quantity: '30',
+      purchased_unit: 'unidad',
+    };
+    const grouped = consolidateShoppingItems([
+      { ...row('1', 'Huevo', '11 unidad', 'purchased'), ...receipt },
+      { ...row('2', 'Huevos', '15 unidad', 'purchased'), ...receipt },
+    ]);
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0]).toMatchObject({ required: '26 unidades', actualPurchased: '30 unidades' });
+  });
+
+  it('does not claim an actual purchase if a receipt is missing or incompatible', () => {
+    const a = row('1', 'Huevos', '11 unidad', 'purchased');
+    expect(
+      consolidateShoppingItems([{ ...a, transfer_inventory_item_id: 'inventory-1' }])[0]
+        .actualPurchased
+    ).toBeNull();
+    expect(
+      consolidateShoppingItems([
+        {
+          ...a,
+          transfer_inventory_item_id: 'inventory-1',
+          purchased_quantity: '30',
+          purchased_unit: 'unidad',
+        },
+        {
+          ...row('2', 'Huevo', '5 unidad', 'purchased'),
+          transfer_inventory_item_id: 'inventory-2',
+          purchased_quantity: '1',
+          purchased_unit: 'kg',
+        },
+      ])[0].actualPurchased
+    ).toBeNull();
   });
 
   it('rounds discrete produce up but never fabricates spoon packages', () => {

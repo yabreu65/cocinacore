@@ -29,6 +29,9 @@ function toPublicShoppingListItem(row: ShoppingListItemRow): PublicShoppingListI
     status: row.status,
     transfer_inventory_item_id: row.transfer_inventory_item_id,
     transferred_at: row.transferred_at,
+    ...(row.purchased_quantity != null && row.purchased_unit != null
+      ? { purchased_quantity: row.purchased_quantity, purchased_unit: row.purchased_unit }
+      : {}),
     created_at: row.created_at,
     updated_at: row.updated_at,
   };

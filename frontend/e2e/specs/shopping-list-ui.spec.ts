@@ -9,6 +9,10 @@ type ShoppingItem = {
   status: 'pending' | 'purchased';
   created_at: string;
   updated_at: string;
+  purchased_quantity?: string | null;
+  purchased_unit?: string | null;
+  transfer_inventory_item_id?: string | null;
+  transferred_at?: string | null;
 };
 
 const plannerId = '7f3c2af1-9d68-4b1f-a49a-a8e6c415a0d2';
@@ -49,6 +53,52 @@ async function setupShoppingApi(
 
     if (method === 'GET' && url.pathname === '/api/shopping-list') {
       await route.fulfill({ json: { items } });
+      return;
+    }
+
+    if (method === 'POST' && url.pathname === '/api/shopping-list/purchase-group') {
+      const purchase = body as {
+        groupKey: string;
+        actualQuantity: string;
+        rows: Array<{ id: string; ingredientName: string; quantity: string | null }>;
+      };
+      const current = items.filter((item) =>
+        purchase.rows.some(
+          (r) =>
+            r.id === item.id &&
+            r.ingredientName === item.ingredient_name &&
+            r.quantity === item.quantity &&
+            item.status === 'pending'
+        )
+      );
+      if (current.length !== purchase.rows.length) {
+        await route.fulfill({ status: 409, json: { error: 'La lista cambió.' } });
+        return;
+      }
+      const [quantity, unit] = purchase.actualQuantity.split(' ');
+      if (purchase.groupKey === 'pending:huevos' && (unit !== 'unidad' || Number(quantity) < 26)) {
+        await route.fulfill({
+          status: 409,
+          json: { error: 'La cantidad comprada no cubre lo necesario.' },
+        });
+        return;
+      }
+      const updated = current.map((item) => ({
+        ...item,
+        status: 'purchased' as const,
+        transfer_inventory_item_id: 'inventory-eggs-1',
+        transferred_at: '2026-11-21T12:00:00Z',
+        purchased_quantity: quantity,
+        purchased_unit: unit,
+      }));
+      const changed = new Map(updated.map((r) => [r.id, r]));
+      items = items.map((r) => changed.get(r.id) ?? r);
+      await route.fulfill({
+        json: {
+          items: updated,
+          inventoryItem: { id: 'inventory-eggs-1', quantity, unit },
+        },
+      });
       return;
     }
 
@@ -173,6 +223,52 @@ test.describe('Shopping List UI', () => {
     expect(api.requests.every((request) => request.method === 'GET')).toBe(true);
   });
 
+  test('confirms a real carton of 30 for 26 eggs, records once and displays the receipt after reload', async ({
+    page,
+  }) => {
+    const api = await openShoppingList(page, [
+      { ...manualItem, id: 'egg-a', ingredient_name: 'Huevo', quantity: '11 unidad' },
+      { ...manualItem, id: 'egg-b', ingredient_name: 'Huevos', quantity: '15 unidad' },
+    ]);
+    const grouped = page.getByRole('region', { name: 'Huevos consolidado' });
+    await expect(grouped).toContainText('Necesario: 26 unidades');
+    await expect(grouped.getByLabel('Cantidad realmente comprada de Huevos')).toHaveValue(
+      '30 unidad'
+    );
+    await grouped.getByLabel('Cantidad realmente comprada de Huevos').fill('25 unidad');
+    page.once('dialog', (d) => d.accept());
+    await grouped.getByRole('button', { name: 'Confirmar compra e inventario' }).click();
+    await expect(
+      page.getByRole('alert').filter({ hasText: 'no cubre lo necesario' })
+    ).toContainText('no cubre lo necesario');
+    await expect(page.getByRole('heading', { name: 'Pendientes (1)' })).toBeVisible();
+
+    await grouped.getByLabel('Cantidad realmente comprada de Huevos').fill('30 unidad');
+    page.once('dialog', (d) => d.accept());
+    await grouped.getByRole('button', { name: 'Confirmar compra e inventario' }).click();
+    await expect(page.getByRole('heading', { name: 'Comprados (1)' })).toBeVisible();
+    await expect(page.getByText(/Huevos: 30 unidad registrados en el inventario/)).toBeVisible();
+    const posts = api.requests.filter(
+      (r) => r.method === 'POST' && r.pathname.endsWith('/purchase-group')
+    );
+    expect(posts).toHaveLength(2); // rejected partial purchase, then accepted full carton
+    expect(posts[1]?.body).toMatchObject({
+      groupKey: 'pending:huevos',
+      actualQuantity: '30 unidad',
+      rows: [
+        { id: 'egg-a', ingredientName: 'Huevo', quantity: '11 unidad' },
+        { id: 'egg-b', ingredientName: 'Huevos', quantity: '15 unidad' },
+      ],
+    });
+    await page.reload();
+    const bought = page.getByRole('region', { name: 'Huevos consolidado' });
+    await expect(bought).toContainText('Necesario: 26 unidades');
+    await expect(bought).toContainText('Comprado e ingresado al inventario: 30 unidades');
+    expect(
+      api.requests.filter((r) => r.method === 'POST' && r.pathname.endsWith('/purchase-group'))
+    ).toHaveLength(2);
+  });
+
   test('keeps long ingredient names visible beside wrapped actions', async ({ page }) => {
     const longIngredient = `Ingrediente ${'extraordinariamente-largo-'.repeat(20)}`;
     await openShoppingList(page, [{ ...manualItem, ingredient_name: longIngredient }]);
@@ -203,7 +299,7 @@ test.describe('Shopping List UI', () => {
     const api = await openShoppingList(page, [manualItem, plannerItem]);
 
     await page.getByLabel(/ingrediente/i).fill('Leche');
-    await page.getByLabel(/cantidad/i).fill('1 litro');
+    await page.getByRole('textbox', { name: 'Cantidad (opcional)', exact: true }).fill('1 litro');
     const manualAddForm = page.locator('form').filter({ has: page.getByLabel(/ingrediente/i) });
     await manualAddForm.getByRole('button', { name: 'Agregar', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Leche' })).toBeVisible();

@@ -175,6 +175,9 @@ export interface ShoppingListItemRow {
   status: ShoppingItemStatus;
   transfer_inventory_item_id: string | null;
   transferred_at: string | null;
+  /** Filled by shopping-list read join, not stored on shopping row. */
+  purchased_quantity?: string | null;
+  purchased_unit?: string | null;
   created_at: string;
   updated_at: string;
 }

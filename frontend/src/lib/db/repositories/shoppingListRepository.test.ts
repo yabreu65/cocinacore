@@ -44,6 +44,7 @@ const {
   addMealPlanShoppingItems,
   transferPurchasedShoppingListItem,
   createShoppingListItem,
+  confirmShoppingProductPurchase,
   deleteShoppingListItem,
   listShoppingListItems,
   updateShoppingListItemStatus,
@@ -113,8 +114,8 @@ describe('shoppingListRepository', () => {
     ).resolves.toEqual([row]);
 
     const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
-    expect(sql).toMatch(/where tenant_id = \$1 and user_id = \$2/);
-    expect(sql).toMatch(/order by created_at desc, id desc/);
+    expect(sql).toMatch(/where sl\.tenant_id = \$1 and sl\.user_id = \$2/);
+    expect(sql).toMatch(/order by sl\.created_at desc, sl\.id desc/);
     expect(params).toEqual(['00000000-0000-4000-8000-000000000001', 'user-1']);
   });
 
@@ -142,7 +143,7 @@ describe('shoppingListRepository', () => {
     });
 
     const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
-    expect(sql).toMatch(/tenant_id = \$1 and user_id = \$2 and status = \$3/);
+    expect(sql).toMatch(/sl\.tenant_id = \$1 and sl\.user_id = \$2 and sl\.status = \$3/);
     expect(params).toEqual(['00000000-0000-4000-8000-000000000001', 'user-1', 'pending']);
   });
 
@@ -654,6 +655,185 @@ describe('shoppingListRepository', () => {
       expect(createInventoryItemInTransactionMock).not.toHaveBeenCalled();
     }
   );
+
+  it('prevents undoing or deleting rows already transferred to inventory', async () => {
+    queryMock.mockResolvedValue({ rows: [] });
+    await expect(
+      updateShoppingListItemStatus('shopping-1', row.tenant_id, row.user_id, 'pending')
+    ).resolves.toBeNull();
+    const statusSql = queryMock.mock.calls[0]?.[0] as string;
+    expect(statusSql).toContain("($1 = 'purchased' or transfer_inventory_item_id is null)");
+    await expect(
+      deleteShoppingListItem('shopping-1', row.tenant_id, row.user_id)
+    ).resolves.toBeNull();
+    expect(queryMock.mock.calls[1]?.[0]).toContain('transfer_inventory_item_id is null');
+  });
+
+  const groupRows = [
+    {
+      ...row,
+      id: '00000000-0000-4000-8000-000000000011',
+      ingredient_name: 'Huevo',
+      quantity: '11 unidad',
+    },
+    {
+      ...row,
+      id: '00000000-0000-4000-8000-000000000012',
+      ingredient_name: 'Huevos',
+      quantity: '15 unidad',
+    },
+  ];
+
+  function purchaseInput(actualQuantity = '30 unidad') {
+    return {
+      tenantId: row.tenant_id,
+      userId: row.user_id,
+      groupKey: 'pending:huevos',
+      rows: groupRows.map((item) => ({
+        id: item.id,
+        ingredientName: item.ingredient_name,
+        quantity: item.quantity,
+      })),
+      actualQuantity,
+    };
+  }
+
+  it('atomically records one actual carton of 30 for 26 required eggs and marks both original rows', async () => {
+    const purchased = groupRows.map((item) => ({
+      ...item,
+      status: 'purchased' as const,
+      transfer_inventory_item_id: inventoryItem.id,
+      transferred_at: '2026-11-21T00:00:00.000Z',
+    }));
+    queryMock
+      .mockResolvedValueOnce({ rows: groupRows })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: purchased });
+    createInventoryItemInTransactionMock.mockResolvedValue(inventoryItem);
+
+    const result = await confirmShoppingProductPurchase(purchaseInput());
+    expect(result.items).toEqual(purchased);
+    expect(result.inventoryItem).toEqual(inventoryItem);
+    expect(scopedTransactionMock).toHaveBeenCalledWith(
+      { tenantId: row.tenant_id, userId: row.user_id },
+      expect.any(Function),
+      { isolationLevel: 'read committed' }
+    );
+    expect(lockCalls).toHaveLength(1);
+    expect(createInventoryItemInTransactionMock).toHaveBeenCalledOnce();
+    expect(createInventoryItemInTransactionMock.mock.calls[0]?.[0]).toBe(lockCalls[0]?.client);
+    expect(createInventoryItemInTransactionMock.mock.calls[0]?.[1]).toMatchObject({
+      ingredientName: 'Huevos',
+      quantity: '30',
+      unit: 'unidad',
+      normalizedName: 'huevos',
+    });
+    expect(queryMock).toHaveBeenCalledTimes(3);
+    expect(queryMock.mock.calls[0]?.[0]).toContain('order by id for update');
+    expect(queryMock.mock.calls[0]?.[1]).toEqual([row.tenant_id, row.user_id]);
+    expect(queryMock.mock.calls[1]?.[0]).toContain('insert into public.inventory_movements');
+    expect(queryMock.mock.calls[1]?.[1]).toEqual([
+      row.tenant_id,
+      row.user_id,
+      inventoryItem.id,
+      '30',
+      'unidad',
+      'huevos',
+    ]);
+    expect(queryMock.mock.calls[2]?.[0]).toContain("status = 'purchased'");
+    expect(queryMock.mock.calls[2]?.[1]).toEqual([
+      inventoryItem.id,
+      row.tenant_id,
+      row.user_id,
+      groupRows.map((item) => item.id),
+    ]);
+  });
+
+  it('transfers the real purchased 1kg of rice while preserving a 700g source row', async () => {
+    const rice = { ...groupRows[0], ingredient_name: 'Arroz blanco', quantity: '700 g' };
+    queryMock
+      .mockResolvedValueOnce({ rows: [rice] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ ...rice, status: 'purchased' }] });
+    createInventoryItemInTransactionMock.mockResolvedValue(inventoryItem);
+    await confirmShoppingProductPurchase({
+      tenantId: row.tenant_id,
+      userId: row.user_id,
+      groupKey: 'pending:arroz blanco',
+      rows: [{ id: rice.id, ingredientName: rice.ingredient_name, quantity: rice.quantity }],
+      actualQuantity: '1 kg',
+    });
+    expect(createInventoryItemInTransactionMock.mock.calls[0]?.[1]).toMatchObject({
+      quantity: '1000',
+      unit: 'g',
+      ingredientName: 'Arroz blanco',
+    });
+    const movementValues = queryMock.mock.calls[1]?.[1] as unknown[] | undefined;
+    expect(movementValues?.[3]).toBe('1000');
+    expect(rice.quantity).toBe('700 g');
+  });
+
+  it.each([
+    ['stale', () => ({ rows: groupRows.slice(0, 1), input: purchaseInput() })],
+    [
+      'stale',
+      () => ({
+        rows: groupRows,
+        input: {
+          ...purchaseInput(),
+          rows: purchaseInput().rows.map((r, index) =>
+            index ? { ...r, quantity: '20 unidad' } : r
+          ),
+        },
+      }),
+    ],
+    ['stale', () => ({ rows: [], input: purchaseInput() })],
+    ['insufficient', () => ({ rows: groupRows, input: purchaseInput('25 unidad') })],
+    ['invalid_quantity', () => ({ rows: groupRows, input: purchaseInput('1 kg') })],
+    [
+      'ambiguous',
+      () => ({
+        rows: [
+          { ...groupRows[0], quantity: '11 unidad' },
+          { ...groupRows[1], quantity: null },
+        ],
+        input: {
+          ...purchaseInput(),
+          rows: purchaseInput().rows.map((r, index) => (index ? { ...r, quantity: null } : r)),
+        },
+      }),
+    ],
+  ] as const)('rejects %s before creating inventory or a movement', async (code, setup) => {
+    const { rows, input } = setup();
+    queryMock.mockResolvedValue({ rows });
+    await expect(confirmShoppingProductPurchase(input)).rejects.toMatchObject({
+      name: 'ShoppingGroupPurchaseError',
+      code,
+    });
+    expect(createInventoryItemInTransactionMock).not.toHaveBeenCalled();
+    expect(queryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed if updated row count differs after inventory insert, for transaction rollback', async () => {
+    queryMock
+      .mockResolvedValueOnce({ rows: groupRows })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [groupRows[0]] });
+    createInventoryItemInTransactionMock.mockResolvedValue(inventoryItem);
+    await expect(confirmShoppingProductPurchase(purchaseInput())).rejects.toMatchObject({
+      code: 'stale',
+    });
+    expect(scopedTransactionMock).toHaveBeenCalledOnce();
+  });
+
+  it('stops on shared tenant lock failure before reading any shopping rows', async () => {
+    lockFailure.error = new Error('tenant lock failed');
+    await expect(confirmShoppingProductPurchase(purchaseInput())).rejects.toThrow(
+      'tenant lock failed'
+    );
+    expect(queryMock).not.toHaveBeenCalled();
+    expect(createInventoryItemInTransactionMock).not.toHaveBeenCalled();
+  });
 
   it('uses the same transaction client for the tenant lock and the purchase transfer', async () => {
     const purchased = { ...row, status: 'purchased' };
