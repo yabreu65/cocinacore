@@ -143,6 +143,36 @@ test.describe('Shopping List UI', () => {
     await expect(page.getByText(plannerId)).toHaveCount(0);
   });
 
+  test('shows consolidated eggs and suggested commercial packages without changing stored rows', async ({
+    page,
+  }) => {
+    const source: ShoppingItem[] = [
+      { ...manualItem, id: 'egg-a', ingredient_name: 'Huevo', quantity: '11 unidad' },
+      { ...manualItem, id: 'egg-b', ingredient_name: 'Huevos', quantity: '15 unidad' },
+      { ...manualItem, id: 'rice-a', ingredient_name: 'Arroz blanco', quantity: '700 g' },
+      { ...manualItem, id: 'rice-b', ingredient_name: 'Arroz blanco cocido', quantity: '500 g' },
+    ];
+    const api = await openShoppingList(page, source);
+
+    await expect(page.getByRole('heading', { name: 'Pendientes (3)' })).toBeVisible();
+    const eggs = page.getByRole('region', { name: 'Huevos consolidado' });
+    await expect(eggs).toContainText('Necesario: 26 unidades');
+    await expect(eggs).toContainText('Comprar: 1 cartón de 30 huevos');
+    await eggs.getByText('Gestionar 2 registros de origen').click();
+    await expect(eggs.getByRole('button', { name: 'Eliminar Huevo', exact: true })).toBeVisible();
+    await expect(eggs.getByRole('button', { name: 'Eliminar Huevos', exact: true })).toBeVisible();
+
+    const rice = page.getByRole('article').filter({
+      has: page.getByRole('heading', { name: 'Arroz blanco', exact: true }),
+    });
+    await expect(rice).toContainText('Comprar: 1 paquete de 1 kg');
+    const cooked = page.getByRole('article').filter({
+      has: page.getByRole('heading', { name: 'Arroz blanco cocido', exact: true }),
+    });
+    await expect(cooked).not.toContainText('paquete de 1 kg');
+    expect(api.requests.every((request) => request.method === 'GET')).toBe(true);
+  });
+
   test('keeps long ingredient names visible beside wrapped actions', async ({ page }) => {
     const longIngredient = `Ingrediente ${'extraordinariamente-largo-'.repeat(20)}`;
     await openShoppingList(page, [{ ...manualItem, ingredient_name: longIngredient }]);
