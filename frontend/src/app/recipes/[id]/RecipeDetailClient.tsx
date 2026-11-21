@@ -350,7 +350,7 @@ export default function RecipeDetailClient({ id }: { id: string }) {
             </p>
           </section>
           <section
-            aria-labelledby="recipe-steps-heading"
+            aria-label="Instrucciones de la receta"
             className="min-w-0 rounded-2xl border border-bistro-border bg-white p-4 shadow-sm sm:p-6"
           >
             <p className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-bistro-action-primary">
