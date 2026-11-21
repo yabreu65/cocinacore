@@ -137,6 +137,8 @@ describe('safe grocery consolidation with practical purchases', () => {
       'Queso Parmigiano-Reggiano',
     ]);
     expect(grouped[3].required).toBe('225 g');
+    expect(grouped[2]).toMatchObject({ purchase: null, needsReview: true });
+    expect(grouped[2].required).toContain('elegir alternativa');
   });
 
   it('rounds discrete produce up but never fabricates spoon packages', () => {

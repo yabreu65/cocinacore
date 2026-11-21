@@ -116,7 +116,9 @@ function consolidateOne(
     (quantity): quantity is NonNullable<typeof quantity> => quantity !== null
   );
   const units = Array.from(new Set(known.map((q) => q.unit)));
-  const needsReview = quantities.some((q) => q === null) || units.length !== 1;
+  const unresolvedAlternative = /\(\s*o\s+|\s+(?:o|u)\s+/i.test(name);
+  const needsReview =
+    quantities.some((q) => q === null) || units.length !== 1 || unresolvedAlternative;
   const totals = new Map<BaseUnit, number>();
   for (const q of known) totals.set(q.unit, (totals.get(q.unit) ?? 0) + q.amount);
   const formatted = Array.from(totals).map(([unit, amount]) => formatRequired(amount, unit));
@@ -136,7 +138,9 @@ function consolidateOne(
     status,
     rows,
     required:
-      needsReview && formatted.length > 0 ? `${required} (revisar equivalencias)` : required,
+      needsReview && formatted.length > 0
+        ? `${required} (${unresolvedAlternative ? 'elegir alternativa' : 'revisar equivalencias'})`
+        : required,
     purchase: valid ? formatPurchase(key, amount, unit) : null,
     needsReview,
   };

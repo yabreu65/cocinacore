@@ -17,3 +17,4 @@
 - Vitest completo: 2.251 PASS, 123 SKIP, 178 archivos aprobados, 19 omitidos.
 - Playwright stub en `frontend/e2e/specs/shopping-list-ui.spec.ts`: comprueba cartón de 30, arroz 1 kg, origen individual y ausencia de POST/PATCH/DELETE; pendiente ejecución en CI.
 - Riesgo intencional: las sugerencias comerciales no persisten todavía la cantidad efectivamente comprada, ni alteran los registros existentes o la operación de inventario; se mantiene el flujo individual actual de marcado y transferencia.
+- Revisión adicional: ingredientes con alternativa no elegida («huevos o sustituto», «leche o bebida vegetal») se marcan como pendientes de elección y no generan presentación comercial por defecto; prueba focal aprobada.
