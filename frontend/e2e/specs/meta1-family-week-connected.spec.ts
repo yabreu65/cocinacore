@@ -259,12 +259,19 @@ test.describe('META 1 full family week', () => {
       await page.goto('/meal-planner');
       await expect(page.getByRole('heading', { name: 'Menú generado' })).toBeVisible();
       const suggestions = page.locator('section[aria-busy]');
+      await suggestions
+        .locator('summary')
+        .filter({ hasText: /^Revisar o ajustar/ })
+        .click();
       const shortage = suggestions.locator('li').filter({ hasText: ingredientName });
       await expect(shortage).toHaveCount(1);
+      await expect(shortage).toContainText('0.7 kg');
+      await shortage.getByText('Ver origen y cálculo').click();
       await expect(shortage).toContainText('Requerido: 2.1 kg · Disponible: 1.4 kg');
-      await expect(shortage).toContainText('Para comprar: 0.7 kg');
-      await shortage.getByRole('checkbox', { name: new RegExp(ingredientName, 'i') }).check();
-      await suggestions.getByRole('button', { name: 'Agregar seleccionados a compras' }).click();
+      await expect(
+        shortage.getByRole('checkbox', { name: new RegExp(ingredientName, 'i') })
+      ).toBeChecked();
+      await suggestions.getByRole('button', { name: 'Agregar 1 producto al supermercado' }).click();
       await expect(page.getByText('Se agregaron 1 artículo.', { exact: true })).toBeVisible();
 
       const shoppingBeforePurchase = await database.query<{
@@ -303,7 +310,11 @@ test.describe('META 1 full family week', () => {
       await inventoryForm.getByLabel('Ingrediente', { exact: true }).fill(ingredientName);
       await inventoryForm.getByLabel('Cantidad disponible', { exact: true }).fill('0.7');
       await inventoryForm.getByLabel('Unidad', { exact: true }).selectOption('kg');
-      await inventoryForm.getByRole('checkbox', { name: /confirma que quieres conservar este ingrediente por separado/i }).check();
+      await inventoryForm
+        .getByRole('checkbox', {
+          name: /confirma que quieres conservar este ingrediente por separado/i,
+        })
+        .check();
       await inventoryForm.getByRole('button', { name: /Detalles opcionales/ }).click();
       await inventoryForm.getByLabel('Fecha de vencimiento', { exact: true }).fill('2999-12-31');
       await inventoryForm.getByRole('button', { name: 'Guardar ingrediente', exact: true }).click();
@@ -373,14 +384,10 @@ test.describe('META 1 full family week', () => {
       );
       expect(purchasedRow.rows).toEqual([{ status: 'purchased', quantity: '0.7 kg' }]);
 
-      await expect(
-        page.locator('section[aria-busy]').locator('li').filter({ hasText: ingredientName })
-      ).toContainText('Ya comprado');
+      await expect(page.locator('section[aria-busy]').getByText('1 ya en la lista')).toBeVisible();
       await page.reload();
       await expect(page.getByText('Cocinado', { exact: true })).toHaveCount(21);
-      await expect(
-        page.locator('section[aria-busy]').locator('li').filter({ hasText: ingredientName })
-      ).toContainText('Ya comprado');
+      await expect(page.locator('section[aria-busy]').getByText('1 ya en la lista')).toBeVisible();
 
       const replay = await page.request.post('/api/meal-plan/consumption', {
         data: { mealPlanId: planId, dayIndex: 1, mealType: 'breakfast' },

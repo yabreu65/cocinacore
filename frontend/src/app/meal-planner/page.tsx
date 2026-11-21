@@ -40,13 +40,6 @@ type ShoppingSuggestion = {
   existingShoppingSources: string[];
 };
 
-type ShoppingCost = {
-  status: 'complete' | 'partial' | 'unknown';
-  estimatedTotal: number | null;
-  knownItemCount: number;
-  itemCount: number;
-};
-
 type ConfirmationItem = {
   ingredient_name: string;
   status: 'pending' | 'purchased';
@@ -91,7 +84,6 @@ export default function MealPlannerPage() {
   const [shoppingReason, setShoppingReason] = useState<string | null>(null);
   const [shoppingExpectedUpdatedAt, setShoppingExpectedUpdatedAt] = useState<string | null>(null);
   const [shoppingFingerprint, setShoppingFingerprint] = useState<string | null>(null);
-  const [shoppingCost, setShoppingCost] = useState<ShoppingCost | null>(null);
   const [consumptions, setConsumptions] = useState<MealConsumptionPayload>({});
   const [isLoadingConsumptions, setIsLoadingConsumptions] = useState(false);
   const [consumingMealKeys, setConsumingMealKeys] = useState<Set<string>>(new Set());
@@ -106,6 +98,9 @@ export default function MealPlannerPage() {
   const adaptiveRequestVersionRef = useRef(0);
   const componentActiveRef = useRef(true);
   const userEditedRef = useRef(false);
+  const toBuy = suggestions.filter((item) => item.status === 'buy' && !item.alreadyPresent);
+  const toReview = suggestions.filter((item) => item.status === 'review' && !item.alreadyPresent);
+  const alreadyListed = suggestions.filter((item) => item.alreadyPresent).length;
 
   const setCurrentPlan = (next: StructuredMealPlan | null) => {
     planRef.current = next;
@@ -113,7 +108,11 @@ export default function MealPlannerPage() {
   };
 
   const loadSuggestions = useCallback(
-    async (mealPlanId: string, preserveMessage = false, horizonDays: 7 | 14 = shoppingHorizonRef.current) => {
+    async (
+      mealPlanId: string,
+      preserveMessage = false,
+      horizonDays: 7 | 14 = shoppingHorizonRef.current
+    ) => {
       const requestVersion = ++suggestionRequestVersionRef.current;
       setIsLoadingSuggestions(true);
       setShoppingError(null);
@@ -125,7 +124,6 @@ export default function MealPlannerPage() {
           reason?: string;
           expectedUpdatedAt: string;
           sourceFingerprint: string;
-          cost: ShoppingCost;
         }>(
           `/api/meal-plan/shopping-suggestions?mealPlanId=${encodeURIComponent(mealPlanId)}&horizon=${horizonDays}`,
           { credentials: 'same-origin' }
@@ -145,7 +143,6 @@ export default function MealPlannerPage() {
         setShoppingReason(result.data.reason ?? null);
         setShoppingExpectedUpdatedAt(result.data.expectedUpdatedAt);
         setShoppingFingerprint(result.data.sourceFingerprint);
-        setShoppingCost(result.data.cost);
         setSuggestions(result.data.items);
         setSelectedItems(
           new Set(
@@ -167,7 +164,6 @@ export default function MealPlannerPage() {
           setShoppingReason(null);
           setShoppingExpectedUpdatedAt(null);
           setShoppingFingerprint(null);
-          setShoppingCost(null);
           setSuggestions([]);
           setSelectedItems(new Set());
         }
@@ -406,7 +402,6 @@ export default function MealPlannerPage() {
     setShoppingReason(null);
     setShoppingExpectedUpdatedAt(null);
     setShoppingFingerprint(null);
-    setShoppingCost(null);
     setConsumptions({});
     setIsLoadingConsumptions(false);
     setConsumingMealKeys(new Set());
@@ -455,7 +450,12 @@ export default function MealPlannerPage() {
       }
       setCurrentPlan(result.data.plan);
       setPlanPeopleCount(peopleCount);
-      setPlanHardRestrictions(restrictions.split(',').map((value) => value.trim()).filter(Boolean));
+      setPlanHardRestrictions(
+        restrictions
+          .split(',')
+          .map((value) => value.trim())
+          .filter(Boolean)
+      );
       const generatedPlanId = typeof result.data.id === 'string' ? result.data.id : null;
       activePlanIdRef.current = generatedPlanId;
       setActivePlanId(generatedPlanId);
@@ -710,7 +710,12 @@ export default function MealPlannerPage() {
                 peopleCount={planPeopleCount}
                 disabled={isGenerating || isConfirmingAdaptive}
                 onConfirmed={(mealPlanId, confirmedPlan, schedule) => {
-                  if (!componentActiveRef.current || activePlanIdRef.current !== mealPlanId || planRef.current !== confirmedPlan) return;
+                  if (
+                    !componentActiveRef.current ||
+                    activePlanIdRef.current !== mealPlanId ||
+                    planRef.current !== confirmedPlan
+                  )
+                    return;
                   setCurrentPlan({ ...confirmedPlan, schedule });
                   void loadSuggestions(mealPlanId);
                 }}
@@ -723,9 +728,29 @@ export default function MealPlannerPage() {
                 plan={plan}
                 mealPlanId={activePlanId}
                 disabled={isGenerating || isConfirmingAdaptive}
-                isCurrent={(sourcePlan, id) => isQuantityReviewCurrent(componentActiveRef.current, generationInFlightRef.current, activePlanIdRef.current, id, planRef.current, sourcePlan)}
+                isCurrent={(sourcePlan, id) =>
+                  isQuantityReviewCurrent(
+                    componentActiveRef.current,
+                    generationInFlightRef.current,
+                    activePlanIdRef.current,
+                    id,
+                    planRef.current,
+                    sourcePlan
+                  )
+                }
                 onReloaded={(sourcePlan, id, result) => {
-                  if (!isQuantityReviewCurrent(componentActiveRef.current, generationInFlightRef.current, activePlanIdRef.current, id, planRef.current, sourcePlan) || !result.plan) return;
+                  if (
+                    !isQuantityReviewCurrent(
+                      componentActiveRef.current,
+                      generationInFlightRef.current,
+                      activePlanIdRef.current,
+                      id,
+                      planRef.current,
+                      sourcePlan
+                    ) ||
+                    !result.plan
+                  )
+                    return;
                   setCurrentPlan(result.plan);
                   setPlanHardRestrictions(result.restrictions ?? []);
                   void loadSuggestions(id);
@@ -752,7 +777,8 @@ export default function MealPlannerPage() {
               </p>
             ) : null}
             <p className="mt-2 text-xs text-bistro-text-secondary">
-              Revisa los ingredientes y etiquetas del menú antes de cocinar. El plan no certifica ausencia de alérgenos.
+              Revisa los ingredientes y etiquetas del menú antes de cocinar. El plan no certifica
+              ausencia de alérgenos.
             </p>
             <section className="mt-4 rounded-xl border border-bistro-border bg-white p-3">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -870,7 +896,12 @@ export default function MealPlannerPage() {
                           {meal.description ? (
                             <p className="text-bistro-text-secondary">{meal.description}</p>
                           ) : null}
-                          {meal.recipeRef && <p className="mt-1 text-xs text-bistro-text-secondary">Receta vinculada: los datos de abajo corresponden a la estimación original del menú.</p>}
+                          {meal.recipeRef && (
+                            <p className="mt-1 text-xs text-bistro-text-secondary">
+                              Receta vinculada: los datos de abajo corresponden a la estimación
+                              original del menú.
+                            </p>
+                          )}
                           {meal.ingredients.length > 0 ? (
                             <ul className="mt-1 list-disc pl-5 text-bistro-text-secondary">
                               {meal.ingredients.map((ingredient, index) => (
@@ -895,7 +926,17 @@ export default function MealPlannerPage() {
                                   Cocinado
                                 </span>
                               ) : meal.recipeRef ? (
-                                <Link href={'/app/cooking-intent?source=meal_slot&mealPlanId=' + encodeURIComponent(activePlanId) + '&dayIndex=' + day.dayIndex + '&mealType=' + meal.mealType} className="text-sm font-semibold text-bistro-action-primary underline">
+                                <Link
+                                  href={
+                                    '/app/cooking-intent?source=meal_slot&mealPlanId=' +
+                                    encodeURIComponent(activePlanId) +
+                                    '&dayIndex=' +
+                                    day.dayIndex +
+                                    '&mealType=' +
+                                    meal.mealType
+                                  }
+                                  className="text-sm font-semibold text-bistro-action-primary underline"
+                                >
                                   Ver receta vinculada y registrar consumo real
                                 </Link>
                               ) : (
@@ -982,39 +1023,43 @@ export default function MealPlannerPage() {
                 y asegurate de que el plan cubra el horizonte solicitado.
               </p>
             ) : null}
-            {!isLoadingSuggestions && !shoppingError && shoppingStatus === 'ready' && suggestions.length === 0 ? (
+            {!isLoadingSuggestions &&
+            !shoppingError &&
+            shoppingStatus === 'ready' &&
+            suggestions.length === 0 ? (
               <p className="mt-2 text-sm text-bistro-text-secondary">
                 No hay faltantes accionables para este menú.
               </p>
             ) : null}
-            {suggestions.length > 0 ? (
-              <ul className="mt-3 grid gap-3">
-                {suggestions.map((item) => {
-                  const existingLabel = item.alreadyPresent
-                    ? item.shoppingStatus === 'purchased'
-                      ? 'Ya comprado'
-                      : 'Ya está en compras'
-                    : null;
-                  const quantity = (value: number | null) =>
-                    value === null
-                      ? 'Sin cantidad especificada'
-                      : `${value}${item.unit !== 'unknown' ? ` ${item.unit}` : ''}`;
-                  return (
-                    <li
-                      key={item.normalizedName}
-                      className="rounded-xl border border-bistro-border p-3"
-                    >
-                      <label className="flex items-start gap-3">
+            {!isLoadingSuggestions && shoppingStatus === 'ready' && suggestions.length > 0 ? (
+              <div
+                aria-live="polite"
+                className="mt-3 flex flex-wrap gap-x-4 gap-y-1 rounded-lg bg-bistro-page p-3 text-sm"
+              >
+                <span>
+                  <strong>{toBuy.length}</strong> por comprar
+                </span>
+                <span>
+                  <strong>{alreadyListed}</strong> ya en la lista
+                </span>
+                <span>
+                  <strong>{toReview.length}</strong> requieren revisar cantidad
+                </span>
+              </div>
+            ) : null}
+            {toBuy.length > 0 ? (
+              <details className="mt-3 rounded-xl border border-bistro-border p-3">
+                <summary className="cursor-pointer font-semibold">
+                  Revisar o ajustar {toBuy.length} productos ({selectedItems.size} seleccionados)
+                </summary>
+                <ul className="mt-3 divide-y divide-bistro-border">
+                  {toBuy.map((item) => (
+                    <li key={item.normalizedName} className="py-2">
+                      <label className="flex items-center gap-3 text-sm">
                         <input
                           type="checkbox"
                           checked={selectedItems.has(item.normalizedName)}
-                          disabled={
-                            isLoadingSuggestions ||
-                            isConfirming ||
-                            isGenerating ||
-                            Boolean(existingLabel) ||
-                            item.status !== 'buy'
-                          }
+                          disabled={isLoadingSuggestions || isConfirming || isGenerating}
                           onChange={(event) =>
                             setSelectedItems((current) => {
                               const next = new Set(current);
@@ -1023,58 +1068,67 @@ export default function MealPlannerPage() {
                               return next;
                             })
                           }
-                          aria-label={`${item.ingredientName}, ${item.status === 'buy' ? 'Comprar' : 'Revisar'}`}
+                          aria-label={item.ingredientName + ', Comprar'}
                         />
-                        <span className="grid gap-1 text-sm">
+                        <span className="flex flex-1 flex-wrap justify-between gap-x-3">
                           <span className="font-semibold">{item.ingredientName}</span>
                           <span>
-                            Requerido: {quantity(item.requiredQuantity)} · Disponible:{' '}
-                            {quantity(item.availableQuantity)}
-                          </span>
-                          <span>Para comprar: {quantity(item.quantityToBuy)}</span>
-                          {item.estimatedCost !== null ? (
-                            <span>
-                              Costo estimado del artículo: {item.estimatedCost.toFixed(2)}
-                            </span>
-                          ) : (
-                            <span>Costo: desconocido</span>
-                          )}
-                          <span className="font-semibold">
-                            {existingLabel ??
-                              (item.status === 'buy'
-                                ? item.transferCompleted
-                                  ? 'Ya transferido; verificar inventario'
-                                  : 'Comprar'
-                                : 'Revisar: cantidad o unidad desconocida')}
-                          </span>
-                          {item.existingShoppingSources.length > 0 ? (
-                            <span className="text-bistro-text-secondary">
-                              Ya existe en: {item.existingShoppingSources.join(', ')}.
-                            </span>
-                          ) : null}
-                          <span className="text-bistro-text-secondary">
-                            Usado en: {item.usedInRecipes.join('; ')}
+                            {item.quantityToBuy} {item.unit}
                           </span>
                         </span>
                       </label>
+                      <details className="ml-7 mt-1 text-xs text-bistro-text-secondary">
+                        <summary className="cursor-pointer">Ver origen y cálculo</summary>
+                        <p>
+                          Requerido: {item.requiredQuantity ?? 'Sin dato'} {item.unit} · Disponible:{' '}
+                          {item.availableQuantity ?? 'Sin dato'} {item.unit}
+                        </p>
+                        <p>Recetas: {item.usedInRecipes.join('; ')}</p>
+                      </details>
                     </li>
-                  );
-                })}
-              </ul>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
+            {toReview.length > 0 ? (
+              <details className="mt-3 rounded-xl border border-bistro-border p-3">
+                <summary className="cursor-pointer text-sm font-semibold">
+                  Revisar cantidad ({toReview.length}) — no se agregarán automáticamente
+                </summary>
+                <ul className="mt-2 divide-y divide-bistro-border text-sm">
+                  {toReview.map((item) => (
+                    <li key={item.normalizedName} className="py-2">
+                      <span className="font-semibold">{item.ingredientName}</span>
+                      <span className="ml-2 text-bistro-text-secondary">
+                        Cantidad o unidad pendiente
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-2 text-xs text-bistro-text-secondary">
+                  Completá y confirmá las cantidades pendientes desde el menú antes de agregar estos
+                  productos.
+                </p>
+              </details>
             ) : null}
             {shoppingMessage ? (
               <p role="status" className="mt-3 text-sm font-semibold text-bistro-success">
                 {shoppingMessage}
               </p>
             ) : null}
-            {shoppingCost && shoppingCost.itemCount > 0 ? (
-              <p className="mt-3 text-sm text-bistro-text-secondary">
-                {shoppingCost.status === 'complete'
-                  ? `Costo estimado total verificable: ${shoppingCost.estimatedTotal?.toFixed(2) ?? '0.00'}.`
-                  : shoppingCost.status === 'partial'
-                    ? `Costo estimado parcial: ${shoppingCost.estimatedTotal?.toFixed(2) ?? 'desconocido'}; faltan precios o cantidades para completar el total.`
-                    : 'Costo total desconocido: faltan precios o cantidades verificables.'}
+            {selectedItems.size > 250 ? (
+              <p role="alert" className="mt-3 text-sm text-bistro-danger">
+                Hay más de 250 productos seleccionados. Desmarcá algunos para confirmar una sola
+                lista segura.
               </p>
+            ) : null}
+            {shoppingMessage ? (
+              <Link
+                href="/shopping-list"
+                className="mt-2 inline-block text-sm font-semibold text-bistro-action-primary underline"
+              >
+                Ver mi lista del supermercado
+              </Link>
             ) : null}
             <button
               type="button"
@@ -1086,11 +1140,17 @@ export default function MealPlannerPage() {
                 shoppingStatus !== 'ready' ||
                 !shoppingExpectedUpdatedAt ||
                 !shoppingFingerprint ||
-                selectedItems.size === 0
+                selectedItems.size === 0 ||
+                selectedItems.size > 250
               }
               className="mt-4 h-11 rounded-xl bg-bistro-action-primary px-4 font-semibold text-white disabled:opacity-60"
             >
-              {isConfirming ? 'Agregando...' : 'Agregar seleccionados a compras'}
+              {isConfirming
+                ? 'Agregando...'
+                : 'Agregar ' +
+                  selectedItems.size +
+                  (selectedItems.size === 1 ? ' producto' : ' productos') +
+                  ' al supermercado'}
             </button>
           </section>
         ) : null}

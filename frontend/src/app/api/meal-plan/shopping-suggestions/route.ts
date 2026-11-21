@@ -8,7 +8,8 @@ import { equalPostgresTimestamps } from '@/lib/db/postgres-timestamp';
 import { ShoppingListIdSchema } from '@/lib/validation';
 import type { PredictiveShoppingProposal } from '@/lib/meal-planner/predictive-shopping';
 
-const MAX_SELECTED_ITEMS = 100;
+// One bounded confirmation covers a normal 7/14-day menu without splitting stale proposals.
+const MAX_SELECTED_ITEMS = 250;
 
 function parseHorizon(value: string | null): 7 | 14 | null {
   if (value === null || value === '7') return 7;
