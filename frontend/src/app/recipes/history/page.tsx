@@ -3,12 +3,29 @@ import { postgresTimestampDisplayDate } from '@/lib/db/postgres-timestamp';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import {
+  Bookmark,
+  BookOpen,
+  CalendarDays,
+  ChevronRight,
+  History,
+  Sparkles,
+  Trash2,
+} from 'lucide-react';
 import { humanCopy } from '@/lib/copy';
 import { safeFetch } from '@/lib/api';
 import { createHistoryOperationGate, type HistoryOperation } from './history-operation-gate';
-import { buildRecipeImportFromHistory, historyImportIngredientLimitExceeded } from '@/lib/recipes/recipe-history-import';
+import {
+  buildRecipeImportFromHistory,
+  historyImportIngredientLimitExceeded,
+} from '@/lib/recipes/recipe-history-import';
 import { getHistoryRecipeSources } from '@/lib/recipes/source-citations';
-import { RecipeEditor, draftFromImport, payloadFromDraft, type Draft } from '../RecipeLibraryClient';
+import {
+  RecipeEditor,
+  draftFromImport,
+  payloadFromDraft,
+  type Draft,
+} from '../RecipeLibraryClient';
 
 type HistoryFilter = 'all' | 'saved';
 
@@ -61,6 +78,21 @@ function toPrettyPayload(payload: unknown): string {
     return JSON.stringify(payload, null, 2);
   }
   return 'Sin detalle disponible.';
+}
+
+/** A display-only preview. The original payload remains available in «Ver detalle». */
+function historyPreview(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const obj = payload as Record<string, unknown>;
+  const raw =
+    typeof obj.summary === 'string' && obj.summary.trim()
+      ? obj.summary
+      : typeof obj.full_recipe === 'string'
+        ? obj.full_recipe
+        : '';
+  const preview = raw.replace(/\s+/g, ' ').trim();
+  if (!preview) return null;
+  return preview.length > 150 ? preview.slice(0, 147).trimEnd() + '…' : preview;
 }
 
 export default function RecipeHistoryPage() {
@@ -259,7 +291,7 @@ export default function RecipeHistoryPage() {
         throw new Error('No se pudo importar la receta.');
       }
       importedIds.current.add(entry.id);
-      setReviewId((current) => current === entry.id ? null : current);
+      setReviewId((current) => (current === entry.id ? null : current));
       setImportedRecipes((current) => ({ ...current, [entry.id]: result.data.recipe.id }));
     } catch {
       setError('No pudimos llevar la receta a tu recetario. Podés intentarlo nuevamente.');
@@ -269,151 +301,227 @@ export default function RecipeHistoryPage() {
   };
 
   return (
-    <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 text-bistro-text-primary md:px-6">
-      <section className="mx-auto w-full max-w-5xl rounded-3xl border border-bistro-border bg-white/80 p-5 premium-shadow">
-        <h1 className="text-3xl font-semibold">Historial de recetas</h1>
-        <p className="mt-1 text-bistro-text-secondary">
-          Tus ideas generadas. Marcar una idea para consultar no la guarda en Mi recetario; para
-          tenerla siempre disponible, usá «Importar a Mi recetario» y revisá los ingredientes y pasos antes de confirmar.
-        </p>
-
-        <label className="mt-4 flex w-fit items-center gap-2 text-sm font-semibold text-bistro-text-secondary">
-          Mostrar recetas
-          <select
-            value={filter}
-            disabled={reviewId !== null}
-            onChange={(event) => updateFilter(event.target.value as HistoryFilter)}
-            className="rounded-xl border border-bistro-border bg-white px-3 py-1.5 text-sm font-medium text-bistro-text-primary"
+    <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 text-bistro-text-primary md:px-6 md:py-8">
+      <div className="mx-auto w-full max-w-5xl">
+        <header className="rounded-3xl bg-bistro-inverse px-4 py-4 text-white shadow-sm sm:px-8 sm:py-7">
+          <div className="flex items-center justify-between gap-3">
+            <p className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-[0.14em] text-bistro-champagne">
+              <History aria-hidden="true" className="h-4 w-4" />
+              Tu cocina, con memoria
+            </p>
+            <Link
+              href="/recipes"
+              className="shrink-0 rounded-xl border border-white/35 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/10 sm:text-sm"
+            >
+              Mi recetario
+            </Link>
+          </div>
+          <h1 className="mt-2 font-bistro-heading text-2xl font-semibold leading-tight sm:text-4xl">
+            Historial de recetas
+          </h1>
+          <p className="mt-2 hidden max-w-xl text-sm leading-relaxed text-bistro-cream sm:block sm:text-base">
+            Volvé a encontrar las ideas que preparaste con el asistente.
+          </p>
+          <Link
+            href="/recipes/search"
+            className="mt-3 inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-bistro-champagne px-4 py-2 text-sm font-bold text-bistro-text-primary transition hover:bg-white"
           >
-            <option value="all">Todas</option>
-            <option value="saved">Marcadas para consultar</option>
-          </select>
-        </label>
+            <Sparkles aria-hidden="true" className="h-4 w-4" />
+            Buscar recetas
+          </Link>
+        </header>
 
-        {loading ? (
-          <p className="mt-4 text-sm text-bistro-text-secondary">Cargando historial...</p>
-        ) : null}
+        <section
+          aria-label="Organizar historial de recetas"
+          className="mt-4 rounded-2xl border border-bistro-border bg-white p-3 shadow-sm sm:p-5"
+        >
+          <div className="flex items-start gap-2 rounded-xl bg-bistro-surface-warm px-3 py-2.5 text-xs leading-relaxed text-bistro-text-primary sm:gap-3 sm:text-sm">
+            <BookOpen
+              aria-hidden="true"
+              className="mt-0.5 h-5 w-5 shrink-0 text-bistro-action-primary"
+            />
+            <p>
+              <strong>Marcar una idea no la guarda en Mi recetario.</strong> Para conservarla, usá
+              «Importar a Mi recetario» y revisala antes de confirmar.
+            </p>
+          </div>
+          <div className="mt-3 flex items-end justify-between gap-3">
+            <div>
+              <h2 className="font-bistro-heading text-lg font-semibold text-bistro-text-primary sm:text-xl">
+                Tus ideas generadas
+              </h2>
+              <p role="status" className="mt-1 text-sm text-bistro-text-secondary">
+                {loading
+                  ? 'Cargando historial…'
+                  : loadError
+                    ? 'No se pudo cargar el historial'
+                    : rows.length + (rows.length === 1 ? ' idea encontrada' : ' ideas encontradas')}
+              </p>
+            </div>
+            <label className="grid min-w-0 w-40 gap-1 text-xs font-semibold text-bistro-text-primary sm:w-52 sm:text-sm">
+              Mostrar recetas
+              <select
+                value={filter}
+                disabled={reviewId !== null}
+                onChange={(event) => updateFilter(event.target.value as HistoryFilter)}
+                className="min-h-11 w-full rounded-xl border border-bistro-border bg-bistro-page px-2 py-2 text-sm font-normal text-bistro-text-primary disabled:opacity-60 sm:px-3 sm:text-base"
+              >
+                <option value="all">Todas</option>
+                <option value="saved">Marcadas para consultar</option>
+              </select>
+            </label>
+          </div>
+        </section>
+
         {error ? (
-          <p className="mt-4 rounded-xl border border-bistro-danger/30 bg-bistro-danger/10 px-3 py-2 text-sm text-bistro-danger">
+          <p
+            role="alert"
+            className="mt-4 rounded-xl border border-bistro-danger/30 bg-bistro-danger/10 p-4 text-sm text-bistro-danger"
+          >
             {error}
           </p>
         ) : null}
         {loadError ? (
-          <div role="alert" className="mt-4 rounded-xl border border-bistro-danger/30 bg-bistro-danger/10 px-3 py-2 text-sm text-bistro-danger">
+          <div
+            role="alert"
+            className="mt-4 rounded-xl border border-bistro-danger/30 bg-bistro-danger/10 p-4 text-sm text-bistro-danger"
+          >
             <p>{loadError}</p>
             <button
               type="button"
               disabled={loading || pending.size > 0}
               onClick={() => setReloadVersion((current) => current + 1)}
-              className="mt-2 font-semibold underline disabled:opacity-60"
+              className="mt-2 min-h-10 font-semibold underline disabled:opacity-60"
             >
               Reintentar carga del historial
             </button>
           </div>
         ) : null}
         {!loading && !loadError && rows.length === 0 ? (
-          <p className="mt-4 text-sm text-bistro-text-secondary">
-            {filter === 'saved'
-              ? 'Aún no hay ideas marcadas para consultar.'
-              : 'Aún no tienes recetas en el historial.'}
-          </p>
+          <div className="mt-4 rounded-2xl border border-dashed border-bistro-border bg-white px-5 py-8 text-center">
+            <BookOpen aria-hidden="true" className="mx-auto h-10 w-10 text-bistro-action-primary" />
+            <h2 className="mt-3 font-bistro-heading text-xl font-semibold">
+              {filter === 'saved' ? 'Aún no hay ideas marcadas' : 'Tu historial empieza aquí'}
+            </h2>
+            <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-bistro-text-secondary">
+              {filter === 'saved'
+                ? 'Aún no hay ideas marcadas para consultar.'
+                : 'Aún no tienes recetas en el historial.'}
+            </p>
+            <Link
+              href="/recipes/search"
+              className="mt-4 inline-flex min-h-11 items-center justify-center rounded-xl bg-bistro-action-primary px-4 py-2 text-sm font-semibold text-white"
+            >
+              Encontrar recetas
+            </Link>
+          </div>
         ) : null}
 
-        <ul className="mt-4 grid gap-3">
+        <ul aria-label="Recetas del historial" className="mt-4 grid gap-4 sm:grid-cols-2">
           {rows.map((entry) => {
             const isOpen = openId === entry.id;
-            const sources = isOpen || reviewId === entry.id ? getHistoryRecipeSources(entry.recipe_payload) : [];
+            const sources =
+              isOpen || reviewId === entry.id ? getHistoryRecipeSources(entry.recipe_payload) : [];
             const operation = pending.get(entry.id);
             const busy = loading || operation !== undefined;
             const otherReview = reviewId !== null && reviewId !== entry.id;
             const importDraft = buildRecipeImportFromHistory({
-              id: entry.id, title: entry.recipe_title, payload: entry.recipe_payload,
+              id: entry.id,
+              title: entry.recipe_title,
+              payload: entry.recipe_payload,
             });
+            const preview = historyPreview(entry.recipe_payload);
             return (
               <li
                 key={entry.id}
-                className="rounded-2xl border border-bistro-border bg-white/70 p-3"
+                className="flex min-w-0 flex-col rounded-2xl border border-bistro-border bg-white p-4 shadow-sm sm:p-5"
               >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-sm text-bistro-text-primary">
-                    <span className="font-semibold">
-                      {entry.recipe_title ?? humanCopy.suggestedRecipesForYou}
-                    </span>{' '}
-                    — {postgresTimestampDisplayDate(entry.created_at).toLocaleString()}
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => void setSaved(entry)}
-                      aria-pressed={entry.is_saved}
-                      disabled={busy || reviewId !== null}
-                      className="rounded-xl border border-bistro-border bg-white px-3 py-1.5 text-sm font-semibold text-bistro-text-secondary disabled:opacity-70"
-                    >
-                      {entry.is_saved ? 'Quitar marca' : 'Marcar para consultar'}
-                    </button>
-                    {importedRecipes[entry.id] ? (
-                      <Link
-                        href={`/recipes/${importedRecipes[entry.id]}`}
-                        className="inline-flex min-h-10 items-center rounded-xl bg-bistro-action-secondary px-3 py-2 text-sm font-semibold text-white"
-                      >
-                        Ver en Mi recetario
-                      </Link>
-                    ) : importDraft && reviewId !== entry.id ? (
-                      <button
-                        type="button"
-                        onClick={() => { if (!loadingRef.current && gate.current.size === 0) setReviewId(entry.id); }}
-                        disabled={busy || otherReview || pending.size > 0}
-                        className="min-h-10 rounded-xl bg-bistro-action-primary px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
-                      >
-                        {operation === 'import' ? 'Importando…' : 'Importar a Mi recetario'}
-                      </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      onClick={() => void setFeedback(entry.id, 'accepted')}
-                      disabled={busy || reviewId !== null}
-                      className={`rounded-xl border px-3 py-1.5 text-xs font-semibold ${entry.user_feedback === 'accepted' ? 'border-bistro-action-secondary/40 bg-bistro-action-secondary/10 text-bistro-action-secondary' : 'border-bistro-border bg-white text-bistro-text-secondary'}`}
-                    >
-                      Me gustó
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void setFeedback(entry.id, 'discarded')}
-                      disabled={busy || reviewId !== null}
-                      className={`rounded-xl border px-3 py-1.5 text-xs font-semibold ${entry.user_feedback === 'discarded' ? 'border-bistro-danger/30 bg-bistro-danger/10 text-bistro-danger' : 'border-bistro-border bg-white text-bistro-text-secondary'}`}
-                    >
-                      No me gustó
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setOpenId(isOpen ? null : entry.id)}
-                      className="rounded-xl border border-bistro-border bg-white px-3 py-1.5 text-sm font-semibold text-bistro-text-secondary"
-                    >
-                      {isOpen ? 'Ocultar' : 'Ver detalle'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void deleteHistoryItem(entry.id)}
-                      disabled={busy || reviewId !== null}
-                      className="rounded-xl border border-bistro-danger/30 bg-white px-3 py-1.5 text-sm font-semibold text-bistro-danger disabled:opacity-70"
-                    >
-                      {operation === 'delete' ? 'Eliminando...' : 'Eliminar'}
-                    </button>
-                  </div>
+                <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-bistro-text-secondary">
+                  <CalendarDays aria-hidden="true" className="h-4 w-4" />
+                  <span>{postgresTimestampDisplayDate(entry.created_at).toLocaleString()}</span>
+                  {entry.is_saved ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-bistro-surface-warm px-2.5 py-1 text-bistro-action-secondary">
+                      <Bookmark aria-hidden="true" className="h-3.5 w-3.5" />
+                      Marcada
+                    </span>
+                  ) : null}
                 </div>
+                <h2 className="mt-3 min-w-0 break-words font-bistro-heading text-xl font-semibold leading-snug text-bistro-text-primary">
+                  {entry.recipe_title ?? humanCopy.suggestedRecipesForYou}
+                </h2>
+                {preview ? (
+                  <p className="mt-2 min-w-0 flex-1 break-words text-sm leading-relaxed text-bistro-text-secondary">
+                    {preview}
+                  </p>
+                ) : (
+                  <p className="mt-2 flex-1 text-sm text-bistro-text-secondary">
+                    Abrí el detalle para consultar la propuesta.
+                  </p>
+                )}
+
+                <div className="mt-4 grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setOpenId(isOpen ? null : entry.id)}
+                    aria-expanded={isOpen}
+                    className="inline-flex min-h-11 items-center justify-center rounded-xl border border-bistro-border px-3 py-2 text-sm font-semibold text-bistro-action-primary hover:bg-bistro-page"
+                  >
+                    {isOpen ? 'Ocultar' : 'Ver detalle'}
+                  </button>
+                  {importedRecipes[entry.id] ? (
+                    <Link
+                      href={'/recipes/' + importedRecipes[entry.id]}
+                      className="inline-flex min-h-11 items-center justify-center rounded-xl bg-bistro-action-secondary px-3 py-2 text-center text-sm font-semibold text-white"
+                    >
+                      Ver en Mi recetario
+                    </Link>
+                  ) : importDraft && reviewId !== entry.id ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!loadingRef.current && gate.current.size === 0) setReviewId(entry.id);
+                      }}
+                      disabled={busy || otherReview || pending.size > 0}
+                      className="min-h-11 rounded-xl bg-bistro-action-primary px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                    >
+                      {operation === 'import' ? 'Importando…' : 'Importar a Mi recetario'}
+                    </button>
+                  ) : (
+                    <span className="grid min-h-11 place-items-center text-center text-xs text-bistro-text-secondary">
+                      {reviewId === entry.id ? 'Revisando receta' : 'Solo consulta'}
+                    </span>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => void setSaved(entry)}
+                  aria-pressed={entry.is_saved}
+                  disabled={busy || reviewId !== null}
+                  className="mt-2 inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-bistro-border bg-bistro-page px-3 py-2 text-sm font-semibold text-bistro-action-primary transition hover:bg-bistro-surface-warm disabled:opacity-70"
+                >
+                  <Bookmark aria-hidden="true" className="h-4 w-4" />
+                  {entry.is_saved ? 'Quitar marca' : 'Marcar para consultar'}
+                </button>
+
                 {!importedRecipes[entry.id] && !importDraft ? (
-                  <p className="mt-3 text-sm text-bistro-text-secondary">
+                  <p className="mt-3 rounded-xl bg-bistro-surface-warm p-3 text-sm leading-relaxed text-bistro-text-secondary">
                     {historyImportIngredientLimitExceeded(entry.recipe_payload)
                       ? 'No se puede importar esta receta: supera el límite de 100 ingredientes.'
                       : 'No se puede importar esta receta sin alterar sus datos.'}{' '}
                     La receta original sigue disponible en «Ver detalle».
                   </p>
                 ) : null}
+
                 {reviewId === entry.id && importDraft && !importedRecipes[entry.id] ? (
-                  <div className="mt-3 grid gap-3">
-                    <p className="text-sm text-bistro-text-secondary">
-                      Propuesta generada: revisá que los ingredientes y cantidades correspondan a los pasos.
-                      Revisá también etiquetas y contaminación cruzada. No certifica ausencia de alérgenos.
+                  <section
+                    aria-label="Revisar antes de importar"
+                    className="mt-4 rounded-xl border border-bistro-border bg-bistro-page p-3 sm:p-4"
+                  >
+                    <p className="mb-3 text-sm leading-relaxed text-bistro-text-secondary">
+                      Propuesta generada: revisá que los ingredientes y cantidades correspondan a
+                      los pasos. Revisá también etiquetas y contaminación cruzada. No certifica
+                      ausencia de alérgenos.
                     </p>
                     <RecipeEditor
                       key={entry.id}
@@ -423,18 +531,34 @@ export default function RecipeHistoryPage() {
                       onSave={(draft) => void importToRecetario(entry, draft)}
                       onCancel={() => setReviewId(null)}
                     />
-                  </div>
+                  </section>
                 ) : null}
+
                 {sources.length > 0 ? (
-                  <section className="mt-3" aria-label="Fuentes del recetario">
-                    <h3 className="font-semibold text-sm">Fuentes consultadas para la propuesta original</h3>
-                    <p className="text-xs text-bistro-text-secondary">Las fuentes describen el contexto consultado, no certifican una transcripción ni los cambios del usuario.</p>
+                  <section
+                    className="mt-4 rounded-xl border border-bistro-border bg-bistro-page p-3"
+                    aria-label="Fuentes del recetario"
+                  >
+                    <h3 className="text-sm font-semibold">
+                      Fuentes consultadas para la propuesta original
+                    </h3>
+                    <p className="mt-1 text-xs leading-relaxed text-bistro-text-secondary">
+                      Las fuentes describen el contexto consultado, no certifican una transcripción
+                      ni los cambios del usuario.
+                    </p>
                     <ul className="mt-2 grid gap-2">
                       {sources.map((source) => (
-                        <li key={JSON.stringify([source.sourceType, source.sourceId, source.pageNumber, source.chunkId])}
-                          className="rounded-lg border border-bistro-border bg-white px-3 py-2 text-sm">
-                          <p className="font-medium">{source.label}</p>
-                          {source.title ? <p>{source.title}</p> : null}
+                        <li
+                          key={JSON.stringify([
+                            source.sourceType,
+                            source.sourceId,
+                            source.pageNumber,
+                            source.chunkId,
+                          ])}
+                          className="min-w-0 rounded-lg border border-bistro-border bg-white px-3 py-2 text-sm"
+                        >
+                          <p className="break-words font-medium">{source.label}</p>
+                          {source.title ? <p className="break-words">{source.title}</p> : null}
                           {source.pageNumber ? <p>Página {source.pageNumber}</p> : null}
                         </li>
                       ))}
@@ -442,24 +566,77 @@ export default function RecipeHistoryPage() {
                   </section>
                 ) : null}
                 {isOpen ? (
-                  <pre className="mt-3 whitespace-pre-wrap rounded-xl border border-bistro-border bg-bistro-page p-3 text-sm text-bistro-text-primary">
+                  <pre className="mt-4 max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-xl border border-bistro-border bg-bistro-page p-3 text-sm leading-relaxed text-bistro-text-primary [overflow-wrap:anywhere]">
                     {toPrettyPayload(entry.recipe_payload)}
                   </pre>
                 ) : null}
+
+                <details className="group mt-3 rounded-xl border border-bistro-border">
+                  <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 text-sm font-semibold text-bistro-action-primary [&::-webkit-details-marker]:hidden">
+                    Más opciones
+                    <ChevronRight
+                      aria-hidden="true"
+                      className="h-4 w-4 transition-transform group-open:rotate-90"
+                    />
+                  </summary>
+                  <div className="grid gap-3 border-t border-bistro-border px-3 py-3">
+                    <p className="text-xs font-semibold text-bistro-text-secondary">
+                      ¿Qué te pareció esta idea?
+                    </p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void setFeedback(entry.id, 'accepted')}
+                        aria-pressed={entry.user_feedback === 'accepted'}
+                        disabled={busy || reviewId !== null}
+                        className={
+                          'min-h-11 rounded-xl border px-3 py-2 text-sm font-semibold disabled:opacity-70 ' +
+                          (entry.user_feedback === 'accepted'
+                            ? 'border-bistro-action-secondary/40 bg-bistro-action-secondary/10 text-bistro-action-secondary'
+                            : 'border-bistro-border bg-white text-bistro-text-secondary')
+                        }
+                      >
+                        Me gustó
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void setFeedback(entry.id, 'discarded')}
+                        aria-pressed={entry.user_feedback === 'discarded'}
+                        disabled={busy || reviewId !== null}
+                        className={
+                          'min-h-11 rounded-xl border px-3 py-2 text-sm font-semibold disabled:opacity-70 ' +
+                          (entry.user_feedback === 'discarded'
+                            ? 'border-bistro-danger/30 bg-bistro-danger/10 text-bistro-danger'
+                            : 'border-bistro-border bg-white text-bistro-text-secondary')
+                        }
+                      >
+                        No me gustó
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (
+                          window.confirm(
+                            '¿Eliminar esta propuesta del historial? Esta acción no se puede deshacer.'
+                          )
+                        ) {
+                          void deleteHistoryItem(entry.id);
+                        }
+                      }}
+                      disabled={busy || reviewId !== null}
+                      className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-bistro-danger/30 bg-white px-3 py-2 text-sm font-semibold text-bistro-danger disabled:opacity-70"
+                    >
+                      <Trash2 aria-hidden="true" className="h-4 w-4" />
+                      {operation === 'delete' ? 'Eliminando...' : 'Eliminar'}
+                    </button>
+                  </div>
+                </details>
               </li>
             );
           })}
         </ul>
-
-        <div className="mt-4">
-          <Link
-            href="/recipes/search"
-            className="text-sm font-semibold text-bistro-action-primary hover:text-bistro-action-primary"
-          >
-            Ir a búsqueda de recetas
-          </Link>
-        </div>
-      </section>
+      </div>
     </main>
   );
 }
