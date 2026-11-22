@@ -46,8 +46,15 @@ function find(node: ReactNode, predicate: (element: ReactElement<Record<string, 
   if (!isValidElement<Record<string, unknown>>(node)) return undefined;
   return predicate(node) ? node : find(node.props.children as ReactNode, predicate);
 }
+function buttonText(node: ReactNode): string {
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(buttonText).join('');
+  if (isValidElement<{ children?: ReactNode }>(node)) return buttonText(node.props.children);
+  return '';
+}
 function button(node: ReactNode, label: string) {
-  const result = find(node, (element) => element.type === 'button' && element.props.children === label);
+  const result = find(node, (element) => element.type === 'button' &&
+    buttonText(element.props.children as ReactNode) === label);
   if (!result) throw new Error('Missing button: ' + label);
   return result;
 }

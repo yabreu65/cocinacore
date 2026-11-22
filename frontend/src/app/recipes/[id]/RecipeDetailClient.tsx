@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { ArrowLeft, ChefHat, Clock3, Pencil, UsersRound } from 'lucide-react';
 import { safeFetch } from '@/lib/api';
 import { recipePortionCost, scaleIngredients, type Recipe, type RecipeVersion } from '../recipe-ui';
 import type { InventoryCostLot } from '@/lib/inventory/inventory-costing';
@@ -166,49 +167,95 @@ export default function RecipeDetailClient({ id }: { id: string }) {
         )
       : null;
   return (
-    <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 text-bistro-text-primary md:px-6">
-      <article className="mx-auto max-w-4xl rounded-3xl border border-bistro-border bg-white/85 p-5 premium-shadow">
-        <Link
-          href="/recipes"
-          className="text-sm font-semibold text-bistro-action-primary underline"
-        >
-          Volver al recetario
-        </Link>
-        <div className="mt-4 flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h1 className="text-3xl font-semibold">{version.title}</h1>
-            {recipe.category && (
-              <p className="mt-1 text-bistro-text-secondary">{recipe.category}</p>
-            )}
-            <div className="mt-2 flex flex-wrap gap-1">
+    <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 text-bistro-text-primary md:px-6 md:py-8">
+      <article className="mx-auto max-w-5xl">
+        <header className="rounded-3xl bg-bistro-inverse p-5 text-white shadow-sm sm:p-8">
+          <Link
+            href="/recipes"
+            className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-white/40 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-white/10"
+          >
+            <ArrowLeft aria-hidden="true" className="h-4 w-4" />
+            Volver al recetario
+          </Link>
+          <div className="mt-4">
+            <p className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.15em] text-bistro-champagne">
+              <ChefHat aria-hidden="true" className="h-4 w-4" />
+              Tu cocina
+            </p>
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {recipe.category && (
+                <span className="rounded-full bg-white/15 px-3 py-1 text-xs font-semibold text-white">
+                  {recipe.category}
+                </span>
+              )}
+              {recipe.archived_at && (
+                <span className="rounded-full border border-bistro-champagne px-3 py-1 text-xs font-semibold text-bistro-champagne">
+                  Archivada
+                </span>
+              )}
               {recipe.tags.map((tag) => (
-                <span key={tag} className="rounded-full bg-bistro-surface-warm px-2 py-1 text-xs">
+                <span
+                  key={tag}
+                  className="rounded-full border border-white/25 px-3 py-1 text-xs text-bistro-cream"
+                >
                   {tag}
                 </span>
               ))}
             </div>
+            <h1 className="mt-3 break-words font-bistro-heading text-3xl font-semibold leading-tight sm:text-4xl">
+              {version.title}
+            </h1>
+            <p className="mt-2 flex items-center gap-2 text-sm text-bistro-cream">
+              <UsersRound aria-hidden="true" className="h-4 w-4" />
+              {baseServings > 0
+                ? String(baseServings) +
+                  (baseServings === 1 ? ' porción original' : ' porciones originales')
+                : 'Porciones por definir'}
+            </p>
+            <div className="mt-5 flex flex-wrap gap-2">
+              {!recipe.archived_at && (
+                <Link
+                  href={'/app/cooking-intent?source=recipe&recipeId=' + encodeURIComponent(id)}
+                  className="inline-flex min-h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-bistro-champagne px-4 py-3 text-sm font-bold text-bistro-text-primary transition hover:bg-white sm:flex-none"
+                >
+                  <ChefHat aria-hidden="true" className="h-5 w-5" />
+                  Cocinar ahora
+                </Link>
+              )}
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => {
+                  if (!mutationLock.current) setEdit((current) => !current);
+                }}
+                className="inline-flex min-h-12 flex-1 items-center justify-center gap-2 rounded-xl border border-white/40 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10 disabled:opacity-60 sm:flex-none"
+              >
+                <Pencil aria-hidden="true" className="h-4 w-4" />
+                {edit ? 'Cerrar edición' : 'Editar'}
+              </button>
+              <button
+                disabled={saving || edit}
+                onClick={() =>
+                  void mutate(`/api/recipes/${encodeURIComponent(id)}/archive`, 'PATCH', {
+                    archived: !recipe.archived_at,
+                  })
+                }
+                className="inline-flex min-h-12 items-center rounded-xl border border-white/40 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10 disabled:opacity-60"
+              >
+                {recipe.archived_at ? 'Desarchivar' : 'Archivar'}
+              </button>
+            </div>
           </div>
-          <div className="flex gap-2">
-            <button disabled={saving} onClick={() => { if (!mutationLock.current) setEdit((current) => !current); }} className="rounded-xl border px-3 py-2">
-              {edit ? 'Cerrar edición' : 'Editar'}
-            </button>
-            <button
-              disabled={saving || edit}
-              onClick={() =>
-                void mutate(`/api/recipes/${encodeURIComponent(id)}/archive`, 'PATCH', {
-                  archived: !recipe.archived_at,
-                })
-              }
-              className="rounded-xl border px-3 py-2"
-            >
-              {recipe.archived_at ? 'Desarchivar' : 'Archivar'}
-            </button>
-          </div>
-        </div>
+        </header>
         {error && (
           <p role="alert" className="mt-3 rounded-xl bg-bistro-danger/10 p-3 text-bistro-danger">
             {error}{' '}
-            <button type="button" disabled={saving || edit} onClick={() => void load()} className="ml-2 underline">
+            <button
+              type="button"
+              disabled={saving || edit}
+              onClick={() => void load()}
+              className="ml-2 underline"
+            >
               Reintentar carga
             </button>
           </p>
@@ -219,69 +266,134 @@ export default function RecipeDetailClient({ id }: { id: string }) {
               key={version.id}
               initial={draftFromRecipe(recipe)}
               onSave={(draft) => void save(draft)}
-              onCancel={() => { if (!mutationLock.current) setEdit(false); }}
+              onCancel={() => {
+                if (!mutationLock.current) setEdit(false);
+              }}
               saving={saving}
             />
           </section>
         )}
-        <section className="mt-6">
-          <h2 className="text-xl font-semibold">Ingredientes</h2>
-          <p className="mt-2 text-sm">
-            Porciones:{' '}
-            <input
-              aria-label="Porciones deseadas"
-              type="number"
-              min="1"
-              max="100"
-              step="1"
-              className="w-24 rounded-lg border px-2 py-1"
-              value={servings}
-              onChange={(e) => setServings(e.target.value)}
-            />
-          </p>
-          {scaled.partial && (
-            <p className="mt-2 text-sm text-bistro-text-secondary">
-              Algunas cantidades conservan sus valores originales. Revisá las porciones y las
-              unidades antes de cocinar.
+        <div className="mt-5 grid items-start gap-5 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+          <section
+            aria-labelledby="recipe-ingredients-heading"
+            className="min-w-0 rounded-2xl border border-bistro-border bg-white p-4 shadow-sm sm:p-6"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wider text-bistro-action-primary">
+                  Lo que vas a necesitar
+                </p>
+                <h2
+                  id="recipe-ingredients-heading"
+                  className="mt-1 font-bistro-heading text-2xl font-semibold"
+                >
+                  Ingredientes
+                </h2>
+              </div>
+              <label className="flex min-h-11 items-center gap-2 rounded-xl border border-bistro-border bg-bistro-page px-3 py-1.5 text-sm font-semibold">
+                Porciones
+                <input
+                  aria-label="Porciones deseadas"
+                  type="number"
+                  min="1"
+                  max="100"
+                  step="1"
+                  inputMode="numeric"
+                  className="h-9 w-14 rounded-lg border border-bistro-border bg-white px-1 text-center text-base"
+                  value={servings}
+                  onChange={(e) => setServings(e.target.value)}
+                />
+              </label>
+            </div>
+            {scaled.partial && (
+              <p className="mt-3 rounded-xl bg-bistro-surface-warm p-3 text-sm leading-relaxed text-bistro-text-secondary">
+                Algunas cantidades conservan sus valores originales. Revisá las porciones y las
+                unidades antes de cocinar.
+              </p>
+            )}
+            {scaled.ingredients.length > 0 ? (
+              <ul
+                aria-label="Ingredientes de la receta"
+                className="mt-4 divide-y divide-bistro-border"
+              >
+                {scaled.ingredients.map((item, i) => (
+                  <li
+                    key={[item.name, i].join('-')}
+                    className="flex min-w-0 items-start gap-3 py-3 text-sm leading-relaxed sm:text-base"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full bg-bistro-action-primary"
+                    />
+                    <span className="min-w-0 flex-1 break-words">{item.name}</span>
+                    {(item.quantity || item.unit) && (
+                      <span className="max-w-[45%] shrink-0 break-words text-right font-semibold text-bistro-action-secondary">
+                        {[item.quantity, item.unit].filter(Boolean).join(' ')}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-4 text-sm text-bistro-text-secondary">
+                No se registraron ingredientes.
+              </p>
+            )}
+            <p
+              className="mt-4 rounded-xl bg-bistro-surface-warm p-3 text-sm leading-relaxed"
+              role="status"
+            >
+              <strong className="text-bistro-action-primary">Costo estimado: </strong>
+              {cost && cost.amount !== null && cost.currency
+                ? `${cost.amount} ${cost.currency}${cost.status === 'partial' ? ' (parcial; faltan cantidades o precios)' : ''}`
+                : 'No disponible; revisá las porciones, los precios y la moneda del inventario.'}
             </p>
-          )}
-          <ul className="mt-3 list-disc space-y-1 pl-5">
-            {scaled.ingredients.map((item, i) => (
-              <li key={`${item.name}-${i}`}>
-                {[item.quantity, item.unit, item.name].filter(Boolean).join(' ')}
-              </li>
-            ))}
-          </ul>
-          <p className="mt-4 text-sm" role="status">
-            Costo estimado:{' '}
-            {cost && cost.amount !== null && cost.currency
-              ? `${cost.amount} ${cost.currency}${cost.status === 'partial' ? ' (parcial; faltan cantidades o precios)' : ''}`
-              : 'No disponible; revisá las porciones, los precios y la moneda del inventario.'}
+          </section>
+          <section
+            aria-label="Instrucciones de la receta"
+            className="min-w-0 rounded-2xl border border-bistro-border bg-white p-4 shadow-sm sm:p-6"
+          >
+            <p className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-bistro-action-primary">
+              <Clock3 aria-hidden="true" className="h-4 w-4" /> A cocinar
+            </p>
+            <h2
+              id="recipe-steps-heading"
+              className="mt-1 font-bistro-heading text-2xl font-semibold"
+            >
+              Pasos y notas
+            </h2>
+            <p className="mt-4 whitespace-pre-wrap break-words text-base leading-8 [overflow-wrap:anywhere]">
+              {version.instructions || 'Sin pasos ni notas.'}
+            </p>
+          </section>
+        </div>
+        <section className="mt-5 min-w-0 rounded-2xl border border-bistro-border bg-white p-4 shadow-sm sm:p-6">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="font-bistro-heading text-xl font-semibold">Historial de versiones</h2>
+            <span className="rounded-full bg-bistro-surface-warm px-3 py-1 text-xs font-semibold text-bistro-action-primary">
+              {versions.length} {versions.length === 1 ? 'versión' : 'versiones'}
+            </span>
+          </div>
+          <p className="mt-1 text-sm leading-relaxed text-bistro-text-secondary">
+            Consultá las versiones anteriores y restauralas sin borrar las actuales.
           </p>
-        </section>
-        <section className="mt-6">
-          <h2 className="text-xl font-semibold">Pasos y notas</h2>
-          <p className="mt-2 whitespace-pre-wrap">
-            {version.instructions || 'Sin pasos ni notas.'}
-          </p>
-        </section>
-        <section className="mt-8">
-          <h2 className="text-xl font-semibold">Historial de versiones</h2>
           {versions.length === 0 ? (
             <p className="mt-2">Aún no hay versiones.</p>
           ) : (
-            <ol className="mt-3 grid gap-3">
+            <ol className="mt-4 grid gap-3">
               {versions.map((item) => (
                 <li
                   key={item.id}
-                  className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-bistro-border p-3"
+                  className="flex min-w-0 flex-col gap-3 rounded-xl border border-bistro-border bg-bistro-page p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4"
                 >
-                  <span>
+                  <span className="min-w-0 break-words text-sm font-semibold">
                     Versión {item.version_number} · {item.title}
                     {item.source_recipe_history_id ? (
                       <span className="block text-xs text-bistro-text-secondary">
                         Vinculada a una propuesta del historial.{' '}
-                        <Link href="/recipes/history" className="underline">Consultar historial original</Link>
+                        <Link href="/recipes/history" className="underline">
+                          Consultar historial original
+                        </Link>
                       </span>
                     ) : null}
                   </span>
@@ -299,7 +411,7 @@ export default function RecipeDetailClient({ id }: { id: string }) {
                             versionId: item.id,
                           });
                       }}
-                      className="rounded-xl border px-3 py-2"
+                      className="min-h-11 shrink-0 rounded-xl border border-bistro-action-primary px-3 py-2 text-sm font-semibold text-bistro-action-primary hover:bg-bistro-surface-warm disabled:opacity-60"
                     >
                       Restaurar como nueva versión
                     </button>
