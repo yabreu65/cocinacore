@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CocinaCore Bistró — Área 5 · Diseño de experiencias transversales</title>
+<style>
+:root{--ink:#233f35;--ink2:#18382f;--wine:#78313a;--wine2:#9e5055;--sand:#f7f3ed;--line:#e6dcd0;--muted:#6a625c;--tan:#f0e4d5;--cream:#fffdfa;--good:#2c755d;--bad:#9c3d45}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--sand);font:14px/1.48 system-ui,-apple-system,'Segoe UI',sans-serif;color:#3b3431}
+button,select{font:inherit}button{cursor:pointer}
+button:focus-visible,select:focus-visible,a:focus-visible{outline:3px solid #5a937b;outline-offset:3px}
+.page-header{background:var(--ink2);color:white;padding:28px clamp(18px,4vw,70px)}
+.eyebrow{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.17em;color:#edca88}
+.page-header h1{font-family:Georgia,serif;font-size:clamp(25px,3.5vw,43px);font-weight:500;line-height:1.13;margin:10px 0}
+.page-header p{max-width:880px;margin:0;color:#d9e2db}
+main{max-width:1690px;margin:auto;padding:24px clamp(14px,3vw,48px) 48px}
+.toolbar{display:flex;flex-wrap:wrap;align-items:flex-end;gap:15px;padding:16px 19px;border-radius:18px;background:white;border:1px solid var(--line);box-shadow:0 1px 3px #2d1d1114}
+.toolbar label{display:flex;flex-direction:column;gap:6px;font-size:12px;font-weight:800;color:#5a514b}
+select{min-width:240px;border:1px solid #c9b9a6;background:var(--cream);border-radius:11px;padding:11px 13px;color:#43342f}
+.heading{display:flex;flex-wrap:wrap;align-items:end;justify-content:space-between;gap:12px;margin:24px 0 15px}
+.heading h2{font-family:Georgia,serif;font-weight:500;font-size:clamp(21px,2.4vw,28px);margin:0}
+.heading p{margin:4px 0 0;color:var(--muted)}
+.pill{border-radius:100px;background:#e6eee7;color:#22513d;padding:7px 11px;font-size:11px;font-weight:800}
+.grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px;align-items:start}
+.pane{min-width:0;background:var(--cream);border:1px solid var(--line);border-radius:20px;overflow:hidden;box-shadow:0 3px 12px #28180c0a}
+.pane-title{display:flex;justify-content:space-between;gap:10px;padding:14px 17px;border-bottom:1px solid var(--line);font-weight:800}
+.pane.before .pane-title{background:#f0eae5}.pane.after .pane-title{background:#e8f0e7}
+.pane-title small{font-size:11px;color:var(--muted);font-weight:500}
+.viewport{background:#f7f4ef;padding:14px;min-height:580px}
+.screen{width:100%;min-width:0;overflow:hidden;border-radius:18px;background:#fff;box-shadow:0 3px 16px #0000000b}
+.screen .top{background:var(--ink);color:#fff;padding:19px 21px;display:flex;align-items:center;justify-content:space-between;gap:10px}
+.screen .top strong{font-family:Georgia,serif;font-size:19px}.screen .top span{font-size:11px;color:#cfe1d6}
+.screen .body{padding:21px;min-height:445px}
+.sub{font-size:11px;letter-spacing:.12em;text-transform:uppercase;font-weight:800;color:var(--good);margin:0 0 7px}
+.screen h3{font-family:Georgia,serif;font-size:clamp(23px,2.3vw,30px);line-height:1.1;font-weight:500;margin:0 0 8px}
+.screen p{margin:0 0 14px;color:#645b55}
+.screen .white{padding:20px;border:1px solid var(--line);border-radius:17px;background:white}
+.screen .soft{border:1px solid #e6e0d4;border-radius:15px;padding:16px;background:#f8f4ed}
+.screen .stack{display:grid;gap:11px}
+.screen .two{display:grid;grid-template-columns:1fr 1fr;gap:11px}
+.screen .three{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.screen .metric{background:#f7f5ef;border:1px solid var(--line);border-radius:14px;padding:13px}
+.screen .metric b{font-size:22px;color:#293f36}.screen .metric small{display:block;color:#777064}
+.screen .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:43px;padding:10px 15px;border:1px solid var(--line);background:#fff;color:#553c37;border-radius:11px;font-weight:750;text-decoration:none;cursor:pointer}
+.screen .btn.primary{background:var(--wine);border-color:var(--wine);color:white}
+.screen .btn.dark{background:var(--ink);border-color:var(--ink);color:white}
+.screen .btn:disabled{opacity:.45;cursor:not-allowed}
+.screen .card-head{display:flex;align-items:center;gap:11px;margin-bottom:12px}
+.screen .icon{display:grid;place-items:center;width:42px;height:42px;flex:none;border-radius:14px;background:#e8efe6;color:#24553d;font-size:20px}
+.screen .small{font-size:12px;color:#746961}
+.screen .line{height:1px;background:var(--line);margin:16px 0}
+.screen .tag{display:inline-flex;align-items:center;gap:6px;border-radius:99px;padding:5px 9px;background:#e7eee6;color:var(--ink);font-size:11px;font-weight:750}
+.screen .tag.ember{background:#f8e6e5;color:#913a42}
+.screen .row{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.screen .row-wrap{display:flex;gap:8px;flex-wrap:wrap}
+.screen .dots{display:flex;gap:5px}.screen .dots i{display:block;width:7px;height:7px;background:#a9bcb0;border-radius:50%}
+.screen .input{padding:11px 13px;border:1px solid var(--line);border-radius:10px;background:white;min-height:43px;color:#6d635a}
+.screen .skeleton{height:12px;background:#e7e2dc;border-radius:5px;margin:9px 0}
+.screen .skeleton.short{width:50%}.screen .skeleton.long{width:85%}
+.screen .alert{background:#f9eeec;border:1px solid #eccbca;border-left:4px solid var(--bad);padding:15px;border-radius:12px}
+.screen .success{background:#ebf4ed;border:1px solid #c9e3d1;border-left:4px solid var(--good);padding:15px;border-radius:12px}
+.screen .progress{height:9px;background:#e3e7de;border-radius:99px;overflow:hidden}.screen .progress i{display:block;height:100%;background:var(--good);width:55%;border-radius:99px}
+.before .screen{border:1px solid #ede4df;background:#faf9f7}.before .screen .top{background:#6f665f}.before .screen .body>.stack>.soft{background:#f4f1ee}
+.note{color:#796e64;font-size:12px;margin:16px 2px 0}
+.footer{margin:25px 0 0;padding:21px;background:#fff;border:1px solid var(--line);border-radius:17px;color:#645b56;line-height:1.6}
+.footer strong{color:#3b3a30}
+.checks{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.checks span{padding:5px 9px;border-radius:99px;background:#e5eee7;color:#24563d;font-size:11px;font-weight:750}
+.mobile .viewport{max-width:390px;margin:0 auto}.mobile .screen .two{grid-template-columns:1fr 1fr}
+.mobile .screen .three{grid-template-columns:1fr}.mobile .screen .top{padding:15px}.mobile .screen .body{padding:15px}
+.mobile .screen .top strong{font-size:16px}.mobile .screen h3{font-size:24px}.mobile .screen .white{padding:15px}
+.mobile .screen .row.collapsible{align-items:stretch;flex-direction:column}.mobile .screen .row-wrap .btn{flex:1}
+@media(max-width:950px){.grid{grid-template-columns:1fr}.pane{max-width:900px;width:100%;margin:auto}.viewport{min-height:auto}}
+@media(max-width:570px){main{padding:15px 10px 40px}.toolbar{align-items:stretch}.toolbar label,select{width:100%;min-width:0}.page-header{padding:23px 15px}.viewport{padding:10px}.heading{margin-top:19px}.pane-title small{display:none}}
+</style>
+</head>
+<body>
+<header class="page-header">
+<div class="eyebrow">Cocinacore Bistró · Diseño de experiencia</div>
+<h1>Área 5 — Estados y recorridos críticos</h1>
+<p>Propuesta visual transversal sobre pantallas que ya existen. No añade rutas ni funcionalidades: ordena lo que la persona ve cuando empieza, espera, encuentra una lista vacía, ocurre un error o confirma una compra.</p>
+</header>
+<main>
+<div class="toolbar">
+<label>Escenario a revisar
+<select id="scene">
+<option value="inicio">01 · Orientación y acciones de inicio</option>
+<option value="carga">02 · Espera al generar un menú</option>
+<option value="vacio">03 · Lista de compras vacía</option>
+<option value="error">04 · Error recuperable</option>
+<option value="confirmacion">05 · Compra e inventario</option>
+</select></label>
+<label>Vista
+<select id="viewport"><option value="desktop">Escritorio — 1440 px</option><option value="mobile">Móvil — 390 px</option></select></label>
+<span class="pill">Prototipo · datos ilustrativos</span>
+</div>
+<div class="heading">
+<div><h2 id="sceneTitle">01 · Inicio</h2><p id="sceneDesc"></p></div>
+<span class="pill" id="route">Ruta existente: /app</span>
+</div>
+<div class="grid" id="comparison">
+<section class="pane before"><div class="pane-title">Antes · Problema/patrón actual <small>Esquema conceptual</small></div><div class="viewport"><div class="screen" id="old"></div></div></section>
+<section class="pane after"><div class="pane-title">Después · Dirección de diseño <small>Propuesta, no aplicación desplegada</small></div><div class="viewport"><div class="screen" id="new"></div></div></section>
+</div>
+<p class="note">La columna «Antes» representa los patrones y mensajes encontrados en los componentes actuales; no es una captura literal. La columna «Después» es una propuesta de diseño con datos simulados y acciones de demostración. No se efectúan compras ni llamadas a IA.</p>
+<div class="footer"><strong>Criterios de aprobación del Área 5:</strong> cada estado explica qué ocurre, qué puede hacer el usuario a continuación y qué datos cambiarán. Ningún éxito se anuncia antes de la confirmación del servidor. Las cantidades no se inventan ni se transfieren al inventario automáticamente. Los estados de error conservan las opciones de recuperación.
+<div class="checks"><span>5 escenarios</span><span>5 rutas/operaciones existentes</span><span>Sin nuevos endpoints</span><span>Sin datos reales</span><span>Diseño pendiente de aprobación</span></div>
+</div>
+</main>
+<script>
+const $=x=>document.getElementById(x);
+const frame=(title,subtitle,content)=>'<div class="top"><div><strong>CocinaCore</strong><div><span>'+subtitle+'</span></div></div><span>Hogar · Demo</span></div><div class="body"><p class="sub">'+title+'</p>'+content+'</div>';
+const btn=(label,style='')=>'<button type="button" class="btn '+style+'" data-demo="'+label.replaceAll('"','')+'">'+label+'</button>';
+const scenes={
+inicio:{title:'01 · Orientación al entrar',desc:'Menos acciones simultáneas: una decisión principal y un resumen del contexto.',route:'/app',
+before:()=>frame('Inicio de mi cocina','Cocinar u organizar','<h3>Bienvenido a CocinaCore</h3><p>Elegí por dónde continuar.</p><div class="stack"><div class="soft"><b>Acciones rápidas</b><p class="small">Recetas, inventario, compras y menú.</p>'+btn('Ver recetas')+'</div><div class="soft"><b>Planificador</b><p class="small">Organizá tus comidas.</p>'+btn('Ir al planificador')+'</div><div class="soft"><b>Mi cocina</b><p class="small">Tus herramientas y actividad.</p>'+btn('Abrir inventario')+'</div></div>'),
+after:()=>frame('Tu cocina, en un vistazo','Acción principal y contexto','<h3>¿Qué querés hacer hoy?</h3><p>Podés cocinar algo ahora o revisar tu menú y las compras que tengas pendientes.</p><div class="stack"><div class="soft" style="background:#e8efe6"><div class="card-head"><span class="icon">♨</span><div><b>Cocinar ahora</b><div class="small">Buscar o generar una receta</div></div></div>'+btn('Buscar una receta','primary')+'</div><div class="soft"><div class="row"><div><b>Organizar mi semana</b><p class="small" style="margin:3px 0">Menú y compras en un solo lugar</p></div><span class="tag">Planificar</span></div></div><div class="two"><div class="metric"><b>Menú</b><small>Ver planificación</small></div><div class="metric"><b>Compras</b><small>Ver pendientes</small></div></div></div>')},
+carga:{title:'02 · Espera durante la generación',desc:'Mostrar qué proceso está ejecutándose, sin porcentajes ficticios ni prometer un tiempo.',route:'/meal-planner',
+before:()=>frame('Planificador','Generación','<h3>Crear menú</h3><p>Seleccioná los días que querés organizar.</p><div class="soft"><div class="input">7 días</div><div style="height:11px"></div>'+btn('Generando…','primary')+'</div><p style="margin-top:20px">Cargando menú guardado...</p><div class="skeleton long"></div><div class="skeleton short"></div>'),
+after:()=>frame('Planificador','Generación','<h3>Preparando tu menú</h3><p>Estamos solicitando una propuesta de comidas. Los datos existentes permanecen guardados mientras se prepara la respuesta.</p><div class="white"><div class="card-head"><span class="icon">◌</span><div><b>Generación en curso</b><div class="small">Esperando respuesta del proveedor de IA</div></div></div><div class="line"></div><p class="small">No hay porcentaje de avance disponible. Al recibir el resultado, podrás revisar la propuesta antes de guardarla.</p></div><p class="small" style="margin-top:16px">No se guarda un menú nuevo hasta confirmar la propuesta.</p><button class="btn primary" type="button" disabled>Esperando respuesta…</button>' )},
+vacio:{title:'03 · Compras cuando no hay artículos',desc:'Evitar un callejón sin salida: acción inmediata y vínculo con el planificador.',route:'/shopping-list',
+before:()=>frame('Compras','Lista vacía','<h3>Lista de compras</h3><p>Agregá los ingredientes que necesites.</p><div class="soft"><p>No hay artículos en la lista.</p></div><div style="height:12px"></div><div class="input">Nombre del ingrediente</div><div style="height:9px"></div>'+btn('Agregar artículo')),
+after:()=>frame('Compras','Inicio rápido','<h3>Tu lista está vacía</h3><p>Cuando agregues ingredientes o confirmes los faltantes de un menú, aparecerán aquí.</p><div class="soft" style="text-align:center;padding:26px 16px"><span class="icon" style="margin:0 auto 10px">▦</span><b>No hay compras pendientes</b><p class="small" style="margin-top:7px">Elegí cómo querés comenzar.</p><div class="row-wrap" style="justify-content:center">'+btn('Agregar ingrediente','primary')+btn('Ver planificador')+'</div></div><div class="line"></div><p class="small"><b>Importante:</b> los artículos comprados no pasan al inventario hasta que confirmes su cantidad real.</p>')},
+error:{title:'04 · Error recuperable sin perder el trabajo',desc:'Mensajes comprensibles y una acción segura para volver a intentarlo.',route:'/meal-planner',
+before:()=>frame('Planificador','No disponible','<h3>Mi menú semanal</h3><div class="soft"><p>No se pudo cargar el menú guardado.</p></div><div style="height:12px"></div>'+btn('Reintentar')+'<p class="small" style="margin-top:18px">La pantalla no explica qué se conservó.</p>'),
+after:()=>frame('Planificador','Recuperación','<h3>No pudimos cargar tu menú</h3><p>La consulta al servidor falló. No se modificó el menú guardado ni el inventario.</p><div class="alert"><div class="card-head"><span class="icon" style="background:#f6e1df;color:#903e46">!</span><div><b>No fue posible obtener los datos</b><div class="small">Podés volver a intentarlo sin crear otro menú.</div></div></div><div class="row-wrap">'+btn('Reintentar carga','primary')+btn('Volver a Inicio')+'</div></div><p class="small" style="margin-top:16px">Si el problema continúa, podés salir y regresar más tarde. No hay cambios pendientes de guardar.</p>')},
+confirmacion:{title:'05 · Confirmación de compra real',desc:'Separa claramente lo planificado de lo comprado y de lo ingresado al inventario.',route:'/shopping-list',
+before:()=>frame('Compras','Registro','<h3>Confirmar compra</h3><div class="soft"><div class="row"><b>Harina de trigo</b><span class="tag">Pendiente</span></div><p class="small" style="margin-top:10px">Cantidad estimada: 1 kg</p>'+btn('Confirmar compra e inventario','primary')+'</div>'),
+after:()=>frame('Compras','Confirmación consciente','<h3>¿Cuánto compraste realmente?</h3><p>La cantidad del plan es una estimación. Registrá la compra real antes de incorporarla al inventario.</p><div class="white"><div class="row"><div><b>Harina de trigo</b><p class="small" style="margin:3px 0">Estimado: 1 kg</p></div><span class="tag ember">Sin confirmar</span></div><div class="line"></div><label class="small" for="realQty"><b>Cantidad real comprada</b></label><div class="row" style="margin:8px 0 14px;gap:8px"><input id="realQty" type="number" min="0.01" step="0.1" value="1.5" class="input" style="flex:1;min-width:0;width:90px" aria-label="Cantidad realmente comprada"><select id="realUnit" class="input" style="width:95px;min-width:0" aria-label="Unidad de medida"><option>kg</option><option>g</option><option>u</option></select></div><p class="small" id="purchasePreview">Si confirmás, se registrará 1,5 kg como compra y se actualizará el inventario según el flujo existente.</p>'+btn('Confirmar compra e inventario','primary')+'</div><p class="small" style="margin-top:13px">No se realizará ningún registro automáticamente al abrir esta pantalla.</p>')}
+};
+function render(){
+ const scene=scenes[$('scene').value],mobile=$('viewport').value==='mobile';
+ $('sceneTitle').textContent=scene.title;$('sceneDesc').textContent=scene.desc;$('route').textContent='Ruta existente: '+scene.route;
+ $('comparison').classList.toggle('mobile',mobile);
+ $('old').innerHTML=scene.before();$('new').innerHTML=scene.after();
+}
+$('scene').addEventListener('change',render);$('viewport').addEventListener('change',render);
+document.addEventListener('input',e=>{
+ if(e.target.id!=='realQty'&&e.target.id!=='realUnit')return;
+ const qty=document.getElementById('realQty'),unit=document.getElementById('realUnit'),preview=document.getElementById('purchasePreview');
+ if(!qty||!unit||!preview)return;
+ const valid=Number.isFinite(qty.valueAsNumber)&&qty.valueAsNumber>0;
+ preview.textContent=valid?'Si confirmás, se registrará '+qty.value.replace('.',',')+' '+unit.value+' como compra y se actualizará el inventario según el flujo existente.':'Ingresá una cantidad válida mayor a cero.';
+});
+document.addEventListener('change',e=>{if(e.target.id==='realUnit'){const qty=document.getElementById('realQty');if(qty)qty.dispatchEvent(new Event('input',{bubbles:true}));}});
+document.addEventListener('click',e=>{
+ const button=e.target.closest('button[data-demo]');if(!button)return;
+ const title=button.getAttribute('data-demo');if(!title)return;
+ const feedback=$('demoFeedback')||document.createElement('p');
+ feedback.id='demoFeedback';feedback.style.cssText='font-size:12px;background:#e8eee4;color:#24523c;border-radius:10px;padding:10px;margin:15px 0 0';
+ const qty=document.getElementById('realQty'),unit=document.getElementById('realUnit');
+ if(qty&&unit&&title.includes('Confirmar compra')&&!(Number.isFinite(qty.valueAsNumber)&&qty.valueAsNumber>0)){
+   feedback.textContent='Ingresá una cantidad válida antes de confirmar.';
+ }else if(qty&&unit&&title.includes('Confirmar compra')){
+   feedback.textContent='Simulación: confirmarías '+qty.value.replace('.',',')+' '+unit.value+'. No se registró ninguna compra ni se cambió el inventario.';
+ }else{
+   feedback.textContent='Vista conceptual: «'+title+'». No se ejecutó ninguna operación ni se cambiaron datos.';
+ }
+ button.closest('.body').appendChild(feedback);
+});
+render();
+</script>
+</body></html>
