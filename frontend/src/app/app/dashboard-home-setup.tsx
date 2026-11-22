@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { BookOpen, CalendarDays, Check, ChevronRight, Package, ShoppingCart } from 'lucide-react';
+import { BookOpen, Check, ChevronRight, Package } from 'lucide-react';
 
 type SetupStep = {
   label: string;
@@ -146,41 +146,31 @@ const quickActions = [
     href: '/recipes',
     icon: BookOpen,
   },
-  {
-    label: 'Planificar menú',
-    description: 'Organizá las comidas de la semana.',
-    href: '/meal-planner',
-    icon: CalendarDays,
-  },
-  {
-    label: 'Lista de compras',
-    description: 'Anotá lo que necesitás comprar.',
-    href: '/shopping-list',
-    icon: ShoppingCart,
-  },
 ] as const;
 
 export function DashboardQuickActions() {
   return (
     <section aria-labelledby="home-actions-title" className="mt-6">
       <h2 id="home-actions-title" className="text-xl font-semibold text-bistro-text-primary">
-        ¿Por dónde empezamos?
+        Tu recetario e ingredientes
       </h2>
       <p className="mt-1 text-sm text-bistro-text-secondary">
-        Accedé directamente a las tareas habituales de tu hogar.
+        Todo lo que guardaste, siempre a mano.
       </p>
-      <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="mt-4 grid grid-cols-2 gap-3">
         {quickActions.map(({ label, description, href, icon: Icon }) => (
           <Link
             key={href}
             href={href}
-            className="group flex min-h-40 flex-col rounded-2xl border border-bistro-border bg-white p-4 transition-colors hover:border-bistro-action-primary/50 hover:bg-bistro-surface-warm"
+            className="group flex min-h-28 flex-col rounded-2xl border border-bistro-border bg-white p-4 transition-colors hover:border-bistro-action-primary/50 hover:bg-bistro-surface-warm"
           >
             <span className="grid h-10 w-10 place-items-center rounded-xl bg-bistro-surface-warm text-bistro-action-secondary">
               <Icon className="h-5 w-5" aria-hidden="true" />
             </span>
             <span className="mt-3 text-sm font-semibold text-bistro-text-primary">{label}</span>
-            <span className="mt-1 text-xs text-bistro-text-secondary">{description}</span>
+            <span className="mt-1 hidden text-xs text-bistro-text-secondary sm:block">
+              {description}
+            </span>
           </Link>
         ))}
       </div>

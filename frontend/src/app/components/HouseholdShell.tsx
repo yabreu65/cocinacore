@@ -18,6 +18,24 @@ import {
 } from 'lucide-react';
 import { activeHouseholdRoute, householdNavigation, isHouseholdRoute } from './household-nav';
 
+const mobileTabs = [
+  { href: '/app', label: 'Inicio', icon: LayoutGrid },
+  { href: '/recipes', label: 'Recetas', icon: BookOpen },
+  { href: '/meal-planner', label: 'Planificar', icon: CalendarDays },
+  { href: '/shopping-list', label: 'Compras', icon: ShoppingCart },
+] as const;
+
+function isMobileTabActive(pathname: string, href: string): boolean {
+  if (href === '/app') return pathname === '/app';
+  if (href === '/recipes')
+    return (
+      pathname === '/app/cooking-intent' ||
+      pathname === '/recipes' ||
+      (pathname.startsWith('/recipes/') && !pathname.startsWith('/recipes/inventory'))
+    );
+  return pathname === href;
+}
+
 const icons = {
   home: LayoutGrid,
   book: BookOpen,
@@ -101,6 +119,9 @@ export default function HouseholdShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
+  const moreSelected =
+    isHouseholdRoute(pathname) &&
+    !mobileTabs.some((item) => isMobileTabActive(pathname, item.href));
   const dialogRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
@@ -164,17 +185,7 @@ export default function HouseholdShell({ children }: { children: ReactNode }) {
         >
           CocinaCore
         </Link>
-        <button
-          type="button"
-          ref={triggerRef}
-          aria-label="Abrir menú de navegación"
-          aria-controls="mobile-household-menu"
-          aria-expanded={menuOpen}
-          onClick={() => setMenuOpen(true)}
-          className="grid h-11 w-11 place-items-center rounded-xl border border-bistro-border bg-bistro-page text-bistro-action-primary"
-        >
-          <Menu className="h-5 w-5" aria-hidden="true" />
-        </button>
+        <span className="text-xs font-semibold text-bistro-text-secondary">Tu cocina</span>
       </header>
 
       {menuOpen ? (
@@ -223,7 +234,50 @@ export default function HouseholdShell({ children }: { children: ReactNode }) {
         <SidebarContents pathname={pathname} onLogout={() => void logout()} />
       </aside>
 
-      <div className="min-w-0 flex-1">{children}</div>
+      <div className="min-w-0 flex-1 pb-24 md:pb-0">{children}</div>
+
+      <nav
+        aria-label="Navegación rápida"
+        className="fixed inset-x-0 bottom-0 z-40 border-t border-bistro-border bg-white/95 pb-[env(safe-area-inset-bottom)] shadow-[0_-8px_24px_rgba(22,17,13,0.08)] backdrop-blur-md md:hidden"
+      >
+        <div className="grid grid-cols-5 gap-0.5 px-1 pt-1">
+          {mobileTabs.map(({ href, label, icon: Icon }) => {
+            const active = isMobileTabActive(pathname, href);
+            return (
+              <Link
+                key={href}
+                href={href}
+                aria-current={active ? 'page' : undefined}
+                className={`flex min-h-14 flex-col items-center justify-center gap-0.5 rounded-xl px-1 text-[11px] font-semibold focus-visible:outline-2 focus-visible:outline-bistro-action-primary ${
+                  active
+                    ? 'bg-bistro-surface-warm text-bistro-action-primary'
+                    : 'text-bistro-text-secondary hover:bg-bistro-page'
+                }`}
+              >
+                <Icon className="h-5 w-5" aria-hidden="true" />
+                <span>{label}</span>
+              </Link>
+            );
+          })}
+          <button
+            type="button"
+            ref={triggerRef}
+            aria-label="Abrir menú de navegación"
+            aria-controls="mobile-household-menu"
+            aria-expanded={menuOpen}
+            aria-current={moreSelected ? 'page' : undefined}
+            onClick={() => setMenuOpen(true)}
+            className={`flex min-h-14 flex-col items-center justify-center gap-0.5 rounded-xl px-1 text-[11px] font-semibold focus-visible:outline-2 focus-visible:outline-bistro-action-primary ${
+              moreSelected
+                ? 'bg-bistro-surface-warm text-bistro-action-primary'
+                : 'text-bistro-text-secondary hover:bg-bistro-page'
+            }`}
+          >
+            <Menu className="h-5 w-5" aria-hidden="true" />
+            <span>Más</span>
+          </button>
+        </div>
+      </nav>
     </div>
   );
 }

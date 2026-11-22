@@ -60,16 +60,16 @@ describe('CocinaCore Hogar: guided dashboard', () => {
     expect(html).toBe('');
   });
 
-  it('shows four practical shortcuts without promising unfinished premium features', () => {
+  it('keeps inventory and recetario as compact secondary shortcuts without duplicating daily actions', () => {
     const html = renderToStaticMarkup(<DashboardQuickActions />);
     expect(html).toContain('Mis ingredientes');
     expect(html).toContain('Mis recetas');
-    expect(html).toContain('Planificar menú');
-    expect(html).toContain('Lista de compras');
+    expect(html).not.toContain('Planificar menú');
+    expect(html).not.toContain('Lista de compras');
     expect(html).toContain('href="/recipes/inventory"');
     expect(html).toContain('href="/recipes"');
-    expect(html).toContain('href="/meal-planner"');
-    expect(html).toContain('href="/shopping-list"');
+    expect(html).not.toContain('href="/meal-planner"');
+    expect(html).not.toContain('href="/shopping-list"');
     expect(html).not.toContain('Premium Board');
     expect(html).not.toContain('Miembros');
   });
