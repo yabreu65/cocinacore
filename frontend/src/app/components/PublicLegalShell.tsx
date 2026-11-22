@@ -72,8 +72,8 @@ export default function PublicLegalShell({
 
         <article className="mt-5 rounded-2xl border border-bistro-border bg-white p-5 shadow-sm sm:p-8">
           <p className="mb-7 rounded-xl border border-bistro-border bg-bistro-surface-warm px-3 py-3 text-xs leading-relaxed text-bistro-text-secondary">
-            El texto legal original permanece en inglés. Su traducción y revisión legal se
-            realizarán por separado antes de modificar las condiciones publicadas.
+            Versión en español del documento existente. Su contenido debe revisarse legalmente
+            antes de considerarlo definitivo.
           </p>
           <div className="space-y-7">{children}</div>
         </article>

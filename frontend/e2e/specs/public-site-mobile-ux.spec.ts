@@ -31,12 +31,12 @@ test.describe('Área 3: cuatro pantallas del sitio público', () => {
     ).toBeLessThanOrEqual(1);
   });
 
-  test('documentos legales mantienen contenido original y permiten navegar', async ({ page }) => {
+  test('documentos legales están en español y permiten navegar', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     for (const item of [
-      { route: '/privacy', title: 'Privacy Policy', heading: 'Information We Collect' },
-      { route: '/terms', title: 'Terms of Service', heading: 'Acceptance of Terms' },
-      { route: '/cookies', title: 'Cookie Policy', heading: 'What Are Cookies' },
+      { route: '/privacy', title: 'Política de privacidad', heading: 'Información que recopilamos' },
+      { route: '/terms', title: 'Términos del servicio', heading: 'Aceptación de los términos' },
+      { route: '/cookies', title: 'Política de cookies', heading: 'Qué son las cookies' },
     ]) {
       await page.goto(item.route);
       await expect(page.getByRole('heading', { name: item.title })).toBeVisible();
@@ -49,7 +49,7 @@ test.describe('Área 3: cuatro pantallas del sitio público', () => {
         '/'
       );
       await expect(
-        page.getByText('El texto legal original permanece en inglés.', { exact: false })
+        page.getByText('Versión en español del documento existente.', { exact: false })
       ).toBeVisible();
       expect(
         await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)

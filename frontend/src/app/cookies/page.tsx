@@ -1,51 +1,51 @@
 import PublicLegalShell from '../components/PublicLegalShell';
 
 export const metadata = {
-  title: 'Cookie Policy - CocinaCore',
-  description: 'Cookie Policy for CocinaCore',
+  title: 'Política de cookies - CocinaCore',
+  description: 'Política de cookies de CocinaCore',
 };
 
 export default function CookiesPage() {
   return (
-    <PublicLegalShell current="/cookies" title="Cookie Policy">
+    <PublicLegalShell current="/cookies" title="Política de cookies">
       <section className="border-b border-bistro-border pb-6 last:border-b-0 last:pb-0">
         <h2 className="font-bistro-heading text-xl font-semibold text-bistro-text-primary">
-          1. What Are Cookies
+          1. Qué son las cookies
         </h2>
         <p className="mt-3 text-sm leading-relaxed text-bistro-text-secondary sm:text-base">
-          Cookies are small text files that are placed on your device when you visit a website. They
-          are widely used to make websites work more efficiently and provide information to website
-          owners.
+          Las cookies son pequeños archivos de texto que se almacenan en tu dispositivo cuando visitás
+          un sitio web. Se utilizan ampliamente para que los sitios funcionen de manera más eficiente
+          y para proporcionar información a sus propietarios.
         </p>
       </section>
 
       <section className="border-b border-bistro-border pb-6 last:border-b-0 last:pb-0">
         <h2 className="font-bistro-heading text-xl font-semibold text-bistro-text-primary">
-          2. How We Use Cookies
+          2. Cómo utilizamos las cookies
         </h2>
         <p className="mt-3 text-sm leading-relaxed text-bistro-text-secondary sm:text-base">
-          We use cookies to authenticate users, maintain session state, and improve your experience
-          on our platform. We do not use cookies for advertising purposes.
+          Utilizamos cookies para autenticar a los usuarios, mantener el estado de la sesión y mejorar
+          tu experiencia en nuestra plataforma. No utilizamos cookies con fines publicitarios.
         </p>
       </section>
 
       <section className="border-b border-bistro-border pb-6 last:border-b-0 last:pb-0">
         <h2 className="font-bistro-heading text-xl font-semibold text-bistro-text-primary">
-          3. Managing Cookies
+          3. Administración de cookies
         </h2>
         <p className="mt-3 text-sm leading-relaxed text-bistro-text-secondary sm:text-base">
-          Most web browsers allow you to control cookies through their settings. You can choose to
-          block or delete cookies, but this may affect your ability to use certain features of our
-          service.
+          La mayoría de los navegadores permiten controlar las cookies desde su configuración. Podés
+          bloquearlas o eliminarlas, pero esto podría afectar tu capacidad para utilizar algunas
+          funciones del servicio.
         </p>
       </section>
 
       <section className="border-b border-bistro-border pb-6 last:border-b-0 last:pb-0">
         <h2 className="font-bistro-heading text-xl font-semibold text-bistro-text-primary">
-          4. Contact Us
+          4. Contacto
         </h2>
         <p className="mt-3 text-sm leading-relaxed text-bistro-text-secondary sm:text-base">
-          If you have any questions about our Cookie Policy, please contact us at{' '}
+          Si tenés alguna pregunta sobre nuestra Política de cookies, escribinos a{' '}
           <a
             href="mailto:privacy@cocinacore.com"
             className="font-semibold text-bistro-action-primary hover:underline"

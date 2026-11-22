@@ -1,60 +1,60 @@
 import PublicLegalShell from '../components/PublicLegalShell';
 
 export const metadata = {
-  title: 'Terms of Service - CocinaCore',
-  description: 'Terms of Service for CocinaCore',
+  title: 'Términos del servicio - CocinaCore',
+  description: 'Términos del servicio de CocinaCore',
 };
 
 export default function TermsPage() {
   return (
-    <PublicLegalShell current="/terms" title="Terms of Service">
+    <PublicLegalShell current="/terms" title="Términos del servicio">
       <section className="border-b border-bistro-border pb-6 last:border-b-0 last:pb-0">
         <h2 className="font-bistro-heading text-xl font-semibold text-bistro-text-primary">
-          1. Acceptance of Terms
+          1. Aceptación de los términos
         </h2>
         <p className="mt-3 text-sm leading-relaxed text-bistro-text-secondary sm:text-base">
-          By accessing and using CocinaCore, you accept and agree to be bound by the terms and
-          conditions of this agreement.
+          Al acceder a CocinaCore y utilizarlo, aceptás quedar sujeto a los términos y condiciones
+          de este acuerdo.
         </p>
       </section>
 
       <section className="border-b border-bistro-border pb-6 last:border-b-0 last:pb-0">
         <h2 className="font-bistro-heading text-xl font-semibold text-bistro-text-primary">
-          2. Use of Service
+          2. Uso del servicio
         </h2>
         <p className="mt-3 text-sm leading-relaxed text-bistro-text-secondary sm:text-base">
-          You agree to use the service only for lawful purposes and in a way that does not infringe
-          the rights of others or restrict their use and enjoyment of the service.
+          Te comprometés a utilizar el servicio únicamente con fines lícitos, sin vulnerar los derechos
+          de otras personas ni restringir su uso y disfrute del servicio.
         </p>
       </section>
 
       <section className="border-b border-bistro-border pb-6 last:border-b-0 last:pb-0">
         <h2 className="font-bistro-heading text-xl font-semibold text-bistro-text-primary">
-          3. User Accounts
+          3. Cuentas de usuario
         </h2>
         <p className="mt-3 text-sm leading-relaxed text-bistro-text-secondary sm:text-base">
-          You are responsible for maintaining the confidentiality of your account credentials and
-          for all activities that occur under your account.
+          Sos responsable de mantener la confidencialidad de las credenciales de tu cuenta y de todas
+          las actividades que se realicen desde ella.
         </p>
       </section>
 
       <section className="border-b border-bistro-border pb-6 last:border-b-0 last:pb-0">
         <h2 className="font-bistro-heading text-xl font-semibold text-bistro-text-primary">
-          4. Limitation of Liability
+          4. Limitación de responsabilidad
         </h2>
         <p className="mt-3 text-sm leading-relaxed text-bistro-text-secondary sm:text-base">
-          CocinaCore shall not be liable for any indirect, incidental, special, consequential, or
-          punitive damages resulting from your use of the service.
+          CocinaCore no será responsable por daños indirectos, incidentales, especiales, consecuentes
+          o punitivos derivados del uso del servicio.
         </p>
       </section>
 
       <section className="border-b border-bistro-border pb-6 last:border-b-0 last:pb-0">
         <h2 className="font-bistro-heading text-xl font-semibold text-bistro-text-primary">
-          5. Changes to Terms
+          5. Modificaciones de los términos
         </h2>
         <p className="mt-3 text-sm leading-relaxed text-bistro-text-secondary sm:text-base">
-          We reserve the right to modify these terms at any time. Continued use of the service after
-          changes constitutes acceptance of the new terms.
+          Nos reservamos el derecho de modificar estos términos en cualquier momento. Seguir
+          utilizando el servicio después de los cambios implica aceptar los nuevos términos.
         </p>
       </section>
     </PublicLegalShell>
