@@ -3,8 +3,8 @@ import OwnerSectionPlaceholder from '../OwnerSectionPlaceholder';
 export default function OwnerTenantsPage() {
   return (
     <OwnerSectionPlaceholder
-      title="Tenants"
-      description="Visión de tenants activos, trial y señales operativas multi-tenant."
+      title="Hogares"
+      description="Vista prevista de hogares activos, períodos de prueba e indicadores operativos."
     />
   );
 }

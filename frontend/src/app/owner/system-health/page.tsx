@@ -176,30 +176,41 @@ export default function OwnerSystemHealthPage() {
       <article
         key={sub.key}
         data-testid="status-card"
-        className={`rounded-2xl border p-4 premium-shadow transition ${config.border} ${config.bg}`}
+        className="flex min-w-0 flex-col justify-between rounded-2xl border border-bistro-border bg-white p-5 shadow-sm"
       >
-        <header className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <span className={`${config.text}`}>{sub.icon}</span>
-            <h3 className="text-sm font-semibold text-bistro-text-primary">{sub.label}</h3>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className={`inline-block h-2.5 w-2.5 rounded-full ${config.dot}`} />
-            <span className={`text-xs font-semibold ${config.text}`}>{config.label}</span>
-          </div>
+        <header className="flex flex-wrap items-start justify-between gap-3">
+          <span
+            className="flex size-11 items-center justify-center rounded-xl bg-bistro-page text-bistro-action-secondary"
+            aria-hidden="true"
+          >
+            {sub.icon}
+          </span>
+          <span
+            className={
+              'inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold ' +
+              config.bg +
+              ' ' +
+              config.text
+            }
+          >
+            <span className={'size-2 rounded-full ' + config.dot} aria-hidden="true" />
+            {config.label}
+          </span>
         </header>
-
-        <div className="mt-3 space-y-1 text-xs text-bistro-text-secondary">
-          {check && check.latency !== null ? (
-            <>
-              <p>
+        <div className="mt-5">
+          <h3 className="font-bistro-heading text-lg font-semibold text-bistro-text-primary">
+            {sub.label}
+          </h3>
+          <p className="mt-1 text-sm text-bistro-text-secondary">
+            {check && check.latency !== null ? (
+              <>
                 Latencia:{' '}
-                <span className="font-semibold text-bistro-text-primary">{check.latency}ms</span>
-              </p>
-            </>
-          ) : (
-            <p>Sin datos</p>
-          )}
+                <span className="font-semibold text-bistro-text-primary">{check.latency} ms</span>
+              </>
+            ) : (
+              'Sin medición disponible'
+            )}
+          </p>
         </div>
       </article>
     );
@@ -207,41 +218,39 @@ export default function OwnerSystemHealthPage() {
 
   function renderOverallBanner() {
     if (!health) return null;
-
     const overall = summarizeHealth(health.status, health.checks.storage);
     const isOk = overall === 'ok';
     return (
       <article
-        className={`mb-5 rounded-3xl border p-4 premium-shadow ${
-          isOk
+        className={
+          'flex flex-wrap items-center justify-between gap-4 rounded-2xl border px-5 py-4 ' +
+          (isOk
             ? 'border-bistro-action-secondary/30 bg-bistro-action-secondary/10'
-            : 'border-bistro-action-primary/30 bg-bistro-action-primary/10'
-        }`}
+            : 'border-bistro-warning/30 bg-bistro-warning/10')
+        }
       >
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <span
-              className={`inline-block h-3 w-3 rounded-full ${
-                isOk ? 'bg-bistro-action-secondary' : 'bg-bistro-action-primary'
-              }`}
-            />
-            <p className="text-sm font-semibold text-bistro-text-primary">
-              Estado global:{' '}
-              <span
-                className={isOk ? 'text-bistro-action-secondary' : 'text-bistro-action-primary'}
-              >
-                {isOk ? 'Todo operativo' : overall === 'partial' ? 'Estado parcial: almacenamiento sin datos' : 'Degradado'}
-              </span>
-            </p>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <p className="text-xs text-bistro-text-secondary">
-              v{health.version}{' '}
-              {lastUpdated ? `· Actualizado ${lastUpdated.toLocaleTimeString()}` : ''}
+        <div className="flex items-center gap-3">
+          <span
+            className={
+              'size-3 rounded-full ' + (isOk ? 'bg-bistro-action-secondary' : 'bg-bistro-warning')
+            }
+            aria-hidden="true"
+          />
+          <div>
+            <p className="text-xs text-bistro-text-secondary">Estado global</p>
+            <p className="font-bistro-heading text-lg font-semibold text-bistro-text-primary">
+              {isOk
+                ? 'Todo operativo'
+                : overall === 'partial'
+                  ? 'Estado parcial: almacenamiento sin datos'
+                  : 'Degradado'}
             </p>
           </div>
         </div>
+        <p className="text-xs text-bistro-text-secondary">
+          v{health.version}
+          {lastUpdated ? ' · Actualizado ' + lastUpdated.toLocaleTimeString() : ''}
+        </p>
       </article>
     );
   }
@@ -251,71 +260,114 @@ export default function OwnerSystemHealthPage() {
   // ---------------------------------------------------------------------------
 
   return (
-    <section className="space-y-4">
-      {/* Header */}
-      <article className="rounded-3xl border border-bistro-border bg-white/90 p-5 premium-shadow">
-        <p className="inline-flex items-center gap-2 rounded-full border border-bistro-action-secondary/25 bg-bistro-action-secondary/10 px-3 py-1 text-xs font-semibold text-bistro-action-secondary">
-          <ActivityIcon size={14} /> Monitoreo en tiempo real
+    <section className="space-y-5">
+      <header className="rounded-[26px] bg-bistro-inverse px-6 py-7 text-white shadow-sm sm:px-8">
+        <p className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-[0.14em] text-bistro-champagne">
+          <ActivityIcon size={16} /> Supervisión de servicios
         </p>
-        <h1 className="mt-3 text-2xl font-semibold text-bistro-text-primary">Estado del sistema</h1>
-        <p className="mt-1 text-sm text-bistro-text-secondary">
-          Estado de PostgreSQL, Redis, Gemini y almacenamiento S3. Se actualiza cada 30 segundos.
+        <h2 className="mt-3 font-bistro-heading text-3xl font-semibold sm:text-4xl">
+          Estado del sistema
+        </h2>
+        <p className="mt-2 max-w-xl text-sm leading-relaxed text-bistro-cream">
+          Consultá el estado real de PostgreSQL, Redis, Gemini y almacenamiento S3. Actualización
+          automática cada 30 segundos.
         </p>
-      </article>
+      </header>
 
-      {/* Overall banner */}
       {renderOverallBanner()}
 
-      {/* Error banner */}
       {fetchError ? (
-        <article className="rounded-xl border border-bistro-danger/30 bg-bistro-danger/10 px-4 py-3">
-          <p className="text-sm text-bistro-danger" role="alert">{fetchError}</p>
-          <button type="button" onClick={() => void fetchHealth()} className="mt-2 text-sm font-semibold underline">
+        <article
+          role="alert"
+          className="rounded-2xl border border-bistro-danger/30 bg-bistro-danger/10 p-5"
+        >
+          <p className="font-semibold text-bistro-danger">
+            No se pudo obtener el estado del sistema
+          </p>
+          <p className="mt-1 break-words text-sm text-bistro-danger">{fetchError}</p>
+          <button
+            type="button"
+            onClick={() => void fetchHealth()}
+            className="mt-3 inline-flex min-h-11 items-center rounded-xl border border-bistro-danger/30 px-4 text-sm font-semibold text-bistro-danger"
+          >
             Reintentar
           </button>
         </article>
       ) : null}
 
-      {/* Loading state (only on initial load) */}
-      {loading ? (
-        <div className="grid gap-3 sm:grid-cols-2">
-          {SUBSYSTEMS.map((sub) => (
-            <article
-              key={sub.key}
-              className="rounded-2xl border border-bistro-border bg-white/60 p-5 premium-shadow animate-pulse"
-            >
-              <div className="flex items-center gap-2">
-                <div className="h-5 w-5 rounded bg-bistro-border" />
-                <div className="h-4 w-24 rounded bg-bistro-border" />
-              </div>
-              <div className="mt-3 h-4 w-32 rounded bg-bistro-border" />
-            </article>
-          ))}
-        </div>
-      ) : health ? (
-        <>
-          {/* Status grid */}
-          <div className="grid gap-3 sm:grid-cols-2">{SUBSYSTEMS.map(renderStatusCard)}</div>
-
-          {/* Timestamp + refresh info */}
-          <footer className="flex items-center justify-between rounded-2xl border border-bistro-border bg-white/70 px-4 py-3">
-            <p className="text-xs text-bistro-text-secondary">
-              {health.timestamp
-                ? `Último chequeo: ${new Date(health.timestamp).toLocaleString()}`
-                : 'Sin datos de timestamp'}
+      <section
+        aria-labelledby="owner-dependencies"
+        className="rounded-[26px] border border-bistro-border bg-bistro-page/60 p-4 sm:p-6"
+      >
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 id="owner-dependencies" className="font-bistro-heading text-xl font-semibold">
+              Servicios y dependencias
+            </h3>
+            <p className="mt-1 text-sm text-bistro-text-secondary">
+              Cada tarjeta muestra una comprobación independiente.
             </p>
-            <button
-              onClick={() => {
-                setLoading(true);
-                void fetchHealth();
-              }}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-bistro-border bg-white px-3 py-1.5 text-xs font-semibold text-bistro-text-secondary transition hover:border-bistro-action-primary/40 hover:text-bistro-action-primary"
+          </div>
+          {loading ? (
+            <span
+              role="status"
+              className="rounded-full bg-white px-3 py-2 text-xs font-semibold text-bistro-text-secondary"
             >
-              <RefreshCw size={14} /> Refrescar ahora
-            </button>
-          </footer>
-        </>
-      ) : null}
+              Verificando servicios…
+            </span>
+          ) : null}
+        </div>
+
+        {loading ? (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {SUBSYSTEMS.map((sub) => (
+              <article
+                key={sub.key}
+                className="flex min-h-40 flex-col justify-between rounded-2xl border border-bistro-border bg-white p-4 shadow-sm sm:p-5"
+              >
+                <span
+                  className="flex size-11 items-center justify-center rounded-xl bg-bistro-page text-bistro-action-secondary"
+                  aria-hidden="true"
+                >
+                  {sub.icon}
+                </span>
+                <div className="mt-5">
+                  <h4 className="font-bistro-heading text-base font-semibold sm:text-lg">
+                    {sub.label}
+                  </h4>
+                  <p className="mt-1 text-xs text-bistro-text-secondary">Esperando medición…</p>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : health ? (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {SUBSYSTEMS.map(renderStatusCard)}
+          </div>
+        ) : (
+          <p className="rounded-2xl bg-white p-5 text-sm text-bistro-text-secondary">
+            Sin datos disponibles. Usá Reintentar para consultar nuevamente.
+          </p>
+        )}
+      </section>
+
+      <footer className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-bistro-border bg-white px-5 py-4">
+        <p className="text-xs text-bistro-text-secondary">
+          {health?.timestamp
+            ? 'Último chequeo: ' + new Date(health.timestamp).toLocaleString()
+            : 'Última comprobación: sin datos'}
+        </p>
+        <button
+          type="button"
+          onClick={() => {
+            setLoading(true);
+            void fetchHealth();
+          }}
+          className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-bistro-border px-4 text-sm font-semibold text-bistro-text-primary hover:bg-bistro-page"
+        >
+          <RefreshCw size={16} aria-hidden="true" /> Refrescar ahora
+        </button>
+      </footer>
     </section>
   );
 }
