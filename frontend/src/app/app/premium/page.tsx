@@ -23,21 +23,23 @@ export default async function PremiumBoardIntelligentPage() {
 
   return (
     <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 text-bistro-text-primary md:px-6">
-      <section className="mx-auto w-full max-w-6xl rounded-3xl border border-bistro-border bg-white/85 p-5 premium-shadow">
-        <div className="flex flex-wrap items-start justify-between gap-3">
+      <section className="mx-auto w-full max-w-5xl">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-3xl bg-bistro-inverse p-5 text-white shadow-sm sm:p-8">
           <div>
-            <p className="text-xs font-bold tracking-[0.15em] text-bistro-action-primary">
+            <p className="text-xs font-bold tracking-[0.15em] text-bistro-champagne">
               COCINACORE • PREMIUM
             </p>
-            <h1 className="mt-2 text-3xl font-semibold">Premium Board</h1>
-            <p className="mt-2 max-w-2xl text-sm text-bistro-text-secondary">
-              Funcionalidad en reconstrucción durante la migración. La página ya renderiza estable y
-              con TypeScript estricto.
+            <h1 className="mt-2 font-bistro-heading text-3xl font-semibold sm:text-4xl">
+              CocinaCore Premium
+            </h1>
+            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-bistro-cream">
+              Esta experiencia está en reconstrucción. Las recomendaciones Premium todavía no están
+              disponibles.
             </p>
           </div>
           <Link
             href="/app"
-            className="rounded-xl bg-bistro-action-primary px-4 py-2 text-sm font-semibold text-white"
+            className="inline-flex min-h-11 items-center rounded-xl border border-white/40 px-4 py-2 text-sm font-semibold text-white hover:bg-white/10"
           >
             Volver al panel
           </Link>
@@ -62,8 +64,8 @@ export default async function PremiumBoardIntelligentPage() {
         </div>
 
         <div className="mt-5 rounded-2xl border border-dashed border-bistro-action-primary/40 bg-bistro-page p-4 text-sm text-bistro-text-secondary">
-          Próximo entregable: volver a conectar feed, recomendaciones y acciones sociales a
-          rutas/API directas.
+          Estas funciones aún no están activas. Mientras tanto, podés seguir usando el asistente de
+          recetas y Mi recetario.
         </div>
       </section>
     </main>

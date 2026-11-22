@@ -610,15 +610,23 @@ export default function MealPlannerPage() {
 
   return (
     <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 text-bistro-text-primary md:px-6">
-      <section className="mx-auto w-full max-w-4xl rounded-3xl border border-bistro-border bg-white/80 p-5 premium-shadow">
-        <div className="mb-4 flex items-center justify-between">
+      <section className="mx-auto w-full max-w-5xl">
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-3xl bg-bistro-inverse p-5 text-white shadow-sm sm:p-8">
           <div>
-            <h1 className="text-3xl font-semibold">Planificador de menú</h1>
-            <p className="text-bistro-text-secondary">
-              Generá un menú para el período elegido con IA.
+            <p className="text-xs font-bold uppercase tracking-wider text-bistro-champagne">
+              Tu semana en la cocina
+            </p>
+            <h1 className="mt-2 font-bistro-heading text-3xl font-semibold sm:text-4xl">
+              Planificador de menú
+            </h1>
+            <p className="mt-2 text-sm leading-relaxed text-bistro-cream">
+              Elegí para cuántas personas y por cuántos días. El asistente te ayuda con las comidas.
             </p>
           </div>
-          <Link href="/app" className="text-sm font-semibold text-bistro-action-primary">
+          <Link
+            href="/app"
+            className="inline-flex min-h-11 items-center rounded-xl border border-white/40 px-3 text-sm font-semibold text-white"
+          >
             Volver
           </Link>
         </div>
@@ -628,7 +636,10 @@ export default function MealPlannerPage() {
         ) : null}
         {loadError ? <LoadErrorNotice message={loadError} /> : null}
 
-        <form onSubmit={onSubmit} className="grid gap-3">
+        <form
+          onSubmit={onSubmit}
+          className="grid gap-4 rounded-2xl border border-bistro-border bg-white p-4 shadow-sm sm:grid-cols-2 sm:p-6"
+        >
           <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
             Comensales
             <input
@@ -687,7 +698,7 @@ export default function MealPlannerPage() {
           <button
             type="submit"
             disabled={isGenerating}
-            className="h-11 rounded-xl bg-bistro-action-primary px-4 font-semibold text-white disabled:opacity-60"
+            className="min-h-12 w-full rounded-xl bg-bistro-action-primary px-5 py-3 font-semibold text-white disabled:opacity-60 sm:col-span-2 sm:w-fit"
           >
             {isGenerating ? 'Generando...' : 'Generar menú'}
           </button>
@@ -700,8 +711,8 @@ export default function MealPlannerPage() {
         ) : null}
 
         {plan ? (
-          <div className="mt-6 rounded-xl border border-bistro-border bg-bistro-page p-4">
-            <h2 className="font-semibold">Menú generado</h2>
+          <div className="mt-5 rounded-2xl border border-bistro-border bg-white p-4 shadow-sm sm:p-6">
+            <h2 className="font-bistro-heading text-2xl font-semibold">Menú generado</h2>
             {activePlanId ? (
               <ScheduleConfirmation
                 key={`${activePlanId}:${JSON.stringify(plan.days)}`}

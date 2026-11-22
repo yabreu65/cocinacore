@@ -13,14 +13,19 @@ export default async function PremiumRecipeDetailPage({ params }: PremiumRecipeD
 
   return (
     <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 text-bistro-text-primary md:px-6">
-      <section className="mx-auto w-full max-w-4xl rounded-3xl border border-bistro-border bg-white/85 p-5 premium-shadow">
-        <p className="text-xs font-bold tracking-[0.15em] text-bistro-action-primary">
-          COCINACORE • PREMIUM DETAIL
-        </p>
-        <h1 className="mt-2 text-3xl font-semibold">Receta premium en reconstrucción</h1>
-        <p className="mt-2 text-sm text-bistro-text-secondary">
-          El detalle completo del board premium todavía no fue reconectado a PostgreSQL directo.
-        </p>
+      <section className="mx-auto w-full max-w-4xl">
+        <header className="rounded-3xl bg-bistro-inverse p-5 text-white shadow-sm sm:p-8">
+          <p className="text-xs font-bold tracking-[0.15em] text-bistro-champagne">
+            CocinaCore · Premium
+          </p>
+          <h1 className="mt-2 font-bistro-heading text-3xl font-semibold sm:text-4xl">
+            Receta Premium
+          </h1>
+          <p className="mt-2 text-sm leading-relaxed text-bistro-cream">
+            El detalle de esta receta todavía está en reconstrucción. No se muestran ingredientes ni
+            pasos que no podamos verificar.
+          </p>
+        </header>
 
         <div className="mt-5 rounded-2xl border border-bistro-border bg-white/75 p-4 text-sm text-bistro-text-secondary">
           <p>

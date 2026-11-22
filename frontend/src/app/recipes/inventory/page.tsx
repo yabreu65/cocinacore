@@ -536,7 +536,8 @@ export default function RecipeInventoryPage() {
 
   const saveItemPrice = async (event: FormEvent, id: string) => {
     event.preventDefault();
-    if (working || loading || loadError || editingId !== id || !maySubmitConflict(conflictPhase)) return;
+    if (working || loading || loadError || editingId !== id || !maySubmitConflict(conflictPhase))
+      return;
     const validated = validatePriceReference(editingPrice);
     if (!validated.ok) {
       setError(validated.error);
@@ -718,21 +719,21 @@ export default function RecipeInventoryPage() {
   return (
     <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 text-bistro-text-primary md:px-6">
       <div className="mx-auto w-full max-w-6xl space-y-5">
-        <header className="flex flex-wrap items-end justify-between gap-4">
+        <header className="flex flex-wrap items-center justify-between gap-4 rounded-3xl bg-bistro-inverse p-5 text-white shadow-sm sm:p-7">
           <div className="min-w-0">
             <Link
               href="/app"
-              className="mb-3 inline-flex items-center gap-2 text-sm font-semibold text-bistro-action-secondary"
+              className="mb-3 inline-flex min-h-10 items-center gap-2 text-sm font-semibold text-bistro-cream hover:text-white"
             >
               <ArrowLeft size={16} aria-hidden="true" /> Inicio
             </Link>
-            <p className="text-xs font-bold uppercase tracking-wider text-bistro-action-secondary">
+            <p className="text-xs font-bold uppercase tracking-wider text-bistro-champagne">
               Mi cocina · Despensa
             </p>
-            <h1 className="mt-1 font-bistro-heading text-bistro-title-lg font-semibold">
+            <h1 className="mt-1 font-bistro-heading text-3xl font-semibold leading-tight sm:text-4xl">
               Inventario de ingredientes
             </h1>
-            <p className="mt-1 text-sm text-bistro-text-secondary">
+            <p className="mt-2 text-sm leading-relaxed text-bistro-cream">
               Lo que tienes, lo que falta y cuánto vale tu despensa.
             </p>
           </div>
@@ -750,7 +751,7 @@ export default function RecipeInventoryPage() {
               editingId !== null ||
               inventoryEditor !== null
             }
-            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-bistro-action-primary px-5 py-3 font-semibold text-white hover:bg-bistro-action-primary-hover disabled:opacity-60"
+            className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-bistro-champagne px-5 py-3 text-sm font-bold text-bistro-text-primary transition hover:bg-white disabled:opacity-60 sm:w-auto"
           >
             <Plus size={19} aria-hidden="true" /> Agregar ingrediente
           </button>
@@ -758,7 +759,7 @@ export default function RecipeInventoryPage() {
         <InventorySummary summary={summary} loading={loading} dataReady={dataReady} />
         <section
           aria-labelledby="inventory-currency-heading"
-          className="rounded-2xl border border-bistro-border bg-bistro-surface p-4"
+          className="rounded-2xl border border-bistro-border bg-white p-4 shadow-sm"
         >
           <h2 id="inventory-currency-heading">
             <button
@@ -845,7 +846,7 @@ export default function RecipeInventoryPage() {
         <section
           id="inventory-add-panel"
           hidden={!formOpen}
-          className="rounded-2xl border border-bistro-border bg-bistro-surface p-4 sm:p-5"
+          className="rounded-2xl border border-bistro-border bg-white p-4 shadow-sm sm:p-5"
         >
           <div className="mb-4">
             <h2 className="font-bistro-heading text-bistro-title-sm font-semibold">
@@ -911,7 +912,12 @@ export default function RecipeInventoryPage() {
             </label>
             <label className="grid gap-1 text-sm font-semibold">
               Unidad
-              <select aria-label="Unidad" value={unit} onChange={(e) => setUnit(e.target.value)} className={fieldClass}>
+              <select
+                aria-label="Unidad"
+                value={unit}
+                onChange={(e) => setUnit(e.target.value)}
+                className={fieldClass}
+              >
                 <option value="">Seleccionar</option>
                 {INVENTORY_UNITS.map((option) => (
                   <option key={option.value} value={option.value}>
@@ -1039,7 +1045,7 @@ export default function RecipeInventoryPage() {
         ) : null}
         <section
           aria-labelledby="inventory-list-heading"
-          className="rounded-2xl border border-bistro-border bg-bistro-surface p-4 sm:p-5"
+          className="rounded-2xl border border-bistro-border bg-white p-4 shadow-sm sm:p-5"
         >
           <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
             <h2

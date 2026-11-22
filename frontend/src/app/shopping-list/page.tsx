@@ -409,17 +409,22 @@ export default function ShoppingListPage() {
 
   return (
     <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 text-bistro-text-primary md:px-6">
-      <section className="mx-auto w-full max-w-4xl rounded-3xl border border-bistro-border bg-white/80 p-5 premium-shadow sm:p-6">
-        <header className="mb-6 flex flex-wrap items-start justify-between gap-3">
+      <section className="mx-auto w-full max-w-5xl">
+        <header className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-3xl bg-bistro-inverse p-5 text-white shadow-sm sm:p-8">
           <div>
-            <h1 className="text-3xl font-semibold">Lista de compras</h1>
-            <p className="mt-1 text-bistro-text-secondary">
-              Organizá lo que necesitás para tus próximas comidas.
+            <p className="text-xs font-bold uppercase tracking-wider text-bistro-champagne">
+              Todo listo para comprar
+            </p>
+            <h1 className="mt-2 font-bistro-heading text-3xl font-semibold sm:text-4xl">
+              Lista de compras
+            </h1>
+            <p className="mt-2 text-sm leading-relaxed text-bistro-cream">
+              Marcá lo que compraste y pasalo al inventario cuando lo tengas en casa.
             </p>
           </div>
           <Link
             href="/app"
-            className="min-h-11 rounded-xl px-3 py-2 text-sm font-semibold text-bistro-action-primary hover:bg-bistro-page"
+            className="min-h-11 rounded-xl border border-white/40 px-3 py-2 text-sm font-semibold text-white hover:bg-white/10"
           >
             Volver
           </Link>
@@ -471,7 +476,7 @@ export default function ShoppingListPage() {
 
         <form
           onSubmit={(event) => void onCreate(event)}
-          className="mb-7 grid gap-3 rounded-2xl border border-bistro-border bg-white p-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end"
+          className="mb-5 grid gap-3 rounded-2xl border border-bistro-border bg-white p-4 shadow-sm sm:grid-cols-[1fr_1fr_auto] sm:items-end sm:p-5"
         >
           <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
             Ingrediente
@@ -499,21 +504,28 @@ export default function ShoppingListPage() {
           </button>
         </form>
 
-        <p className="mb-3 text-sm text-bistro-text-secondary">
-          Los ingredientes equivalentes se muestran juntos. «Necesario» conserva lo que requieren
-          las recetas; «Comprar» sugiere envases completos cuando hay una presentación conocida. No
-          se modifica la cantidad guardada ni se añade inventario automáticamente.
-        </p>
-        <p className="mb-5 text-sm text-bistro-text-secondary">
-          Cuando compres un producto, marcalo como comprado y después elegí «Agregar al inventario»
-          para registrar lo que ya tenés en casa.{' '}
-          <Link
-            href="/recipes/inventory"
-            className="font-semibold text-bistro-action-primary underline underline-offset-4"
-          >
-            Ver mi inventario
-          </Link>
-        </p>
+        <details className="group mb-5 rounded-xl border border-bistro-border bg-white px-3 py-2 text-sm text-bistro-text-secondary">
+          <summary className="min-h-10 cursor-pointer py-2 font-semibold text-bistro-action-primary">
+            Cómo funcionan las cantidades y el inventario
+          </summary>
+          <div className="mt-2 border-t border-bistro-border pt-3">
+            <p className="mb-3 text-sm text-bistro-text-secondary">
+              Los ingredientes equivalentes se muestran juntos. «Necesario» conserva lo que
+              requieren las recetas; «Comprar» sugiere envases completos cuando hay una presentación
+              conocida. No se modifica la cantidad guardada ni se añade inventario automáticamente.
+            </p>
+            <p className="mb-5 text-sm text-bistro-text-secondary">
+              Cuando compres un producto, marcalo como comprado y después elegí «Agregar al
+              inventario» para registrar lo que ya tenés en casa.{' '}
+              <Link
+                href="/recipes/inventory"
+                className="font-semibold text-bistro-action-primary underline underline-offset-4"
+              >
+                Ver mi inventario
+              </Link>
+            </p>
+          </div>
+        </details>
 
         <div className="grid gap-6">
           <section aria-labelledby="pending-heading" className="grid gap-3">
