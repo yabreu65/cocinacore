@@ -174,7 +174,10 @@ export default function ProfilePage() {
     selections,
     ...detailedForm,
   });
-  const dislikedError = ingredientListError(payload.dislikedIngredients, 'Ingredientes que no te gustan');
+  const dislikedError = ingredientListError(
+    payload.dislikedIngredients,
+    'Ingredientes que no te gustan'
+  );
   const allergiesError = ingredientListError(payload.allergies, 'Alergias');
 
   const onSave = async (event: FormEvent) => {
@@ -216,24 +219,32 @@ export default function ProfilePage() {
 
   return (
     <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 text-bistro-text-primary md:px-6">
-      <section className="mx-auto w-full max-w-5xl rounded-3xl border border-bistro-border bg-white/80 p-5 premium-shadow md:p-7">
-        <div className="mb-5 flex items-start justify-between gap-4">
+      <section className="mx-auto w-full max-w-5xl">
+        <div className="mb-5 flex flex-wrap items-start justify-between gap-4 rounded-3xl bg-bistro-inverse p-5 text-white shadow-sm sm:p-8">
           <div>
-            <p className="text-xs font-bold tracking-[0.14em] text-bistro-action-primary">
+            <p className="text-xs font-bold tracking-[0.14em] text-bistro-champagne">
               TU CONTEXTO CULINARIO
             </p>
-            <h1 className="mt-2 text-3xl font-semibold">Perfil</h1>
-            <p className="mt-1 max-w-2xl text-bistro-text-secondary">
+            <h1 className="mt-2 font-bistro-heading text-3xl font-semibold sm:text-4xl">
+              Mi perfil culinario
+            </h1>
+            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-bistro-cream sm:text-base">
               Estas preferencias alimentan el Planificador y las recetas conectadas de tu hogar.
             </p>
           </div>
-          <Link href="/app" className="text-sm font-semibold text-bistro-action-primary">
+          <Link
+            href="/app"
+            className="inline-flex min-h-11 items-center rounded-xl border border-white/40 px-3 text-sm font-semibold text-white"
+          >
             Volver
           </Link>
         </div>
 
         {error ? (
-          <p role="alert" className="mb-4 rounded-xl border border-bistro-danger/30 bg-bistro-danger/10 px-3 py-2 text-sm text-bistro-danger">
+          <p
+            role="alert"
+            className="mb-4 rounded-xl border border-bistro-danger/30 bg-bistro-danger/10 px-3 py-2 text-sm text-bistro-danger"
+          >
             {error}
           </p>
         ) : null}
@@ -245,7 +256,7 @@ export default function ProfilePage() {
 
         <form onSubmit={onSave} className="grid gap-4">
           <fieldset disabled={formDisabled} className="contents">
-            <div className="grid gap-3 rounded-2xl border border-bistro-border bg-white/70 p-4 md:grid-cols-3">
+            <div className="grid gap-3 rounded-2xl border border-bistro-border bg-white p-4 shadow-sm md:grid-cols-3 md:p-5">
               <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
                 Nombre completo
                 <input
@@ -299,26 +310,39 @@ export default function ProfilePage() {
             />
 
             <fieldset className="grid gap-3 rounded-2xl border border-bistro-border bg-white/70 p-4">
-              <legend className="px-1 text-lg font-semibold text-bistro-text-primary">Alergias alimentarias</legend>
+              <legend className="px-1 text-lg font-semibold text-bistro-text-primary">
+                Alergias alimentarias
+              </legend>
               <p className="text-sm text-bistro-text-secondary">
-                Selecciona los alérgenos que necesitas evitar. Maní y frutos secos de árbol son opciones distintas.
+                Selecciona los alérgenos que necesitas evitar. Maní y frutos secos de árbol son
+                opciones distintas.
               </p>
               <div className="flex flex-wrap gap-2">
                 {PROFILE_ALLERGEN_OPTIONS.map((option) => {
-                  const active = isProfileAllergenSelected(detailedForm.selectedAllergies, option.id);
+                  const active = isProfileAllergenSelected(
+                    detailedForm.selectedAllergies,
+                    option.id
+                  );
                   return (
                     <button
                       key={option.id}
                       type="button"
                       aria-pressed={active}
                       disabled={!active && payload.allergies.length >= PROFILE_LIST_MAX_ITEMS}
-                      onClick={() => setDetailedForm((current) => ({
-                        ...current,
-                        selectedAllergies: toggleProfileAllergen(current.selectedAllergies, option.id),
-                      }))}
-                      className={active
-                        ? 'rounded-full border border-bistro-action-primary bg-bistro-action-primary/10 px-3 py-2 text-sm font-semibold text-bistro-action-primary'
-                        : 'rounded-full border border-bistro-border bg-white px-3 py-2 text-sm text-bistro-text-primary disabled:opacity-40'}
+                      onClick={() =>
+                        setDetailedForm((current) => ({
+                          ...current,
+                          selectedAllergies: toggleProfileAllergen(
+                            current.selectedAllergies,
+                            option.id
+                          ),
+                        }))
+                      }
+                      className={
+                        active
+                          ? 'rounded-full border border-bistro-action-primary bg-bistro-action-primary/10 px-3 py-2 text-sm font-semibold text-bistro-action-primary'
+                          : 'rounded-full border border-bistro-border bg-white px-3 py-2 text-sm text-bistro-text-primary disabled:opacity-40'
+                      }
                     >
                       {option.label}
                     </button>
@@ -326,29 +350,39 @@ export default function ProfilePage() {
                 })}
               </div>
               <p className="text-xs text-bistro-text-secondary">
-                {payload.allergies.length} de {PROFILE_LIST_MAX_ITEMS} alergias registradas (incluidas las adicionales).
+                {payload.allergies.length} de {PROFILE_LIST_MAX_ITEMS} alergias registradas
+                (incluidas las adicionales).
               </p>
               <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
                 Alergias adicionales
                 <span id="allergies-language-hint" className="text-xs font-normal">
-                  Si falta alguna, escríbela en español, una por línea. Conservamos las alergias guardadas previamente.
-                  Hasta {PROFILE_LIST_MAX_LENGTH} caracteres por ingrediente.
-                  Revisa siempre ingredientes, etiquetas y contaminación cruzada: el filtro no certifica ausencia de alérgenos.
+                  Si falta alguna, escríbela en español, una por línea. Conservamos las alergias
+                  guardadas previamente. Hasta {PROFILE_LIST_MAX_LENGTH} caracteres por ingrediente.
+                  Revisa siempre ingredientes, etiquetas y contaminación cruzada: el filtro no
+                  certifica ausencia de alérgenos.
                 </span>
                 <textarea
                   aria-invalid={Boolean(allergiesError)}
-                  aria-describedby={allergiesError ? 'allergies-language-hint allergies-error' : 'allergies-language-hint'}
+                  aria-describedby={
+                    allergiesError
+                      ? 'allergies-language-hint allergies-error'
+                      : 'allergies-language-hint'
+                  }
                   rows={3}
                   value={detailedForm.allergiesText}
-                  onChange={(event) => setDetailedForm((current) => ({
-                    ...current,
-                    allergiesText: event.target.value,
-                  }))}
+                  onChange={(event) =>
+                    setDetailedForm((current) => ({
+                      ...current,
+                      allergiesText: event.target.value,
+                    }))
+                  }
                   placeholder="Otra alergia, una por línea"
                   className="rounded-xl border border-bistro-border bg-white px-3 py-2 outline-none"
                 />
                 {allergiesError ? (
-                  <span id="allergies-error" className="text-xs text-bistro-danger">{allergiesError}</span>
+                  <span id="allergies-error" className="text-xs text-bistro-danger">
+                    {allergiesError}
+                  </span>
                 ) : null}
               </label>
             </fieldset>
@@ -412,12 +446,16 @@ export default function ProfilePage() {
                 <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
                   Ingredientes que no te gustan
                   <span id="disliked-ingredients-hint" className="text-xs font-normal">
-                    Un ingrediente por línea en español. Hasta {PROFILE_LIST_MAX_ITEMS} ingredientes,
-                    con {PROFILE_LIST_MAX_LENGTH} caracteres por ingrediente.
+                    Un ingrediente por línea en español. Hasta {PROFILE_LIST_MAX_ITEMS}{' '}
+                    ingredientes, con {PROFILE_LIST_MAX_LENGTH} caracteres por ingrediente.
                   </span>
                   <textarea
                     aria-invalid={Boolean(dislikedError)}
-                    aria-describedby={dislikedError ? 'disliked-ingredients-hint disliked-ingredients-error' : 'disliked-ingredients-hint'}
+                    aria-describedby={
+                      dislikedError
+                        ? 'disliked-ingredients-hint disliked-ingredients-error'
+                        : 'disliked-ingredients-hint'
+                    }
                     rows={4}
                     value={detailedForm.dislikedIngredientsText}
                     onChange={(event) =>
@@ -430,7 +468,9 @@ export default function ProfilePage() {
                     className="rounded-xl border border-bistro-border bg-white px-3 py-2 outline-none"
                   />
                   {dislikedError ? (
-                    <span id="disliked-ingredients-error" className="text-xs text-bistro-danger">{dislikedError}</span>
+                    <span id="disliked-ingredients-error" className="text-xs text-bistro-danger">
+                      {dislikedError}
+                    </span>
                   ) : null}
                 </label>
               </div>
@@ -458,7 +498,9 @@ export default function ProfilePage() {
                   </button>
                 </div>
                 {detailedForm.householdMembers.length === 0 ? (
-                  <p className="text-sm text-bistro-text-secondary">Aún no has añadido comensales.</p>
+                  <p className="text-sm text-bistro-text-secondary">
+                    Aún no has añadido comensales.
+                  </p>
                 ) : null}
                 <div className="grid gap-3 sm:grid-cols-2">
                   {detailedForm.householdMembers.map((member: CulinaryHouseholdMember, index) => (
@@ -535,7 +577,7 @@ export default function ProfilePage() {
               <button
                 type="submit"
                 disabled={formDisabled}
-                className="h-11 rounded-xl bg-bistro-action-primary px-4 font-semibold text-white disabled:opacity-60"
+                className="min-h-12 w-full rounded-xl bg-bistro-action-primary px-4 py-3 font-semibold text-white disabled:opacity-60 sm:w-auto"
               >
                 {saving ? 'Guardando...' : 'Guardar perfil culinario'}
               </button>
@@ -553,7 +595,8 @@ export default function ProfilePage() {
           <p className="mt-3 text-sm text-bistro-text-secondary">Cargando perfil...</p>
         ) : profileData === null ? (
           <p className="mt-3 text-sm text-bistro-text-secondary">
-            No puedes modificar el perfil hasta que se cargue correctamente. Recarga la página para volver a intentarlo.
+            No puedes modificar el perfil hasta que se cargue correctamente. Recarga la página para
+            volver a intentarlo.
           </p>
         ) : null}
       </section>

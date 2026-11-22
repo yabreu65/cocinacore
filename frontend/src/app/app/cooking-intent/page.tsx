@@ -85,18 +85,18 @@ function CookingIntentPreviewContent() {
 
   return (
     <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 text-bistro-text-primary md:px-6">
-      <section className="mx-auto max-w-4xl rounded-3xl border border-bistro-border bg-white/85 p-5 premium-shadow">
-        <header className="border-b border-bistro-border pb-4">
-          <p className="text-sm font-semibold uppercase tracking-wide text-bistro-action-primary">
+      <section className="mx-auto max-w-5xl">
+        <header className="rounded-3xl bg-bistro-inverse p-5 text-white shadow-sm sm:p-8">
+          <p className="text-xs font-bold uppercase tracking-wider text-bistro-champagne">
             Vista previa
           </p>
-          <h1 className="mt-1 text-3xl font-semibold">
+          <h1 className="mt-2 break-words font-bistro-heading text-3xl font-semibold leading-tight sm:text-4xl">
             {preview.title || 'Preparación seleccionada'}
           </h1>
           <p className="mt-2" role="status">
             {statusCopy[preview.status]}
           </p>
-          <p className="mt-1 text-sm text-bistro-text-secondary">
+          <p className="mt-2 text-sm leading-relaxed text-bistro-cream">
             {preview.portions.requested ?? '—'} porciones · Solo lectura: no se modificó tu
             inventario ni tu menú.
           </p>
@@ -112,13 +112,24 @@ function CookingIntentPreviewContent() {
           </div>
         )}
 
-        {preview.source === 'confirmed_meal_slot' && preview.mealSlot && preview.recipeVersion.recipeId &&
-          preview.recipeVersion.versionId && !preview.recipeVersion.versionId.startsWith('meal-slot:') && (
-          <CookingSessionPanel key={JSON.stringify([preview.mealSlot, preview.recipeVersion])} recipeId={preview.recipeVersion.recipeId} versionId={preview.recipeVersion.versionId} pinnedSlot={preview.mealSlot} />
-        )}
+        {preview.source === 'confirmed_meal_slot' &&
+          preview.mealSlot &&
+          preview.recipeVersion.recipeId &&
+          preview.recipeVersion.versionId &&
+          !preview.recipeVersion.versionId.startsWith('meal-slot:') && (
+            <CookingSessionPanel
+              key={JSON.stringify([preview.mealSlot, preview.recipeVersion])}
+              recipeId={preview.recipeVersion.recipeId}
+              versionId={preview.recipeVersion.versionId}
+              pinnedSlot={preview.mealSlot}
+            />
+          )}
 
-        <section className="mt-5" aria-labelledby="ingredients-heading">
-          <h2 id="ingredients-heading" className="text-xl font-semibold">
+        <section
+          className="mt-5 rounded-2xl border border-bistro-border bg-white p-4 shadow-sm sm:p-6"
+          aria-labelledby="ingredients-heading"
+        >
+          <h2 id="ingredients-heading" className="font-bistro-heading text-2xl font-semibold">
             Ingredientes y evidencia
           </h2>
           <ul className="mt-3 grid gap-3 sm:grid-cols-2">
@@ -154,8 +165,11 @@ function CookingIntentPreviewContent() {
           </ul>
         </section>
 
-        <section className="mt-5" aria-labelledby="steps-heading">
-          <h2 id="steps-heading" className="text-xl font-semibold">
+        <section
+          className="mt-5 rounded-2xl border border-bistro-border bg-white p-4 shadow-sm sm:p-6"
+          aria-labelledby="steps-heading"
+        >
+          <h2 id="steps-heading" className="font-bistro-heading text-2xl font-semibold">
             Pasos disponibles
           </h2>
           {preview.steps.length === 0 ? (

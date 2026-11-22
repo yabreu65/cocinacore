@@ -69,40 +69,51 @@ export default async function BillingPage() {
     }
   );
 
-  const tenant = tenantResult.rows[0] ?? { trial_ends_at: null, tenant_type: user.tenant.tenantType };
+  const tenant = tenantResult.rows[0] ?? {
+    trial_ends_at: null,
+    tenant_type: user.tenant.tenantType,
+  };
   const remaining = daysLeft(tenant.trial_ends_at);
   const legacyHome = isHome && membersCount !== 1;
 
   return (
     <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 text-bistro-text-primary md:px-6">
-      <section className="mx-auto w-full max-w-4xl rounded-3xl border border-bistro-border bg-white/80 p-5 premium-shadow">
-        <div className="mb-4 flex items-center justify-between">
+      <section className="mx-auto w-full max-w-4xl">
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-3xl bg-bistro-inverse p-5 text-white shadow-sm sm:p-8">
           <div>
-            <h1 className="text-3xl font-semibold">Facturación</h1>
-            <p className="text-bistro-text-secondary">
-              Consulta el estado de tu plan.
+            <p className="text-xs font-bold uppercase tracking-wider text-bistro-champagne">
+              Tu suscripción
+            </p>
+            <h1 className="mt-2 font-bistro-heading text-3xl font-semibold sm:text-4xl">Mi plan</h1>
+            <p className="mt-2 text-sm text-bistro-cream">
+              Consultá tu plan y el período de prueba. Esta sección es informativa.
             </p>
           </div>
-          <Link href="/app" className="text-sm font-semibold text-bistro-action-primary">
+          <Link
+            href="/app"
+            className="inline-flex min-h-11 items-center rounded-xl border border-white/40 px-3 text-sm font-semibold text-white"
+          >
             Volver
           </Link>
         </div>
 
         <div className="grid gap-3 md:grid-cols-2">
-          <article className="rounded-2xl border border-bistro-border bg-white/70 p-4">
+          <article className="rounded-2xl border border-bistro-border bg-white p-5 shadow-sm">
             <p className="text-sm text-bistro-text-secondary">Plan actual</p>
-            <p className="text-xl font-semibold">
-              {isHome ? 'Hogar' : 'Professional'}
-            </p>
+            <p className="text-xl font-semibold">{isHome ? 'Hogar' : 'Professional'}</p>
             <p className="mt-1 text-xs text-bistro-text-secondary">
-              {isHome ? (legacyHome ? 'Accesos históricos: ' + membersCount : 'Una cuenta por hogar') : `Rol: ${user.tenant.role} · Miembros activos: ${membersCount}`}
+              {isHome
+                ? legacyHome
+                  ? 'Accesos históricos: ' + membersCount
+                  : 'Una cuenta por hogar'
+                : `Rol: ${user.tenant.role} · Miembros activos: ${membersCount}`}
             </p>
             <p className="mt-1 text-xs text-bistro-text-secondary">
               Límite PDFs: {isHome ? 5 : 15}
             </p>
           </article>
 
-          <article className="rounded-2xl border border-bistro-border bg-white/70 p-4">
+          <article className="rounded-2xl border border-bistro-border bg-white p-5 shadow-sm">
             <p className="text-sm text-bistro-text-secondary">Trial</p>
             <p className="text-xl font-semibold">
               {remaining === null
@@ -117,7 +128,7 @@ export default async function BillingPage() {
           </article>
         </div>
 
-        <article className="mt-4 rounded-2xl border border-bistro-border bg-white/70 p-4">
+        <article className="mt-4 rounded-2xl border border-bistro-border bg-white p-5 shadow-sm">
           <p className="text-sm text-bistro-text-secondary">Estado comercial actual</p>
           <p className="mt-1 text-sm text-bistro-text-primary">
             {isHome
@@ -126,12 +137,16 @@ export default async function BillingPage() {
           </p>
           {legacyHome && (
             <p className="mt-2 text-sm text-bistro-text-secondary">
-              Este hogar requiere revisar sus accesos históricos. No se crean ni eliminan cuentas aquí.
+              Este hogar requiere revisar sus accesos históricos. No se crean ni eliminan cuentas
+              aquí.
             </p>
           )}
           <div className="mt-3 flex flex-wrap gap-2">
             {legacyHome && (
-              <Link href="/members" className="rounded-xl border border-bistro-border px-3 py-2 text-sm font-semibold">
+              <Link
+                href="/members"
+                className="rounded-xl border border-bistro-border px-3 py-2 text-sm font-semibold"
+              >
                 Ver accesos existentes
               </Link>
             )}

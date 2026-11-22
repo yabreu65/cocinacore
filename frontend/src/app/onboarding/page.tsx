@@ -247,7 +247,18 @@ export default function OnboardingPage() {
           </div>
         </section>
 
-        <section className="p-5 md:p-8 lg:p-10">
+        <section className="p-4 sm:p-5 md:p-8 lg:p-10">
+          <div className="mb-4 rounded-2xl bg-bistro-inverse p-4 text-white shadow-sm lg:hidden">
+            <p className="text-xs font-bold uppercase tracking-wider text-bistro-champagne">
+              CocinaCore · Tu primera experiencia
+            </p>
+            <h1 className="mt-2 font-bistro-heading text-2xl font-semibold leading-snug">
+              Tu cocina, a tu manera
+            </h1>
+            <p className="mt-1 text-sm leading-relaxed text-bistro-cream">
+              Tus preferencias ayudan a personalizar recetas y planificación.
+            </p>
+          </div>
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3 text-sm">
             <Link
               href="/app"
@@ -262,7 +273,7 @@ export default function OnboardingPage() {
               Prefiero cocinar ahora
             </Link>
           </div>
-          <div className="rounded-3xl border border-white/70 bg-white/70 p-6 shadow-[0_20px_36px_rgba(36,26,20,0.12)] backdrop-blur-md md:p-8">
+          <div className="rounded-2xl border border-bistro-border bg-white p-4 shadow-sm sm:p-6 md:p-8">
             <div className="mb-6">
               <div className="flex items-center justify-between">
                 <p className="text-xs font-semibold uppercase tracking-[0.1em] text-bistro-text-secondary">
@@ -288,7 +299,9 @@ export default function OnboardingPage() {
                   exit={{ opacity: 0, y: -12 }}
                   transition={{ duration: 0.2 }}
                 >
-                  <h2 className="text-3xl font-semibold text-bistro-text-primary">{step.title}</h2>
+                  <h2 className="font-bistro-heading text-2xl font-semibold text-bistro-text-primary sm:text-3xl">
+                    {step.title}
+                  </h2>
                   <p className="mt-2 text-bistro-text-secondary">{step.subtitle}</p>
 
                   {step.options.length === 0 ? (
@@ -300,7 +313,7 @@ export default function OnboardingPage() {
                       ninguna.
                     </p>
                   ) : null}
-                  <div className="mt-6 grid gap-3 sm:grid-cols-2">
+                  <div className="mt-5 grid gap-2 sm:grid-cols-2 sm:gap-3">
                     {step.options.map((option) => {
                       const active = selectedForStep.includes(option.id);
                       const disabled =
@@ -379,7 +392,7 @@ export default function OnboardingPage() {
                   type="button"
                   disabled={!canContinue}
                   onClick={() => setCurrentStep((current) => Math.min(current + 1, steps.length))}
-                  className="h-11 rounded-xl bg-bistro-action-primary px-5 font-semibold text-white transition hover:bg-bistro-action-primary disabled:opacity-50"
+                  className="min-h-12 rounded-xl bg-bistro-action-primary px-5 font-semibold text-white transition hover:bg-bistro-action-primary disabled:opacity-50"
                 >
                   Continuar
                 </button>

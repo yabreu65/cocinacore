@@ -29,7 +29,12 @@ export default async function LibraryPage() {
     return (
       <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 text-bistro-text-primary md:px-6">
         <section className="mx-auto w-full max-w-4xl rounded-3xl border border-bistro-border bg-white/80 p-5 premium-shadow">
-          <h1 className="text-3xl font-semibold">Biblioteca</h1>
+          <p className="text-xs font-bold uppercase tracking-wider text-bistro-champagne">
+            Fuentes de inspiración
+          </p>
+          <h1 className="mt-2 font-bistro-heading text-3xl font-semibold sm:text-4xl">
+            Biblioteca
+          </h1>
           <p className="mt-2 text-bistro-text-secondary">
             Necesitás iniciar sesión para ver tu biblioteca.
           </p>
@@ -82,34 +87,37 @@ export default async function LibraryPage() {
 
   return (
     <main className="texture-paper min-h-screen bg-bistro-page px-4 py-6 text-bistro-text-primary md:px-6">
-      <section className="mx-auto w-full max-w-5xl rounded-3xl border border-bistro-border bg-white/80 p-5 premium-shadow">
-        <div className="mb-4 flex items-center justify-between">
+      <section className="mx-auto w-full max-w-5xl">
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-3xl bg-bistro-inverse p-5 text-white shadow-sm sm:p-8">
           <div>
             <h1 className="text-3xl font-semibold">Biblioteca</h1>
-            <p className="text-bistro-text-secondary">
-              Vista mínima ya migrada a PostgreSQL directo.
+            <p className="mt-2 text-sm leading-relaxed text-bistro-cream">
+              Consultá los documentos y libros disponibles en tu biblioteca.
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Link
               href="/recipes/search"
-              className="rounded-xl border border-bistro-border px-3 py-2 text-sm font-semibold text-bistro-text-secondary hover:border-bistro-action-primary/40"
+              className="inline-flex min-h-11 items-center rounded-xl border border-white/40 px-3 py-2 text-sm font-semibold text-white hover:bg-white/10"
             >
               Abrir buscador
             </Link>
-            <Link href="/app" className="text-sm font-semibold text-bistro-action-primary">
+            <Link
+              href="/app"
+              className="inline-flex min-h-11 items-center rounded-xl px-3 text-sm font-semibold text-white underline-offset-4 hover:underline"
+            >
               Volver
             </Link>
           </div>
         </div>
 
         <div className="mb-4 rounded-2xl border border-bistro-border bg-white/70 p-4 text-sm text-bistro-text-secondary">
-          Eliminación y edición quedan en reconstrucción. La página renderiza con datos reales sobre
-          PostgreSQL directo.
+          La biblioteca se presenta en modo consulta. La administración de documentos no está
+          disponible desde esta pantalla.
         </div>
 
         <div className="grid gap-4 md:grid-cols-2">
-          <article className="rounded-2xl border border-bistro-border bg-white/70 p-4">
+          <article className="rounded-2xl border border-bistro-border bg-white p-5 shadow-sm">
             <h2 className="text-lg font-semibold">PDFs del tenant</h2>
             <p className="mt-1 text-xs text-bistro-text-secondary">
               Plan {user.tenant.tenantType === 'professional' ? 'Professional' : 'Home'} · límite{' '}
@@ -138,7 +146,7 @@ export default async function LibraryPage() {
             </ul>
           </article>
 
-          <article className="rounded-2xl border border-bistro-border bg-white/70 p-4">
+          <article className="rounded-2xl border border-bistro-border bg-white p-5 shadow-sm">
             <h2 className="text-lg font-semibold">Libros vinculados</h2>
             <ul className="mt-3 space-y-2">
               {books.map((book) => (
