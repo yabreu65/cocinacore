@@ -168,7 +168,11 @@ export default function LandingPage() {
     <div className={styles.page}>
       <header className="glass-soft sticky top-0 z-50 border-b border-bistro-border">
         <div className="mx-auto flex h-20 w-full max-w-[1200px] items-center justify-between gap-2 px-4 md:px-6">
-          <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+          <Link
+            href="/"
+            aria-label="CocinaCore Bistró — inicio"
+            className="flex min-w-0 items-center gap-2 sm:gap-3"
+          >
             <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-bistro-action-primary/50 text-bistro-action-primary sm:h-10 sm:w-10">
               ⚭
             </div>
@@ -180,7 +184,7 @@ export default function LandingPage() {
                 Tu cocina, organizada con inteligencia
               </p>
             </div>
-          </div>
+          </Link>
           <nav className="hidden items-center gap-8 text-sm font-semibold text-bistro-text-primary lg:flex">
             {navItems.map((item) => (
               <a key={item.href} href={item.href} className={styles.navLink}>
@@ -188,10 +192,10 @@ export default function LandingPage() {
               </a>
             ))}
           </nav>
-          <div className="flex items-center gap-3">
+          <div className="flex shrink-0 items-center gap-2 sm:gap-3">
             <Link
               href="/login"
-              className={[styles.navLink, 'hidden text-sm font-semibold md:block'].join(' ')}
+              className={[styles.navLink, 'text-xs font-semibold sm:text-sm'].join(' ')}
             >
               Iniciar sesión
             </Link>
@@ -199,7 +203,7 @@ export default function LandingPage() {
               href="/signup"
               className={[
                 styles.primaryLink,
-                'rounded-full bg-bistro-action-primary px-3 py-2.5 text-sm font-bold text-bistro-action-primary-text transition-colors hover:bg-bistro-action-primary-hover sm:px-5',
+                'rounded-xl bg-bistro-action-primary px-3 py-2.5 text-xs font-bold text-bistro-action-primary-text transition-colors hover:bg-bistro-action-primary-hover sm:rounded-full sm:px-5 sm:text-sm',
               ].join(' ')}
             >
               Crear cuenta
@@ -208,8 +212,8 @@ export default function LandingPage() {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-[1200px] px-4 py-10 md:px-6 md:py-14">
-        <section className="grid items-center gap-10 lg:grid-cols-[1.02fr_1fr]">
+      <main className="mx-auto w-full max-w-[1200px] px-4 py-8 md:px-6 md:py-14">
+        <section className="grid items-center gap-7 lg:grid-cols-[1.02fr_1fr] lg:gap-10">
           <motion.div
             initial={{ opacity: 0, y: 24 }}
             animate={{ opacity: 1, y: 0 }}
@@ -226,12 +230,12 @@ export default function LandingPage() {
               Organizá tus recetas e ingredientes, planificá las comidas y prepará tus listas de
               compras. Con ayuda inteligente para encontrar ideas con lo que tenés en casa.
             </p>
-            <div className="mt-7 flex flex-wrap gap-3">
+            <div className="mt-7 grid gap-3 sm:flex sm:flex-wrap">
               <Link
                 href="/signup"
                 className={[
                   styles.primaryLink,
-                  'rounded-2xl bg-bistro-action-primary px-6 py-3 font-semibold text-bistro-action-primary-text transition-colors hover:bg-bistro-action-primary-hover',
+                  'inline-flex min-h-12 items-center justify-center rounded-2xl bg-bistro-action-primary px-6 py-3 text-center font-semibold text-bistro-action-primary-text transition-colors hover:bg-bistro-action-primary-hover',
                 ].join(' ')}
               >
                 Empezar gratis
@@ -240,7 +244,7 @@ export default function LandingPage() {
                 href="#como-funciona"
                 className={[
                   styles.secondaryLink,
-                  'rounded-2xl border border-bistro-action-primary/35 bg-bistro-surface/80 px-6 py-3 font-semibold transition-colors hover:bg-bistro-surface-warm',
+                  'inline-flex min-h-12 items-center justify-center rounded-2xl border border-bistro-action-primary/35 bg-bistro-surface/80 px-6 py-3 text-center font-semibold transition-colors hover:bg-bistro-surface-warm',
                 ].join(' ')}
               >
                 Cómo funciona
@@ -384,7 +388,7 @@ export default function LandingPage() {
                 href="/signup"
                 className={[
                   styles.primaryLink,
-                  'rounded-2xl bg-bistro-action-primary px-6 py-3 font-semibold text-bistro-action-primary-text transition-colors hover:bg-bistro-action-primary-hover',
+                  'inline-flex min-h-12 items-center justify-center rounded-2xl bg-bistro-action-primary px-6 py-3 text-center font-semibold text-bistro-action-primary-text transition-colors hover:bg-bistro-action-primary-hover',
                 ].join(' ')}
               >
                 Empezar con mi cocina
@@ -402,6 +406,30 @@ export default function LandingPage() {
           </div>
         </section>
       </main>
+      <footer className="border-t border-white/15 bg-bistro-inverse px-4 py-8 text-bistro-cream md:px-6">
+        <div className="mx-auto flex w-full max-w-[1200px] flex-col items-start justify-between gap-5 sm:flex-row sm:items-center">
+          <div>
+            <p className="font-bistro-heading text-xl font-semibold text-white">
+              CocinaCore Bistró
+            </p>
+            <p className="mt-1 text-sm">Recetas, menús e ingredientes mejor organizados.</p>
+          </div>
+          <nav
+            aria-label="Información legal"
+            className="flex flex-wrap gap-x-5 gap-y-3 text-sm font-semibold"
+          >
+            <Link href="/privacy" className="text-bistro-champagne hover:text-white">
+              Privacidad
+            </Link>
+            <Link href="/terms" className="text-bistro-champagne hover:text-white">
+              Términos
+            </Link>
+            <Link href="/cookies" className="text-bistro-champagne hover:text-white">
+              Cookies
+            </Link>
+          </nav>
+        </div>
+      </footer>
     </div>
   );
 }
