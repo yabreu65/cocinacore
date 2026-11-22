@@ -1,72 +1,68 @@
-import Link from 'next/link';
+import PublicLegalShell from '../components/PublicLegalShell';
 
 export const metadata = {
-  title: 'Privacy Policy - CocinaCore',
-  description: 'Privacy Policy for CocinaCore',
+  title: 'Política de privacidad - CocinaCore',
+  description: 'Política de privacidad de CocinaCore',
 };
 
 export default function PrivacyPolicyPage() {
   return (
-    <main className="texture-paper min-h-screen bg-bistro-page px-4 py-16 text-bistro-text-primary">
-      <div className="mx-auto max-w-3xl rounded-3xl border border-bistro-border bg-white/85 p-6 premium-shadow md:p-8">
-        <h1 className="mb-8 text-3xl font-semibold text-bistro-text-primary">Privacy Policy</h1>
+    <PublicLegalShell current="/privacy" title="Política de privacidad">
+      <section className="border-b border-bistro-border pb-6 last:border-b-0 last:pb-0">
+        <h2 className="font-bistro-heading text-xl font-semibold text-bistro-text-primary">
+          1. Información que recopilamos
+        </h2>
+        <p className="mt-3 text-sm leading-relaxed text-bistro-text-secondary sm:text-base">
+          Recopilamos la información que nos proporcionás directamente, incluidos tu nombre, dirección
+          de correo electrónico y cualquier otro dato que decidas compartir al crear una cuenta
+          o utilizar nuestros servicios.
+        </p>
+      </section>
 
-        <section className="mb-8">
-          <h2 className="mb-4 text-xl font-semibold text-bistro-text-primary">
-            1. Information We Collect
-          </h2>
-          <p className="mb-4 text-bistro-text-secondary">
-            We collect information you provide directly to us, including your name, email address,
-            and any other information you choose to provide when creating an account or using our
-            services.
-          </p>
-        </section>
+      <section className="border-b border-bistro-border pb-6 last:border-b-0 last:pb-0">
+        <h2 className="font-bistro-heading text-xl font-semibold text-bistro-text-primary">
+          2. Cómo usamos tu información
+        </h2>
+        <p className="mt-3 text-sm leading-relaxed text-bistro-text-secondary sm:text-base">
+          Utilizamos la información recopilada para prestar, mantener y mejorar nuestros servicios,
+          comunicarnos con vos y cumplir con nuestras obligaciones legales.
+        </p>
+      </section>
 
-        <section className="mb-8">
-          <h2 className="mb-4 text-xl font-semibold text-bistro-text-primary">
-            2. How We Use Your Information
-          </h2>
-          <p className="mb-4 text-bistro-text-secondary">
-            We use the information we collect to provide, maintain, and improve our services, to
-            communicate with you, and to comply with legal obligations.
-          </p>
-        </section>
+      <section className="border-b border-bistro-border pb-6 last:border-b-0 last:pb-0">
+        <h2 className="font-bistro-heading text-xl font-semibold text-bistro-text-primary">
+          3. Seguridad de los datos
+        </h2>
+        <p className="mt-3 text-sm leading-relaxed text-bistro-text-secondary sm:text-base">
+          Implementamos medidas técnicas y organizativas adecuadas para proteger tus datos personales
+          frente al acceso, la alteración, la divulgación o la destrucción no autorizados.
+        </p>
+      </section>
 
-        <section className="mb-8">
-          <h2 className="mb-4 text-xl font-semibold text-bistro-text-primary">3. Data Security</h2>
-          <p className="mb-4 text-bistro-text-secondary">
-            We implement appropriate technical and organizational measures to protect your personal
-            data against unauthorized access, alteration, disclosure, or destruction.
-          </p>
-        </section>
+      <section className="border-b border-bistro-border pb-6 last:border-b-0 last:pb-0">
+        <h2 className="font-bistro-heading text-xl font-semibold text-bistro-text-primary">
+          4. Tus derechos
+        </h2>
+        <p className="mt-3 text-sm leading-relaxed text-bistro-text-secondary sm:text-base">
+          Tenés derecho a acceder a tus datos personales, rectificarlos o eliminarlos. También podés
+          oponerte a determinados tratamientos de tus datos o solicitar su limitación.
+        </p>
+      </section>
 
-        <section className="mb-8">
-          <h2 className="mb-4 text-xl font-semibold text-bistro-text-primary">4. Your Rights</h2>
-          <p className="mb-4 text-bistro-text-secondary">
-            You have the right to access, correct, or delete your personal data. You may also object
-            to or restrict certain processing of your data.
-          </p>
-        </section>
-
-        <section className="mb-8">
-          <h2 className="mb-4 text-xl font-semibold text-bistro-text-primary">5. Contact Us</h2>
-          <p className="mb-4 text-bistro-text-secondary">
-            If you have any questions about this Privacy Policy, please contact us at{' '}
-            <a
-              href="mailto:privacy@cocinacore.com"
-              className="font-semibold text-bistro-action-primary hover:underline"
-            >
-              privacy@cocinacore.com
-            </a>
-          </p>
-        </section>
-
-        <div className="mt-12 pt-8 border-t border-bistro-border">
-          <Link href="/" className="font-semibold text-bistro-action-primary hover:underline">
-            ← Back to Home
-          </Link>
-        </div>
-      </div>
-    </main>
+      <section className="border-b border-bistro-border pb-6 last:border-b-0 last:pb-0">
+        <h2 className="font-bistro-heading text-xl font-semibold text-bistro-text-primary">
+          5. Contacto
+        </h2>
+        <p className="mt-3 text-sm leading-relaxed text-bistro-text-secondary sm:text-base">
+          Si tenés alguna pregunta sobre esta Política de privacidad, escribinos a{' '}
+          <a
+            href="mailto:privacy@cocinacore.com"
+            className="font-semibold text-bistro-action-primary hover:underline"
+          >
+            privacy@cocinacore.com
+          </a>
+        </p>
+      </section>
+    </PublicLegalShell>
   );
 }
