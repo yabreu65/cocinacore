@@ -96,8 +96,8 @@ test.describe('Historial de recetas — experiencia mobile-first', () => {
 
     await page.getByLabel('Mostrar recetas').selectOption('all');
     await firstCard.getByText('Más opciones', { exact: true }).click();
-    await firstCard.getByRole('button', { name: 'Me gustó' }).click();
-    await expect(firstCard.getByRole('button', { name: 'Me gustó' })).toHaveAttribute(
+    await firstCard.getByRole('button', { name: 'Me gustó', exact: true }).click();
+    await expect(firstCard.getByRole('button', { name: 'Me gustó', exact: true })).toHaveAttribute(
       'aria-pressed',
       'true'
     );
