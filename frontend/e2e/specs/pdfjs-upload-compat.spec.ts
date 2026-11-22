@@ -92,7 +92,7 @@ test.describe('Owner global PDF upload PDF.js compatibility', () => {
     expect(workerResponse.ok(), 'PDF.js worker request should succeed').toBe(true);
     expect(await workerResponse.text()).toContain('6.3.289');
 
-    await expect(page.getByText(/Global PDF cargado e indexado:/)).toBeVisible();
+    await expect(page.getByText(/Documento PDF cargado e indexado:/)).toBeVisible();
     expect(uploadedChunks).toBeDefined();
     expect(uploadedChunks?.some((chunk) => chunk.content.includes(marker))).toBe(true);
     expect(pageErrors).toEqual([]);
