@@ -1348,6 +1348,16 @@
           "identity": "public.provision_first_platform_administrator"
         }
       ]
+    },
+    {
+      "id": "025",
+      "filename": "025_private_tenant_pdf_creation.sql",
+      "lane": "migration",
+      "sha256": "6e630b5f95c9327363aee4ca42ecabccc5fec52c8a73bacf3fe6d20d30a5c9e3",
+      "byteLength": 2500,
+      "transactional": "required",
+      "legacyChecksumBackfillAllowed": false,
+      "catalogAdditions": []
     }
   ],
   "baselineObjects": {

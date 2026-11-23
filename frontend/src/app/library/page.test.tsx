@@ -101,6 +101,19 @@ describe('authenticated library page data access', () => {
     expect(markup).not.toContain('global-pdfs/secret.pdf');
   });
 
+  it('links to private uploads and explains their scope', async () => {
+    const markup = renderToStaticMarkup(await LibraryPage());
+    expect(markup).toContain('href="/library/upload"');
+    expect(markup).toContain('Subir libro PDF');
+    expect(markup).toContain('fuentes privadas de tu hogar');
+    expect(markup).toContain('límite 5 PDFs');
+  });
+
+  it('shows the professional plan quota', async () => {
+    mocks.getCurrentUser.mockResolvedValue({ id: 'authenticated-user', tenant: { tenantId: 'authenticated-tenant', tenantType: 'professional' } });
+    expect(renderToStaticMarkup(await LibraryPage())).toContain('límite 15 PDFs');
+  });
+
   it('shows an empty global catalog', async () => {
     expect(renderToStaticMarkup(await LibraryPage())).toContain(
       'No hay libros globales disponibles.'

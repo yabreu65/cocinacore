@@ -127,6 +127,22 @@ describe('global PDF embedding preparation', () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
+  it('backs off for the private endpoint when its 429 has no Retry-After', async () => {
+    vi.useFakeTimers();
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce(Response.json({ error: 'Cuota' }, { status: 429 }))
+      .mockResolvedValueOnce(Response.json({ embeddings: [vector(0)] }));
+    vi.stubGlobal('fetch', mockFetch);
+    const waiting = vi.fn();
+    const result = embedPdfChunks(chunks(1), undefined, waiting, '/api/library/private-pdfs/embeddings');
+    await vi.advanceTimersByTimeAsync(64_999);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(waiting).toHaveBeenCalledWith(0, 1, 65);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await result).toEqual([vector(0)]);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
   it.each([null, '121', 'bad'])('stops when there is no usable bounded retry instruction: %s', async (delay) => {
     const headers = new Headers();
     if (delay !== null) headers.set('Retry-After', delay);

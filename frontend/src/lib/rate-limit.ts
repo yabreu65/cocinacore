@@ -42,6 +42,8 @@ const ROUTE_CONFIGS: Record<string, RateLimitConfig> = {
   'cooking-teacher-user': { limit: 20, windowSeconds: 60 },
   'cooking-teacher-tenant': { limit: 120, windowSeconds: 60 },
   embeddings: { limit: 25, windowSeconds: 60 },
+  'private-pdf-upload': { limit: 10, windowSeconds: 60 },
+  'private-pdf-embeddings': { limit: 25, windowSeconds: 60 },
   'auth/password-reset': { limit: 3, windowSeconds: 900 },
   'auth/password-update': { limit: 5, windowSeconds: 900 },
   'auth/login': { limit: 8, windowSeconds: 900 },

@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   removeBook: vi.fn(),
   deleteFile: vi.fn(),
   driver: vi.fn(),
+  deleteTenantPdf: vi.fn(),
+  configured: vi.fn(),
 }));
 vi.mock('@/lib/auth/server', () => ({ requireRole: mocks.role }));
 vi.mock('@/lib/db/repositories/pdfRepository', () => ({
@@ -20,6 +22,8 @@ vi.mock('@/lib/storage', () => ({
   getStorageAdapter: () => ({ deleteFile: mocks.deleteFile }),
   getStorageDriver: mocks.driver,
 }));
+vi.mock('@/lib/storage/tenantPdfStorage', () => ({ deleteTenantPdf: mocks.deleteTenantPdf }));
+vi.mock('@/lib/private-pdf/config', () => ({ privatePdfStorageConfigured: mocks.configured }));
 const { DELETE } = await import('./route');
 const request = new Request('https://example.test') as unknown as NextRequest;
 const context = { params: Promise.resolve({ id: 'pdf-1' }) };
@@ -40,6 +44,8 @@ describe('private PDF deletion', () => {
     mocks.count.mockResolvedValue(0);
     mocks.deleteFile.mockResolvedValue(undefined);
     mocks.driver.mockReturnValue('local');
+    mocks.configured.mockReturnValue(true);
+    mocks.deleteTenantPdf.mockResolvedValue(undefined);
   });
   it.each(['member', 'owner', 'admin'])(
     'permits authorized %s and scopes all reads and writes',
@@ -73,14 +79,44 @@ describe('private PDF deletion', () => {
   });
   it('fails closed in S3 mode before deleting private metadata or objects', async () => {
     mocks.driver.mockReturnValue('s3');
+    mocks.configured.mockReturnValue(false);
     expect((await DELETE(request, context)).status).toBe(503);
     expect(mocks.remove).not.toHaveBeenCalled();
     expect(mocks.removeBook).not.toHaveBeenCalled();
     expect(mocks.deleteFile).not.toHaveBeenCalled();
   });
+  it('uses private storage before deleting metadata in S3 mode', async () => {
+    mocks.driver.mockReturnValue('s3');
+    mocks.find.mockResolvedValue({
+      uploaded_by: 'user-1',
+      tenant_book_id: 'book-1',
+      storage_path: 'tenant-pdfs/tenant-1/object.pdf',
+    });
+    expect((await DELETE(request, context)).status).toBe(200);
+    expect(mocks.deleteTenantPdf).toHaveBeenCalledWith({
+      tenantId: 'tenant-1',
+      storagePath: 'tenant-pdfs/tenant-1/object.pdf',
+    });
+    expect(mocks.deleteTenantPdf.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.remove.mock.invocationCallOrder[0]
+    );
+    expect(mocks.deleteFile).not.toHaveBeenCalled();
+  });
+  it('preserves metadata when a foreign path is rejected', async () => {
+    mocks.driver.mockReturnValue('s3');
+    mocks.deleteTenantPdf.mockRejectedValue(new Error('invalid path'));
+    expect((await DELETE(request, context)).status).toBe(503);
+    expect(mocks.remove).not.toHaveBeenCalled();
+  });
   it('preserves a shared book when other PDFs remain', async () => {
     mocks.count.mockResolvedValue(1);
     expect((await DELETE(request, context)).status).toBe(200);
     expect(mocks.removeBook).not.toHaveBeenCalled();
+  });
+  it('reports a database deletion failure as server error, not as forbidden', async () => {
+    mocks.remove.mockRejectedValueOnce(new Error('database unavailable'));
+    const response = await DELETE(request, context);
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: 'No se pudo eliminar el PDF.' });
   });
 });

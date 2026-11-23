@@ -16,8 +16,10 @@ const RETENTION_023_ATTESTATION_SHA256 = '6ce4c11587c78500e8e2b8ba5ecb51bf015162
 const FIRST_ADMIN_024_ATTESTATION_SHA256 = '096240c8246b34f33599dfcdaaa8ee919b2b225968b6114d1f9e0f08bcfef87f';
 const FIRST_ADMIN_024_INVENTORY_ATTESTATION_SHA256 = 'a4de388c8f60fd4bc735bf75ed6f70ff249bb8aa2a246615114aaceab4623771';
 
+const PRIVATE_PDF_025_INVENTORY_ATTESTATION_SHA256 = '71793cce59481043e7fe53a067b9c59768e8d0dd3b988d588cde12fd778fe455';
+
 function loadActivationAttestation(version = '020') {
-  if (!['020','021','022','023','024'].includes(version)) {
+  if (!['020','021','022','023','024','025'].includes(version)) {
     throw new Error('ACTIVATED_CAPABILITIES_ATTESTATION_MISMATCH: unsupported catalog version.');
   }
   const filename = version !== '020'
@@ -33,13 +35,15 @@ function loadActivationAttestation(version = '020') {
     if (crypto.createHash('sha256').update(extra).digest('hex') !== RETENTION_023_ATTESTATION_SHA256) throw new Error('ACTIVATED_CAPABILITIES_ATTESTATION_MISMATCH: untrusted 023 attestation SQL.');
     return extra.toString('utf8') + '\n' + loadActivationAttestation('022');
   }
-  if (version === '024') {
+  if (version === '024' || version === '025') {
     const extra = fs.readFileSync(path.join(__dirname, 'activated-capabilities-024-first-admin.sql'));
     if (crypto.createHash('sha256').update(extra).digest('hex') !== FIRST_ADMIN_024_ATTESTATION_SHA256) throw new Error('ACTIVATED_CAPABILITIES_ATTESTATION_MISMATCH: untrusted 024 attestation SQL.');
     const files = [
       ['activated-capabilities-023-retention.sql', RETENTION_023_ATTESTATION_SHA256],
       ['activated-capabilities-022-occurrences.sql', OCCURRENCE_022_ATTESTATION_SHA256],
-      ['activated-capabilities-024-inventory.sql', FIRST_ADMIN_024_INVENTORY_ATTESTATION_SHA256],
+      version === '025'
+        ? ['activated-capabilities-025-inventory.sql', PRIVATE_PDF_025_INVENTORY_ATTESTATION_SHA256]
+        : ['activated-capabilities-024-inventory.sql', FIRST_ADMIN_024_INVENTORY_ATTESTATION_SHA256],
     ];
     const trustedSql = files.map(([filename, expected]) => {
       const sql = fs.readFileSync(path.join(__dirname, filename));

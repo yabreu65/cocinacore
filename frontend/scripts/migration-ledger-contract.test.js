@@ -147,7 +147,7 @@ test('validates the exact 018 then 019 pending sequence only after baseline 017'
 });
 
 test('registers the additive first-platform-admin capability after the verified baseline', () => {
-  const migration = manifest.migrations.at(-1);
+  const migration = manifest.migrations.find((entry) => entry.id === '024');
   assert.equal(migration?.filename, '024_first_platform_admin_bootstrap.sql');
   assert.equal(migration?.lane, 'migration');
   assert.equal(migration?.transactional, 'required');
@@ -170,7 +170,43 @@ test('requires active 023 capabilities before applying or verifying migration 02
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- Inspect the CommonJS migration runner source as a static contract.
   const runner = require('node:fs').readFileSync(require.resolve('./run-migrations.js'), 'utf8');
   assert.ok(runner.includes("const FIRST_ADMIN_MIGRATION = '024_first_platform_admin_bootstrap.sql'"));
-  assert.ok(runner.includes('FIRST_ADMIN_MIGRATION].includes(migration.filename)'));
+  assert.ok(runner.includes('FIRST_ADMIN_MIGRATION, PRIVATE_PDF_MIGRATION].includes(migration.filename)'));
   assert.ok(runner.includes('migration.filename === FIRST_ADMIN_MIGRATION && post020Applied'));
   assert.ok(runner.includes("attestActivatedCapabilities(client, '023')"));
+});
+
+
+test('pins migration 025 bytes and its narrow transactional manifest contract', () => {
+  const fs = require('node:fs'); // eslint-disable-line @typescript-eslint/no-require-imports
+  const crypto = require('node:crypto'); // eslint-disable-line @typescript-eslint/no-require-imports
+  const path = require('node:path'); // eslint-disable-line @typescript-eslint/no-require-imports
+  const migration = manifest.migrations.at(-1);
+  const bytes = fs.readFileSync(path.join(__dirname, '../../db/migrations/025_private_tenant_pdf_creation.sql'));
+  assert.deepEqual(migration, {
+    id: '025', filename: '025_private_tenant_pdf_creation.sql', lane: 'migration',
+    sha256: '6e630b5f95c9327363aee4ca42ecabccc5fec52c8a73bacf3fe6d20d30a5c9e3',
+    byteLength: 2500, transactional: 'required', legacyChecksumBackfillAllowed: false, catalogAdditions: [],
+  });
+  assert.equal(bytes.length, migration.byteLength);
+  assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'), migration.sha256);
+  const sql = bytes.toString();
+  assert.equal((sql.match(/CREATE POLICY /g) || []).length, 2);
+  assert.equal((sql.match(/GRANT INSERT /g) || []).length, 2);
+  assert.match(sql, /INSERT \(tenant_id, title, author, description\)/);
+  assert.match(sql, /INSERT \(tenant_id, tenant_book_id, storage_path, file_size_bytes, page_count, checksum_sha256,\s*uploaded_by, processing_status, processed_chunks_count\)/);
+  assert.equal((sql.match(/FOR INSERT TO cocinacore_runtime_rls/g) || []).length, 2);
+  assert.equal((sql.match(/EXISTS \(SELECT 1 FROM public\.runtime_identity_probe\)/g) || []).length, 2);
+  assert.match(sql, /parent_book\.id = tenant_pdf_library\.tenant_book_id/);
+  assert.match(sql, /parent_book\.tenant_id = tenant_pdf_library\.tenant_id/);
+  assert.match(sql, /tenant_book_id IS NOT NULL/);
+  assert.doesNotMatch(sql, /SECURITY DEFINER|CREATE ROLE|GRANT UPDATE/i);
+});
+
+test('routes 025 through the previous and current attestations', () => {
+  const runner = require('node:fs').readFileSync(require.resolve('./run-migrations.js'), 'utf8'); // eslint-disable-line @typescript-eslint/no-require-imports
+  assert.match(runner, /applied\.has\(PRIVATE_PDF_MIGRATION\) \? '025'/);
+  assert.match(runner, /migration\.filename === PRIVATE_PDF_MIGRATION && post020Applied[\s\S]*?attestActivatedCapabilities\(client, '024'\)/);
+  assert.match(runner, /attestActivatedCapabilities\(client, capabilityVersion\(new Set\(\[migration\.filename\]\)\)\)/);
+  assert.match(runner, /attestActivatedCapabilities\(client, capabilityVersion\(applied\)\)/);
+  assert.match(runner, /'024', '025'\]\.includes\(stopAfter\)/);
 });

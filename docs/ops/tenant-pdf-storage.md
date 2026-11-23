@@ -1,0 +1,28 @@
+# Private tenant PDF storage
+
+The tenant adapter is separate from global PDF storage. Provision a dedicated private bucket and a dedicated RustFS identity; never use root or global-library credentials. This adapter is not wired into an application route. The server must derive the tenant ID from authenticated context and authorize each operation; callers must not supply an untrusted tenant ID as authority.
+
+## Configuration
+
+Set `STORAGE_DRIVER=s3`, `S3_TENANT_BUCKET`, `S3_TENANT_ACCESS_KEY_ID`, `S3_TENANT_SECRET_ACCESS_KEY`, `S3_ENDPOINT`, and `S3_REGION` in the server environment through your secret manager. Values are intentionally omitted. The tenant bucket and access key must differ from `S3_BUCKET` and `S3_ACCESS_KEY_ID`. The adapter uses path-style S3 requests. Missing configuration fails closed; there is no global credential fallback. Never expose these variables to the browser.
+
+`STORAGE_DRIVER=local` is for testing; store its `LOCAL_UPLOAD_DIR` outside any publicly served directory. Neither driver returns a public URL.
+
+## RustFS custom IAM policy
+
+Attach a custom IAM policy like the following to the dedicated tenant service identity, replacing `TENANT_BUCKET` with the actual dedicated bucket name. This is an **identity policy**, not a public bucket policy. Do not grant this identity global-bucket access, bucket administration, listing, or permissions outside the private prefix. Keep anonymous access disabled and verify the effective permissions and policy syntax against the deployed RustFS version before enabling it.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:DeleteObject"],
+      "Resource": ["arn:aws:s3:::TENANT_BUCKET/tenant-pdfs/*"]
+    }
+  ]
+}
+```
+
+The policy limits the service identity to the dedicated bucket and prefix; it does **not** isolate tenants from one another. The application must enforce authenticated tenant ownership before calling the adapter, which also checks canonical UUID paths on deletion. Ensure no other policy grants this identity broader access. This document does not authorize provisioning or production changes.

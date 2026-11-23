@@ -79,6 +79,8 @@ export async function embedPdfChunks(
   chunks: ParsedChunk[],
   onProgress?: (completed: number, total: number) => void,
   onWait?: (completed: number, total: number, seconds: number) => void,
+  endpoint = '/api/embeddings',
+  signal?: AbortSignal,
 ): Promise<number[][]> {
   const candidates = preparePdfChunks(chunks);
   const batches: string[][] = [];
@@ -107,17 +109,19 @@ export async function embedPdfChunks(
     let batchRetries = 0;
     let response: Response;
     while (true) {
-      response = await fetch('/api/embeddings', {
+      response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ texts }),
+        ...(signal ? { signal } : {}),
       });
       if (response.ok) break;
       const payload: unknown = await response.json().catch(() => null);
       const message = payload && typeof payload === 'object' && 'error' in payload &&
         typeof payload.error === 'string' ? payload.error : 'Error de embeddings.';
       const header = response.headers.get('Retry-After');
-      const seconds = header && /^\d+$/.test(header) ? Number(header) : null;
+      const seconds = header && /^\d+$/.test(header) ? Number(header) :
+        !header && endpoint === '/api/library/private-pdfs/embeddings' ? MIN_BATCH_PAUSE_SECONDS : null;
       if (response.status !== 429 || seconds === null || !Number.isSafeInteger(seconds) ||
         seconds < 1 || seconds > MAX_RETRY_DELAY_SECONDS ||
         batchRetries >= MAX_RETRIES_PER_BATCH || retries >= MAX_RETRIES_PER_UPLOAD) {
