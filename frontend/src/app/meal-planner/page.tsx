@@ -62,6 +62,7 @@ export default function MealPlannerPage() {
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadRequestVersion, setLoadRequestVersion] = useState(0);
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [plan, setPlan] = useState<StructuredMealPlan | null>(null);
   const [activePlanId, setActivePlanId] = useState<string | null>(null);
@@ -328,6 +329,8 @@ export default function MealPlannerPage() {
   useEffect(() => {
     let active = true;
     componentActiveRef.current = true;
+    setIsInitialLoading(true);
+    setLoadError(null);
 
     const loadLatestMealPlan = async () => {
       try {
@@ -381,7 +384,7 @@ export default function MealPlannerPage() {
       suggestionRequestVersionRef.current += 1;
       consumptionRequestVersionRef.current += 1;
     };
-  }, [loadConsumptions, loadSuggestions]);
+  }, [loadConsumptions, loadSuggestions, loadRequestVersion]);
 
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -632,9 +635,20 @@ export default function MealPlannerPage() {
         </div>
 
         {isInitialLoading ? (
-          <p className="mb-3 text-sm text-bistro-text-secondary">Cargando menú guardado...</p>
+          <div
+            role="status"
+            aria-live="polite"
+            className="mb-4 rounded-2xl border border-bistro-border bg-white px-5 py-4 text-sm text-bistro-text-secondary"
+          >
+            Consultando tu menú guardado… No se generará otro menú durante esta consulta.
+          </div>
         ) : null}
-        {loadError ? <LoadErrorNotice message={loadError} /> : null}
+        {loadError ? (
+          <LoadErrorNotice
+            message={loadError}
+            onRetry={() => setLoadRequestVersion((current) => current + 1)}
+          />
+        ) : null}
 
         <form
           onSubmit={onSubmit}
@@ -700,9 +714,36 @@ export default function MealPlannerPage() {
             disabled={isGenerating}
             className="min-h-12 w-full rounded-xl bg-bistro-action-primary px-5 py-3 font-semibold text-white disabled:opacity-60 sm:col-span-2 sm:w-fit"
           >
-            {isGenerating ? 'Generando...' : 'Generar menú'}
+            {isGenerating ? 'Preparando propuesta…' : 'Generar menú'}
           </button>
         </form>
+
+        {isGenerating ? (
+          <section
+            role="status"
+            aria-live="polite"
+            className="mt-4 rounded-2xl border border-bistro-action-secondary/25 bg-white p-5 shadow-sm"
+          >
+            <div className="flex items-start gap-3">
+              <span
+                aria-hidden="true"
+                className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-bistro-surface-warm text-bistro-action-secondary"
+              >
+                ◌
+              </span>
+              <div>
+                <h2 className="font-bistro-heading text-xl font-semibold">Preparando tu menú</h2>
+                <p className="mt-1 text-sm leading-relaxed text-bistro-text-secondary">
+                  Estamos solicitando una propuesta al proveedor de IA. Todavía no tenemos un
+                  porcentaje de avance ni un resultado confirmado.
+                </p>
+                <p className="mt-2 text-xs text-bistro-text-secondary">
+                  Generar el menú no registra compras ni descuenta ingredientes del inventario.
+                </p>
+              </div>
+            </div>
+          </section>
+        ) : null}
 
         {generationError ? (
           <p className="mt-4 rounded-xl border border-bistro-danger/30 bg-bistro-danger/10 px-3 py-2 text-sm text-bistro-danger">

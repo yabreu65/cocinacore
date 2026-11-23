@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { safeFetch } from '@/lib/api';
 import { ShoppingTransferControls, type ShoppingItem } from './ShoppingTransferControls';
 import { consolidateShoppingItems, type ConsolidatedShoppingProduct } from './consolidate-shopping';
+import { validateActualPurchaseQuantity } from './purchase-quantity';
 
 function provenanceLabel(source: string): string {
   if (source === 'manual') return 'Agregado manualmente';
@@ -27,6 +28,7 @@ export default function ShoppingListPage() {
   const [actualPurchaseQuantities, setActualPurchaseQuantities] = useState<Record<string, string>>(
     {}
   );
+  const [actualPurchaseUnits, setActualPurchaseUnits] = useState<Record<string, string>>({});
   const [purchaseBusy, setPurchaseBusy] = useState<string | null>(null);
   const purchaseBusyRef = useRef(false);
   const [purchaseMessage, setPurchaseMessage] = useState<string | null>(null);
@@ -196,10 +198,18 @@ export default function ShoppingListPage() {
       product.rows.some((row) => busyItemIdsRef.current.has(row.id))
     )
       return;
-    const actualQuantity = (
-      actualPurchaseQuantities[product.key] ?? product.purchaseQuantity
-    ).trim();
-    if (!actualQuantity) return;
+    const enteredAmount = (actualPurchaseQuantities[product.key] ?? '').trim();
+    const selectedUnit = actualPurchaseUnits[product.key] ?? product.unit ?? '';
+    const actualQuantity = enteredAmount ? enteredAmount + ' ' + selectedUnit : '';
+    const validationError = validateActualPurchaseQuantity(
+      actualQuantity,
+      product.unit,
+      product.requiredAmount
+    );
+    if (validationError) {
+      setMutationError(validationError);
+      return;
+    }
     if (
       !window.confirm(
         `¿Confirmás que compraste ${actualQuantity} de ${product.name}? Se registrará esa cantidad en el inventario.`
@@ -233,6 +243,17 @@ export default function ShoppingListPage() {
       if (!componentActiveRef.current) return;
       const updated = new Map(result.data.items.map((row) => [row.id, row]));
       setItems((current) => current.map((row) => updated.get(row.id) ?? row));
+      // Never prefill a future purchase from a previous confirmation.
+      setActualPurchaseQuantities((current) => {
+        const next = { ...current };
+        delete next[product.key];
+        return next;
+      });
+      setActualPurchaseUnits((current) => {
+        const next = { ...current };
+        delete next[product.key];
+        return next;
+      });
       setPurchaseMessage(
         `${product.name}: ${result.data.inventoryItem.quantity} ${result.data.inventoryItem.unit} registrados en el inventario.`
       );
@@ -255,38 +276,89 @@ export default function ShoppingListPage() {
   const renderPurchaseForm = (product: ConsolidatedShoppingProduct) => {
     if (product.status !== 'pending' || product.purchaseQuantity === null) return null;
     const busy = purchaseBusy !== null || product.rows.some((row) => busyItemIds.has(row.id));
+    const selectedUnit = actualPurchaseUnits[product.key] ?? product.unit ?? '';
+    const unitOptions =
+      product.unit === 'g'
+        ? ['g', 'kg']
+        : product.unit === 'ml'
+          ? ['ml', 'l']
+          : product.unit
+            ? [product.unit]
+            : [];
     return (
       <form
         onSubmit={(event) => {
           event.preventDefault();
           void onConfirmPurchase(product);
         }}
-        className="mt-3 flex flex-wrap items-end gap-2 rounded-lg border border-bistro-border bg-bistro-page p-3"
+        className="mt-3 rounded-2xl border border-bistro-action-secondary/25 bg-bistro-surface-warm p-4"
       >
-        <label className="grid min-w-40 flex-1 gap-1 text-sm font-semibold text-bistro-text-secondary">
-          Cantidad realmente comprada
-          <input
-            aria-label={`Cantidad realmente comprada de ${product.name}`}
-            required
-            maxLength={64}
-            value={actualPurchaseQuantities[product.key] ?? product.purchaseQuantity}
-            disabled={busy}
-            onChange={(event) =>
-              setActualPurchaseQuantities((current) => ({
-                ...current,
-                [product.key]: event.target.value,
-              }))
-            }
-            className="min-h-11 rounded-lg border border-bistro-border bg-white px-3 text-bistro-text-primary"
-          />
-        </label>
-        <button
-          type="submit"
-          disabled={busy}
-          className="min-h-11 rounded-lg bg-bistro-action-primary px-3 text-sm font-semibold text-white disabled:opacity-60"
-        >
-          {purchaseBusy === product.key ? 'Registrando...' : 'Confirmar compra e inventario'}
-        </button>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h4 className="font-bistro-heading text-lg font-semibold text-bistro-text-primary">
+            ¿Cuánto compraste realmente?
+          </h4>
+          <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-bistro-text-secondary">
+            Sin confirmar
+          </span>
+        </div>
+        <p className="mb-3 text-sm text-bistro-text-secondary">
+          Cantidad sugerida: <strong>{product.purchaseQuantity}</strong>. Ingresá la cantidad real
+          con su unidad; la sugerencia no se registra automáticamente.
+        </p>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <label className="grid min-w-40 flex-1 gap-1 text-sm font-semibold text-bistro-text-secondary">
+            Cantidad realmente comprada
+            <input
+              aria-label={'Cantidad realmente comprada de ' + product.name}
+              required
+              inputMode="decimal"
+              maxLength={48}
+              value={actualPurchaseQuantities[product.key] ?? ''}
+              disabled={busy}
+              placeholder="Ej.: 1,5"
+              onChange={(event) => {
+                setActualPurchaseQuantities((current) => ({
+                  ...current,
+                  [product.key]: event.target.value,
+                }));
+                setMutationError(null);
+              }}
+              className="min-h-11 rounded-xl border border-bistro-border bg-white px-3 text-bistro-text-primary"
+            />
+          </label>
+          <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
+            Unidad
+            <select
+              aria-label={'Unidad de compra de ' + product.name}
+              value={selectedUnit}
+              disabled={busy}
+              onChange={(event) => {
+                setActualPurchaseUnits((current) => ({
+                  ...current,
+                  [product.key]: event.target.value,
+                }));
+                setMutationError(null);
+              }}
+              className="min-h-11 rounded-xl border border-bistro-border bg-white px-3 text-bistro-text-primary"
+            >
+              {unitOptions.map((unit) => (
+                <option key={unit} value={unit}>
+                  {unit}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="submit"
+            disabled={busy || !(actualPurchaseQuantities[product.key] ?? '').trim()}
+            className="min-h-11 rounded-xl bg-bistro-action-primary px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {purchaseBusy === product.key ? 'Registrando...' : 'Confirmar compra e inventario'}
+          </button>
+        </div>
+        <p className="mt-3 text-xs text-bistro-text-secondary">
+          Solo al confirmar se enviará la cantidad al servidor para registrar compra e inventario.
+        </p>
       </form>
     );
   };
@@ -462,16 +534,43 @@ export default function ShoppingListPage() {
         ) : null}
 
         {!isLoading && !loadError && items.length === 0 ? (
-          <div className="mb-6 rounded-2xl border border-bistro-border bg-bistro-page p-4 text-sm text-bistro-text-secondary">
-            <p className="font-semibold text-bistro-text-primary">Tu lista está vacía.</p>
-            <p className="mt-1">Agregá productos aquí o desde un menú que hayas planificado.</p>
-            <Link
-              href="/meal-planner"
-              className="mt-3 inline-flex min-h-11 items-center font-semibold text-bistro-action-primary underline underline-offset-4"
+          <section
+            aria-labelledby="empty-shopping-title"
+            className="mb-6 rounded-3xl border border-bistro-border bg-white p-6 text-center shadow-sm sm:p-8"
+          >
+            <div
+              aria-hidden="true"
+              className="mx-auto flex size-14 items-center justify-center rounded-2xl bg-bistro-surface-warm text-2xl"
             >
-              Planificar mis comidas
-            </Link>
-          </div>
+              🛒
+            </div>
+            <h2
+              id="empty-shopping-title"
+              className="mt-4 font-bistro-heading text-2xl font-semibold text-bistro-text-primary"
+            >
+              Tu lista está vacía
+            </h2>
+            <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-bistro-text-secondary">
+              Cuando agregues ingredientes o confirmes los faltantes de un menú, aparecerán aquí.
+            </p>
+            <div className="mt-5 flex flex-wrap justify-center gap-3">
+              <a
+                href="#shopping-ingredient-name"
+                className="inline-flex min-h-11 items-center rounded-xl bg-bistro-action-primary px-5 text-sm font-semibold text-white"
+              >
+                Agregar ingrediente
+              </a>
+              <Link
+                href="/meal-planner"
+                className="inline-flex min-h-11 items-center rounded-xl border border-bistro-border px-5 text-sm font-semibold text-bistro-action-primary hover:bg-bistro-page"
+              >
+                Ver planificador
+              </Link>
+            </div>
+            <p className="mt-5 text-xs text-bistro-text-secondary">
+              Las cantidades de compra se confirman antes de registrarlas en el inventario.
+            </p>
+          </section>
         ) : null}
 
         <form
@@ -481,6 +580,7 @@ export default function ShoppingListPage() {
           <label className="grid gap-1 text-sm font-semibold text-bistro-text-secondary">
             Ingrediente
             <input
+              id="shopping-ingredient-name"
               required
               value={ingredientName}
               onChange={(event) => setIngredientName(event.target.value)}

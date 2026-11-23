@@ -232,18 +232,20 @@ test.describe('Shopping List UI', () => {
     ]);
     const grouped = page.getByRole('region', { name: 'Huevos consolidado' });
     await expect(grouped).toContainText('Necesario: 26 unidades');
-    await expect(grouped.getByLabel('Cantidad realmente comprada de Huevos')).toHaveValue(
-      '30 unidad'
-    );
-    await grouped.getByLabel('Cantidad realmente comprada de Huevos').fill('25 unidad');
-    page.once('dialog', (d) => d.accept());
+    await expect(grouped.getByLabel('Cantidad realmente comprada de Huevos')).toHaveValue('');
+    await expect(grouped.getByText('Cantidad sugerida:')).toContainText('30 unidad');
+    await expect(
+      grouped.getByRole('button', { name: 'Confirmar compra e inventario' })
+    ).toBeDisabled();
+    await expect(grouped.getByLabel('Unidad de compra de Huevos')).toHaveValue('unidad');
+    await grouped.getByLabel('Cantidad realmente comprada de Huevos').fill('25');
     await grouped.getByRole('button', { name: 'Confirmar compra e inventario' }).click();
     await expect(
       page.getByRole('alert').filter({ hasText: 'no cubre lo necesario' })
     ).toContainText('no cubre lo necesario');
     await expect(page.getByRole('heading', { name: 'Pendientes (1)' })).toBeVisible();
 
-    await grouped.getByLabel('Cantidad realmente comprada de Huevos').fill('30 unidad');
+    await grouped.getByLabel('Cantidad realmente comprada de Huevos').fill('30');
     page.once('dialog', (d) => d.accept());
     await grouped.getByRole('button', { name: 'Confirmar compra e inventario' }).click();
     await expect(page.getByRole('heading', { name: 'Comprados (1)' })).toBeVisible();
@@ -251,8 +253,8 @@ test.describe('Shopping List UI', () => {
     const posts = api.requests.filter(
       (r) => r.method === 'POST' && r.pathname.endsWith('/purchase-group')
     );
-    expect(posts).toHaveLength(2); // rejected partial purchase, then accepted full carton
-    expect(posts[1]?.body).toMatchObject({
+    expect(posts).toHaveLength(1); // invalid partial purchase is rejected before network call
+    expect(posts[0]?.body).toMatchObject({
       groupKey: 'pending:huevos',
       actualQuantity: '30 unidad',
       rows: [
@@ -266,7 +268,7 @@ test.describe('Shopping List UI', () => {
     await expect(bought).toContainText('Comprado e ingresado al inventario: 30 unidades');
     expect(
       api.requests.filter((r) => r.method === 'POST' && r.pathname.endsWith('/purchase-group'))
-    ).toHaveLength(2);
+    ).toHaveLength(1);
   });
 
   test('keeps long ingredient names visible beside wrapped actions', async ({ page }) => {
@@ -287,8 +289,18 @@ test.describe('Shopping List UI', () => {
 
     await expect(page.getByText(/tu lista está vacía/i)).toBeVisible();
     await expect(
-      page.getByText('Agregá productos aquí o desde un menú que hayas planificado.')
+      page.getByText(
+        'Cuando agregues ingredientes o confirmes los faltantes de un menú, aparecerán aquí.'
+      )
     ).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Agregar ingrediente' })).toHaveAttribute(
+      'href',
+      '#shopping-ingredient-name'
+    );
+    await expect(page.getByRole('link', { name: 'Ver planificador' })).toHaveAttribute(
+      'href',
+      '/meal-planner'
+    );
     await expect(page.getByText('No tenés compras pendientes.')).toBeVisible();
     await expect(page.getByText('No hay compras marcadas como realizadas.')).toBeVisible();
   });
