@@ -47,4 +47,5 @@ COCINACORE_ACTIVATION_DATABASE_URL="$BOOTSTRAP_DATABASE_URL" node scripts/activa
 MIGRATION_EXPECTED_PENDING=021_inventory_price_reference.sql,022_real_consumption_occurrences.sql,023_inventory_movement_retention.sql,024_first_platform_admin_bootstrap.sql npm run db:migrate -- --stop-after 023
 psql "$BOOTSTRAP_DATABASE_URL" -X -v ON_ERROR_STOP=1 -f /app/scripts/provision-first-platform-admin-roles.sql
 MIGRATION_EXPECTED_PENDING=024_first_platform_admin_bootstrap.sql npm run db:migrate
+MIGRATION_EXPECTED_PENDING=025_private_tenant_pdf_creation.sql npm run db:migrate
 npm run db:migrate:verify

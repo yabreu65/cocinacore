@@ -156,7 +156,7 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
-      - name: Provision migrations 019–024, then run isolated E2E
+      - name: Provision migrations 019–025, then run isolated E2E
         env:
           RUN_CONNECTED_TODAY: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feat/m3-4-u5-hosted-e2e' && inputs.run_connected_today == true }}
           COCINACORE_E2E_EXECUTION_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
@@ -316,6 +316,7 @@ jobs:
           });
           NODE
           MIGRATION_EXPECTED_PENDING=024_first_platform_admin_bootstrap.sql npm run db:migrate
+          MIGRATION_EXPECTED_PENDING=025_private_tenant_pdf_creation.sql npm run db:migrate
           npm run db:migrate:verify
           psql "$admin_url" -X -v ON_ERROR_STOP=1 -f ../scripts/tests/test-inventory-021-constraints.sql
 

@@ -22,7 +22,7 @@ check_ci_lanes_gate() {
   workflow=$1
   [ -f "$workflow" ] || fail "CI workflow is missing: $workflow"
   awk '
-    /^      - name: Provision migrations 019–024, then run isolated E2E$/ {
+    /^      - name: Provision migrations 019–025, then run isolated E2E$/ {
       in_step = 1
       next
     }
@@ -76,16 +76,18 @@ check_standalone_first_admin_sequence() {
   pending='MIGRATION_EXPECTED_PENDING=021_inventory_price_reference.sql,022_real_consumption_occurrences.sql,023_inventory_movement_retention.sql,024_first_platform_admin_bootstrap.sql npm run db:migrate -- --stop-after 023'
   prepare='psql "$BOOTSTRAP_DATABASE_URL" -X -v ON_ERROR_STOP=1 -f /app/scripts/provision-first-platform-admin-roles.sql'
   apply='MIGRATION_EXPECTED_PENDING=024_first_platform_admin_bootstrap.sql npm run db:migrate'
+  apply_private='MIGRATION_EXPECTED_PENDING=025_private_tenant_pdf_creation.sql npm run db:migrate'
   verify='npm run db:migrate:verify'
-  for command in "$pending" "$prepare" "$apply" "$verify"; do
+  for command in "$pending" "$prepare" "$apply" "$apply_private" "$verify"; do
     grep -Fq "$command" "$script" || fail "standalone first-admin sequence is missing: $command"
   done
   pending_line=$(grep -nF "$pending" "$script" | cut -d: -f1)
   prepare_line=$(grep -nF "$prepare" "$script" | cut -d: -f1)
   apply_line=$(grep -nF "$apply" "$script" | cut -d: -f1)
+  private_line=$(grep -nF "$apply_private" "$script" | cut -d: -f1)
   verify_line=$(grep -nF "$verify" "$script" | tail -n1 | cut -d: -f1)
-  [ "$pending_line" -lt "$prepare_line" ] && [ "$prepare_line" -lt "$apply_line" ] && [ "$apply_line" -lt "$verify_line" ] ||
-    fail 'standalone first-admin sequence must stop at 023, prepare roles, apply 024, then verify'
+  [ "$pending_line" -lt "$prepare_line" ] && [ "$prepare_line" -lt "$apply_line" ] && [ "$apply_line" -lt "$private_line" ] && [ "$private_line" -lt "$verify_line" ] ||
+    fail 'standalone bootstrap must prepare roles, apply 024, apply 025, then verify'
 }
 
 if [ "${1:-}" = '--check-ci-workflow' ]; then
@@ -152,7 +154,7 @@ const fs = require('fs');
 const path = require('path');
 const [manifestPath, directory, base] = process.argv.slice(2);
 const HISTORICAL_BASELINE_COUNT = 10;
-const CURRENT_MIGRATION_COUNT = 24;
+const CURRENT_MIGRATION_COUNT = 25;
 const manifestBytes = fs.readFileSync(manifestPath);
 const manifest = JSON.parse(manifestBytes.toString('utf8'));
 if (manifest.manifestVersion !== 1 || manifest.trustedBaseCommit !== base) process.exit(1);
