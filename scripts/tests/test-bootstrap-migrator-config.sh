@@ -73,9 +73,9 @@ check_standalone_first_admin_sequence() {
     fail 'standalone bootstrap must reject missing TTY before any setup work'
   grep -Fq 'network_mode: service:postgres' "$ROOT/docker-compose.standalone.yml" ||
     fail 'operations service must use the postgres network namespace for loopback-only installer access'
-  pending='MIGRATION_EXPECTED_PENDING=021_inventory_price_reference.sql,022_real_consumption_occurrences.sql,023_inventory_movement_retention.sql,024_first_platform_admin_bootstrap.sql npm run db:migrate -- --stop-after 023'
+  pending='MIGRATION_EXPECTED_PENDING=021_inventory_price_reference.sql,022_real_consumption_occurrences.sql,023_inventory_movement_retention.sql,024_first_platform_admin_bootstrap.sql,025_private_tenant_pdf_creation.sql npm run db:migrate -- --stop-after 023'
   prepare='psql "$BOOTSTRAP_DATABASE_URL" -X -v ON_ERROR_STOP=1 -f /app/scripts/provision-first-platform-admin-roles.sql'
-  apply='MIGRATION_EXPECTED_PENDING=024_first_platform_admin_bootstrap.sql npm run db:migrate'
+  apply='MIGRATION_EXPECTED_PENDING=024_first_platform_admin_bootstrap.sql,025_private_tenant_pdf_creation.sql npm run db:migrate -- --stop-after 024'
   apply_private='MIGRATION_EXPECTED_PENDING=025_private_tenant_pdf_creation.sql npm run db:migrate'
   verify='npm run db:migrate:verify'
   for command in "$pending" "$prepare" "$apply" "$apply_private" "$verify"; do
