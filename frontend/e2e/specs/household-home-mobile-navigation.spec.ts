@@ -18,7 +18,11 @@ test.describe('UX mobile: Inicio y navegación del hogar', () => {
     for (const label of ['Recetas', 'Planificar', 'Compras']) {
       await expect(quick.getByRole('link', { name: label })).toBeVisible();
     }
-    await expect(page.getByRole('link', { name: 'Encontrar una receta' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Cocinar ahora', exact: true })).toBeVisible();
+    await expect(page.getByRole('link', { name: /Compras Ver lista pendiente/ })).toHaveAttribute(
+      'href',
+      '/shopping-list'
+    );
 
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
     expect(overflow).toBeLessThanOrEqual(1);

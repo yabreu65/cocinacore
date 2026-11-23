@@ -68,7 +68,11 @@ test.describe('UX Bistró — páginas del hogar restantes', () => {
     await page.goto('/shopping-list');
     await expect(page.getByRole('heading', { name: 'Lista de compras' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Agregar', exact: true })).toBeVisible();
-    await expect(page.getByText('Tu lista está vacía.')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Tu lista está vacía' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Agregar ingrediente' })).toHaveAttribute(
+      'href',
+      '#shopping-ingredient-name'
+    );
     const help = page.getByText('Cómo funcionan las cantidades y el inventario', { exact: true });
     await help.click();
     await expect(

@@ -82,14 +82,14 @@ export default function DashboardPage() {
             Hola, {data?.fullName || 'bienvenido'}
           </h1>
           <p className="mt-2 max-w-xl text-sm leading-relaxed text-bistro-cream sm:text-base">
-            Encontrá qué cocinar y retomá tu organización desde un solo lugar.
+            ¿Qué querés hacer hoy? Cociná algo ahora o revisá tu organización desde un solo lugar.
           </p>
           <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
             <Link
               href="/recipes/search"
               className="inline-flex min-h-12 items-center justify-center rounded-xl bg-bistro-champagne px-5 py-3 text-sm font-bold text-bistro-text-primary transition-colors hover:bg-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
             >
-              Encontrar una receta
+              Cocinar ahora
             </Link>
             <Link
               href="/meal-planner"
@@ -98,9 +98,32 @@ export default function DashboardPage() {
               Organizar mi semana
             </Link>
           </div>
+          <div className="mt-5 grid grid-cols-2 gap-3 border-t border-white/15 pt-4">
+            <Link
+              href="/meal-planner"
+              className="flex min-h-12 flex-col justify-center rounded-xl bg-white/10 px-4 py-3 text-bistro-cream hover:bg-white/15"
+            >
+              <span className="text-sm font-bold text-white">Mi menú</span>
+              <span className="text-xs">Ver planificación</span>
+            </Link>
+            <Link
+              href="/shopping-list"
+              className="flex min-h-12 flex-col justify-center rounded-xl bg-white/10 px-4 py-3 text-bistro-cream hover:bg-white/15"
+            >
+              <span className="text-sm font-bold text-white">Compras</span>
+              <span className="text-xs">Ver lista pendiente</span>
+            </Link>
+          </div>
         </header>
 
-        {loading ? <p className="mt-4 text-sm text-bistro-text-secondary">Cargando...</p> : null}
+        {loading ? (
+          <p
+            role="status"
+            className="mt-4 rounded-xl bg-white p-4 text-sm text-bistro-text-secondary"
+          >
+            Cargando los datos de tu cocina…
+          </p>
+        ) : null}
         {error ? (
           <p className="mt-4 rounded-xl border border-bistro-danger/30 bg-bistro-danger/10 px-3 py-2 text-sm text-bistro-danger">
             {error}

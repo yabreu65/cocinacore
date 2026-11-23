@@ -10,5 +10,14 @@ describe('LoadErrorNotice', () => {
 
     expect(markup).toContain('role="alert"');
     expect(markup).toContain(message);
+    expect(markup).toContain('Volver al Inicio');
+    expect(markup).not.toContain('Reintentar carga');
+  });
+  it('offers an explicit retry when the page supplies a read-only reload action', () => {
+    const markup = renderToStaticMarkup(
+      <LoadErrorNotice message="Servicio no disponible" onRetry={() => {}} />
+    );
+    expect(markup).toContain('Reintentar carga');
+    expect(markup).toContain('no genera otro menú');
   });
 });
