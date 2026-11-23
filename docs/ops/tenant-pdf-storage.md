@@ -1,6 +1,6 @@
 # Private tenant PDF storage
 
-The tenant adapter is separate from global PDF storage. Provision a dedicated private bucket and a dedicated RustFS identity; never use root or global-library credentials. This adapter is not wired into an application route. The server must derive the tenant ID from authenticated context and authorize each operation; callers must not supply an untrusted tenant ID as authority.
+The tenant adapter is separate from global PDF storage. Provision a dedicated private bucket and a dedicated RustFS identity; never use root or global-library credentials for application access. The adapter is connected to the authenticated private-PDF API (PR #154), but remains unavailable in the original Docker until dedicated RustFS credentials and migration 025 are provisioned. The server derives the tenant ID from authenticated context and authorizes each operation; callers must not supply an untrusted tenant ID as authority.
 
 ## Configuration
 
@@ -26,3 +26,15 @@ Attach a custom IAM policy like the following to the dedicated tenant service id
 ```
 
 The policy limits the service identity to the dedicated bucket and prefix; it does **not** isolate tenants from one another. The application must enforce authenticated tenant ownership before calling the adapter, which also checks canonical UUID paths on deletion. Ensure no other policy grants this identity broader access. This document does not authorize provisioning or production changes.
+
+## Plan de aprovisionamiento operativo
+
+La política revisable para este despliegue es `scripts/standalone-tenant-pdf-policy.json`. No dar permisos de `s3:ListBucket`, `s3:GetObject` ni acceso a `cocinacore-documents`. El contrato estático se prueba con `node scripts/tests/test-tenant-pdf-policy-contract.cjs`.
+
+El stack existente dispone del servicio opcional `storage-init` con el cliente `rustfs/rc`, orientado a operaciones administrativas. El acceso root únicamente puede usarse durante el aprovisionamiento autorizado, desde un entorno administrativo aislado y sin mostrar/exportar secretos por herramientas de conversación. La aplicación deberá usar **exclusivamente una nueva identidad con esta política**.
+
+En el RustFS original la consola web está expresamente deshabilitada (`RUSTFS_CONSOLE_ENABLE=false`) y el API de almacenamiento está aislado en la red Docker. No publicar ni reiniciar su consola antes de contar con respaldo verificable, ventana de mantenimiento y plan de reversión. La consola se habilita mediante `RUSTFS_CONSOLE_ENABLE=true` y escucha normalmente en el puerto 9001; si se habilita transitoriamente, publicar solo en `127.0.0.1` y deshabilitar tras el aprovisionamiento.
+
+Al obtener acceso administrativo autorizado, comprobar el siguiente orden: respaldo actual → bucket `cocinacore-tenant-pdfs` → identidad IAM independiente con la política fijada → pruebas de permisos positivos (PUT y DELETE en `tenant-pdfs/*`) y negativos (GET/LIST, acceso global y PUT fuera de prefijo) → configurar las variables privadas en `CC_APP_ENV` → migración 025 por el migrador canónico → E2E real con PDF sintético → verificar salud de los cinco servicios.
+
+**No realizado en esta revisión:** creación del bucket o IAM original, conexión de secretos, migración 025 sobre la base existente y despliegue. El proveedor Gemini sí aprobó la prueba real con un PDF sintético; la identidad RustFS definitiva requiere comprobación aparte.
