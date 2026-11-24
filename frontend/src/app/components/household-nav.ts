@@ -2,6 +2,7 @@
 export const householdNavigation = [
   { label: 'Inicio', href: '/app', icon: 'home' },
   { label: 'Mis recetas', href: '/recipes', icon: 'book' },
+  { label: 'Biblioteca', href: '/library', icon: 'library' },
   { label: 'Asistente de recetas', href: '/recipes/search', icon: 'sparkles' },
   { label: 'Inventario', href: '/recipes/inventory', icon: 'package' },
   { label: 'Planificador', href: '/meal-planner', icon: 'calendar' },
