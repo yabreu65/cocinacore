@@ -2,6 +2,7 @@ import {
   assertPdfUploadSize,
   chunkPdfPage,
   embedPdfChunks,
+  embeddingDeadlineMs,
   estimatedPdfChunkBytes,
   preparePdfChunks,
   type ParsedChunk,
@@ -79,7 +80,7 @@ export async function uploadPrivatePdf(
     (completed, total) => onProgress({ stage: 'embed', completed, total }),
     (completed, total, seconds) => onProgress({ stage: 'wait', completed, total, seconds }),
     '/api/library/private-pdfs/embeddings',
-    AbortSignal.timeout(30 * 60 * 1000),
+    AbortSignal.timeout(embeddingDeadlineMs(candidates)),
   );
   const chunksJson = JSON.stringify(candidates.map((chunk, index) => ({ ...chunk, embedding: embeddings[index] })));
   assertPdfUploadSize(file.size + metadataBytes + new TextEncoder().encode(chunksJson).byteLength);

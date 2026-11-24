@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { assertPdfUploadSize, chunkPdfPage, embedPdfChunks, preparePdfChunks, PDF_UPLOAD_BUDGET_BYTES } from './pdf-embeddings';
+import { assertPdfUploadSize, chunkPdfPage, embedPdfChunks, embeddingDeadlineMs, preparePdfChunks, PDF_UPLOAD_BUDGET_BYTES } from './pdf-embeddings';
 import { EmbeddingsSchema } from '@/lib/validation';
 
 const chunks = (count: number, size = 900) =>
@@ -12,6 +12,14 @@ const vector = (n: number) => [n + 1, ...Array<number>(1535).fill(0)];
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 describe('global PDF embedding preparation', () => {
+  it('budgets enough time for all required pauses on the supported 1000-chunk PDF', () => {
+    const allowedPdf = chunks(1000);
+    const deadline = embeddingDeadlineMs(allowedPdf);
+    // 1000 x 900 bytes requires 46 batches, with 45 mandatory 65s pauses.
+    expect(deadline).toBeGreaterThan(45 * 65 * 1000);
+    expect(deadline).toBeGreaterThan(30 * 60 * 1000);
+    expect(embeddingDeadlineMs(chunks(1))).toBeLessThan(deadline);
+  });
   it('rejects empty extraction without creating a synthetic chunk', () => {
     expect(() => preparePdfChunks([])).toThrow('no contiene texto extraíble');
   });

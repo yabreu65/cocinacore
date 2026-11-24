@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { GeminiEmbeddingService } from './gemini';
+import { GeminiBatchRateLimitError, GeminiEmbeddingService } from './gemini';
 
 function stalledFetch(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>) {
   let signal: AbortSignal | undefined;
@@ -45,6 +45,17 @@ describe('Gemini embedding cancellation', () => {
     const service = new GeminiEmbeddingService('test-key');
     await expect(service.generateEmbedding('rice')).rejects.toThrow();
     await expect(service.generateEmbeddings(['rice'])).rejects.toThrow();
+  });
+
+  it('reports provider 429 as a typed retryable error without leaking provider details', async () => {
+    vi.stubEnv('GEMINI_BASE_URL', 'http://127.0.0.1:4319/v1beta');
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response('quota exceeded', { status: 429, headers: { 'Retry-After': '75' } }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(new GeminiEmbeddingService('test-key').generateEmbeddings(['rice']))
+      .rejects.toMatchObject({ name: 'GeminiBatchRateLimitError', retryAfterSeconds: 75 });
+    expect(new GeminiBatchRateLimitError('invalid').retryAfterSeconds).toBeNull();
   });
 
   it('forwards an abort signal to the single RAG embedding request', async () => {

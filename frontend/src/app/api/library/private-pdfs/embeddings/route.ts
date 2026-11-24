@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/auth/server';
 import { getGeminiApiKey, isConfiguredEmbedding } from '@/lib/ai/gemini-config';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { GeminiEmbeddingService } from '@/services/gemini';
+import { GeminiBatchRateLimitError, GeminiEmbeddingService } from '@/services/gemini';
 
 export const runtime = 'nodejs';
 export async function POST(request: NextRequest) {
@@ -42,5 +42,14 @@ export async function POST(request: NextRequest) {
     const embeddings = await new GeminiEmbeddingService(key).generateEmbeddings(texts as string[], request.signal);
     if (embeddings.length !== texts.length || !embeddings.every(isConfiguredEmbedding)) throw new Error('Invalid embeddings');
     return NextResponse.json({ embeddings });
-  } catch { return NextResponse.json({ error: 'Embedding provider unavailable' }, { status: 502 }); }
+  } catch (error) {
+    if (error instanceof GeminiBatchRateLimitError) {
+      const seconds = error.retryAfterSeconds;
+      return NextResponse.json(
+        { error: 'Embedding quota temporarily exceeded' },
+        { status: 429, headers: seconds ? { 'Retry-After': String(seconds) } : {} },
+      );
+    }
+    return NextResponse.json({ error: 'Embedding provider unavailable' }, { status: 502 });
+  }
 }
