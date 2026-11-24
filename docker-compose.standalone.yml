@@ -70,7 +70,7 @@ services:
       - storage_data:/data
     networks: [data]
     healthcheck:
-      test: [CMD-SHELL, 'curl -fsS --max-time 3 http://127.0.0.1:9000/health >/dev/null']
+      test: [CMD-SHELL, 'curl -fsS --max-time 3 http://127.0.0.1:9000/health/ready >/dev/null']
       interval: 5s
       timeout: 5s
       retries: 12
