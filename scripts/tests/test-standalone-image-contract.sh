@@ -11,7 +11,7 @@ done
 for path in '**' '**/.env' '**/.env.*' '**/.npmrc' '**/*.pem' '**/*.key' '**/node_modules' '**/.next-*'; do
   grep -Fqx "$path" "$I" || fail "missing exclusion $path"
 done
-for path in frontend/scripts/activate-020-capabilities.js frontend/scripts/activated-capabilities-021-attestation.sql frontend/scripts/activated-capabilities-022-occurrences.sql frontend/scripts/activated-capabilities-023-retention.sql frontend/scripts/activated-capabilities-024-first-admin.sql frontend/scripts/activated-capabilities-024-inventory.sql frontend/scripts/bootstrap-first-platform-admin.js scripts/provision-runtime-role.sql scripts/provision-auth-role.sql scripts/provision-020-inert-capabilities.sql scripts/provision-first-platform-admin-roles.sql scripts/rls-candidates/020e-a1-inert-capability-guard.sql; do
+for path in frontend/scripts/activate-020-capabilities.js frontend/scripts/activated-capabilities-021-attestation.sql frontend/scripts/activated-capabilities-022-occurrences.sql frontend/scripts/activated-capabilities-023-retention.sql frontend/scripts/activated-capabilities-024-first-admin.sql frontend/scripts/activated-capabilities-024-inventory.sql frontend/scripts/activated-capabilities-025-inventory.sql frontend/scripts/bootstrap-first-platform-admin.js scripts/provision-runtime-role.sql scripts/provision-auth-role.sql scripts/provision-020-inert-capabilities.sql scripts/provision-first-platform-admin-roles.sql scripts/rls-candidates/020e-a1-inert-capability-guard.sql; do
   grep -Fq "$path" "$D" || fail "missing operational input $path"
   grep -Fqx "!$path" "$I" || fail "missing context input $path"
 done
