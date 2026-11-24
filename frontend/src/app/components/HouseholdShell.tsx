@@ -9,6 +9,7 @@ import {
   CalendarDays,
   CreditCard,
   LayoutGrid,
+  LibraryBig,
   Menu,
   Package,
   ShoppingCart,
@@ -39,6 +40,7 @@ function isMobileTabActive(pathname: string, href: string): boolean {
 const icons = {
   home: LayoutGrid,
   book: BookOpen,
+  library: LibraryBig,
   sparkles: Sparkles,
   package: Package,
   calendar: CalendarDays,
