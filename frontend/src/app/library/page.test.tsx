@@ -35,11 +35,10 @@ describe('authenticated library page data access', () => {
       tenantId: 'authenticated-tenant',
       userId: 'authenticated-user',
     });
-    expect(mocks.clientQuery).toHaveBeenCalledTimes(1);
-    for (const [sql, params] of mocks.clientQuery.mock.calls as [string, unknown[]][]) {
-      expect(sql).toContain('tenant_id = $1');
-      expect(params).toEqual(['authenticated-tenant']);
-    }
+    expect(mocks.clientQuery).toHaveBeenCalledTimes(2);
+    const [tenantSql, params] = mocks.clientQuery.mock.calls[0] as [string, unknown[]];
+    expect(tenantSql).toContain('tenant_id = $1');
+    expect(params).toEqual(['authenticated-tenant']);
   });
 
   it('loads the linked older book through the displayed PDF set and deduplicates it', async () => {
@@ -55,7 +54,7 @@ describe('authenticated library page data access', () => {
       book_title: 'Older linked book',
       book_author: 'Author',
     };
-    mocks.clientQuery.mockResolvedValue({
+    mocks.clientQuery.mockResolvedValueOnce({
       rows: [
         pdf,
         { ...pdf, id: 'pdf-2' },
@@ -78,6 +77,34 @@ describe('authenticated library page data access', () => {
     expect(sql.match(/limit 50/g)).toHaveLength(1);
     expect(markup.match(/Older linked book/g)).toHaveLength(1);
     expect(markup).not.toContain('foreign');
+  });
+  it('renders only global PDF book metadata, without exposing storage paths', async () => {
+    mocks.clientQuery.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({
+      rows: [
+        {
+          id: 'global-1',
+          title: 'Global cookbook',
+          author: 'Chef',
+          description: 'Recipes',
+          cuisine_region: 'Andes',
+          storage_path: 'global-pdfs/secret.pdf',
+        },
+      ],
+    });
+    const markup = renderToStaticMarkup(await LibraryPage());
+    const sql = mocks.clientQuery.mock.calls[1][0] as string;
+    expect(sql).toContain('from public.global_books');
+    expect(sql).toContain('exists (select 1 from public.global_pdf_library');
+    expect(sql).not.toContain('storage_path');
+    expect(markup).toContain('Global cookbook');
+    expect(markup).toContain('Chef');
+    expect(markup).not.toContain('global-pdfs/secret.pdf');
+  });
+
+  it('shows an empty global catalog', async () => {
+    expect(renderToStaticMarkup(await LibraryPage())).toContain(
+      'No hay libros globales disponibles.'
+    );
   });
   it('does not query tenant documents without an authenticated tenant', async () => {
     mocks.getCurrentUser.mockResolvedValue({ id: 'authenticated-user', tenant: null });

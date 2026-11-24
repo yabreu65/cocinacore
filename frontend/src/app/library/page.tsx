@@ -22,6 +22,11 @@ type BookRow = {
   author: string | null;
 };
 
+type GlobalBookRow = BookRow & {
+  description: string | null;
+  cuisine_region: string;
+};
+
 export default async function LibraryPage() {
   const user = await getCurrentUser();
 
@@ -50,15 +55,17 @@ export default async function LibraryPage() {
   }
 
   const tenantId = user.tenant.tenantId;
-  const result = await scopedTransaction({ tenantId, userId: user.id }, (client) =>
-    client.query<
-      PdfRow & {
-        book_id: string | null;
-        book_title: string | null;
-        book_author: string | null;
-      }
-    >(
-      `with visible_pdfs as (
+  const { result, globalResult } = await scopedTransaction(
+    { tenantId, userId: user.id },
+    async (client) => {
+      const result = await client.query<
+        PdfRow & {
+          book_id: string | null;
+          book_title: string | null;
+          book_author: string | null;
+        }
+      >(
+        `with visible_pdfs as (
          select id, tenant_id, tenant_book_id, storage_path, created_at, processing_status, page_count, uploaded_by
          from public.tenant_pdf_library
          where tenant_id = $1
@@ -69,8 +76,16 @@ export default async function LibraryPage() {
        from visible_pdfs p
        left join public.tenant_books b on b.id = p.tenant_book_id and b.tenant_id = $1
        order by p.created_at desc, p.id desc`,
-      [tenantId]
-    )
+        [tenantId]
+      );
+      const globalResult = await client.query<GlobalBookRow>(
+        `select b.id, b.title, b.author, b.description, b.cuisine_region
+       from public.global_books b
+       where exists (select 1 from public.global_pdf_library p where p.global_book_id = b.id)
+       order by b.title, b.id`
+      );
+      return { result, globalResult };
+    }
   );
   const pdfs = result.rows;
   const booksById = new Map<string, BookRow>();
@@ -115,6 +130,39 @@ export default async function LibraryPage() {
           La biblioteca se presenta en modo consulta. La administración de documentos no está
           disponible desde esta pantalla.
         </div>
+
+        <article className="mb-4 rounded-2xl border border-bistro-border bg-white p-5 shadow-sm">
+          <h2 className="text-lg font-semibold">Libros globales</h2>
+          <p className="mt-1 text-xs text-bistro-text-secondary">
+            Catálogo de consulta de libros con PDF.
+          </p>
+          <ul className="mt-3 space-y-2">
+            {globalResult.rows.map((book) => (
+              <li
+                key={book.id}
+                className="rounded-xl border border-bistro-border bg-white/75 p-3 text-sm"
+              >
+                <p className="font-medium text-bistro-text-primary">{book.title}</p>
+                <p className="text-xs text-bistro-text-secondary">
+                  Autor: {book.author ?? 'No especificado'}
+                </p>
+                {book.description ? (
+                  <p className="mt-1 text-sm text-bistro-text-secondary">{book.description}</p>
+                ) : null}
+                {book.cuisine_region ? (
+                  <p className="mt-1 text-xs text-bistro-text-secondary">
+                    Región: {book.cuisine_region}
+                  </p>
+                ) : null}
+              </li>
+            ))}
+            {globalResult.rows.length === 0 ? (
+              <li className="text-sm text-bistro-text-secondary">
+                No hay libros globales disponibles.
+              </li>
+            ) : null}
+          </ul>
+        </article>
 
         <div className="grid gap-4 md:grid-cols-2">
           <article className="rounded-2xl border border-bistro-border bg-white p-5 shadow-sm">
