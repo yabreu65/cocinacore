@@ -112,6 +112,12 @@ export default async function LibraryPage() {
           </div>
           <div className="flex flex-wrap gap-2">
             <Link
+              href="/library/upload"
+              className="inline-flex min-h-11 items-center rounded-xl bg-white px-3 py-2 text-sm font-semibold text-bistro-inverse hover:bg-bistro-cream"
+            >
+              Subir libro PDF
+            </Link>
+            <Link
               href="/recipes/search"
               className="inline-flex min-h-11 items-center rounded-xl border border-white/40 px-3 py-2 text-sm font-semibold text-white hover:bg-white/10"
             >
@@ -127,8 +133,8 @@ export default async function LibraryPage() {
         </div>
 
         <div className="mb-4 rounded-2xl border border-bistro-border bg-white/70 p-4 text-sm text-bistro-text-secondary">
-          La biblioteca se presenta en modo consulta. La administración de documentos no está
-          disponible desde esta pantalla.
+          Los libros PDF que subas son fuentes privadas de tu hogar y se mantienen separados del
+          catálogo global.
         </div>
 
         <article className="mb-4 rounded-2xl border border-bistro-border bg-white p-5 shadow-sm">

@@ -14,6 +14,18 @@ import {
   RecipeBookChunk,
 } from './types';
 
+export class GeminiBatchRateLimitError extends Error {
+  readonly retryAfterSeconds: number | null;
+
+  constructor(retryAfter: string | null) {
+    super('Gemini embedding quota exceeded');
+    this.name = 'GeminiBatchRateLimitError';
+    const seconds = retryAfter && /^\d+$/.test(retryAfter) ? Number(retryAfter) : null;
+    this.retryAfterSeconds = seconds !== null && Number.isSafeInteger(seconds) && seconds >= 1
+      ? seconds : null;
+  }
+}
+
 export class GeminiEmbeddingService implements EmbeddingService {
   private apiKey: string;
   private baseUrl: string;
@@ -94,6 +106,9 @@ export class GeminiEmbeddingService implements EmbeddingService {
         }),
       });
 
+      if (response.status === 429) {
+        throw new GeminiBatchRateLimitError(response.headers.get('Retry-After'));
+      }
       if (!response.ok) {
         throw new Error(`Gemini Batch API Error (${response.status})`);
       }

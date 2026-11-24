@@ -63,8 +63,53 @@ describe('activated PostgreSQL state attestation', () => {
 
     await assert.rejects(attestActivatedCapabilities(mockClient('pending'), '024'), /ACTIVATION_PENDING/);
     const unsupportedClient = mockClient('active');
-    await assert.rejects(attestActivatedCapabilities(unsupportedClient, '025'), /unsupported catalog version/);
+    await assert.rejects(attestActivatedCapabilities(unsupportedClient, '026'), /unsupported catalog version/);
     assert.equal(unsupportedClient.queries.length, 0);
+  });
+
+  it('pins 025 inventory and retains each earlier component without the 024 inventory', async () => {
+    const inventory = readFileSync(new URL('./activated-capabilities-025-inventory.sql', import.meta.url));
+    assert.equal(createHash('sha256').update(inventory).digest('hex'),
+      '71793cce59481043e7fe53a067b9c59768e8d0dd3b988d588cde12fd778fe455');
+    const sql = loadActivationAttestation('025');
+    for (const name of ['activated-capabilities-024-first-admin.sql', 'activated-capabilities-023-retention.sql', 'activated-capabilities-022-occurrences.sql', 'activated-capabilities-025-inventory.sql']) {
+      assert.ok(sql.includes(readFileSync(new URL(`./${name}`, import.meta.url), 'utf8')));
+    }
+    assert.ok(!sql.includes(readFileSync(new URL('./activated-capabilities-024-inventory.sql', import.meta.url), 'utf8')));
+    assert.match(sql, /count\(\*\)=74 FROM actual/);
+    assert.match(sql, /count\(\*\)=54 FROM expected/);
+    const oldInventory = readFileSync(new URL('./activated-capabilities-024-inventory.sql', import.meta.url));
+    assert.equal(createHash('sha256').update(oldInventory).digest('hex'),
+      'a4de388c8f60fd4bc735bf75ed6f70ff249bb8aa2a246615114aaceab4623771');
+    const text = inventory.toString();
+    for (const [table, columns] of Object.entries({
+      tenant_books: ['tenant_id', 'title', 'author', 'description'],
+      tenant_pdf_library: ['tenant_id', 'tenant_book_id', 'storage_path', 'file_size_bytes', 'page_count', 'checksum_sha256', 'uploaded_by', 'processing_status', 'processed_chunks_count'],
+    })) {
+      for (const column of columns) assert.ok(text.includes(`('${table}','${column}','INSERT',false)`));
+    }
+    assert.match(text, /documents_tenant_books_insert','a','cocinacore_runtime_rls',true,'-','049b61188bb1ee07a817bc83960a81f7/);
+    assert.match(text, /documents_tenant_pdfs_insert','a','cocinacore_runtime_rls',true,'-'/);
+    assert.match(text, /AND \(tenant_book_id IS NOT NULL\)/);
+    assert.match(text, /count\(\*\)=55 FROM expected/);
+
+    await assert.rejects(attestActivatedCapabilities(mockClient('pending'), '025'), /ACTIVATION_PENDING/);
+  });
+
+  it('rejects modified 025 inventory without changing the 024 attestation', () => {
+    const fs = require('node:fs');
+    const original = fs.readFileSync;
+    try {
+      fs.readFileSync = function (filename, ...args) {
+        const value = original.call(this, filename, ...args);
+        return String(filename).endsWith('activated-capabilities-025-inventory.sql')
+          ? Buffer.concat([Buffer.from(value), Buffer.from('\n-- tampered')]) : value;
+      };
+      assert.throws(() => loadActivationAttestation('025'), /untrusted activated-capabilities-025-inventory/);
+      assert.doesNotThrow(() => loadActivationAttestation('024'));
+    } finally {
+      fs.readFileSync = original;
+    }
   });
 
   it('requires both the 021 capability contract and 022 occurrence constraints', async () => {

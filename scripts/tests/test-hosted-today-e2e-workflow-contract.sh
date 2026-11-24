@@ -26,7 +26,7 @@ if (!/^  pull_request:\n    branches: \[main\]$/m.test(workflow) ||
   fail('existing pull_request and push triggers must remain limited to main');
 }
 
-const setupName = '      - name: Provision migrations 019–024, then run isolated E2E';
+const setupName = '      - name: Provision migrations 019–025, then run isolated E2E';
 const start = workflow.indexOf(setupName);
 const end = start < 0 ? -1 : workflow.indexOf('\n      - name:', start + setupName.length);
 const setup = start < 0 ? '' : workflow.slice(start, end < 0 ? undefined : end);

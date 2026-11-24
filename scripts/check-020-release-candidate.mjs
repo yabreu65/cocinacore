@@ -193,15 +193,15 @@ function checkCandidate({ candidateRoot, releaseSha }) {
     String(index + 1).padStart(3, "0"),
   );
   const entries = manifest.migrations;
-  // A historical release approval is still bound to exactly 001–020.
-  // Working-tree CI may validate exact successor artifacts through 024; this
-  // does not authorize a release or change the original 020 artifact checks.
-  const successor = !releaseSha && [21, 22, 23, 24].includes(entries.length);
-  const occurrenceSuccessor = !releaseSha && [22, 23, 24].includes(entries.length);
-  const retentionSuccessor = !releaseSha && [23, 24].includes(entries.length);
-  const firstAdminSuccessor = !releaseSha && entries.length === 24;
+  // Historical release authorization remains bound to exactly 001–020.
+  // CI may validate separately pinned successor artifacts through 025.
+  const successor = !releaseSha && [21, 22, 23, 24, 25].includes(entries.length);
+  const occurrenceSuccessor = !releaseSha && [22, 23, 24, 25].includes(entries.length);
+  const retentionSuccessor = !releaseSha && [23, 24, 25].includes(entries.length);
+  const firstAdminSuccessor = !releaseSha && [24, 25].includes(entries.length);
+  const privatePdfSuccessor = !releaseSha && entries.length === 25;
   if (
-    entries.length !== (firstAdminSuccessor ? 24 : retentionSuccessor ? 23 : occurrenceSuccessor ? 22 : successor ? 21 : expectedIds.length) ||
+    entries.length !== (privatePdfSuccessor ? 25 : firstAdminSuccessor ? 24 : retentionSuccessor ? 23 : occurrenceSuccessor ? 22 : successor ? 21 : expectedIds.length) ||
     entries.slice(0, 20).some((entry, index) => entry.id !== expectedIds[index])
   )
     fail("manifest migration sequence must contain the exact 001 through 020 prefix");
@@ -264,6 +264,25 @@ function checkCandidate({ candidateRoot, releaseSha }) {
     if (JSON.stringify(entry) !== JSON.stringify(expected) || file.length !== expected.byteLength || sha256(file) !== expected.sha256)
       fail("unreviewed migration 024 successor");
     console.log("PASS exact 024 successor in working-tree artifact check only");
+  }
+
+  if (privatePdfSuccessor) {
+    const entry = entries[24];
+    const file = readCandidate("db/migrations/025_private_tenant_pdf_creation.sql", candidateRoot, releaseSha);
+    const expected = {
+      id: "025",
+      filename: "025_private_tenant_pdf_creation.sql",
+      lane: "migration",
+      sha256: "6e630b5f95c9327363aee4ca42ecabccc5fec52c8a73bacf3fe6d20d30a5c9e3",
+      byteLength: 2500,
+      transactional: "required",
+      legacyChecksumBackfillAllowed: false,
+      catalogAdditions: [],
+    };
+    if (JSON.stringify(entry) !== JSON.stringify(expected) ||
+        file.length !== expected.byteLength || sha256(file) !== expected.sha256)
+      fail("unreviewed migration 025 successor");
+    console.log("PASS exact 025 successor in working-tree artifact check only");
   }
 
   for (const id of expectedIds.slice(0, 19)) {

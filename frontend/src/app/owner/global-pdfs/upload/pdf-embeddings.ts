@@ -75,16 +75,11 @@ function isValidVector(value: unknown): value is number[] {
     value.some((entry) => entry !== 0);
 }
 
-export async function embedPdfChunks(
-  chunks: ParsedChunk[],
-  onProgress?: (completed: number, total: number) => void,
-  onWait?: (completed: number, total: number, seconds: number) => void,
-): Promise<number[][]> {
-  const candidates = preparePdfChunks(chunks);
+function embeddingBatches(chunks: ParsedChunk[]): string[][] {
   const batches: string[][] = [];
   let batch: string[] = [];
   let bytes = 0;
-  for (const { content } of candidates) {
+  for (const { content } of chunks) {
     const contentBytes = encoder.encode(content).byteLength;
     if (batch.length && (batch.length >= BATCH_SIZE || bytes + contentBytes > BATCH_BYTE_LIMIT)) {
       batches.push(batch);
@@ -95,7 +90,29 @@ export async function embedPdfChunks(
     bytes += contentBytes;
   }
   if (batch.length) batches.push(batch);
+  return batches;
+}
 
+// The upload deadline must cover every mandatory 65-second inter-batch pause,
+// plus bounded quota retries and a per-request allowance for the provider.
+export function embeddingDeadlineMs(chunks: ParsedChunk[]): number {
+  const batchCount = embeddingBatches(chunks).length;
+  return (
+    Math.max(0, batchCount - 1) * MIN_BATCH_PAUSE_SECONDS +
+    MAX_RETRIES_PER_UPLOAD * MAX_RETRY_DELAY_SECONDS +
+    batchCount * 30 + 120
+  ) * 1000;
+}
+
+export async function embedPdfChunks(
+  chunks: ParsedChunk[],
+  onProgress?: (completed: number, total: number) => void,
+  onWait?: (completed: number, total: number, seconds: number) => void,
+  endpoint = '/api/embeddings',
+  signal?: AbortSignal,
+): Promise<number[][]> {
+  const candidates = preparePdfChunks(chunks);
+  const batches = embeddingBatches(candidates);
   const embeddings: number[][] = [];
   let retries = 0;
   const pause = async (seconds: number) => {
@@ -107,17 +124,19 @@ export async function embedPdfChunks(
     let batchRetries = 0;
     let response: Response;
     while (true) {
-      response = await fetch('/api/embeddings', {
+      response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ texts }),
+        ...(signal ? { signal } : {}),
       });
       if (response.ok) break;
       const payload: unknown = await response.json().catch(() => null);
       const message = payload && typeof payload === 'object' && 'error' in payload &&
         typeof payload.error === 'string' ? payload.error : 'Error de embeddings.';
       const header = response.headers.get('Retry-After');
-      const seconds = header && /^\d+$/.test(header) ? Number(header) : null;
+      const seconds = header && /^\d+$/.test(header) ? Number(header) :
+        !header && endpoint === '/api/library/private-pdfs/embeddings' ? MIN_BATCH_PAUSE_SECONDS : null;
       if (response.status !== 429 || seconds === null || !Number.isSafeInteger(seconds) ||
         seconds < 1 || seconds > MAX_RETRY_DELAY_SECONDS ||
         batchRetries >= MAX_RETRIES_PER_BATCH || retries >= MAX_RETRIES_PER_UPLOAD) {

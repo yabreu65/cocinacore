@@ -33,8 +33,9 @@ const INVENTORY_MIGRATION = '021_inventory_price_reference.sql';
 const OCCURRENCE_MIGRATION = '022_real_consumption_occurrences.sql';
 const RETENTION_MIGRATION = '023_inventory_movement_retention.sql';
 const FIRST_ADMIN_MIGRATION = '024_first_platform_admin_bootstrap.sql';
+const PRIVATE_PDF_MIGRATION = '025_private_tenant_pdf_creation.sql';
 function capabilityVersion(applied) {
-  return applied.has(FIRST_ADMIN_MIGRATION) ? '024' : applied.has(RETENTION_MIGRATION) ? '023' : applied.has(OCCURRENCE_MIGRATION) ? '022' : applied.has(INVENTORY_MIGRATION) ? '021' : '020';
+  return applied.has(PRIVATE_PDF_MIGRATION) ? '025' : applied.has(FIRST_ADMIN_MIGRATION) ? '024' : applied.has(RETENTION_MIGRATION) ? '023' : applied.has(OCCURRENCE_MIGRATION) ? '022' : applied.has(INVENTORY_MIGRATION) ? '021' : '020';
 }
 const MIGRATION_NAME = /^(\d{3})_[a-z0-9]+(?:_[a-z0-9]+)*(\.bootstrap)?\.sql$/;
 const LANES = new Set(['migration', 'bootstrap']);
@@ -67,8 +68,8 @@ function getOptions() {
   if (!LANES.has(lane)) throw new Error('--lane must be exactly migration or bootstrap.');
   const stopAfter = values.get('--stop-after');
   const verifyBoundary = values.get('--verify-boundary');
-  if ((stopAfter && !['019', '020', '021', '022', '023', '024'].includes(stopAfter)) || (verifyBoundary && verifyBoundary !== '019'))
-    throw new Error('Supported stop boundaries are 019–024; verification boundary is 019.');
+  if ((stopAfter && !['019', '020', '021', '022', '023', '024', '025'].includes(stopAfter)) || (verifyBoundary && verifyBoundary !== '019'))
+    throw new Error('Supported stop boundaries are 019–025; verification boundary is 019.');
   if ((stopAfter || verifyBoundary) && (lane !== 'migration' || flags.has('--verify-complete') || (verifyBoundary && (flags.size || stopAfter))))
     throw new Error('Boundary options cannot be combined with another mode or bootstrap lane.');
   return { lane, dryRun: flags.has('--dry-run'), verifyComplete: flags.has('--verify-complete'), stopAfter, verifyBoundary };
@@ -1017,7 +1018,7 @@ async function assertAndAssumeMigrationIdentity(client, manifest, migrations, se
     assertGlobalOrder(migrations, applied);
   }
 
-  if (applied && migrations.some((migration) => migration.prefix > 20 && ![INVENTORY_MIGRATION, OCCURRENCE_MIGRATION, RETENTION_MIGRATION, FIRST_ADMIN_MIGRATION].includes(migration.filename) && applied.has(migration.filename))) {
+  if (applied && migrations.some((migration) => migration.prefix > 20 && ![INVENTORY_MIGRATION, OCCURRENCE_MIGRATION, RETENTION_MIGRATION, FIRST_ADMIN_MIGRATION, PRIVATE_PDF_MIGRATION].includes(migration.filename) && applied.has(migration.filename))) {
     throw new Error('UNSUPPORTED_CAPABILITY_MIGRATION: no reviewed catalog attestation.');
   }
 
@@ -1526,6 +1527,8 @@ async function runMigration(client, migration, ledgerMode, { post020Applied = fa
         if (await attestActivatedCapabilities(client, '022') !== 'active') throw new Error('ACTIVATION_PENDING: 023 requires active 022 capabilities.');
       } else if (migration.filename === FIRST_ADMIN_MIGRATION && post020Applied) {
         if (await attestActivatedCapabilities(client, '023') !== 'active') throw new Error('ACTIVATION_PENDING: 024 requires active 023 capabilities.');
+      } else if (migration.filename === PRIVATE_PDF_MIGRATION && post020Applied) {
+        if (await attestActivatedCapabilities(client, '024') !== 'active') throw new Error('ACTIVATION_PENDING: 025 requires active 024 capabilities.');
       } else {
         throw new Error('UNSUPPORTED_CAPABILITY_MIGRATION: no reviewed catalog transition.');
       }

@@ -18,7 +18,7 @@ if (!/^    runs-on: ubuntu-24\.04$/m.test(job)) fail('E2E runner must pin ubuntu
 if (!/image: pgvector\/pgvector:pg16/.test(job)) fail('E2E must use PostgreSQL 16 with pgvector');
 if (!/node-version: 22\.22\.3/.test(job)) fail('E2E must pin Node 22.22.3');
 
-const setupName = '      - name: Provision migrations 019–024, then run isolated E2E';
+const setupName = '      - name: Provision migrations 019–025, then run isolated E2E';
 const start = job.indexOf(setupName);
 const end = start < 0 ? -1 : job.indexOf('\n      - name:', start + setupName.length);
 const setup = start < 0 ? '' : job.slice(start, end < 0 ? undefined : end);
@@ -34,14 +34,15 @@ const orderedCommands = [
   'scripts/provision-020-inert-capabilities.sql',
   'attestPreparedCapabilities(client, { required: true })',
   'scripts/rls-candidates/020e-a1-inert-capability-guard.sql',
-  'MIGRATION_EXPECTED_PENDING=020_tenant_rls_hardening.sql,021_inventory_price_reference.sql,022_real_consumption_occurrences.sql,023_inventory_movement_retention.sql,024_first_platform_admin_bootstrap.sql npm run db:migrate -- --stop-after 020\n',
+  'MIGRATION_EXPECTED_PENDING=020_tenant_rls_hardening.sql,021_inventory_price_reference.sql,022_real_consumption_occurrences.sql,023_inventory_movement_retention.sql,024_first_platform_admin_bootstrap.sql,025_private_tenant_pdf_creation.sql npm run db:migrate -- --stop-after 020\n',
   "if (state !== 'pending')",
   'if npm run db:migrate:verify',
   'scripts/activate-020-capabilities.js',
-  'MIGRATION_EXPECTED_PENDING=021_inventory_price_reference.sql,022_real_consumption_occurrences.sql,023_inventory_movement_retention.sql,024_first_platform_admin_bootstrap.sql npm run db:migrate -- --stop-after 023\n',
+  'MIGRATION_EXPECTED_PENDING=021_inventory_price_reference.sql,022_real_consumption_occurrences.sql,023_inventory_movement_retention.sql,024_first_platform_admin_bootstrap.sql,025_private_tenant_pdf_creation.sql npm run db:migrate -- --stop-after 023\n',
   'cocinacore_first_admin_function_owner',
   'GRANT cocinacore_first_admin_function_owner TO cocinacore_schema_owner WITH INHERIT FALSE, SET TRUE',
-  'MIGRATION_EXPECTED_PENDING=024_first_platform_admin_bootstrap.sql npm run db:migrate\n',
+  'MIGRATION_EXPECTED_PENDING=024_first_platform_admin_bootstrap.sql,025_private_tenant_pdf_creation.sql npm run db:migrate -- --stop-after 024\n',
+  'MIGRATION_EXPECTED_PENDING=025_private_tenant_pdf_creation.sql npm run db:migrate\n',
   'npm run db:migrate:verify\n',
   'scripts/tests/test-inventory-021-constraints.sql',
   'npm run test:e2e',

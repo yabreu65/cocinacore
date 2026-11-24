@@ -7,6 +7,8 @@ import {
   findTenantPdfById,
 } from '@/lib/db/repositories/pdfRepository';
 import { getStorageAdapter, getStorageDriver } from '@/lib/storage';
+import { privatePdfStorageConfigured } from '@/lib/private-pdf/config';
+import { deleteTenantPdf } from '@/lib/storage/tenantPdfStorage';
 
 export const runtime = 'nodejs';
 
@@ -35,13 +37,20 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
-    // The S3 identity is deliberately global-only. Never delete metadata or
-    // attempt an object operation until a tenant-scoped S3 lane is available.
-    if (getStorageDriver() === 's3') {
-      return NextResponse.json(
-        { error: 'Private PDF deletion is unavailable with S3 storage.' },
-        { status: 503 }
-      );
+    if (!privatePdfStorageConfigured()) {
+      return NextResponse.json({ error: 'Private PDF storage unavailable.' }, { status: 503 });
+    }
+    const isPrivatePath = pdfRow.storage_path.startsWith('tenant-pdfs/');
+    if (getStorageDriver() === 's3' || isPrivatePath) {
+      try {
+        await deleteTenantPdf({ tenantId: tenant.tenantId, storagePath: pdfRow.storage_path });
+      } catch {
+        return NextResponse.json({ error: 'Private PDF deletion unavailable.' }, { status: 503 });
+      }
+    } else {
+      await getStorageAdapter()
+        .deleteFile(pdfRow.storage_path)
+        .catch(() => undefined);
     }
 
     await deleteTenantPdfById(tenant.tenantId, pdfId, scope);
@@ -57,14 +66,24 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
       }
     }
 
-    await getStorageAdapter()
-      .deleteFile(pdfRow.storage_path)
-      .catch(() => undefined);
-
     return NextResponse.json({ ok: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Forbidden';
-    const status = message === 'Unauthorized' ? 401 : 403;
-    return NextResponse.json({ error: message }, { status });
+    const status =
+      error instanceof Error && error.message === 'Unauthorized'
+        ? 401
+        : error instanceof Error && error.message === 'Forbidden'
+          ? 403
+          : 500;
+    return NextResponse.json(
+      {
+        error:
+          status === 401
+            ? 'Unauthorized'
+            : status === 403
+              ? 'Forbidden'
+              : 'No se pudo eliminar el PDF.',
+      },
+      { status }
+    );
   }
 }
