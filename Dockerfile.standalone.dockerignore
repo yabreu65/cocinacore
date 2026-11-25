@@ -36,6 +36,7 @@ frontend/scripts/**
 !frontend/scripts/activated-capabilities-023-retention.sql
 !frontend/scripts/activated-capabilities-024-first-admin.sql
 !frontend/scripts/activated-capabilities-024-inventory.sql
+!frontend/scripts/activated-capabilities-025-inventory.sql
 !frontend/scripts/bootstrap-first-platform-admin.js
 !frontend/scripts/bootstrap-owner.js
 !frontend/scripts/legacy-017-attestation.js
